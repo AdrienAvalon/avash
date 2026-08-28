@@ -1,6 +1,6 @@
 //! Avash GUI — coquille Tauri 2. Sessions PTY multi-onglets côté Rust.
 
-mod commands;
+pub mod commands;
 
 pub use commands::*;
 

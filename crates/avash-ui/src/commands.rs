@@ -238,20 +238,67 @@ async fn open_on_target(
     }
 
     // Pump out → event front ; la session vit dans le pump.
+    //
+    // Les blocs arrivant du canal SSH sont souvent minuscules — 1, 4, 38,
+    // 101 octets — et chacun coûterait un message JSON, un aller-retour IPC
+    // et une écriture xterm. On les regroupe donc sur une courte fenêtre :
+    // le débit s'effondre en nombre de messages sans que la latence devienne
+    // perceptible (COALESCE_MS reste sous la durée d'une image à 60 Hz).
+    const COALESCE_MS: u64 = 8;
+    const FLUSH_BYTES: usize = 16 * 1024;
     let app2 = app.clone();
     let _pump = tokio::spawn(async move {
         let mut decoder = Utf8Stream::default();
-        while let Some(bytes) = out_rx.recv().await {
+        let mut buffer = String::new();
+        let mut deadline: Option<tokio::time::Instant> = None;
+
+        loop {
+            // Tant que le tampon attend, on borne l'attente a l'echeance :
+            // sans cela un octet isole resterait bloque jusqu'au suivant.
+            let recu = match deadline {
+                Some(d) => match tokio::time::timeout_at(d, out_rx.recv()).await {
+                    Ok(v) => v,
+                    Err(_) => {
+                        if !buffer.is_empty() {
+                            let _ = app2.emit(
+                                "pty-output",
+                                serde_json::json!({ "id": sid, "data": buffer }),
+                            );
+                            buffer.clear();
+                        }
+                        deadline = None;
+                        continue;
+                    }
+                },
+                None => out_rx.recv().await,
+            };
+
+            let Some(bytes) = recu else { break };
             let text = decoder.push(&bytes);
             if text.is_empty() {
-                continue; // sequence encore incomplete
+                continue; // sequence UTF-8 encore incomplete
             }
+            buffer.push_str(&text);
+
+            // Gros volume : inutile d'attendre, on ecoule tout de suite.
+            if buffer.len() >= FLUSH_BYTES {
+                let _ = app2.emit(
+                    "pty-output",
+                    serde_json::json!({ "id": sid, "data": buffer }),
+                );
+                buffer.clear();
+                deadline = None;
+            } else if deadline.is_none() {
+                deadline = Some(
+                    tokio::time::Instant::now() + tokio::time::Duration::from_millis(COALESCE_MS),
+                );
+            }
+        }
+        // Ne pas perdre ce qui restait au moment de la fermeture.
+        if !buffer.is_empty() {
             let _ = app2.emit(
                 "pty-output",
-                serde_json::json!({
-                    "id": sid,
-                    "data": text,
-                }),
+                serde_json::json!({ "id": sid, "data": buffer }),
             );
         }
         // La session distante s'est terminee (exit, coupure reseau, kill).

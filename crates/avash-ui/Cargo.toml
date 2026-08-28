@@ -19,3 +19,11 @@ avash = { path = "../avash" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 whoami = "1"
+
+[[bench]]
+name = "utf8"
+harness = false
+
+[[bench]]
+name = "coalesce"
+harness = false
