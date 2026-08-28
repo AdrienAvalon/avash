@@ -18,7 +18,108 @@ pub struct SessionHandle {
     pub resize: Sender<(u32, u32)>,
     /// Session SFTP dédiée ouverte à la demande (lazy), par onglet.
     pub sftp: Mutex<Option<std::sync::Arc<SftpHandle>>>,
-    pub alias: String,
+    /// Cible conservee pour rouvrir une session SFTP sans redemander les
+    /// identifiants a l'utilisateur.
+    pub target: Target,
+}
+
+/// Ou et comment se connecter.
+///
+/// Deux origines possibles : un alias de `~/.ssh/config`, ou une saisie
+/// directe (adresse, utilisateur, mot de passe ou cle). Les deux chemins
+/// produisent le meme Target, donc la suite du code ne les distingue pas.
+#[derive(Clone)]
+pub struct Target {
+    pub addr: String,
+    pub port: u16,
+    pub user: String,
+    pub key_path: Option<std::path::PathBuf>,
+    /// ⚠️ En memoire vive uniquement, le temps de la session. Jamais ecrit
+    /// sur disque, jamais renvoye au front, jamais journalise.
+    pub password: Option<String>,
+    /// Libelle affiche : l'alias, ou `user@hote` pour une saisie directe.
+    pub label: String,
+}
+
+/// `Debug` ecrit a la main : un `derive` afficherait le mot de passe en clair
+/// dans les traces, les messages de panique et les logs de test.
+impl std::fmt::Debug for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Target")
+            .field("addr", &self.addr)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("key_path", &self.key_path)
+            .field("password", &self.password.as_ref().map(|_| "<masqué>"))
+            .field("label", &self.label)
+            .finish()
+    }
+}
+
+impl Target {
+    /// Resout un alias declare dans `~/.ssh/config`.
+    fn from_alias(alias: &str) -> Result<Self, String> {
+        let host = find_host(alias)?;
+        let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
+        Ok(Self {
+            port: host.port.unwrap_or(22),
+            user: host.user.clone().unwrap_or_else(whoami::username),
+            key_path: host.identity_file.as_ref().map(std::path::PathBuf::from),
+            password: None,
+            label: host.alias.clone(),
+            addr,
+        })
+    }
+
+    /// Connexion saisie a la main, sans passer par `~/.ssh/config`.
+    fn manual(
+        addr: String,
+        port: Option<u16>,
+        user: String,
+        password: Option<String>,
+        key_path: Option<String>,
+    ) -> Result<Self, String> {
+        let addr = addr.trim().to_string();
+        if addr.is_empty() {
+            return Err("L'adresse du serveur est vide.".into());
+        }
+        let user = user.trim().to_string();
+        if user.is_empty() {
+            return Err("Le nom d'utilisateur est vide.".into());
+        }
+        let key_path = key_path
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .map(std::path::PathBuf::from);
+        // Une cle inexistante donnerait une erreur d'authentification obscure ;
+        // autant le dire tout de suite et nommer le chemin fautif.
+        if let Some(k) = &key_path {
+            if !k.exists() {
+                return Err(format!("Clé introuvable : {}", k.display()));
+            }
+        }
+        let password = password.filter(|p| !p.is_empty());
+        if password.is_none() && key_path.is_none() {
+            return Err("Renseigne un mot de passe ou une clé privée.".into());
+        }
+        let port = port.unwrap_or(22);
+        Ok(Self {
+            label: format!("{user}@{addr}"),
+            addr,
+            port,
+            user,
+            key_path,
+            password,
+        })
+    }
+
+    fn auth(&self) -> avash::ssh::ClientAuth {
+        avash::ssh::ClientAuth {
+            user: self.user.clone(),
+            key_path: self.key_path.clone(),
+            password: self.password.clone(),
+        }
+    }
 }
 
 fn find_host(alias: &str) -> Result<SshHost, String> {
@@ -27,14 +128,6 @@ fn find_host(alias: &str) -> Result<SshHost, String> {
         .into_iter()
         .find(|h| h.alias == alias)
         .ok_or_else(|| format!("Hôte introuvable : {alias}"))
-}
-
-fn auth_for(host: &SshHost) -> avash::ssh::ClientAuth {
-    avash::ssh::ClientAuth {
-        user: host.user.clone().unwrap_or_else(whoami::username),
-        key_path: host.identity_file.as_ref().map(std::path::PathBuf::from),
-        password: None,
-    }
 }
 
 /// Liste les hôtes de ~/.ssh/config.
@@ -46,10 +139,8 @@ pub fn list_hosts() -> Result<Vec<SshHost>, String> {
 /// Exécution one-shot (écho de test / commandes rapides).
 #[tauri::command]
 pub async fn run_command(alias: String, command: String) -> Result<String, String> {
-    let host = find_host(&alias)?;
-    let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
-    let auth = auth_for(&host);
-    let mut session = AvashSession::connect(&addr, host.port.unwrap_or(22), &auth)
+    let target = Target::from_alias(&alias)?;
+    let mut session = AvashSession::connect(&target.addr, target.port, &target.auth())
         .await
         .map_err(|e| e.to_string())?;
     let (stdout, code) = session.run(&command).await.map_err(|e| e.to_string())?;
@@ -98,18 +189,15 @@ impl Utf8Stream {
 
 /// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
 #[tauri::command]
-pub async fn pty_open(
+async fn open_on_target(
     app: AppHandle,
-    state: tauri::State<'_, SessionStore>,
+    state: &tauri::State<'_, SessionStore>,
     id: u64,
-    alias: String,
+    target: Target,
     cols: u32,
     rows: u32,
-) -> Result<(), String> {
-    let host = find_host(&alias)?;
-    let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
-    let auth = auth_for(&host);
-    let mut session = AvashSession::connect(&addr, host.port.unwrap_or(22), &auth)
+) -> Result<String, String> {
+    let mut session = AvashSession::connect(&target.addr, target.port, &target.auth())
         .await
         .map_err(|e| e.to_string())?;
     let pty = session
@@ -148,19 +236,57 @@ pub async fn pty_open(
     // continuerait d'emettre des `pty-output` portant le meme id : la sortie
     // d'un ancien serveur apparaitrait dans le nouvel onglet.
     // Lacher le SessionHandle ferme ses canaux, ce qui termine l'ancien pump.
+    let label = target.label.clone();
     let evicted = state.inner.lock().unwrap().insert(
         id,
         SessionHandle {
             input,
             resize,
             sftp: Mutex::new(None),
-            alias,
+            target,
         },
     );
     if let Some(old) = evicted {
         drop(old);
     }
-    Ok(())
+    Ok(label)
+}
+
+/// Ouvre une session sur un hote declare dans `~/.ssh/config`.
+#[tauri::command]
+pub async fn pty_open(
+    app: AppHandle,
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+    alias: String,
+    cols: u32,
+    rows: u32,
+) -> Result<String, String> {
+    let target = Target::from_alias(&alias)?;
+    open_on_target(app, &state, id, target, cols, rows).await
+}
+
+/// Ouvre une session sur une adresse saisie a la main, sans `~/.ssh/config`.
+///
+/// Le mot de passe reste en memoire vive le temps de la session : il sert a
+/// rouvrir un canal SFTP sur le meme serveur sans redemander la saisie.
+/// Il n'est ni ecrit sur disque, ni renvoye au front, ni journalise.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn pty_open_manual(
+    app: AppHandle,
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+    addr: String,
+    port: Option<u16>,
+    user: String,
+    password: Option<String>,
+    key_path: Option<String>,
+    cols: u32,
+    rows: u32,
+) -> Result<String, String> {
+    let target = Target::manual(addr, port, user, password, key_path)?;
+    open_on_target(app, &state, id, target, cols, rows).await
 }
 
 /// Écrit le clavier du front dans le canal PTY.
@@ -235,17 +361,16 @@ async fn sftp_of(
         }
     }
     // Sinon : connexion dédiée puis stockage.
-    let alias = {
+    // On rejoue la meme cible : une connexion saisie a la main n'existe pas
+    // dans ~/.ssh/config, on ne peut donc pas la retrouver par son alias.
+    let target = {
         let store = state.inner.lock().unwrap();
         store
             .get(&id)
-            .map(|h| h.alias.clone())
+            .map(|h| h.target.clone())
             .ok_or_else(|| format!("Session {id} inconnue"))?
     };
-    let host = find_host(&alias)?;
-    let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
-    let auth = auth_for(&host);
-    let session = AvashSession::connect(&addr, host.port.unwrap_or(22), &auth)
+    let session = AvashSession::connect(&target.addr, target.port, &target.auth())
         .await
         .map_err(|e| e.to_string())?;
     let sftp = std::sync::Arc::new(SftpHandle::open(session).await.map_err(|e| e.to_string())?);
@@ -420,42 +545,26 @@ mod tests {
     }
 
     #[test]
-    fn auth_for_utilise_le_user_declare() {
-        let host = SshHost {
-            alias: "prod".into(),
-            hostname: Some("10.0.0.1".into()),
-            user: Some("deploy".into()),
-            port: None,
-            identity_file: Some("/home/x/.ssh/id_ed25519".into()),
-            proxy_jump: None,
-            tags: vec![],
-        };
-        let auth = auth_for(&host);
-        assert_eq!(auth.user, "deploy");
-        assert_eq!(
-            auth.key_path.as_deref(),
-            Some(std::path::Path::new("/home/x/.ssh/id_ed25519"))
+    fn target_depuis_alias_reprend_user_port_et_cle() {
+        let _g = with_ssh_config(
+            "Host prod\n  HostName 10.0.0.1\n  User deploy\n  Port 2222\n  IdentityFile /tmp/k\n",
         );
-        assert!(
-            auth.password.is_none(),
-            "aucun mot de passe ne doit etre pose ici"
-        );
+        let t = Target::from_alias("prod").unwrap();
+        assert_eq!(t.addr, "10.0.0.1");
+        assert_eq!(t.user, "deploy");
+        assert_eq!(t.port, 2222);
+        assert_eq!(t.key_path.as_deref(), Some(std::path::Path::new("/tmp/k")));
+        assert!(t.password.is_none(), "aucun mot de passe depuis un alias");
+        assert_eq!(t.label, "prod");
     }
 
     #[test]
-    fn auth_for_retombe_sur_l_utilisateur_courant() {
-        let host = SshHost {
-            alias: "prod".into(),
-            hostname: Some("10.0.0.1".into()),
-            user: None,
-            port: None,
-            identity_file: None,
-            proxy_jump: None,
-            tags: vec![],
-        };
-        let auth = auth_for(&host);
-        assert_eq!(auth.user, whoami::username());
-        assert!(auth.key_path.is_none());
+    fn target_depuis_alias_retombe_sur_les_defauts() {
+        let _g = with_ssh_config("Host simple\n  HostName 10.0.0.9\n");
+        let t = Target::from_alias("simple").unwrap();
+        assert_eq!(t.port, 22, "port par defaut");
+        assert_eq!(t.user, whoami::username(), "utilisateur courant par defaut");
+        assert!(t.key_path.is_none());
     }
     // ---------- Utf8Stream ----------
 
@@ -504,5 +613,126 @@ mod tests {
     fn utf8_ascii_passe_sans_latence() {
         let mut d = Utf8Stream::default();
         assert_eq!(d.push(b"ls -la\r\n"), "ls -la\r\n");
+    }
+    // ---------- Target::manual ----------
+
+    #[test]
+    fn manual_accepte_adresse_user_et_mot_de_passe() {
+        let t = Target::manual(
+            "10.0.0.5".into(),
+            Some(2222),
+            "adrien".into(),
+            Some("secret".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.addr, "10.0.0.5");
+        assert_eq!(t.port, 2222);
+        assert_eq!(t.user, "adrien");
+        assert_eq!(t.password.as_deref(), Some("secret"));
+        assert_eq!(t.label, "adrien@10.0.0.5", "libelle affiche dans l'onglet");
+    }
+
+    #[test]
+    fn manual_utilise_22_par_defaut() {
+        let t = Target::manual("srv".into(), None, "u".into(), Some("p".into()), None).unwrap();
+        assert_eq!(t.port, 22);
+    }
+
+    #[test]
+    fn manual_rogne_les_espaces_de_saisie() {
+        // Un copier-coller traine souvent une espace : elle casserait la
+        // resolution DNS avec un message incomprehensible.
+        let t = Target::manual(
+            "  10.0.0.5  ".into(),
+            None,
+            " adrien ".into(),
+            Some("p".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.addr, "10.0.0.5");
+        assert_eq!(t.user, "adrien");
+    }
+
+    #[test]
+    fn manual_refuse_une_adresse_vide() {
+        let e = Target::manual("   ".into(), None, "u".into(), Some("p".into()), None).unwrap_err();
+        assert!(e.contains("adresse"), "{e}");
+    }
+
+    #[test]
+    fn manual_refuse_un_utilisateur_vide() {
+        let e = Target::manual("srv".into(), None, "".into(), Some("p".into()), None).unwrap_err();
+        assert!(e.contains("utilisateur"), "{e}");
+    }
+
+    #[test]
+    fn manual_exige_un_mot_de_passe_ou_une_cle() {
+        // Sans l'un des deux, l'authentification echouerait cote serveur avec
+        // un message opaque : autant le dire avant de tenter la connexion.
+        let e = Target::manual("srv".into(), None, "u".into(), None, None).unwrap_err();
+        assert!(e.contains("mot de passe") && e.contains("clé"), "{e}");
+        // Une chaine vide vaut absence.
+        let e = Target::manual(
+            "srv".into(),
+            None,
+            "u".into(),
+            Some(String::new()),
+            Some(String::new()),
+        )
+        .unwrap_err();
+        assert!(e.contains("mot de passe"), "{e}");
+    }
+
+    #[test]
+    fn manual_signale_une_cle_introuvable() {
+        let e = Target::manual(
+            "srv".into(),
+            None,
+            "u".into(),
+            None,
+            Some("/chemin/qui/n/existe/pas".into()),
+        )
+        .unwrap_err();
+        assert!(e.contains("introuvable"), "{e}");
+        assert!(
+            e.contains("/chemin/qui/n/existe/pas"),
+            "le chemin fautif doit etre nomme : {e}"
+        );
+    }
+
+    #[test]
+    fn manual_accepte_une_cle_existante_sans_mot_de_passe() {
+        let key = std::env::temp_dir().join(format!("avash-key-{}", std::process::id()));
+        std::fs::write(&key, b"factice").unwrap();
+        let t = Target::manual(
+            "srv".into(),
+            None,
+            "u".into(),
+            None,
+            Some(key.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        assert_eq!(t.key_path.as_deref(), Some(key.as_path()));
+        assert!(t.password.is_none());
+        let _ = std::fs::remove_file(&key);
+    }
+    #[test]
+    fn debug_ne_divulgue_jamais_le_mot_de_passe() {
+        let t = Target::manual(
+            "srv".into(),
+            None,
+            "u".into(),
+            Some("tres-secret".into()),
+            None,
+        )
+        .unwrap();
+        let rendu = format!("{t:?}");
+        assert!(
+            !rendu.contains("tres-secret"),
+            "le mot de passe ne doit jamais apparaitre dans une trace : {rendu}"
+        );
+        assert!(rendu.contains("masqué"), "{rendu}");
     }
 }

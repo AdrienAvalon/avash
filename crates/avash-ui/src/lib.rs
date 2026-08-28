@@ -17,6 +17,7 @@ pub fn run() {
             commands::list_hosts,
             commands::run_command,
             commands::pty_open,
+            commands::pty_open_manual,
             commands::pty_write,
             commands::pty_resize,
             commands::pty_close,

@@ -58,7 +58,8 @@ function renderHosts() {
   $("host-count").textContent = `${shown.length} hôte${shown.length > 1 ? "s" : ""}`;
 }
 
-async function openSession(h: Host) {
+/** Cree l'onglet et le terminal. La connexion elle-meme est faite par l'appelant. */
+function newSessionShell(label: string) {
   const id = state.nextId++;
   const term = new Terminal({
     theme: THEME,
@@ -76,7 +77,7 @@ async function openSession(h: Host) {
   const tab = document.createElement("div");
   tab.className = "tab active";
   tab.innerHTML = `<span class="label"></span><span class="close">✕</span>`;
-  tab.querySelector(".label")!.textContent = h.alias;
+  tab.querySelector(".label")!.textContent = label;
   tab.addEventListener("click", () => focusSession(id));
   tab.querySelector(".close")!.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -100,15 +101,47 @@ async function openSession(h: Host) {
     invoke("pty_resize", { id, cols, rows }).catch(() => {});
   });
 
-  const s: Session = { id, alias: h.alias, term, fit, tab };
+  const s: Session = { id, alias: label, term, fit, tab };
   state.sessions.set(id, s);
   state.active = id;
   focusTerminal(s);
+  return { id, term, session: s };
+}
 
+/** Ouvre une session sur un hote declare dans ~/.ssh/config. */
+async function openSession(h: Host) {
+  const { id, term } = newSessionShell(h.alias);
   try {
     await invoke("pty_open", { id, alias: h.alias, cols: term.cols, rows: term.rows });
   } catch (e) {
     term.write(`\x1b[31m⚔️ Échec connexion : ${e}\x1b[0m\r\n`);
+  }
+}
+
+/**
+ * Ouvre une session sur une adresse saisie a la main.
+ *
+ * Contrairement au chemin par alias, l'echec doit remonter a l'appelant :
+ * le formulaire affiche le message et reste ouvert pour corriger la saisie.
+ * On referme donc l'onglet plutot que de laisser une coquille morte.
+ */
+async function openManualSession(t: ManualTarget) {
+  const { id, term, session } = newSessionShell(`${t.user}@${t.addr}`);
+  try {
+    const label = await invoke<string>("pty_open_manual", {
+      id,
+      addr: t.addr,
+      port: t.port,
+      user: t.user,
+      password: t.password,
+      keyPath: t.key_path,
+      cols: term.cols,
+      rows: term.rows,
+    });
+    session.tab.querySelector(".label")!.textContent = label;
+  } catch (e) {
+    closeSession(id);
+    throw e;
   }
 }
 
@@ -308,3 +341,85 @@ document.addEventListener("keydown", (e) => {
 });
 
 loadHosts();
+
+// ---------- Connexion directe (sans ~/.ssh/config) ----------
+
+type ManualTarget = {
+  addr: string;
+  port: number | null;
+  user: string;
+  password: string | null;
+  key_path: string | null;
+};
+
+const manualModal = () => $("manual-modal");
+const manualError = () => $("m-error");
+
+function manualOpen() {
+  manualError().hidden = true;
+  manualModal().classList.add("open");
+  ($("m-addr") as HTMLInputElement).focus();
+}
+
+function manualClose() {
+  manualModal().classList.remove("open");
+  ($("manual-form") as HTMLFormElement).reset();
+  manualSyncAuthRows();
+}
+
+/** N'affiche que le champ correspondant au mode d'authentification choisi. */
+function manualSyncAuthRows() {
+  const mode = (document.querySelector('input[name="auth"]:checked') as HTMLInputElement | null)?.value;
+  $("m-password-row").hidden = mode !== "password";
+  $("m-key-row").hidden = mode !== "key";
+}
+
+function manualReadForm(): ManualTarget {
+  const val = (id: string) => ($(id) as HTMLInputElement).value.trim();
+  const mode = (document.querySelector('input[name="auth"]:checked') as HTMLInputElement).value;
+  const portRaw = val("m-port");
+  return {
+    addr: val("m-addr"),
+    port: portRaw ? Number(portRaw) : null,
+    user: val("m-user"),
+    password: mode === "password" ? val("m-password") || null : null,
+    key_path: mode === "key" ? val("m-key") || null : null,
+  };
+}
+
+async function manualSubmit(ev: Event) {
+  ev.preventDefault();
+  const submit = $("m-submit") as HTMLButtonElement;
+  const target = manualReadForm();
+  manualError().hidden = true;
+  submit.disabled = true;
+  submit.textContent = "Connexion…";
+  try {
+    await openManualSession(target);
+    manualClose();
+  } catch (e) {
+    // Le backend renvoie un message deja redige pour l'utilisateur
+    // (cle introuvable, cle d'hote modifiee, identifiants manquants).
+    manualError().textContent = String(e);
+    manualError().hidden = false;
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "Se connecter";
+  }
+}
+
+// Cablage du formulaire de connexion directe.
+$("manual-btn").addEventListener("click", manualOpen);
+$("m-cancel").addEventListener("click", manualClose);
+$("manual-form").addEventListener("submit", manualSubmit);
+document
+  .querySelectorAll('input[name="auth"]')
+  .forEach((r) => r.addEventListener("change", manualSyncAuthRows));
+// Fermeture au clic hors du cadre, et a Echap.
+manualModal().addEventListener("click", (e) => {
+  if (e.target === manualModal()) manualClose();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && manualModal().classList.contains("open")) manualClose();
+});
+manualSyncAuthRows();

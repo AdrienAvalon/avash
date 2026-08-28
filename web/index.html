@@ -174,7 +174,51 @@
     .palette .item:hover, .palette .item.hl { background: rgba(124,108,245,.15); }
     .palette .item .sub { margin-left: auto; font-size: 11px; color: var(--text-dim); font-family: var(--mono); }
     .palette .empty { padding: 18px; text-align: center; color: var(--text-dim); font-size: 13px; }
-  </style>
+  
+      /* --- Connexion directe --- */
+      .manual-btn {
+        margin: 8px 10px; padding: 8px 10px; width: calc(100% - 20px);
+        background: transparent; color: var(--text-dim);
+        border: 1px dashed var(--border); border-radius: 8px;
+        cursor: pointer; font-size: 13px; font-family: inherit;
+      }
+      .manual-btn:hover { color: var(--text); border-color: var(--accent); }
+
+      .modal-backdrop {
+        position: fixed; inset: 0; background: rgba(0,0,0,.62);
+        display: none; align-items: center; justify-content: center; z-index: 50;
+      }
+      .modal-backdrop.open { display: flex; }
+      .modal {
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 12px; padding: 22px; width: 380px;
+        display: flex; flex-direction: column; gap: 12px;
+        box-shadow: 0 18px 50px rgba(0,0,0,.5);
+      }
+      .modal h2 { margin: 0; font-size: 16px; }
+      .modal-hint { margin: -6px 0 4px; font-size: 12px; color: var(--text-dim); }
+      .modal label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-dim); }
+      .modal input[type=text], .modal input[type=password], .modal input[type=number], .modal input:not([type]) {
+        background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+        padding: 8px 10px; color: var(--text); font-family: inherit; font-size: 13px;
+      }
+      .modal input:focus { outline: none; border-color: var(--accent); }
+      .auth-switch { display: flex; gap: 16px; font-size: 12px; }
+      .auth-switch .radio { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+      .modal-error {
+        margin: 0; padding: 8px 10px; border-radius: 7px; font-size: 12px;
+        background: rgba(220,60,60,.14); border: 1px solid rgba(220,60,60,.4); color: #ff9a9a;
+        white-space: pre-wrap;
+      }
+      .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+      .btn-primary, .btn-ghost {
+        padding: 8px 14px; border-radius: 7px; cursor: pointer;
+        font-family: inherit; font-size: 13px; border: 1px solid var(--border);
+      }
+      .btn-primary { background: var(--accent); color: #1a1020; border-color: var(--accent); font-weight: 600; }
+      .btn-ghost { background: transparent; color: var(--text-dim); }
+      .btn-primary:disabled { opacity: .55; cursor: progress; }
+    </style>
 </head>
 <body>
   <div class="app">
@@ -186,6 +230,7 @@
         <input id="search" class="search" placeholder="Filtrer les hôtes…" autocomplete="off" />
       </div>
       <div id="host-list" class="host-list"></div>
+      <button id="manual-btn" class="manual-btn" type="button">＋ Connexion directe</button>
       <div class="footer"><span id="host-count">—</span><span>avash</span></div>
     </aside>
 
@@ -221,5 +266,41 @@
   </div>
 
   <script type="module" src="/main.ts"></script>
+
+    <div class="modal-backdrop" id="manual-modal">
+      <form class="modal" id="manual-form" autocomplete="off">
+        <h2>Connexion directe</h2>
+        <p class="modal-hint">Sans passer par <code>~/.ssh/config</code>.</p>
+
+        <label>Adresse ou IP
+          <input id="m-addr" name="addr" placeholder="192.168.1.10" required />
+        </label>
+        <label>Port
+          <input id="m-port" name="port" type="number" min="1" max="65535" placeholder="22" />
+        </label>
+        <label>Utilisateur
+          <input id="m-user" name="user" placeholder="root" required />
+        </label>
+
+        <div class="auth-switch">
+          <label class="radio"><input type="radio" name="auth" value="password" checked /> Mot de passe</label>
+          <label class="radio"><input type="radio" name="auth" value="key" /> Clé privée</label>
+        </div>
+
+        <label id="m-password-row">Mot de passe
+          <input id="m-password" name="password" type="password" />
+        </label>
+        <label id="m-key-row" hidden>Chemin de la clé privée
+          <input id="m-key" name="key" placeholder="~/.ssh/id_ed25519" />
+        </label>
+
+        <p class="modal-error" id="m-error" hidden></p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="m-cancel">Annuler</button>
+          <button type="submit" class="btn-primary" id="m-submit">Se connecter</button>
+        </div>
+      </form>
+    </div>
 </body>
 </html>
