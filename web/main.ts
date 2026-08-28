@@ -3,6 +3,7 @@
 import "@xterm/xterm/css/xterm.css";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { humanSize, filterHosts, remoteJoin, type Host } from "./filters";
@@ -25,19 +26,61 @@ const state = {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+// ⚠️ `fontFamily` n'appartient PAS au theme : c'est une option du Terminal.
+// Place ici, il etait purement ignore et xterm.js retombait sur son defaut
+// (courier-new), d'ou un rendu tres laid.
 const THEME = {
-  background: "#0f1117",
-  foreground: "#e6e9f0",
-  cursor: "#7c6cf5",
-  cursorAccent: "#0f1117",
-  selectionBackground: "rgba(124, 108, 245, .35)",
-  black: "#0f1117", red: "#f56a6a", green: "#3fd68f", yellow: "#f5b652",
-  blue: "#6c9ef5", magenta: "#b57cf5", cyan: "#6cd9f5", white: "#e6e9f0",
-  brightBlack: "#5c6379", brightRed: "#ff8c8c", brightGreen: "#6ce8ae",
-  brightYellow: "#ffce7a", brightBlue: "#93b8ff", brightMagenta: "#d0a0ff",
-  brightCyan: "#96e8ff", brightWhite: "#ffffff",
-  fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, monospace',
+  background: "#12141c",
+  foreground: "#dfe3ee",
+  cursor: "#8b7cf6",
+  cursorAccent: "#12141c",
+  selectionBackground: "rgba(139, 124, 246, .30)",
+  selectionForeground: "#ffffff",
+  // Palette ANSI : contrastee sur fond sombre, sans saturation criarde.
+  black: "#1b1e29", red: "#ef6b73", green: "#4ad295", yellow: "#e8b765",
+  blue: "#6e9df8", magenta: "#b98cf7", cyan: "#5fd0e8", white: "#c8cddb",
+  brightBlack: "#59617a", brightRed: "#ff8a91", brightGreen: "#71e6ae",
+  brightYellow: "#ffd083", brightBlue: "#97bcff", brightMagenta: "#d5adff",
+  brightCyan: "#8ce4f7", brightWhite: "#ffffff",
 };
+
+/**
+ * Nerd Font en tete : l'invite d'un shell moderne (fish, starship, powerlevel)
+ * utilise des glyphes que les polices classiques ne contiennent pas et
+ * remplacent par des carres vides.
+ */
+const FONT_STACK =
+  '"Avash Mono", "MesloLGS Nerd Font Mono", "Hack", "Consolas", ' +
+  '"DejaVu Sans Mono", ui-monospace, monospace';
+
+
+/**
+ * Attend que la police embarquee soit chargee.
+ *
+ * xterm.js mesure la largeur d'un caractere a l'initialisation. Si la police
+ * arrive apres, il garde les metriques de la police de repli : colonnes
+ * decalees, curseur mal place, cadres semi-graphiques disjoints. On attend
+ * donc une fois, au demarrage, avant d'ouvrir le moindre terminal.
+ */
+let fontReady: Promise<void> | null = null;
+
+function ensureFontLoaded(): Promise<void> {
+  if (!fontReady) {
+    fontReady = (async () => {
+      try {
+        await Promise.all([
+          document.fonts.load('400 14px "Avash Mono"'),
+          document.fonts.load('600 14px "Avash Mono"'),
+        ]);
+        await document.fonts.ready;
+      } catch {
+        // Police indisponible : on continue avec la pile de repli plutot
+        // que de bloquer l'ouverture d'un terminal.
+      }
+    })();
+  }
+  return fontReady;
+}
 
 function renderHosts() {
   const list = $("host-list");
@@ -63,10 +106,23 @@ function newSessionShell(label: string) {
   const id = state.nextId++;
   const term = new Terminal({
     theme: THEME,
-    fontSize: 13.5,
+    fontFamily: FONT_STACK,
+    // Taille entiere : une valeur fractionnaire donne un rendu flou.
+    fontSize: 14,
+    lineHeight: 1.25,
+    letterSpacing: 0,
+    fontWeight: "400",
+    fontWeightBold: "600",
     cursorBlink: true,
-    scrollback: 5000,
+    cursorStyle: "bar",
+    cursorWidth: 2,
+    scrollback: 10000,
     macOptionIsMeta: true,
+    allowProposedApi: true,
+    // Marge interieure : du texte colle au bord se lit mal.
+    // (xterm n'a pas d'option de padding, on le fait en CSS sur le container.)
+    drawBoldTextInBrightColors: false,
+    minimumContrastRatio: 1.5,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -91,9 +147,23 @@ function newSessionShell(label: string) {
   const container = document.createElement("div");
   container.className = "xterm-container";
   container.style.position = "absolute";
-  container.style.inset = "8px";
+  // Marge un peu plus genereuse a gauche : le texte colle au bord se lit mal.
+  container.style.inset = "10px 8px 6px 14px";
   $("terminal").appendChild(container);
   term.open(container);
+
+  // Rendu GPU : nettement plus net et plus fluide que le rendu DOM.
+  // On replie silencieusement si le contexte WebGL est indisponible
+  // (machine virtuelle, pilote graphique limite) — mieux vaut un rendu
+  // moins beau qu'un terminal qui refuse de s'ouvrir.
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch {
+    /* rendu DOM par defaut */
+  }
+
   term.onData((data) => {
     invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${e}\r\n`));
   });
@@ -123,6 +193,7 @@ function warnIfDeaf(term: Terminal) {
 
 /** Ouvre une session sur un hote declare dans ~/.ssh/config. */
 async function openSession(h: Host) {
+  await ensureFontLoaded();
   const { id, term } = newSessionShell(h.alias);
   warnIfDeaf(term);
   try {
@@ -140,6 +211,7 @@ async function openSession(h: Host) {
  * On referme donc l'onglet plutot que de laisser une coquille morte.
  */
 async function openManualSession(t: ManualTarget) {
+  await ensureFontLoaded();
   const { id, term, session } = newSessionShell(`${t.user}@${t.addr}`);
   warnIfDeaf(term);
   try {
@@ -364,6 +436,8 @@ document.addEventListener("keydown", (e) => {
 });
 
 loadHosts();
+// Prechargement : au moment du clic, la police est deja prete.
+ensureFontLoaded();
 
 // ---------- Connexion directe (sans ~/.ssh/config) ----------
 

@@ -5,6 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Avash 😼</title>
   <style>
+      /* --- Police embarquee ---
+         Avash doit rendre pareil sur Linux et Windows. Aucune police par
+         defaut de Windows ne contient les glyphes powerline ni les icones
+         des invites modernes : elles s'afficheraient en carres vides. */
+      @font-face {
+        font-family: "Avash Mono";
+        src: url("/fonts/avash-mono-regular.woff2") format("woff2");
+        font-weight: 400;
+        font-style: normal;
+        font-display: block;
+      }
+      @font-face {
+        font-family: "Avash Mono";
+        src: url("/fonts/avash-mono-bold.woff2") format("woff2");
+        font-weight: 600 700;
+        font-style: normal;
+        font-display: block;
+      }
+
     :root {
       --bg: #0f1117;
       --bg-soft: #161a23;
@@ -243,6 +262,19 @@
         margin: 0; padding: 8px 10px; border-radius: 7px; font-size: 12px;
         background: rgba(60,190,120,.13); border: 1px solid rgba(60,190,120,.4); color: #8ee0ac;
       }
+    
+      /* --- Terminal --- */
+      .xterm-container { border-radius: 6px; }
+      /* Barre de defilement discrete, dans le ton du terminal. */
+      .xterm-viewport::-webkit-scrollbar { width: 10px; }
+      .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+      .xterm-viewport::-webkit-scrollbar-thumb {
+        background: #2c3145; border-radius: 5px;
+        border: 2px solid #12141c;
+      }
+      .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #3b4260; }
+      /* Le curseur reste visible quand la fenetre perd le focus. */
+      .xterm.xterm-cursor-blink .xterm-cursor-layer { opacity: 1; }
     </style>
 </head>
 <body>
