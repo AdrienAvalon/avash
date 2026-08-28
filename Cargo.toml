@@ -1,22 +1,18 @@
-[package]
-name = "avash"
+[workspace]
+resolver = "2"
+members = ["crates/avash", "crates/avash-ui"]
+
+# Metadonnees communes : un seul endroit a modifier pour une release.
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Avash — native SSH/RDP connection manager. Light, fast, secure, multi-platform."
 license = "MIT"
+repository = "https://github.com/vela-kern/avash"
 
-[dependencies]
-tokio = { version = "1", features = ["full"] }
-russh = "0.45"
-russh-keys = "0.45"
-russh-sftp = "2"
-async-trait = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
-dirs = "5"
-anyhow = "1"
-smol = "2"
-whoami = "1"
-
-[dev-dependencies]
-log = "0.4.34"
+# Un seul cargo build --release pour tout le workspace : les dependances
+# communes (russh, tokio, serde) ne sont compilees qu'une fois, et le
+# repertoire target est partage au lieu d'etre duplique par crate.
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

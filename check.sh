@@ -5,8 +5,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UI="$ROOT/../avash-ui"
-WEB="$ROOT/../avash-web"
+CORE="$ROOT/crates/avash"
+UI="$ROOT/crates/avash-ui"
+WEB="$ROOT/web"
 QUICK=${1:-}
 FAILED=()
 
@@ -26,17 +27,13 @@ run() { # run <libellé> <répertoire> <commande...>
   rm -f /tmp/avash-check.$$
 }
 
-step "Cœur (avash)"
-run "compilation"        "$ROOT" cargo check --all-targets
-run "tests"              "$ROOT" cargo test
-run "format"             "$ROOT" cargo fmt --check
-run "clippy"             "$ROOT" cargo clippy --all-targets -- -D warnings
-
-step "Interface (avash-ui)"
-run "compilation"        "$UI" cargo check --all-targets
-run "tests"              "$UI" cargo test
-run "format"             "$UI" cargo fmt --check
-run "clippy"             "$UI" cargo clippy --all-targets -- -D warnings
+# Le workspace valide les deux crates Rust d'un seul appel : dependances
+# communes compilees une fois, target partage.
+step "Rust (workspace : avash + avash-ui)"
+run "compilation"        "$ROOT" cargo check --workspace --all-targets
+run "tests"              "$ROOT" cargo test --workspace --all-targets
+run "format"             "$ROOT" cargo fmt --all --check
+run "clippy"             "$ROOT" cargo clippy --workspace --all-targets -- -D warnings
 
 step "Front (avash-web)"
 run "typage"             "$WEB" npx tsc --noEmit
@@ -45,7 +42,7 @@ run "build"              "$WEB" npx vite build
 
 if [ "$QUICK" != "--quick" ]; then
   step "Build release"
-  run "binaire Tauri"    "$UI" cargo build --release
+  run "binaire Tauri"    "$ROOT" cargo build --release -p avash-ui
 fi
 
 printf '\n'
