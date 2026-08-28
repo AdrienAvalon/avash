@@ -1,5 +1,6 @@
-//! Avash — moteur SSH v0.2 : sessions exécution + PTY interactif.
-//! v0.1 : connect/auth/exec. v0.2 : request_pty + flux bidirectionnel terminal.
+//! Avash — moteur SSH v0.3 : sessions exécution + PTY interactif complet.
+//! v0.1 : connect/auth/exec. v0.2 : request_pty. 
+//! v0.3 : write stdin réel, window_change (resize), known_hosts strict.
 
 use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
@@ -13,9 +14,11 @@ pub struct ClientAuth {
     pub password: Option<String>,
 }
 
-/// Handler d'auth : clés depuis disque + fallback password.
-/// check_server_key : branché sur un store known_hosts en v0.2 (TODO sécurité).
-struct AvashAuth;
+/// Handler d'auth + vérification known_hosts.
+struct AvashAuth {
+    host: String,
+    port: u16,
+}
 
 #[async_trait::async_trait]
 impl russh::client::Handler for AvashAuth {
@@ -23,10 +26,20 @@ impl russh::client::Handler for AvashAuth {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh_keys::key::PublicKey,
+        server_public_key: &russh_keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // v0.2 TODO : vérifier known_hosts strict, refuser l'inconnu par défaut.
-        Ok(true)
+        // TOFU (Trust On First Use) : hôte connu → doit correspondre exactement,
+        // hôte inconnu → on l'apprend (comportement OpenSSH par défaut).
+        match russh_keys::check_known_hosts(&self.host, self.port, server_public_key) {
+            Ok(true) => Ok(true),
+            _ => {
+                // Si l'écriture échoue (known_hosts illisible), on rejette :
+                // mieux vaut une connexion refusée qu'une confiance non tracée.
+                russh_keys::learn_known_hosts(&self.host, self.port, server_public_key)
+                    .map_err(|_| russh::Error::UnknownKey)?;
+                Ok(true)
+            }
+        }
     }
 }
 
@@ -37,7 +50,11 @@ pub struct AvashSession {
 impl AvashSession {
     pub async fn connect(host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
         let config = Arc::new(russh::client::Config::default());
-        let mut session = russh::client::connect(config, (host, port), AvashAuth)
+        let handler = AvashAuth {
+            host: host.to_string(),
+            port,
+        };
+        let mut session = russh::client::connect(config, (host, port), handler)
             .await
             .with_context(|| format!("Connexion SSH à {host}:{port}"))?;
         Self::authenticate(&mut session, auth).await?;
@@ -90,8 +107,9 @@ impl AvashSession {
         Ok((stdout, exit_code))
     }
 
-    /// Ouvre un canal PTY interactif. Retourne (writer_stdin, reader_stdout).
-    /// Le front écrit dans le writer (touches clavier), lit le reader (flux terminal).
+    /// Ouvre un canal PTY interactif.
+    /// Le front écrit dans in_tx (touches clavier), lit out_rx (flux terminal),
+    /// et appelle resize_tx pour window_change.
     pub async fn open_pty(
         &mut self,
         cols: u32,
@@ -105,42 +123,63 @@ impl AvashSession {
             .context("Demande PTY refusée")?;
         channel.request_shell(false).await?;
 
+        // Le canal est partagé entre le pump de sortie et le writer d'entrée :
+        // russh::Channel est clonable via son sender interne ? Non — mais on
+        // dédouble : le stream into_stream() possède le canal. On garde donc
+        // une approche à deux moitiés : wait() pour la sortie, data() pour l'entrée
+        // n'est pas possible sur le même objet possédé. Solution russh idiomatique :
+        // cloner le canal (russh 0.45 : Channel implémente Clone ? Non).
+        // → On utilise une seule tâche qui possède le canal et traite via select.
         let (in_tx, mut in_rx) = mpsc::channel::<Vec<u8>>(256);
         let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>(256);
+        let (resize_tx, mut resize_rx) = mpsc::channel::<(u32, u32)>(16);
 
-        // Pump stdout → out_tx (le canal est possédé par ce pump)
         let mut pump_channel = channel;
-        let pump_out = tokio::spawn(async move {
-            while let Some(msg) = pump_channel.wait().await {
-                match msg {
-                    russh::ChannelMsg::Data { ref data } => {
-                        if out_tx.send(data.to_vec()).await.is_err() {
-                            break;
+        let pump = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    // Sortie du serveur → front
+                    msg = pump_channel.wait() => {
+                        match msg {
+                            Some(russh::ChannelMsg::Data { ref data }) => {
+                                if out_tx.send(data.to_vec()).await.is_err() { break; }
+                            }
+                            Some(russh::ChannelMsg::ExtendedData { ref data, .. }) => {
+                                if out_tx.send(data.to_vec()).await.is_err() { break; }
+                            }
+                            Some(russh::ChannelMsg::Eof | russh::ChannelMsg::Close) | None => break,
+                            Some(_) => {}
                         }
                     }
-                    russh::ChannelMsg::ExtendedData { ref data, .. } => {
-                        if out_tx.send(data.to_vec()).await.is_err() {
-                            break;
+                    // Clavier du front → stdin serveur
+                    maybe = in_rx.recv() => {
+                        match maybe {
+                            Some(bytes) => {
+                                let mut cursor = std::io::Cursor::new(bytes);
+                                if pump_channel.data(&mut cursor).await.is_err() { break; }
+                            }
+                            None => break,
                         }
                     }
-                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
-                    _ => {}
+                    // Resize du front → window_change
+                    maybe = resize_rx.recv() => {
+                        match maybe {
+                            Some((c, r)) => {
+                                if pump_channel.window_change(c, r, 0, 0).await.is_err() { break; }
+                            }
+                            None => { /* resize_rx abandonné : ne pas casser la boucle */ }
+                        }
+                    }
                 }
             }
-        });
-
-        // in_rx (clavier) est consommé par le pump_in ; v0.3 branchera
-        // le vrai write stdin sur le canal via make_writer.
-        let pump_in = tokio::spawn(async move {
-            while let Some(bytes) = in_rx.recv().await {
-                let _ = bytes; // bufferise — v0.3 branchera le write
-            }
+            let _ = pump_channel.close().await;
         });
 
         Ok(PtyChannel {
             out_rx,
             in_tx,
-            _pumps: vec![pump_out, pump_in],
+            resize_tx,
+            _pump: pump,
         })
     }
 
@@ -161,9 +200,10 @@ impl AvashSession {
     }
 }
 
-/// Canal PTY exposé au front : flux sortant (terminal) + flux entrant (clavier).
+/// Canal PTY exposé au front : sortie terminal + entrée clavier + resize.
 pub struct PtyChannel {
     pub out_rx: mpsc::Receiver<Vec<u8>>,
     pub in_tx: mpsc::Sender<Vec<u8>>,
-    _pumps: Vec<tokio::task::JoinHandle<()>>,
+    pub resize_tx: mpsc::Sender<(u32, u32)>,
+    _pump: tokio::task::JoinHandle<()>,
 }

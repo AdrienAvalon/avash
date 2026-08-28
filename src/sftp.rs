@@ -17,18 +17,23 @@ pub struct SftpEntry {
 }
 
 /// Handle SFTP vivant — le front liste/téléverse via ces commandes.
+/// Possède la session SSH mère (la garde ouverte).
 pub struct SftpHandle {
     pub sftp: SftpSession,
+    _session: AvashSession,
 }
 
 impl SftpHandle {
-    /// Ouvre le sous-système SFTP sur la session.
-    pub async fn open(session: &mut AvashSession) -> Result<Self> {
+    /// Ouvre le sous-système SFTP sur une session (consommée, gardée vivante).
+    pub async fn open(mut session: AvashSession) -> Result<Self> {
         let channel = session.open_sftp_channel().await?;
         let sftp = SftpSession::new(channel.into_stream())
             .await
             .context("Ouverture sous-système SFTP")?;
-        Ok(Self { sftp })
+        Ok(Self {
+            sftp,
+            _session: session,
+        })
     }
 
     /// Liste un répertoire distant.
