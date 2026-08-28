@@ -99,6 +99,43 @@ function renderHosts() {
     list.appendChild(el);
   }
   $("host-count").textContent = `${shown.length} hôte${shown.length > 1 ? "s" : ""}`;
+
+  // Aucun hote declare : conseiller « double-clic sur un hote » n'aide
+  // personne. On oriente vers la seule voie disponible.
+  if (state.hosts.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "host-empty";
+    empty.innerHTML =
+      `<p>Aucun hôte dans <code>~/.ssh/config</code>.</p>` +
+      `<p class="sub">Utilise <strong>Connexion directe</strong> ci-dessous, ` +
+      `ou crée une clé puis installe-la sur un serveur.</p>`;
+    list.appendChild(empty);
+  } else if (shown.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "host-empty";
+    empty.innerHTML = `<p>Aucun hôte ne correspond à « ${state.filter.replace(/[<>&]/g, "")} ».</p>`;
+    list.appendChild(empty);
+  }
+}
+
+
+type SessionState = "connecting" | "live" | "closed";
+
+/**
+ * Reflete l'etat d'une session sur son onglet.
+ *
+ * Sans ce retour, l'utilisateur ne distingue pas « ca charge » de
+ * « c'est mort » : dans les deux cas le terminal ne bouge pas.
+ */
+function setSessionState(id: number, st: SessionState) {
+  const s = state.sessions.get(id);
+  if (!s) return;
+  const dot = s.tab.querySelector(".state") as HTMLElement | null;
+  if (!dot) return;
+  dot.className = `state ${st}`;
+  dot.title =
+    st === "connecting" ? "Connexion en cours…" : st === "live" ? "Connectée" : "Session terminée";
+  s.tab.classList.toggle("dead", st === "closed");
 }
 
 /** Cree l'onglet et le terminal. La connexion elle-meme est faite par l'appelant. */
@@ -132,7 +169,7 @@ function newSessionShell(label: string) {
   tabs.querySelector(".no-session")?.remove();
   const tab = document.createElement("div");
   tab.className = "tab active";
-  tab.innerHTML = `<span class="label"></span><span class="close">✕</span>`;
+  tab.innerHTML = `<span class="state" title="Connexion…"></span><span class="label"></span><span class="close">✕</span>`;
   tab.querySelector(".label")!.textContent = label;
   tab.addEventListener("click", () => focusSession(id));
   tab.querySelector(".close")!.addEventListener("click", (e) => {
@@ -196,9 +233,13 @@ async function openSession(h: Host) {
   await ensureFontLoaded();
   const { id, term } = newSessionShell(h.alias);
   warnIfDeaf(term);
+  const target = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
+  term.write(`\x1b[90mConnexion à ${target}…\x1b[0m\r\n`);
   try {
     await invoke("pty_open", { id, alias: h.alias, cols: term.cols, rows: term.rows });
+    setSessionState(id, "live");
   } catch (e) {
+    setSessionState(id, "closed");
     term.write(`\x1b[31m⚔️ Échec connexion : ${e}\x1b[0m\r\n`);
   }
 }
@@ -226,6 +267,7 @@ async function openManualSession(t: ManualTarget) {
       rows: term.rows,
     });
     session.tab.querySelector(".label")!.textContent = label;
+    setSessionState(id, "live");
   } catch (e) {
     closeSession(id);
     throw e;
@@ -280,6 +322,15 @@ async function listenPty() {
         s.term.write(ev.payload.data);
       }
     });
+    await listen<{ id: number }>("pty-closed", (ev) => {
+      const s = state.sessions.get(ev.payload.id);
+      if (!s) return;
+      setSessionState(ev.payload.id, "closed");
+      s.term.write(
+        `\r\n\x1b[90m── session terminée ── \x1b[0m` +
+          `\x1b[90mCtrl+W pour fermer l'onglet.\x1b[0m\r\n`,
+      );
+    });
   } catch (e) {
     // Un echec ici rend TOUS les terminaux muets : la sortie du serveur
     // n'arrive jamais. Le signaler visiblement plutot que dans une console
@@ -293,6 +344,14 @@ async function listenPty() {
 /** Renseigne si l'ecoute des evenements a echoue au demarrage. */
 let ptyListenError: string | null = null;
 
+/** L'ecran d'accueil s'adapte : sans hote, « double-clic » n'aide personne. */
+function refreshEmptyHint() {
+  $("empty-hint").textContent =
+    state.hosts.length === 0
+      ? "Aucun hôte configuré — commence par une connexion directe"
+      : "Double-clic sur un hôte pour te connecter";
+}
+
 async function loadHosts() {
   try {
     state.hosts = await invoke<Host[]>("list_hosts");
@@ -300,6 +359,7 @@ async function loadHosts() {
     console.warn("Config SSH illisible :", e);
   }
   renderHosts();
+  refreshEmptyHint();
 }
 
 // Search sidebar
@@ -670,3 +730,50 @@ keysModal().addEventListener("click", (e) => {
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && keysModal().classList.contains("open")) keysClose();
 });
+
+// ---------- Raccourcis d'onglets ----------
+
+/** Liste ordonnee des identifiants de session, pour naviguer par position. */
+function sessionIds(): number[] {
+  return [...state.sessions.keys()];
+}
+
+function cycleSession(step: number) {
+  const ids = sessionIds();
+  if (ids.length < 2) return;
+  const i = ids.indexOf(state.active ?? ids[0]);
+  focusSession(ids[(i + step + ids.length) % ids.length]);
+}
+
+window.addEventListener("keydown", (e) => {
+  // Ne pas capturer pendant qu'un formulaire est ouvert : l'utilisateur
+  // y tape, Ctrl+W fermerait un onglet sous ses doigts.
+  if (document.querySelector(".modal-backdrop.open")) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+
+  if (e.key.toLowerCase() === "w" && state.active !== null) {
+    e.preventDefault();
+    closeSession(state.active);
+    return;
+  }
+  if (e.key === "Tab") {
+    e.preventDefault();
+    cycleSession(e.shiftKey ? -1 : 1);
+    return;
+  }
+  // Ctrl+1..9 : acces direct a un onglet par sa position.
+  if (/^[1-9]$/.test(e.key)) {
+    const ids = sessionIds();
+    const idx = Number(e.key) - 1;
+    if (idx < ids.length) {
+      e.preventDefault();
+      focusSession(ids[idx]);
+    }
+  }
+});
+
+// L'ecran d'accueil s'adapte : sans hote declare, le conseil « double-clic
+// sur un hote » est inapplicable.
+$("empty-connect").addEventListener("click", manualOpen);
+$("empty-keys").addEventListener("click", keysOpen);

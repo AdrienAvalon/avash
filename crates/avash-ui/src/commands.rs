@@ -254,7 +254,11 @@ async fn open_on_target(
                 }),
             );
         }
+        // La session distante s'est terminee (exit, coupure reseau, kill).
+        // Sans cet evenement, l'onglet resterait muet et l'utilisateur ne
+        // saurait pas s'il attend encore ou si tout est fini.
         let _ = session.disconnect().await;
+        let _ = app2.emit("pty-closed", serde_json::json!({ "id": sid }));
     });
 
     Ok(label)
