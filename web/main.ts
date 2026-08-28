@@ -522,9 +522,14 @@ function manualClose() {
   manualModal().classList.remove("open");
   ($("manual-form") as HTMLFormElement).reset();
   manualSyncAuthRows();
+  manualSyncSaveRow();
 }
 
 /** N'affiche que le champ correspondant au mode d'authentification choisi. */
+function manualSyncSaveRow() {
+  $("m-alias-row").hidden = !($("m-save") as HTMLInputElement).checked;
+}
+
 function manualSyncAuthRows() {
   const mode = (document.querySelector('input[name="auth"]:checked') as HTMLInputElement | null)?.value;
   $("m-password-row").hidden = mode !== "password";
@@ -552,6 +557,21 @@ async function manualSubmit(ev: Event) {
   submit.disabled = true;
   submit.textContent = "Connexion…";
   try {
+    if (($("m-save") as HTMLInputElement).checked) {
+      // Enregistrer AVANT de connecter : si l'ecriture echoue (alias deja
+      // pris, fichier illisible), l'utilisateur le voit dans le formulaire
+      // plutot que de decouvrir plus tard que rien n'a ete sauve.
+      const alias = ($("m-alias") as HTMLInputElement).value.trim();
+      if (!alias) throw "Donne un nom à l'hôte pour l'enregistrer.";
+      await invoke("host_save", {
+        alias,
+        addr: target.addr,
+        port: target.port,
+        user: target.user,
+        keyPath: target.key_path,
+      });
+      await loadHosts();
+    }
     await openManualSession(target);
     manualClose();
   } catch (e) {
@@ -569,6 +589,12 @@ async function manualSubmit(ev: Event) {
 $("manual-btn").addEventListener("click", manualOpen);
 $("m-cancel").addEventListener("click", manualClose);
 $("manual-form").addEventListener("submit", manualSubmit);
+$("m-save").addEventListener("change", manualSyncSaveRow);
+// Pre-remplir le nom avec l'adresse : c'est presque toujours ce qu'on veut.
+$("m-addr").addEventListener("blur", () => {
+  const alias = $("m-alias") as HTMLInputElement;
+  if (!alias.value.trim()) alias.value = ($("m-addr") as HTMLInputElement).value.trim();
+});
 document
   .querySelectorAll('input[name="auth"]')
   .forEach((r) => r.addEventListener("change", manualSyncAuthRows));
@@ -777,3 +803,4 @@ window.addEventListener("keydown", (e) => {
 // sur un hote » est inapplicable.
 $("empty-connect").addEventListener("click", manualOpen);
 $("empty-keys").addEventListener("click", keysOpen);
+manualSyncSaveRow();

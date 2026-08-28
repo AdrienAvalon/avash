@@ -807,3 +807,30 @@ pub async fn key_deploy(
         .map(|m| m.to_string())
         .map_err(|e| format!("{e:#}"))
 }
+
+/// Enregistre une connexion manuelle dans `~/.ssh/config`.
+///
+/// L'hôte devient alors utilisable avec `ssh`, `scp`, `rsync` — pas seulement
+/// dans Avash. Le mot de passe n'est jamais écrit : ce fichier est en clair.
+#[tauri::command]
+pub fn host_save(
+    alias: String,
+    addr: String,
+    port: Option<u16>,
+    user: String,
+    key_path: Option<String>,
+) -> Result<SshHost, String> {
+    let host = SshHost {
+        alias: alias.trim().to_string(),
+        hostname: Some(addr.trim().to_string()),
+        user: Some(user.trim().to_string()).filter(|u| !u.is_empty()),
+        port,
+        identity_file: key_path
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty()),
+        proxy_jump: None,
+        tags: vec![],
+    };
+    avash::append_host(&host).map_err(|e| format!("{e:#}"))?;
+    Ok(host)
+}

@@ -24,6 +24,7 @@ pub fn run() {
             commands::sftp_list,
             commands::sftp_download,
             commands::sftp_upload,
+            commands::host_save,
             commands::keys_list,
             commands::key_generate,
             commands::key_deploy

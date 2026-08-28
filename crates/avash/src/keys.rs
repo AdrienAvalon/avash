@@ -281,42 +281,7 @@ mod tests {
             );
         }
     }
-    /// HOME est global au processus : ces tests doivent etre serialises.
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    struct HomeGuard {
-        previous: Option<String>,
-        dir: PathBuf,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(h) => std::env::set_var("HOME", h),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
-    }
-
-    fn temp_home() -> HomeGuard {
-        let lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!(
-            "avash-keys-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let previous = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &dir);
-        HomeGuard {
-            previous,
-            dir,
-            _lock: lock,
-        }
-    }
+    use crate::testutil::temp_home;
 
     #[test]
     fn generate_produit_une_paire_utilisable() {

@@ -301,6 +301,11 @@
       .tab .state.closed { background: #59617a; }
       .tab.dead .label { opacity: .55; text-decoration: line-through; }
       @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+    
+      .modal .check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); cursor: pointer; }
+      .modal .check input { width: auto; }
+      .field-hint { font-size: 11px; color: var(--text-dim); opacity: .85; }
+      .modal code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
     </style>
 </head>
 <body>
@@ -387,6 +392,15 @@
         </label>
         <label id="m-key-row" hidden>Chemin de la clé privée
           <input id="m-key" name="key" placeholder="~/.ssh/id_ed25519" />
+        </label>
+
+        <label class="check">
+          <input type="checkbox" id="m-save" />
+          <span>Enregistrer cet hôte dans <code>~/.ssh/config</code></span>
+        </label>
+        <label id="m-alias-row" hidden>Nom à donner à l'hôte
+          <input id="m-alias" placeholder="prod-web" />
+          <span class="field-hint">Utilisable ensuite avec <code>ssh prod-web</code>.</span>
         </label>
 
         <p class="modal-error" id="m-error" hidden></p>
