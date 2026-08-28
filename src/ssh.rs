@@ -152,6 +152,9 @@ impl AvashSession {
 
         let mut pump_channel = channel;
         let pump = tokio::spawn(async move {
+            // Le resize est optionnel : sa fermeture ne doit pas tuer la session,
+            // mais son bras select! doit etre desactive (voir plus bas).
+            let mut resize_closed = false;
             loop {
                 tokio::select! {
                     // Sortie du serveur → front
@@ -177,13 +180,17 @@ impl AvashSession {
                             None => break,
                         }
                     }
-                    // Resize du front → window_change
-                    maybe = resize_rx.recv() => {
+                    // Resize du front → window_change.
+                    // La garde `if !resize_closed` est indispensable : un canal
+                    // ferme rend Ready(None) immediatement et sans fin, et ce
+                    // bras ferait tourner la boucle a vide a 100 % de CPU.
+                    // On desactive donc le bras plutot que d'ignorer le None.
+                    maybe = resize_rx.recv(), if !resize_closed => {
                         match maybe {
                             Some((c, r)) => {
                                 if pump_channel.window_change(c, r, 0, 0).await.is_err() { break; }
                             }
-                            None => { /* resize_rx abandonné : ne pas casser la boucle */ }
+                            None => resize_closed = true,
                         }
                     }
                 }

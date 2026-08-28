@@ -436,3 +436,45 @@ async fn unknown_host_is_learned_on_first_contact() {
         .await
         .expect("reconnexion sur hote connu : doit passer");
 }
+
+/// Non-regression : abandonner le canal de resize ne doit ni tuer la session,
+/// ni faire tourner le pump a vide.
+///
+/// Regression corrigee : le bras `resize_rx.recv()` du select! traitait le
+/// None par un no-op. Un canal ferme rendant Ready(None) immediatement et sans
+/// fin, la boucle tournait a 100 % de CPU tant que la session vivait.
+#[tokio::test]
+async fn dropping_resize_channel_keeps_pty_alive_and_idle() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion echouee");
+
+    let mut pty = session.open_pty(80, 24, "xterm-256color").await.unwrap();
+
+    // Banner initial
+    tokio::time::timeout(std::time::Duration::from_secs(5), pty.out_rx.recv())
+        .await
+        .expect("timeout banner")
+        .expect("canal ferme");
+
+    // On abandonne le resize : le front peut le lacher sans fermer l'onglet.
+    let resize = std::mem::replace(&mut pty.resize_tx, {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        tx
+    });
+    drop(resize);
+
+    // La session doit rester utilisable : le clavier passe toujours.
+    pty.in_tx.send(b"bonjour".to_vec()).await.expect("stdin ferme");
+    let echoed = tokio::time::timeout(std::time::Duration::from_secs(5), pty.out_rx.recv())
+        .await
+        .expect("timeout apres abandon du resize")
+        .expect("canal ferme apres abandon du resize");
+    assert!(
+        String::from_utf8_lossy(&echoed).contains("bonjour"),
+        "le PTY doit rester vivant : {:?}",
+        String::from_utf8_lossy(&echoed)
+    );
+}
