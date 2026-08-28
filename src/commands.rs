@@ -57,7 +57,6 @@ pub async fn run_command(alias: String, command: String) -> Result<String, Strin
     Ok(format!("{stdout}\n[exit {code}]"))
 }
 
-
 /// Decodeur UTF-8 incremental pour la sortie d'un PTY.
 ///
 /// Le flux arrive par blocs arbitraires : un caractere multi-octets (accent,
@@ -127,20 +126,18 @@ pub async fn pty_open(
     let app2 = app.clone();
     let _pump = tokio::spawn(async move {
         let mut decoder = Utf8Stream::default();
-        loop {
-            match out_rx.recv().await {
-                Some(bytes) => {
-                    let text = decoder.push(&bytes);
-                    if text.is_empty() {
-                        continue; // sequence encore incomplete
-                    }
-                    let _ = app2.emit("pty-output", serde_json::json!({
-                        "id": sid,
-                        "data": text,
-                    }));
-                }
-                None => break,
+        while let Some(bytes) = out_rx.recv().await {
+            let text = decoder.push(&bytes);
+            if text.is_empty() {
+                continue; // sequence encore incomplete
             }
+            let _ = app2.emit(
+                "pty-output",
+                serde_json::json!({
+                    "id": sid,
+                    "data": text,
+                }),
+            );
         }
         let _ = session.disconnect().await;
     });
@@ -151,11 +148,15 @@ pub async fn pty_open(
     // continuerait d'emettre des `pty-output` portant le meme id : la sortie
     // d'un ancien serveur apparaitrait dans le nouvel onglet.
     // Lacher le SessionHandle ferme ses canaux, ce qui termine l'ancien pump.
-    let evicted = state
-        .inner
-        .lock()
-        .unwrap()
-        .insert(id, SessionHandle { input, resize, sftp: Mutex::new(None), alias });
+    let evicted = state.inner.lock().unwrap().insert(
+        id,
+        SessionHandle {
+            input,
+            resize,
+            sftp: Mutex::new(None),
+            alias,
+        },
+    );
     if let Some(old) = evicted {
         drop(old);
     }
@@ -205,7 +206,7 @@ pub async fn pty_resize(
 pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result<(), String> {
     let handle = state.inner.lock().unwrap().remove(&id);
     if let Some(h) = handle {
-        let sftp = h.sftp.into_inner().unwrap().take();
+        let sftp = h.sftp.into_inner().unwrap();
         if let Some(s) = sftp {
             // Fermeture explicite si on détient la dernière référence.
             if let Ok(owned) = std::sync::Arc::try_unwrap(s) {
@@ -256,7 +257,6 @@ async fn sftp_of(
     Ok(sftp)
 }
 
-
 /// Determine le chemin local d'un telechargement.
 ///
 /// Si l'appelant n'impose rien, on derive le nom depuis le chemin distant.
@@ -297,7 +297,10 @@ pub async fn sftp_download(
 ) -> Result<String, String> {
     let sftp = sftp_of(&state, id).await?;
     let local = local_target(&remote, local)?;
-    let n = sftp.download(&remote, std::path::Path::new(&local)).await.map_err(|e| e.to_string())?;
+    let n = sftp
+        .download(&remote, std::path::Path::new(&local))
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(format!("{local} ({n} octets)"))
 }
 
@@ -433,7 +436,10 @@ mod tests {
             auth.key_path.as_deref(),
             Some(std::path::Path::new("/home/x/.ssh/id_ed25519"))
         );
-        assert!(auth.password.is_none(), "aucun mot de passe ne doit etre pose ici");
+        assert!(
+            auth.password.is_none(),
+            "aucun mot de passe ne doit etre pose ici"
+        );
     }
 
     #[test]
@@ -499,5 +505,4 @@ mod tests {
         let mut d = Utf8Stream::default();
         assert_eq!(d.push(b"ls -la\r\n"), "ls -la\r\n");
     }
-
 }
