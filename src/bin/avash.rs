@@ -44,7 +44,10 @@ fn cmd_list() -> anyhow::Result<()> {
         }
     };
     println!("{:-<62}", "");
-    println!(" Avash 😼 — {} hôtes trouvés dans ~/.ssh/config", hosts.len());
+    println!(
+        " Avash 😼 — {} hôtes trouvés dans ~/.ssh/config",
+        hosts.len()
+    );
     println!("{:-<62}", "");
     for h in &hosts {
         let target = format!(
@@ -66,12 +69,12 @@ fn cmd_list() -> anyhow::Result<()> {
 async fn cmd_run(host: avash::SshHost, command: String) -> anyhow::Result<()> {
     let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
     let auth = avash::ssh::ClientAuth {
-        user: host.user.clone().unwrap_or_else(|| whoami::username()),
+        user: host.user.clone().unwrap_or_else(whoami::username),
         key_path: host.identity_file.as_ref().map(std::path::PathBuf::from),
         password: None,
     };
-    let mut session = avash::ssh::AvashSession::connect(&addr, host.port.unwrap_or(22), &auth)
-        .await?;
+    let mut session =
+        avash::ssh::AvashSession::connect(&addr, host.port.unwrap_or(22), &auth).await?;
     let (stdout, code) = session.run(&command).await?;
     print!("{stdout}");
     session.disconnect().await?;

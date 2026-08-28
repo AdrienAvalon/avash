@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use russh::keys::key::KeyPair;
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
-use russh_sftp::protocol::{File, FileAttributes, Handle, StatusCode, Status};
+use russh_sftp::protocol::{File, FileAttributes, Handle, Status, StatusCode};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -155,6 +155,11 @@ struct TestSftpSession {
     file_read_done: bool,
 }
 
+// Les methodes du trait Handler de russh-sftp sont declarees
+// `fn ... -> impl Future<...> + Send`. On calque cette signature plutot que
+// d'utiliser `async fn` : clippy suggere l'inverse, mais coller au trait rend
+// l'implementation plus lisible face a la definition upstream.
+#[allow(clippy::manual_async_fn)]
 impl russh_sftp::server::Handler for TestSftpSession {
     type Error = StatusCode;
 
@@ -169,7 +174,12 @@ impl russh_sftp::server::Handler for TestSftpSession {
         _pflags: russh_sftp::protocol::OpenFlags,
         _attrs: FileAttributes,
     ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
-        async move { Ok(Handle { id, handle: "file".into() }) }
+        async move {
+            Ok(Handle {
+                id,
+                handle: "file".into(),
+            })
+        }
     }
 
     fn read(
@@ -201,7 +211,12 @@ impl russh_sftp::server::Handler for TestSftpSession {
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let _n = data.len();
         async move {
-            Ok(Status { id, status_code: StatusCode::Ok, error_message: "".into(), language_tag: "".into() })
+            Ok(Status {
+                id,
+                status_code: StatusCode::Ok,
+                error_message: "".into(),
+                language_tag: "".into(),
+            })
         }
     }
 
@@ -211,7 +226,12 @@ impl russh_sftp::server::Handler for TestSftpSession {
         _handle: String,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         async move {
-            Ok(Status { id, status_code: StatusCode::Ok, error_message: "".into(), language_tag: "".into() })
+            Ok(Status {
+                id,
+                status_code: StatusCode::Ok,
+                error_message: "".into(),
+                language_tag: "".into(),
+            })
         }
     }
 
@@ -220,7 +240,12 @@ impl russh_sftp::server::Handler for TestSftpSession {
         id: u32,
         _path: String,
     ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
-        async move { Ok(Handle { id, handle: "dir".into() }) }
+        async move {
+            Ok(Handle {
+                id,
+                handle: "dir".into(),
+            })
+        }
     }
 
     fn readdir(
@@ -236,9 +261,33 @@ impl russh_sftp::server::Handler for TestSftpSession {
             Ok(russh_sftp::protocol::Name {
                 id,
                 files: vec![
-                    File { filename: ".".into(), longname: "drwxr-xr-x".into(), attrs: FileAttributes { size: Some(0), permissions: Some(0o40755), ..Default::default() } },
-                    File { filename: "rapport.md".into(), longname: "-rw-r--r-- rapport.md".into(), attrs: FileAttributes { size: Some(1234), permissions: Some(0o100644), ..Default::default() } },
-                    File { filename: "data".into(), longname: "drwxr-xr-x data".into(), attrs: FileAttributes { size: Some(4096), permissions: Some(0o40755), ..Default::default() } },
+                    File {
+                        filename: ".".into(),
+                        longname: "drwxr-xr-x".into(),
+                        attrs: FileAttributes {
+                            size: Some(0),
+                            permissions: Some(0o40755),
+                            ..Default::default()
+                        },
+                    },
+                    File {
+                        filename: "rapport.md".into(),
+                        longname: "-rw-r--r-- rapport.md".into(),
+                        attrs: FileAttributes {
+                            size: Some(1234),
+                            permissions: Some(0o100644),
+                            ..Default::default()
+                        },
+                    },
+                    File {
+                        filename: "data".into(),
+                        longname: "drwxr-xr-x data".into(),
+                        attrs: FileAttributes {
+                            size: Some(4096),
+                            permissions: Some(0o40755),
+                            ..Default::default()
+                        },
+                    },
                 ],
             })
         }
@@ -252,7 +301,10 @@ impl russh_sftp::server::Handler for TestSftpSession {
         async move {
             Ok(russh_sftp::protocol::Attrs {
                 id,
-                attrs: FileAttributes { size: Some(42), ..Default::default() },
+                attrs: FileAttributes {
+                    size: Some(42),
+                    ..Default::default()
+                },
             })
         }
     }
@@ -268,7 +320,9 @@ async fn spawn_test_sshd() -> u16 {
     };
     let config = Arc::new(config);
     let mut server = TestSshServer;
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         let _ = server.run_on_socket(config, &listener).await;
@@ -316,7 +370,10 @@ async fn connect_exec_roundtrip() {
         .expect("connexion échouée");
     let (stdout, code) = session.run("uname -a").await.unwrap();
     assert_eq!(code, 0);
-    assert!(stdout.contains("CMD:uname -a"), "stdout inattendu : {stdout}");
+    assert!(
+        stdout.contains("CMD:uname -a"),
+        "stdout inattendu : {stdout}"
+    );
     assert!(stdout.contains("stderr-ok"), "stderr manquant : {stdout}");
     session.disconnect().await.unwrap();
 }
@@ -337,7 +394,10 @@ async fn pty_write_and_resize_roundtrip() {
         .expect("timeout banner PTY")
         .expect("canal fermé");
     let banner = String::from_utf8_lossy(&first);
-    assert!(banner.contains("PTY(xterm-256color 80x24)"), "banner : {banner}");
+    assert!(
+        banner.contains("PTY(xterm-256color 80x24)"),
+        "banner : {banner}"
+    );
 
     // Écrire au stdin doit revenir en ECHO:
     pty.in_tx.send(b"bonjour\r".to_vec()).await.unwrap();
@@ -367,11 +427,16 @@ async fn sftp_list_download_upload() {
     let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
         .await
         .expect("connexion échouée");
-    let sftp = avash::sftp::SftpHandle::open(session).await.expect("SFTP open");
+    let sftp = avash::sftp::SftpHandle::open(session)
+        .await
+        .expect("SFTP open");
 
     // list
     let entries = sftp.list("/").await.unwrap();
-    assert!(entries.iter().any(|e| e.name == "rapport.md"), "entries : {entries:?}");
+    assert!(
+        entries.iter().any(|e| e.name == "rapport.md"),
+        "entries : {entries:?}"
+    );
 
     // download → fichier local temporaire
     let local = std::env::temp_dir().join(format!("avash-dl-{}.txt", std::process::id()));
@@ -409,8 +474,7 @@ async fn changed_host_key_is_refused() {
     // On inscrit volontairement une cle qui n'est PAS celle du serveur.
     let decoy = KeyPair::generate_ed25519().unwrap();
     let decoy_pub = decoy.clone_public_key().unwrap();
-    russh_keys::learn_known_hosts("127.0.0.1", port, &decoy_pub)
-        .expect("ecriture known_hosts");
+    russh_keys::learn_known_hosts("127.0.0.1", port, &decoy_pub).expect("ecriture known_hosts");
 
     // Le serveur presente sa vraie cle : elle differe de celle memorisee.
     let res = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth).await;
@@ -467,7 +531,10 @@ async fn dropping_resize_channel_keeps_pty_alive_and_idle() {
     drop(resize);
 
     // La session doit rester utilisable : le clavier passe toujours.
-    pty.in_tx.send(b"bonjour".to_vec()).await.expect("stdin ferme");
+    pty.in_tx
+        .send(b"bonjour".to_vec())
+        .await
+        .expect("stdin ferme");
     let echoed = tokio::time::timeout(std::time::Duration::from_secs(5), pty.out_rx.recv())
         .await
         .expect("timeout apres abandon du resize")

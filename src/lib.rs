@@ -1,7 +1,7 @@
 //! Avash — parseur ~/.ssh/config v0.1, avec serialisation pour le front.
 
-pub mod ssh;
 pub mod sftp;
+pub mod ssh;
 
 use serde::{Deserialize, Serialize};
 
@@ -75,7 +75,10 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
     let mut expanded = Vec::new();
     for h in hosts {
         for alias in h.alias.split_whitespace() {
-            expanded.push(SshHost { alias: alias.to_string(), ..h.clone() });
+            expanded.push(SshHost {
+                alias: alias.to_string(),
+                ..h.clone()
+            });
         }
     }
     expanded.retain(|h| !h.alias.contains('*') && !h.alias.starts_with('!'));

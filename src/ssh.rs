@@ -1,5 +1,5 @@
 //! Avash — moteur SSH v0.3 : sessions exécution + PTY interactif complet.
-//! v0.1 : connect/auth/exec. v0.2 : request_pty. 
+//! v0.1 : connect/auth/exec. v0.2 : request_pty.
 //! v0.3 : write stdin réel, window_change (resize), known_hosts strict.
 
 use anyhow::{anyhow, Context, Result};
@@ -126,12 +126,7 @@ impl AvashSession {
     /// Ouvre un canal PTY interactif.
     /// Le front écrit dans in_tx (touches clavier), lit out_rx (flux terminal),
     /// et appelle resize_tx pour window_change.
-    pub async fn open_pty(
-        &mut self,
-        cols: u32,
-        rows: u32,
-        term: &str,
-    ) -> Result<PtyChannel> {
+    pub async fn open_pty(&mut self, cols: u32, rows: u32, term: &str) -> Result<PtyChannel> {
         let channel = self.session.channel_open_session().await?;
         channel
             .request_pty(false, term, cols, rows, 0, 0, &[])
@@ -214,9 +209,7 @@ impl AvashSession {
     }
 
     /// Ouvre un canal dédié au sous-système SFTP (canal indépendant, session intacte).
-    pub async fn open_sftp_channel(
-        &mut self,
-    ) -> Result<russh::Channel<russh::client::Msg>> {
+    pub async fn open_sftp_channel(&mut self) -> Result<russh::Channel<russh::client::Msg>> {
         let channel = self.session.channel_open_session().await?;
         channel.request_subsystem(true, "sftp").await?;
         Ok(channel)
