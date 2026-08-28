@@ -26,6 +26,9 @@ impl russh::server::Server for TestSshServer {
 #[derive(Default)]
 struct TestSshSession {
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    /// Canaux ayant demande le sous-systeme SFTP : ils transportent du binaire,
+    /// l'echo du test PTY les corromprait.
+    sftp_channels: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
 }
 
 #[async_trait]
@@ -98,6 +101,10 @@ impl russh::server::Handler for TestSshSession {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        // Un canal SFTP transporte du binaire : l'echo du test PTY le corromprait.
+        if self.sftp_channels.lock().await.contains(&channel_id) {
+            return Ok(());
+        }
         let echo = format!("ECHO:{}", String::from_utf8_lossy(data));
         session.data(channel_id, echo.into_bytes().into());
         Ok(())
@@ -124,10 +131,13 @@ impl russh::server::Handler for TestSshSession {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         if name == "sftp" {
+            self.sftp_channels.lock().await.insert(channel_id);
             let channel = self.channels.lock().await.remove(&channel_id).unwrap();
             session.channel_success(channel_id);
             let sftp = TestSftpSession::default();
-            russh_sftp::server::run(channel.into_stream(), sftp).await;
+            tokio::spawn(async move {
+                russh_sftp::server::run(channel.into_stream(), sftp).await;
+            });
         } else {
             session.channel_failure(channel_id);
         }
@@ -140,6 +150,9 @@ impl russh::server::Handler for TestSshSession {
 #[derive(Default)]
 struct TestSftpSession {
     root_read_done: bool,
+    /// Octets deja servis par read() : sans cet etat, le serveur renvoie le
+    /// contenu indefiniment et le client telecharge en boucle infinie.
+    file_read_done: bool,
 }
 
 impl russh_sftp::server::Handler for TestSftpSession {
@@ -166,7 +179,12 @@ impl russh_sftp::server::Handler for TestSftpSession {
         _offset: u64,
         _len: u32,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Data, Self::Error>> + Send {
+        let done = std::mem::replace(&mut self.file_read_done, true);
         async move {
+            if done {
+                // Fin de fichier : sans ce retour, le client relit sans fin.
+                return Err(StatusCode::Eof);
+            }
             Ok(russh_sftp::protocol::Data {
                 id,
                 data: b"CONTENU-FICHIER-TEST".to_vec(),
@@ -364,9 +382,57 @@ async fn sftp_list_download_upload() {
 
     // upload (le serveur factice accepte tout write)
     let up = std::env::temp_dir().join(format!("avash-up-{}.txt", std::process::id()));
-    std::fs::write(&up, b"donnees-locales").unwrap();
+    let payload: &[u8] = b"donnees-locales";
+    std::fs::write(&up, payload).unwrap();
     let n = sftp.upload(&up, "/envoye.txt").await.unwrap();
-    assert_eq!(n, 14);
+    // Compare a la taille reelle : une constante en dur derive des qu'on
+    // touche au contenu (c'etait 14 pour 15 octets).
+    assert_eq!(n as usize, payload.len());
 
     sftp.close().await.unwrap();
+}
+
+/// Non-regression : une cle d'hote qui CHANGE doit faire echouer la connexion.
+///
+/// C'est le scenario d'interception (MITM) : l'hote est deja connu, mais la cle
+/// presentee ne correspond plus. OpenSSH refuse et affiche
+/// REMOTE HOST IDENTIFICATION HAS CHANGED ; avash doit faire de meme.
+///
+/// Regression corrigee : le `match` sur check_known_hosts confondait
+/// "hote inconnu" (Ok(false)) et "cle changee" (Err(KeyChanged)) dans un bras
+/// `_` commun, et reapprenait la cle dans les deux cas.
+#[tokio::test]
+async fn changed_host_key_is_refused() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth(); // positionne HOME sur le home virtuel
+
+    // On inscrit volontairement une cle qui n'est PAS celle du serveur.
+    let decoy = KeyPair::generate_ed25519().unwrap();
+    let decoy_pub = decoy.clone_public_key().unwrap();
+    russh_keys::learn_known_hosts("127.0.0.1", port, &decoy_pub)
+        .expect("ecriture known_hosts");
+
+    // Le serveur presente sa vraie cle : elle differe de celle memorisee.
+    let res = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth).await;
+    assert!(
+        res.is_err(),
+        "une cle d'hote modifiee doit etre refusee, la connexion a reussi"
+    );
+}
+
+/// TOFU : un hote inconnu est appris au premier contact, la connexion passe.
+#[tokio::test]
+async fn unknown_host_is_learned_on_first_contact() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("premier contact : la connexion doit passer (TOFU)");
+    drop(session);
+
+    // La cle doit desormais etre memorisee : une reconnexion passe aussi.
+    avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("reconnexion sur hote connu : doit passer");
 }

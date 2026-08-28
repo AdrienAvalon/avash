@@ -207,6 +207,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dirs",
+ "log",
  "russh",
  "russh-keys",
  "russh-sftp",

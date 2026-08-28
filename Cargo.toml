@@ -17,3 +17,6 @@ dirs = "5"
 anyhow = "1"
 smol = "2"
 whoami = "1"
+
+[dev-dependencies]
+log = "0.4.34"
