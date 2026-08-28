@@ -14,10 +14,18 @@ pub struct ClientAuth {
     pub password: Option<String>,
 }
 
+/// Raison d'un refus de cle d'hote, partagee entre le handler et l'appelant.
+///
+/// `check_server_key` ne peut renvoyer qu'un `russh::Error` sans message : sans
+/// ce canal, l'utilisateur ne verrait qu'un "Unknown key" opaque alors que
+/// c'est l'avertissement le plus important de l'application.
+type HostKeyVerdict = Arc<std::sync::Mutex<Option<String>>>;
+
 /// Handler d'auth + vérification known_hosts.
 struct AvashAuth {
     host: String,
     port: u16,
+    verdict: HostKeyVerdict,
 }
 
 #[async_trait::async_trait]
@@ -45,16 +53,23 @@ impl russh::client::Handler for AvashAuth {
             // La clé d'hôte a changé : réinstallation du serveur, ou interception.
             // Dans le doute on refuse — c'est à l'utilisateur de trancher.
             Err(russh_keys::Error::KeyChanged { line }) => {
-                eprintln!(
-                    "avash: LA CLÉ D'HÔTE A CHANGÉ pour {}:{} (known_hosts ligne {}) — \
-                     connexion refusée, interception possible.",
+                *self.verdict.lock().unwrap() = Some(format!(
+                    "LA CLÉ D'HÔTE A CHANGÉ pour {}:{}.\n\n\
+                     Soit le serveur a été réinstallé, soit quelqu'un intercepte \
+                     la connexion. Avash refuse de se connecter.\n\n\
+                     Si tu es certain que le serveur a changé légitimement, \
+                     supprime la ligne {} de ~/.ssh/known_hosts.",
                     self.host, self.port, line
-                );
+                ));
                 Err(russh::Error::UnknownKey)
             }
 
             // known_hosts illisible ou autre erreur : on refuse aussi.
-            Err(_) => Err(russh::Error::UnknownKey),
+            Err(e) => {
+                *self.verdict.lock().unwrap() =
+                    Some(format!("Vérification de la clé d'hôte impossible : {e}"));
+                Err(russh::Error::UnknownKey)
+            }
         }
     }
 }
@@ -66,13 +81,23 @@ pub struct AvashSession {
 impl AvashSession {
     pub async fn connect(host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
         let config = Arc::new(russh::client::Config::default());
+        let verdict: HostKeyVerdict = Arc::new(std::sync::Mutex::new(None));
         let handler = AvashAuth {
             host: host.to_string(),
             port,
+            verdict: verdict.clone(),
         };
-        let mut session = russh::client::connect(config, (host, port), handler)
-            .await
-            .with_context(|| format!("Connexion SSH à {host}:{port}"))?;
+        let mut session = match russh::client::connect(config, (host, port), handler).await {
+            Ok(s) => s,
+            Err(e) => {
+                // Un refus de cle d'hote porte un message explicite : on le
+                // remonte tel quel plutot que le "Unknown key" de russh.
+                if let Some(reason) = verdict.lock().unwrap().take() {
+                    return Err(anyhow!(reason));
+                }
+                return Err(e).with_context(|| format!("Connexion SSH à {host}:{port}"));
+            }
+        };
         Self::authenticate(&mut session, auth).await?;
         Ok(Self { session })
     }

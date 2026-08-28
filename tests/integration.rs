@@ -478,9 +478,21 @@ async fn changed_host_key_is_refused() {
 
     // Le serveur presente sa vraie cle : elle differe de celle memorisee.
     let res = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth).await;
+    let err = res
+        .err()
+        .expect("une cle d'hote modifiee doit etre refusee");
+
+    // Le message doit etre exploitable tel quel dans l'interface : un
+    // "Unknown key" opaque ne dit pas a l'utilisateur ce qui se passe ni quoi
+    // faire. Il part sinon sur stderr, que personne ne lit dans une GUI.
+    let msg = format!("{err:#}");
     assert!(
-        res.is_err(),
-        "une cle d'hote modifiee doit etre refusee, la connexion a reussi"
+        msg.contains("CLÉ D'HÔTE A CHANGÉ"),
+        "le message doit nommer le probleme : {msg}"
+    );
+    assert!(
+        msg.contains("known_hosts"),
+        "le message doit dire comment s'en sortir : {msg}"
     );
 }
 

@@ -17,17 +17,27 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 
 ## État (28/08, après passe de validation)
 
-- ✅ **7 tests verts** : 2 unitaires (parseur `~/.ssh/config`) + 5 d'intégration
-  (connexion+exec, PTY write/resize, SFTP list/download/upload, et deux tests
-  de non-régression sur la vérification de clé d'hôte).
-- ✅ **Faille MITM corrigée** : `check_server_key` distinguait mal « hôte
-  inconnu » et « clé changée » et réapprenait la clé dans les deux cas. Une
-  clé d'hôte modifiée est désormais refusée. Couvert par
-  `changed_host_key_is_refused`, vérifié comme échouant sur le code d'avant.
-- ✅ **GUI opérationnelle** : `webkit2gtk-4.1` installé, `cargo build --release`
-  produit un binaire de **15 Mo** (objectif tenu), la fenêtre se lance.
-- ⚠️ **`avash-ui` n'a aucun test** — les 9 commandes Tauri sont non couvertes.
-- ⚠️ `avash-ui/target` pèse ~7,5 Go (`cargo clean` pour récupérer l'espace).
+- ✅ **36 tests verts** : 8 sur le cœur, 13 sur `avash-ui`, 15 sur `avash-web`.
+- ✅ **Faille MITM corrigée** : une clé d'hôte modifiée est refusée, avec un
+  message explicite remonté jusqu'à l'interface (il partait sur stderr, que
+  personne ne lit dans une GUI). Couvert par `changed_host_key_is_refused`,
+  vérifié comme échouant sur le code d'avant.
+- ✅ **GUI opérationnelle** — binaire release de **15 Mo**, objectif tenu.
+- ✅ **`./check.sh`** valide les trois projets d'une commande : compilation,
+  tests, `cargo fmt`, `clippy -D warnings`, typage TS, build vite, release.
+  `--quick` saute le build release.
+- ✅ **CI GitHub Actions** sur les trois dépôts + hook `pre-commit` sur le cœur.
+
+### Corrigé au passage
+
+| Défaut | Effet |
+|---|---|
+| `select!` sur canal resize fermé | boucle à vide, 100 % CPU |
+| `from_utf8_lossy` par bloc | accents corrompus dans le terminal |
+| `pty_write` sur session inconnue | frappes perdues en silence |
+| Collision d'identifiants de session | sortie d'un ancien serveur dans un nouvel onglet |
+| Filtre palette ≠ filtre latéral | recherche par IP sans résultat |
+| `file_name().unwrap_or_default()` | téléchargement vers le dossier lui-même |
 
 ## Feuille de route
 - v0.1 (ce soir/aujourd'hui) : CLI + parseur + connexion russh → **GUI dès webkit installé**
