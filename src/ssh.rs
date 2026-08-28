@@ -2,7 +2,6 @@
 //! Phase backend pure : compilable et testable sans webkit2gtk.
 
 use anyhow::{anyhow, Context, Result};
-use russh::client::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -104,7 +103,7 @@ impl AvashSession {
         Ok((stdout, exit_code))
     }
 
-    pub async fn disconnect(mut self) -> Result<()> {
+    pub async fn disconnect(self) -> Result<()> {
         self.session
             .disconnect(russh::Disconnect::ByApplication, "au revoir", "")
             .await?;
