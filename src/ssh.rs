@@ -28,17 +28,33 @@ impl russh::client::Handler for AvashAuth {
         &mut self,
         server_public_key: &russh_keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // TOFU (Trust On First Use) : hôte connu → doit correspondre exactement,
-        // hôte inconnu → on l'apprend (comportement OpenSSH par défaut).
+        // TOFU (Trust On First Use), avec la distinction que fait OpenSSH :
+        // hôte inconnu  -> on apprend la clé (premier contact) ;
+        // clé CHANGÉE   -> on refuse, sans jamais réapprendre en silence.
         match russh_keys::check_known_hosts(&self.host, self.port, server_public_key) {
+            // Hôte connu, clé identique.
             Ok(true) => Ok(true),
-            _ => {
-                // Si l'écriture échoue (known_hosts illisible), on rejette :
-                // mieux vaut une connexion refusée qu'une confiance non tracée.
+
+            // Hôte inconnu : premier contact, on mémorise.
+            Ok(false) => {
                 russh_keys::learn_known_hosts(&self.host, self.port, server_public_key)
                     .map_err(|_| russh::Error::UnknownKey)?;
                 Ok(true)
             }
+
+            // La clé d'hôte a changé : réinstallation du serveur, ou interception.
+            // Dans le doute on refuse — c'est à l'utilisateur de trancher.
+            Err(russh_keys::Error::KeyChanged { line }) => {
+                eprintln!(
+                    "avash: LA CLÉ D'HÔTE A CHANGÉ pour {}:{} (known_hosts ligne {}) — \
+                     connexion refusée, interception possible.",
+                    self.host, self.port, line
+                );
+                Err(russh::Error::UnknownKey)
+            }
+
+            // known_hosts illisible ou autre erreur : on refuse aussi.
+            Err(_) => Err(russh::Error::UnknownKey),
         }
     }
 }

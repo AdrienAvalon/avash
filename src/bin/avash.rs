@@ -13,14 +13,18 @@ fn main() -> anyhow::Result<()> {
                 .get(2)
                 .ok_or_else(|| anyhow::anyhow!("Usage : avash run ALIAS 'commande'"))?;
             let command = args
-                .get(2..)
+                .get(3..)
                 .map(|s| s.join(" "))
                 .ok_or_else(|| anyhow::anyhow!("Commande manquante"))?;
             let host = avash::parse_ssh_config()?
                 .into_iter()
                 .find(|h| h.alias == *alias)
                 .ok_or_else(|| anyhow::anyhow!("Hôte introuvable : {alias}"))?;
-            smol::block_on(cmd_run(host, command))
+            // Le moteur SSH est tokio : runtime dédié sur ce thread.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(cmd_run(host, command))
         }
         Some(other) => {
             eprintln!("Commande inconnue : {other}. Usage : avash [list|run ALIAS CMD]");
