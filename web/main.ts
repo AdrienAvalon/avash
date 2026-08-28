@@ -108,9 +108,23 @@ function newSessionShell(label: string) {
   return { id, term, session: s };
 }
 
+/**
+ * Avertit dans le terminal si l'ecoute des evenements a echoue : sans elle,
+ * la session s'ouvre mais rien ne s'affichera jamais.
+ */
+function warnIfDeaf(term: Terminal) {
+  if (!ptyListenError) return;
+  term.write(
+    `\x1b[33m⚠️  Avash ne reçoit pas les événements du terminal.\r\n` +
+      `   La session va s'ouvrir mais restera muette.\r\n` +
+      `   Détail : ${ptyListenError}\x1b[0m\r\n\r\n`,
+  );
+}
+
 /** Ouvre une session sur un hote declare dans ~/.ssh/config. */
 async function openSession(h: Host) {
   const { id, term } = newSessionShell(h.alias);
+  warnIfDeaf(term);
   try {
     await invoke("pty_open", { id, alias: h.alias, cols: term.cols, rows: term.rows });
   } catch (e) {
@@ -127,6 +141,7 @@ async function openSession(h: Host) {
  */
 async function openManualSession(t: ManualTarget) {
   const { id, term, session } = newSessionShell(`${t.user}@${t.addr}`);
+  warnIfDeaf(term);
   try {
     const label = await invoke<string>("pty_open_manual", {
       id,
@@ -194,9 +209,17 @@ async function listenPty() {
       }
     });
   } catch (e) {
-    console.warn("Bridge Tauri absent (dev navigateur) :", e);
+    // Un echec ici rend TOUS les terminaux muets : la sortie du serveur
+    // n'arrive jamais. Le signaler visiblement plutot que dans une console
+    // que personne n'ouvre — c'est ce silence qui a masque l'absence de
+    // permissions Tauri (capabilities/default.json).
+    ptyListenError = String(e);
+    console.warn("Écoute des événements PTY indisponible :", e);
   }
 }
+
+/** Renseigne si l'ecoute des evenements a echoue au demarrage. */
+let ptyListenError: string | null = null;
 
 async function loadHosts() {
   try {

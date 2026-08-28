@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions de la fenêtre principale d'Avash. Sans ce fichier, Tauri v2 n'accorde AUCUNE permission à la webview : les commandes personnalisées passent, mais les API du cœur — dont listen() sur les événements — échouent en silence, et le terminal reste muet.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:webview:default"
+  ]
+}
