@@ -57,6 +57,46 @@ pub async fn run_command(alias: String, command: String) -> Result<String, Strin
     Ok(format!("{stdout}\n[exit {code}]"))
 }
 
+
+/// Decodeur UTF-8 incremental pour la sortie d'un PTY.
+///
+/// Le flux arrive par blocs arbitraires : un caractere multi-octets (accent,
+/// caractere de tableau, emoji) peut tomber a cheval sur deux blocs.
+/// `String::from_utf8_lossy` appliquee bloc par bloc le remplacerait par un
+/// U+FFFD. On conserve donc la fin incomplete pour la recoller au bloc suivant.
+#[derive(Default)]
+pub struct Utf8Stream {
+    carry: Vec<u8>,
+}
+
+impl Utf8Stream {
+    /// Consomme un bloc et rend le texte decodable maintenant.
+    pub fn push(&mut self, chunk: &[u8]) -> String {
+        self.carry.extend_from_slice(chunk);
+        match std::str::from_utf8(&self.carry) {
+            Ok(s) => {
+                let out = s.to_owned();
+                self.carry.clear();
+                out
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                // Sequence tronquee en fin de bloc : on la garde pour la suite.
+                // Sequence reellement invalide : on ne bloque pas le terminal.
+                let out = String::from_utf8_lossy(&self.carry[..valid]).into_owned();
+                let rest = if e.error_len().is_some() {
+                    // Octet invalide : on le saute pour ne pas coincer le flux.
+                    self.carry[valid + e.error_len().unwrap_or(1)..].to_vec()
+                } else {
+                    self.carry[valid..].to_vec()
+                };
+                self.carry = rest;
+                out
+            }
+        }
+    }
+}
+
 /// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
 #[tauri::command]
 pub async fn pty_open(
@@ -86,12 +126,17 @@ pub async fn pty_open(
     // Pump out → event front ; la session vit dans le pump.
     let app2 = app.clone();
     let _pump = tokio::spawn(async move {
+        let mut decoder = Utf8Stream::default();
         loop {
             match out_rx.recv().await {
                 Some(bytes) => {
+                    let text = decoder.push(&bytes);
+                    if text.is_empty() {
+                        continue; // sequence encore incomplete
+                    }
                     let _ = app2.emit("pty-output", serde_json::json!({
                         "id": sid,
-                        "data": String::from_utf8_lossy(&bytes),
+                        "data": text,
                     }));
                 }
                 None => break,
@@ -119,12 +164,13 @@ pub async fn pty_write(
         let store = state.inner.lock().unwrap();
         store.get(&id).map(|h| h.input.clone())
     };
-    if let Some(input) = input {
-        input
-            .send(data.into_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
-    }
+    // Sans cette erreur, une frappe adressee a une session fermee etait perdue
+    // et le front croyait l'avoir transmise.
+    let input = input.ok_or_else(|| format!("Session {id} inconnue"))?;
+    input
+        .send(data.into_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -140,9 +186,8 @@ pub async fn pty_resize(
         let store = state.inner.lock().unwrap();
         store.get(&id).map(|h| h.resize.clone())
     };
-    if let Some(resize) = resize {
-        let _ = resize.send((cols, rows)).await;
-    }
+    let resize = resize.ok_or_else(|| format!("Session {id} inconnue"))?;
+    let _ = resize.send((cols, rows)).await;
     Ok(())
 }
 
@@ -397,4 +442,53 @@ mod tests {
         assert_eq!(auth.user, whoami::username());
         assert!(auth.key_path.is_none());
     }
+    // ---------- Utf8Stream ----------
+
+    #[test]
+    fn utf8_recolle_un_caractere_coupe_en_deux() {
+        // "é" = 0xC3 0xA9 : on coupe entre les deux octets.
+        let mut d = Utf8Stream::default();
+        assert_eq!(d.push(&[0xC3]), "", "un octet seul n'est pas decodable");
+        assert_eq!(d.push(&[0xA9]), "é", "le caractere doit etre recolle");
+    }
+
+    #[test]
+    fn utf8_gere_une_coupure_au_milieu_d_un_emoji() {
+        // 😈 = 4 octets, coupe apres le premier.
+        let full = "😈".as_bytes().to_vec();
+        let mut d = Utf8Stream::default();
+        assert_eq!(d.push(&full[..1]), "");
+        assert_eq!(d.push(&full[1..]), "😈");
+    }
+
+    #[test]
+    fn utf8_texte_coupe_a_chaque_octet_est_restitue_intact() {
+        let source = "Déjà vu — 100 % réussi 😈 ✓";
+        let mut d = Utf8Stream::default();
+        let mut out = String::new();
+        for b in source.as_bytes() {
+            out.push_str(&d.push(&[*b]));
+        }
+        assert_eq!(out, source, "le flux doit etre restitue a l'identique");
+    }
+
+    #[test]
+    fn utf8_ne_bloque_pas_sur_un_octet_invalide() {
+        // Un octet illegal ne doit pas figer le terminal : on le saute.
+        let mut d = Utf8Stream::default();
+        let out = d.push(&[b'a', 0xFF, b'b']);
+        assert!(out.starts_with('a'), "{out:?}");
+        let suite = d.push(b"c");
+        assert!(
+            format!("{out}{suite}").contains('c'),
+            "le flux doit repartir apres l'octet invalide"
+        );
+    }
+
+    #[test]
+    fn utf8_ascii_passe_sans_latence() {
+        let mut d = Utf8Stream::default();
+        assert_eq!(d.push(b"ls -la\r\n"), "ls -la\r\n");
+    }
+
 }
