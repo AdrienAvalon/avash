@@ -8,6 +8,7 @@ pub mod sftp;
 pub mod ssh;
 
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SshHost {
@@ -31,7 +32,110 @@ pub fn parse_ssh_config() -> anyhow::Result<Vec<SshHost>> {
     let path = ssh_config_path();
     let content = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("Impossible de lire {}: {e}", path.display()))?;
-    Ok(parse_config_str(&content))
+    let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    Ok(parse_config_str(&resolve_includes(&content, &base, 0)))
+}
+
+/// Profondeur maximale de resolution des `Include`.
+///
+/// OpenSSH s'arrete a 16 ; on fait de meme. Sans borne, deux fichiers qui
+/// s'incluent mutuellement boucleraient indefiniment.
+const MAX_INCLUDE_DEPTH: usize = 16;
+
+/// Resout les directives `Include` et rend le contenu aplati.
+///
+/// Les chemins relatifs sont resolus depuis `~/.ssh`, comme le fait OpenSSH.
+/// `~` est developpe. Les motifs (`config.d/*`) sont etendus par ordre
+/// alphabetique. Un fichier illisible est ignore en silence : OpenSSH se
+/// comporte ainsi, et une configuration partielle vaut mieux qu'aucune.
+fn resolve_includes(content: &str, base: &Path, depth: usize) -> String {
+    if depth >= MAX_INCLUDE_DEPTH {
+        return content.to_string();
+    }
+    let mut out = String::with_capacity(content.len());
+    for raw in content.lines() {
+        let line = raw.trim();
+        let is_include = line
+            .split_once(char::is_whitespace)
+            .map(|(k, _)| k.eq_ignore_ascii_case("include"))
+            .unwrap_or(false);
+        if !is_include {
+            out.push_str(raw);
+            out.push('\n');
+            continue;
+        }
+        let Some((_, patterns)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        for pattern in patterns.split_whitespace() {
+            for path in expand_include(pattern, base) {
+                if let Ok(inner) = std::fs::read_to_string(&path) {
+                    let parent = path.parent().unwrap_or(base).to_path_buf();
+                    out.push_str(&resolve_includes(&inner, &parent, depth + 1));
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Developpe un motif d'`Include` en liste de fichiers existants.
+fn expand_include(pattern: &str, base: &Path) -> Vec<PathBuf> {
+    let expanded = if let Some(rest) = pattern.strip_prefix("~/") {
+        dirs::home_dir()
+            .unwrap_or_else(|| base.to_path_buf())
+            .join(rest)
+    } else if pattern.starts_with('/') {
+        PathBuf::from(pattern)
+    } else {
+        base.join(pattern)
+    };
+
+    let s = expanded.to_string_lossy().into_owned();
+    if !s.contains(['*', '?']) {
+        return if expanded.is_file() {
+            vec![expanded]
+        } else {
+            vec![]
+        };
+    }
+    // Motif : on liste le repertoire parent et on filtre a la main plutot
+    // que d'ajouter une dependance de glob pour ce seul usage.
+    let (dir, pat) = match expanded.parent().zip(expanded.file_name()) {
+        Some((d, f)) => (d.to_path_buf(), f.to_string_lossy().into_owned()),
+        None => return vec![],
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
+    let mut found: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter(|p| {
+            p.file_name()
+                .map(|n| glob_match(&pat, &n.to_string_lossy()))
+                .unwrap_or(false)
+        })
+        .collect();
+    // Ordre stable : OpenSSH lit dans l'ordre lexicographique.
+    found.sort();
+    found
+}
+
+/// Correspondance de motif minimale : `*` et `?`, sans classes.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    fn inner(p: &[u8], n: &[u8]) -> bool {
+        match (p.first(), n.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => inner(&p[1..], n) || (!n.is_empty() && inner(p, &n[1..])),
+            (Some(b'?'), Some(_)) => inner(&p[1..], &n[1..]),
+            (Some(a), Some(b)) if a == b => inner(&p[1..], &n[1..]),
+            _ => false,
+        }
+    }
+    inner(pattern.as_bytes(), name.as_bytes())
 }
 
 pub fn parse_config_str(content: &str) -> Vec<SshHost> {
@@ -57,6 +161,21 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
                     alias: value.to_string(),
                     ..Default::default()
                 });
+            }
+            // Un bloc `Match` ferme le bloc `Host` courant. Sans cela ses
+            // directives etaient attribuees au dernier hote rencontre : un
+            // `Match exec ...` jamais satisfait pouvait ainsi changer
+            // silencieusement l'utilisateur et le port d'un hote reel.
+            //
+            // Avash n'evalue pas les conditions de `Match` (elles dependent de
+            // l'hote cible, de l'utilisateur courant, voire d'une commande) :
+            // on ferme le bloc et on ignore ce qu'il contient, plutot que de
+            // l'appliquer a tort.
+            "match" => {
+                if let Some(h) = current.take() {
+                    hosts.push(h);
+                }
+                current = None;
             }
             _ => {
                 if let Some(h) = current.as_mut() {
@@ -403,5 +522,153 @@ mod save_tests {
             .mode()
             & 0o777;
         assert_eq!(d, 0o700, "~/.ssh trop ouvert");
+    }
+
+    // ---------- Match ----------
+
+    #[test]
+    fn un_bloc_match_ne_contamine_pas_l_hote_precedent() {
+        // Regression : `Match` n'etait pas reconnu comme delimiteur, donc ses
+        // directives etaient appliquees au dernier Host. Un `Match exec`
+        // jamais satisfait pouvait ainsi changer l'utilisateur et le port
+        // d'un hote reel — sans le moindre avertissement.
+        let cfg = "Host prod\n  HostName 10.0.0.1\n  User root\n\n                   Match exec \"test -f /tmp/jamais\"\n  User compromis\n  Port 9999\n";
+        let hosts = parse_config_str(cfg);
+        assert_eq!(hosts.len(), 1, "seul `prod` est un hote : {hosts:?}");
+        assert_eq!(
+            hosts[0].user.as_deref(),
+            Some("root"),
+            "utilisateur contamine"
+        );
+        assert_eq!(hosts[0].port, None, "port contamine");
+    }
+
+    #[test]
+    fn un_host_apres_un_match_est_bien_lu() {
+        let cfg = "Match user root\n  ForwardAgent yes\n\nHost apres\n  HostName 1.2.3.4\n";
+        let hosts = parse_config_str(cfg);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].alias, "apres");
+        assert_eq!(hosts[0].hostname.as_deref(), Some("1.2.3.4"));
+    }
+
+    // ---------- Include ----------
+
+    #[test]
+    fn include_absolu_est_resolu() {
+        let _h = crate::testutil::temp_home();
+        let dir = ssh_config_path().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        let inc = dir.join("perso");
+        std::fs::write(&inc, "Host inclus\n  HostName 5.5.5.5\n").unwrap();
+        std::fs::write(
+            ssh_config_path(),
+            format!(
+                "Host principal\n  HostName 1.1.1.1\n\nInclude {}\n",
+                inc.display()
+            ),
+        )
+        .unwrap();
+
+        let noms: Vec<_> = parse_ssh_config()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.alias)
+            .collect();
+        assert!(noms.contains(&"principal".to_string()), "{noms:?}");
+        assert!(
+            noms.contains(&"inclus".to_string()),
+            "l'hote inclus doit apparaitre : {noms:?}"
+        );
+    }
+
+    #[test]
+    fn include_relatif_part_de_ssh() {
+        // OpenSSH resout les chemins relatifs depuis ~/.ssh.
+        let _h = crate::testutil::temp_home();
+        let dir = ssh_config_path().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(dir.join("config.d")).unwrap();
+        std::fs::write(
+            dir.join("config.d/dix"),
+            "Host relatif\n  HostName 9.9.9.9\n",
+        )
+        .unwrap();
+        std::fs::write(ssh_config_path(), "Include config.d/dix\n").unwrap();
+
+        let noms: Vec<_> = parse_ssh_config()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.alias)
+            .collect();
+        assert_eq!(noms, vec!["relatif"], "{noms:?}");
+    }
+
+    #[test]
+    fn include_avec_motif_prend_tous_les_fichiers_en_ordre() {
+        let _h = crate::testutil::temp_home();
+        let dir = ssh_config_path().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(dir.join("config.d")).unwrap();
+        std::fs::write(dir.join("config.d/10-a"), "Host aaa\n  HostName 1.1.1.1\n").unwrap();
+        std::fs::write(dir.join("config.d/20-b"), "Host bbb\n  HostName 2.2.2.2\n").unwrap();
+        std::fs::write(ssh_config_path(), "Include config.d/*\n").unwrap();
+
+        let noms: Vec<_> = parse_ssh_config()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.alias)
+            .collect();
+        assert_eq!(
+            noms,
+            vec!["aaa", "bbb"],
+            "ordre lexicographique attendu : {noms:?}"
+        );
+    }
+
+    #[test]
+    fn include_manquant_est_ignore_sans_planter() {
+        // OpenSSH tolere un Include qui ne correspond a rien ; une config
+        // partielle vaut mieux qu'aucune.
+        let _h = crate::testutil::temp_home();
+        let dir = ssh_config_path().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            ssh_config_path(),
+            "Include /rien/du/tout\nHost seul\n  HostName 1.1.1.1\n",
+        )
+        .unwrap();
+        let noms: Vec<_> = parse_ssh_config()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.alias)
+            .collect();
+        assert_eq!(noms, vec!["seul"], "{noms:?}");
+    }
+
+    #[test]
+    fn include_circulaire_ne_boucle_pas() {
+        // Deux fichiers qui s'incluent mutuellement : borne a 16 niveaux,
+        // comme OpenSSH. Sans borne, le parseur ne rendrait jamais la main.
+        let _h = crate::testutil::temp_home();
+        let dir = ssh_config_path().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("boucle"),
+            "Include config\nHost cycle\n  HostName 3.3.3.3\n",
+        )
+        .unwrap();
+        std::fs::write(ssh_config_path(), "Include boucle\n").unwrap();
+        let hosts = parse_ssh_config().unwrap();
+        assert!(hosts.iter().any(|h| h.alias == "cycle"), "{hosts:?}");
+    }
+
+    #[test]
+    fn glob_match_gere_etoile_et_point_interrogation() {
+        assert!(glob_match("*", "quoi-que-ce-soit"));
+        assert!(glob_match("10-*", "10-web"));
+        assert!(glob_match("*.conf", "prod.conf"));
+        assert!(glob_match("config?", "config1"));
+        assert!(!glob_match("config?", "config12"));
+        assert!(!glob_match("10-*", "20-web"));
+        assert!(glob_match("a*b*c", "axxbyyc"));
     }
 }
