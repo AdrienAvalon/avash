@@ -145,11 +145,20 @@ pub async fn pty_open(
         let _ = session.disconnect().await;
     });
 
-    state
+    // Le front numerote ses onglets avec un compteur qui repart a 1 a chaque
+    // rechargement de la fenetre, alors que le backend garde ses sessions.
+    // Sans cette eviction, la session precedente resterait vivante et son pump
+    // continuerait d'emettre des `pty-output` portant le meme id : la sortie
+    // d'un ancien serveur apparaitrait dans le nouvel onglet.
+    // Lacher le SessionHandle ferme ses canaux, ce qui termine l'ancien pump.
+    let evicted = state
         .inner
         .lock()
         .unwrap()
         .insert(id, SessionHandle { input, resize, sftp: Mutex::new(None), alias });
+    if let Some(old) = evicted {
+        drop(old);
+    }
     Ok(())
 }
 
