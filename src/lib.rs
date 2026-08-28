@@ -19,7 +19,10 @@ pub fn run() {
             commands::pty_open,
             commands::pty_write,
             commands::pty_resize,
-            commands::pty_close
+            commands::pty_close,
+            commands::sftp_list,
+            commands::sftp_download,
+            commands::sftp_upload
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement d'Avash");
