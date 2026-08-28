@@ -66,7 +66,7 @@ async fn cmd_run(host: avash::SshHost, command: String) -> anyhow::Result<()> {
         key_path: host.identity_file.as_ref().map(std::path::PathBuf::from),
         password: None,
     };
-    let mut session = avash::ssh::AvashSession::connect(&addr, host.port.unwrap_or(22), auth)
+    let mut session = avash::ssh::AvashSession::connect(&addr, host.port.unwrap_or(22), &auth)
         .await?;
     let (stdout, code) = session.run(&command).await?;
     print!("{stdout}");
