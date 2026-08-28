@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Avash",
+  "version": "0.2.0",
+  "identifier": "dev.avash.app",
+  "build": {
+    "frontendDist": "../avash-web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Avash 😼",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 480,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+    }
+  }
+}
