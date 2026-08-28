@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/avash", "crates/avash-ui"]
+
+# Metadonnees communes : un seul endroit a modifier pour une release.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/vela-kern/avash"
+
+# Un seul cargo build --release pour tout le workspace : les dependances
+# communes (russh, tokio, serde) ne sont compilees qu'une fois, et le
+# repertoire target est partage au lieu d'etre duplique par crate.
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

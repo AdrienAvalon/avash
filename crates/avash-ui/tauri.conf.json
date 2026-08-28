@@ -4,7 +4,7 @@
   "version": "0.2.0",
   "identifier": "dev.avash.app",
   "build": {
-    "frontendDist": "../avash-web/dist"
+    "frontendDist": "../../web/dist"
   },
   "app": {
     "windows": [
