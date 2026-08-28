@@ -202,6 +202,26 @@ async fn sftp_of(
     Ok(sftp)
 }
 
+
+/// Determine le chemin local d'un telechargement.
+///
+/// Si l'appelant n'impose rien, on derive le nom depuis le chemin distant.
+/// Un chemin distant sans nom de fichier exploitable (`/`, `.`, `..`) ne doit
+/// PAS retomber silencieusement sur le dossier de telechargement lui-meme :
+/// l'ecriture echouerait ensuite avec une erreur obscure.
+fn local_target(remote: &str, local: Option<String>) -> Result<String, String> {
+    if let Some(l) = local {
+        return Ok(l);
+    }
+    let name = std::path::Path::new(remote)
+        .file_name()
+        .ok_or_else(|| format!("Chemin distant sans nom de fichier : {remote}"))?;
+    Ok(avash::sftp::default_local_dir()
+        .join(name)
+        .to_string_lossy()
+        .into_owned())
+}
+
 /// Liste un répertoire distant via SFTP.
 #[tauri::command]
 pub async fn sftp_list(
@@ -222,12 +242,7 @@ pub async fn sftp_download(
     local: Option<String>,
 ) -> Result<String, String> {
     let sftp = sftp_of(&state, id).await?;
-    let local = local.unwrap_or_else(|| {
-        avash::sftp::default_local_dir()
-            .join(std::path::Path::new(&remote).file_name().unwrap_or_default())
-            .to_string_lossy()
-            .into_owned()
-    });
+    let local = local_target(&remote, local)?;
     let n = sftp.download(&remote, std::path::Path::new(&local)).await.map_err(|e| e.to_string())?;
     Ok(format!("{local} ({n} octets)"))
 }
@@ -244,4 +259,142 @@ pub async fn sftp_upload(
     sftp.upload(std::path::Path::new(&local), &remote)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// HOME est global au processus : deux tests qui le modifient en parallele
+    /// se marchent dessus. Ce verrou les serialise (les autres tests restent
+    /// paralleles). Sans lui, find_host_* echoue une fois sur deux.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Isole HOME pour ne pas dependre du ~/.ssh/config reel de la machine.
+    /// Le HOME precedent est restaure a la destruction du garde.
+    fn with_ssh_config(contents: &str) -> HomeGuard {
+        let lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "avash-ui-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let ssh = dir.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(ssh.join("config"), contents).unwrap();
+        let previous = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &dir);
+        HomeGuard {
+            previous,
+            dir,
+            _lock: lock,
+        }
+    }
+
+    struct HomeGuard {
+        previous: Option<String>,
+        dir: std::path::PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(h) => std::env::set_var("HOME", h),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    // ---------- local_target ----------
+
+    #[test]
+    fn local_target_respecte_le_chemin_impose() {
+        let got = local_target("/srv/rapport.md", Some("/tmp/ailleurs.md".into())).unwrap();
+        assert_eq!(got, "/tmp/ailleurs.md");
+    }
+
+    #[test]
+    fn local_target_derive_le_nom_du_fichier_distant() {
+        let got = local_target("/srv/data/rapport.md", None).unwrap();
+        assert!(
+            got.ends_with("rapport.md"),
+            "le nom distant doit etre conserve : {got}"
+        );
+    }
+
+    #[test]
+    fn local_target_ne_garde_que_le_dernier_segment() {
+        // Un remote contenant ../ ne doit pas remonter dans l'arborescence locale.
+        let got = local_target("/srv/../../etc/passwd", None).unwrap();
+        assert!(got.ends_with("passwd"), "{got}");
+        assert!(!got.contains(".."), "traversee de chemin : {got}");
+    }
+
+    #[test]
+    fn local_target_refuse_un_chemin_sans_nom_de_fichier() {
+        // Regression : file_name() renvoyait None, unwrap_or_default() donnait
+        // une chaine vide et la destination devenait le dossier lui-meme.
+        for remote in ["/", "..", "/srv/.."] {
+            assert!(
+                local_target(remote, None).is_err(),
+                "{remote} devrait etre refuse"
+            );
+        }
+    }
+
+    // ---------- find_host / auth_for ----------
+
+    #[test]
+    fn find_host_trouve_un_alias_declare() {
+        let _g = with_ssh_config("Host prod\n  HostName 10.0.0.1\n  User deploy\n  Port 2222\n");
+        let h = find_host("prod").expect("alias prod doit etre trouve");
+        assert_eq!(h.hostname.as_deref(), Some("10.0.0.1"));
+        assert_eq!(h.user.as_deref(), Some("deploy"));
+        assert_eq!(h.port, Some(2222));
+    }
+
+    #[test]
+    fn find_host_signale_un_alias_inconnu() {
+        let _g = with_ssh_config("Host prod\n  HostName 10.0.0.1\n");
+        let err = find_host("absent").unwrap_err();
+        assert!(err.contains("absent"), "message peu clair : {err}");
+    }
+
+    #[test]
+    fn auth_for_utilise_le_user_declare() {
+        let host = SshHost {
+            alias: "prod".into(),
+            hostname: Some("10.0.0.1".into()),
+            user: Some("deploy".into()),
+            port: None,
+            identity_file: Some("/home/x/.ssh/id_ed25519".into()),
+            proxy_jump: None,
+            tags: vec![],
+        };
+        let auth = auth_for(&host);
+        assert_eq!(auth.user, "deploy");
+        assert_eq!(
+            auth.key_path.as_deref(),
+            Some(std::path::Path::new("/home/x/.ssh/id_ed25519"))
+        );
+        assert!(auth.password.is_none(), "aucun mot de passe ne doit etre pose ici");
+    }
+
+    #[test]
+    fn auth_for_retombe_sur_l_utilisateur_courant() {
+        let host = SshHost {
+            alias: "prod".into(),
+            hostname: Some("10.0.0.1".into()),
+            user: None,
+            port: None,
+            identity_file: None,
+            proxy_jump: None,
+            tags: vec![],
+        };
+        let auth = auth_for(&host);
+        assert_eq!(auth.user, whoami::username());
+        assert!(auth.key_path.is_none());
+    }
 }
