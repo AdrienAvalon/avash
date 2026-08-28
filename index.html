@@ -93,8 +93,46 @@
     .tab.active { background: var(--card); color: var(--text); border-color: var(--border, #2a3040); }
     .tab .close { opacity: .5; font-size: 11px; cursor: pointer; }
     .tab .close:hover { opacity: 1; }
-    .terminal-zone { flex: 1; position: relative; }
+    .terminal-zone { flex: 1; position: relative; display: flex; }
+    .terminal-zone > #terminal { flex: 1; position: relative; min-width: 0; }
     .xterm-container { display: block; }
+
+    /* ===== Panneau SFTP ===== */
+    .sftp-panel {
+      width: 0; overflow: hidden; transition: width .18s ease;
+      background: var(--bg-soft); border-left: 1px solid var(--border, #2a3040);
+      display: flex; flex-direction: column; flex-shrink: 0;
+    }
+    .sftp-panel.open { width: 300px; }
+    .sftp-head {
+      padding: 10px 12px; display: flex; align-items: center; gap: 8px;
+      border-bottom: 1px solid var(--border, #2a3040); font-size: 12.5px;
+    }
+    .sftp-path {
+      flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px;
+      color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    .sftp-path:hover { color: var(--text); }
+    .sftp-list { flex: 1; overflow-y: auto; padding: 6px; user-select: none; }
+    .sftp-entry {
+      padding: 7px 10px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
+      display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden;
+    }
+    .sftp-entry:hover { background: rgba(124,108,245,.12); }
+    .sftp-entry .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .sftp-entry .sz { font-size: 10.5px; color: var(--text-dim); font-family: var(--mono); }
+    .sftp-entry.dir .nm { color: var(--accent); font-weight: 600; }
+    .sftp-foot {
+      padding: 8px 12px; border-top: 1px solid var(--border, #2a3040);
+      display: flex; gap: 8px;
+    }
+    .btn-mini {
+      flex: 1; padding: 7px 0; border-radius: 7px; border: 1px solid var(--border, #2a3040);
+      background: var(--card); color: var(--text); font-size: 12px; cursor: pointer; text-align: center;
+    }
+    .btn-mini:hover { border-color: var(--accent); }
+    .sftp-status { padding: 4px 12px 8px; font-size: 10.5px; color: var(--text-dim); font-family: var(--mono); }
     .xterm, .xterm .xterm-screen { height: 100%; }
     .terminal-empty {
       position: absolute; inset: 0;
@@ -159,6 +197,18 @@
           <div class="hint">Double-clic sur un hôte pour te connecter — <kbd>Ctrl</kbd>+<kbd>K</kbd> palette</div>
         </div>
         <div id="terminal"></div>
+        <aside class="sftp-panel" id="sftp-panel">
+          <div class="sftp-head">
+            <span>📁</span>
+            <span class="sftp-path" id="sftp-path" title="Cliquer pour changer de chemin">…</span>
+          </div>
+          <div class="sftp-list" id="sftp-list"></div>
+          <div class="sftp-foot">
+            <button class="btn-mini" id="sftp-up-btn">⬆︎ Envoyer</button>
+            <button class="btn-mini" id="sftp-refresh-btn">↻ Rafraîchir</button>
+          </div>
+          <div class="sftp-status" id="sftp-status">SFTP prêt</div>
+        </aside>
       </div>
     </section>
   </div>

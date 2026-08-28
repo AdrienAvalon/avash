@@ -5,16 +5,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-
-type Host = {
-  alias: string;
-  hostname: string | null;
-  user: string | null;
-  port: number | null;
-  identity_file: string | null;
-  proxy_jump: string | null;
-  tags: string[];
-};
+import { humanSize, filterHosts, remoteJoin, type Host } from "./filters";
 
 type Session = {
   id: number;
@@ -51,10 +42,7 @@ const THEME = {
 function renderHosts() {
   const list = $("host-list");
   list.innerHTML = "";
-  const q = state.filter.toLowerCase();
-  const shown = state.hosts.filter(
-    (h) => !q || h.alias.toLowerCase().includes(q) || (h.hostname ?? "").toLowerCase().includes(q)
-  );
+  const shown = filterHosts(state.hosts, state.filter);
   for (const h of shown) {
     const el = document.createElement("div");
     el.className = "host" + (state.sessions.has(state.active ?? -1) && state.sessions.get(state.active!)?.alias === h.alias ? " selected" : "");
@@ -204,7 +192,7 @@ function renderPalette() {
   const q = paletteInput.value.toLowerCase();
   const res = $("palette-results");
   res.innerHTML = "";
-  const matches = state.hosts.filter((h) => h.alias.toLowerCase().includes(q));
+  const matches = filterHosts(state.hosts, q);
   if (matches.length === 0) {
     res.innerHTML = `<div class="empty">Aucun hôte pour « ${q.replace(/[<>&]/g, "")} »</div>`;
     return;
@@ -233,6 +221,89 @@ window.addEventListener("resize", () => {
   if (state.active !== null) {
     const s = state.sessions.get(state.active);
     if (s) s.fit.fit();
+  }
+});
+
+// ===== SFTP =====
+type SftpEntry = { name: string; is_dir: boolean; size: number; modified: number | null };
+
+const sftp = {
+  path: "" as string,
+  open: false,
+};
+
+
+async function sftpNavigate(path: string) {
+  const id = state.active;
+  if (id === null) return;
+  sftp.path = path;
+  $("sftp-path").textContent = path;
+  $("sftp-list").innerHTML = `<div class="sftp-status">Chargement…</div>`;
+  try {
+    const entries = await invoke<SftpEntry[]>("sftp_list", { id, path });
+    const list = $("sftp-list");
+    list.innerHTML = "";
+    // Dossiers d'abord, tri alpha
+    entries.sort((a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || a.name.localeCompare(b.name));
+    if (path !== "/") {
+      const up = document.createElement("div");
+      up.className = "sftp-entry dir";
+      up.innerHTML = `<span>📁</span><span class="nm">..</span>`;
+      up.addEventListener("click", () => {
+        const parent = path.replace(/\/[^/]+\/?$/, "") || "/";
+        sftpNavigate(parent);
+      });
+      list.appendChild(up);
+    }
+    for (const e of entries) {
+      const el = document.createElement("div");
+      el.className = "sftp-entry" + (e.is_dir ? " dir" : "");
+      el.innerHTML = `<span>${e.is_dir ? "📁" : "📄"}</span><span class="nm"></span><span class="sz"></span>`;
+      el.querySelector(".nm")!.textContent = e.name;
+      el.querySelector(".sz")!.textContent = e.is_dir ? "" : humanSize(e.size);
+      if (e.is_dir) {
+        el.addEventListener("click", () =>
+          sftpNavigate(remoteJoin(path, e.name))
+        );
+      } else {
+        el.title = "Clic : télécharger";
+        el.addEventListener("click", async () => {
+          const remote = remoteJoin(path, e.name);
+          $("sftp-status").textContent = `⬇︎ ${e.name}…`;
+          try {
+            const res = await invoke<string>("sftp_download", { id, remote });
+            $("sftp-status").textContent = `✅ ${res}`;
+          } catch (err) {
+            $("sftp-status").textContent = `⚠️ ${err}`;
+          }
+        });
+      }
+      list.appendChild(el);
+    }
+    $("sftp-status").textContent = `${entries.length} éléments`;
+  } catch (e) {
+    $("sftp-list").innerHTML = "";
+    $("sftp-status").textContent = `⚠️ ${e}`;
+  }
+}
+
+function sftpToggle() {
+  const id = state.active;
+  if (id === null) return;
+  sftp.open = !sftp.open;
+  $("sftp-panel").classList.toggle("open", sftp.open);
+  if (sftp.open) {
+    // "." = cwd du serveur au login (home en général)
+    sftpNavigate(sftp.path.length > 0 ? sftp.path : ".");
+  }
+}
+
+// Toggle SFTP : bouton rafraîchissement
+$("sftp-refresh-btn").addEventListener("click", () => sftpNavigate(sftp.path || "."));
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    sftpToggle();
   }
 });
 
