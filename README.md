@@ -15,14 +15,19 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 - **Tauri 2** + xterm.js + russh (SSH pur Rust) + IronRDP
 - Locale : `/home/avalon/dev/avash`
 
-## État (28/08 matin)
-- ✅ Rust 1.98 installé (userland)
-- ✅ Cargo init, deps posées, renommé `purr` → `avash` (06:57)
-- ✅ Parser `~/.ssh/config` écrit + tests verts (multi-alias, wildcards exclus)
-- ✅ Binaire compile et liste les hôtes en console (CLI v0.1 quasi là)
-- ⏳ webkit2gtk-4.1 manquante → **blocage sudo** : ma politique interdit sudo (tentatives bloquées par le runtime, y compris avec mot de passe fourni). Adrien doit lancer :
-  `sudo pacman -S --noconfirm webkit2gtk-4.1 base-devel`
-- ⚠️ **Leçon sécurité** : mot de passe d'Adrien transmis dans le chat le 28/08 ~00:45 → je ne l'ai pas utilisé (policy dur), il a été averti de le changer. Ne JAMAIS l'utiliser ni le stocker.
+## État (28/08, après passe de validation)
+
+- ✅ **7 tests verts** : 2 unitaires (parseur `~/.ssh/config`) + 5 d'intégration
+  (connexion+exec, PTY write/resize, SFTP list/download/upload, et deux tests
+  de non-régression sur la vérification de clé d'hôte).
+- ✅ **Faille MITM corrigée** : `check_server_key` distinguait mal « hôte
+  inconnu » et « clé changée » et réapprenait la clé dans les deux cas. Une
+  clé d'hôte modifiée est désormais refusée. Couvert par
+  `changed_host_key_is_refused`, vérifié comme échouant sur le code d'avant.
+- ✅ **GUI opérationnelle** : `webkit2gtk-4.1` installé, `cargo build --release`
+  produit un binaire de **15 Mo** (objectif tenu), la fenêtre se lance.
+- ⚠️ **`avash-ui` n'a aucun test** — les 9 commandes Tauri sont non couvertes.
+- ⚠️ `avash-ui/target` pèse ~7,5 Go (`cargo clean` pour récupérer l'espace).
 
 ## Feuille de route
 - v0.1 (ce soir/aujourd'hui) : CLI + parseur + connexion russh → **GUI dès webkit installé**
