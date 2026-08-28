@@ -210,6 +210,33 @@ async fn open_on_target(
     let mut out_rx = pty.out_rx;
     let sid = id;
 
+    // ⚠️ ENREGISTRER AVANT DE LANCER LE PUMP.
+    //
+    // Des l'ouverture, le shell distant interroge le terminal (DA1, couleur de
+    // fond, position du curseur) et attend les reponses avant d'afficher son
+    // invite. xterm.js y repond, mais ses reponses passent par `pty_write`, qui
+    // cherche la session dans ce store. Si le pump emettait avant l'insertion,
+    // ces reponses tomberaient sur "Session inconnue" et seraient perdues : le
+    // shell resterait bloque, et l'utilisateur verrait un terminal vide.
+    //
+    // Le front numerote par ailleurs ses onglets avec un compteur qui repart a
+    // 1 a chaque rechargement de fenetre, alors que le backend garde ses
+    // sessions : sans eviction, l'ancien pump continuerait d'emettre sous le
+    // meme id. Lacher le SessionHandle ferme ses canaux et termine ce pump.
+    let label = target.label.clone();
+    let evicted = state.inner.lock().unwrap().insert(
+        id,
+        SessionHandle {
+            input,
+            resize,
+            sftp: Mutex::new(None),
+            target,
+        },
+    );
+    if let Some(old) = evicted {
+        drop(old);
+    }
+
     // Pump out → event front ; la session vit dans le pump.
     let app2 = app.clone();
     let _pump = tokio::spawn(async move {
@@ -230,25 +257,6 @@ async fn open_on_target(
         let _ = session.disconnect().await;
     });
 
-    // Le front numerote ses onglets avec un compteur qui repart a 1 a chaque
-    // rechargement de la fenetre, alors que le backend garde ses sessions.
-    // Sans cette eviction, la session precedente resterait vivante et son pump
-    // continuerait d'emettre des `pty-output` portant le meme id : la sortie
-    // d'un ancien serveur apparaitrait dans le nouvel onglet.
-    // Lacher le SessionHandle ferme ses canaux, ce qui termine l'ancien pump.
-    let label = target.label.clone();
-    let evicted = state.inner.lock().unwrap().insert(
-        id,
-        SessionHandle {
-            input,
-            resize,
-            sftp: Mutex::new(None),
-            target,
-        },
-    );
-    if let Some(old) = evicted {
-        drop(old);
-    }
     Ok(label)
 }
 
