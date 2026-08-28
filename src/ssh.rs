@@ -150,6 +150,15 @@ impl AvashSession {
             .await?;
         Ok(())
     }
+
+    /// Ouvre un canal dédié au sous-système SFTP (canal indépendant, session intacte).
+    pub async fn open_sftp_channel(
+        &mut self,
+    ) -> Result<russh::Channel<russh::client::Msg>> {
+        let channel = self.session.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        Ok(channel)
+    }
 }
 
 /// Canal PTY exposé au front : flux sortant (terminal) + flux entrant (clavier).

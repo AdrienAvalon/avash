@@ -1,6 +1,7 @@
 //! Avash — parseur ~/.ssh/config v0.1, avec serialisation pour le front.
 
 pub mod ssh;
+pub mod sftp;
 
 use serde::{Deserialize, Serialize};
 
