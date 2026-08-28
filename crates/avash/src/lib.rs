@@ -1,5 +1,6 @@
 //! Avash — parseur ~/.ssh/config v0.1, avec serialisation pour le front.
 
+pub mod keys;
 pub mod sftp;
 pub mod ssh;
 

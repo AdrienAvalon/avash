@@ -23,7 +23,10 @@ pub fn run() {
             commands::pty_close,
             commands::sftp_list,
             commands::sftp_download,
-            commands::sftp_upload
+            commands::sftp_upload,
+            commands::keys_list,
+            commands::key_generate,
+            commands::key_deploy
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement d'Avash");

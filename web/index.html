@@ -218,6 +218,31 @@
       .btn-primary { background: var(--accent); color: #1a1020; border-color: var(--accent); font-weight: 600; }
       .btn-ghost { background: transparent; color: var(--text-dim); }
       .btn-primary:disabled { opacity: .55; cursor: progress; }
+    
+      .modal-wide { width: 470px; max-height: 82vh; overflow-y: auto; }
+      .key-list { display: flex; flex-direction: column; gap: 6px; }
+      .key-row {
+        display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+        background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+        font-size: 12px;
+      }
+      .key-row .kname { font-weight: 600; color: var(--text); }
+      .key-row .kmode { color: var(--text-dim); font-family: ui-monospace, monospace; }
+      .key-row .kmode.warn { color: #ff9a9a; }
+      .key-row .kcopy { margin-left: auto; cursor: pointer; color: var(--text-dim); background: none; border: none; font-family: inherit; font-size: 12px; }
+      .key-row .kcopy:hover { color: var(--accent); }
+      .key-empty { color: var(--text-dim); font-size: 12px; padding: 6px 2px; }
+      .key-block { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+      .key-block summary { cursor: pointer; font-size: 13px; color: var(--text); }
+      .key-block form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+      .key-block select {
+        background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+        padding: 8px 10px; color: var(--text); font-family: inherit; font-size: 13px;
+      }
+      .modal-ok {
+        margin: 0; padding: 8px 10px; border-radius: 7px; font-size: 12px;
+        background: rgba(60,190,120,.13); border: 1px solid rgba(60,190,120,.4); color: #8ee0ac;
+      }
     </style>
 </head>
 <body>
@@ -231,6 +256,7 @@
       </div>
       <div id="host-list" class="host-list"></div>
       <button id="manual-btn" class="manual-btn" type="button">＋ Connexion directe</button>
+      <button id="keys-btn" class="manual-btn" type="button">🔑 Mes clés SSH</button>
       <div class="footer"><span id="host-count">—</span><span>avash</span></div>
     </aside>
 
@@ -301,6 +327,58 @@
           <button type="submit" class="btn-primary" id="m-submit">Se connecter</button>
         </div>
       </form>
+    </div>
+
+    <div class="modal-backdrop" id="keys-modal">
+      <div class="modal modal-wide">
+        <h2>Clés SSH</h2>
+        <p class="modal-hint">Dans <code>~/.ssh</code>. Une clé évite de retaper son mot de passe.</p>
+
+        <div class="key-list" id="key-list"></div>
+
+        <details class="key-block">
+          <summary>Créer une nouvelle clé</summary>
+          <form id="keygen-form" autocomplete="off">
+            <label>Nom du fichier
+              <input id="k-name" placeholder="id_avash" required />
+            </label>
+            <label>Commentaire
+              <input id="k-comment" placeholder="adrien@pc (par défaut)" />
+            </label>
+            <button type="submit" class="btn-primary" id="k-gen-submit">Générer (ed25519)</button>
+          </form>
+        </details>
+
+        <details class="key-block" id="deploy-block">
+          <summary>Installer une clé sur un serveur</summary>
+          <p class="modal-hint">Une dernière connexion par mot de passe, puis la clé prend le relais.</p>
+          <form id="deploy-form" autocomplete="off">
+            <label>Clé à installer
+              <select id="d-key"></select>
+            </label>
+            <label>Adresse ou IP
+              <input id="d-addr" placeholder="192.168.1.10" required />
+            </label>
+            <label>Port
+              <input id="d-port" type="number" min="1" max="65535" placeholder="22" />
+            </label>
+            <label>Utilisateur
+              <input id="d-user" placeholder="root" required />
+            </label>
+            <label>Mot de passe
+              <input id="d-password" type="password" required />
+            </label>
+            <button type="submit" class="btn-primary" id="d-submit">Installer la clé</button>
+          </form>
+        </details>
+
+        <p class="modal-error" id="k-error" hidden></p>
+        <p class="modal-ok" id="k-ok" hidden></p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="k-close">Fermer</button>
+        </div>
+      </div>
     </div>
 </body>
 </html>
