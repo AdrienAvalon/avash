@@ -1,0 +1,11 @@
+# Vulnerabilites connues, examinees et acceptees.
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — attaque Marvin sur le crate `rsa` (5.9 moyenne).
+    # Aucun correctif amont. Arrive via ssh-key pour la prise en charge RSA.
+    # Le desactiver donne zero vulnerabilite mais casse la connexion aux
+    # serveurs a cle d'hote RSA et aux cles id_rsa (verifie contre un vrai
+    # sshd : « Wrong server signature »). Arbitrage documente dans
+    # crates/avash/Cargo.toml.
+    "RUSTSEC-2023-0071",
+]

@@ -34,6 +34,16 @@ run "compilation"        "$ROOT" cargo check --workspace --all-targets
 run "tests"              "$ROOT" cargo test --workspace --all-targets
 run "format"             "$ROOT" cargo fmt --all --check
 run "clippy"             "$ROOT" cargo clippy --workspace --all-targets -- -D warnings
+# Vulnerabilites connues des dependances. cargo-audit s'installe avec
+#   cargo install cargo-audit --locked
+if cargo audit --version >/dev/null 2>&1; then
+  # On echoue sur les vulnerabilites, pas sur les avertissements
+  # « unmaintained » : ils viennent tous de la pile GTK que Tauri embarque,
+  # hors de notre controle.
+  run "audit securite"     "$ROOT" cargo audit --ignore RUSTSEC-2023-0071
+else
+  printf '  \033[33m~\033[0m %s\n' "audit securite (cargo-audit absent)"
+fi
 
 step "Front (avash-web)"
 run "typage"             "$WEB" npx tsc --noEmit

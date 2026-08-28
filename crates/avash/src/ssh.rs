@@ -28,31 +28,47 @@ struct AvashAuth {
     verdict: HostKeyVerdict,
 }
 
-#[async_trait::async_trait]
 impl russh::client::Handler for AvashAuth {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh_keys::key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        // Un certificat se valide contre une autorite, pas contre known_hosts.
+        // On n'en gere pas encore : refuser vaut mieux qu'accepter a l'aveugle.
+        let server_public_key = match server_public_key {
+            russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => key,
+            russh::keys::PublicKeyOrCertificate::Certificate(_) => {
+                *self.verdict.lock().unwrap() = Some(
+                    "Ce serveur présente un certificat SSH. Avash ne sait pas \
+                     encore les valider et refuse la connexion."
+                        .into(),
+                );
+                return Err(russh::Error::UnknownKey);
+            }
+        };
         // TOFU (Trust On First Use), avec la distinction que fait OpenSSH :
         // hôte inconnu  -> on apprend la clé (premier contact) ;
         // clé CHANGÉE   -> on refuse, sans jamais réapprendre en silence.
-        match russh_keys::check_known_hosts(&self.host, self.port, server_public_key) {
+        match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
             // Hôte connu, clé identique.
             Ok(true) => Ok(true),
 
             // Hôte inconnu : premier contact, on mémorise.
             Ok(false) => {
-                russh_keys::learn_known_hosts(&self.host, self.port, server_public_key)
-                    .map_err(|_| russh::Error::UnknownKey)?;
+                russh::keys::known_hosts::learn_known_hosts(
+                    &self.host,
+                    self.port,
+                    server_public_key,
+                )
+                .map_err(|_| russh::Error::UnknownKey)?;
                 Ok(true)
             }
 
             // La clé d'hôte a changé : réinstallation du serveur, ou interception.
             // Dans le doute on refuse — c'est à l'utilisateur de trancher.
-            Err(russh_keys::Error::KeyChanged { line }) => {
+            Err(russh::keys::Error::KeyChanged { line }) => {
                 *self.verdict.lock().unwrap() = Some(format!(
                     "LA CLÉ D'HÔTE A CHANGÉ pour {}:{}.\n\n\
                      Soit le serveur a été réinstallé, soit quelqu'un intercepte \
@@ -107,18 +123,25 @@ impl AvashSession {
         auth: &ClientAuth,
     ) -> Result<()> {
         if let Some(key_path) = &auth.key_path {
-            let key_pair = russh_keys::load_secret_key(key_path, None)
+            let key = russh::keys::load_secret_key(key_path, None)
                 .with_context(|| format!("Chargement clé {}", key_path.display()))?;
-            let auth_res = session
-                .authenticate_publickey(&auth.user, Arc::new(key_pair))
-                .await?;
-            if auth_res {
+            // `None` en hash : ignore hors RSA, et pour RSA russh retombe sur
+            // l'algorithme historique. Nos cles generees sont ed25519.
+            let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), None);
+            if session
+                .authenticate_publickey(&auth.user, key)
+                .await?
+                .success()
+            {
                 return Ok(());
             }
         }
         if let Some(password) = &auth.password {
-            let auth_res = session.authenticate_password(&auth.user, password).await?;
-            if auth_res {
+            if session
+                .authenticate_password(&auth.user, password)
+                .await?
+                .success()
+            {
                 return Ok(());
             }
         }

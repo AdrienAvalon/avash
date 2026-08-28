@@ -1,8 +1,7 @@
 //! Tests d'intégration avash : serveur SSH+SFTP embarqué (russh server),
 //! client avash réel dessus. Valide connect/auth/exec/PTY/SFTP bout-en-bout.
 
-use async_trait::async_trait;
-use russh::keys::key::KeyPair;
+use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
 use russh_sftp::protocol::{File, FileAttributes, Handle, Status, StatusCode};
@@ -31,14 +30,13 @@ struct TestSshSession {
     sftp_channels: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
 }
 
-#[async_trait]
 impl russh::server::Handler for TestSshSession {
     type Error = anyhow::Error;
 
     async fn auth_publickey(
         &mut self,
         _user: &str,
-        _key: &russh_keys::key::PublicKey,
+        _key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
         Ok(Auth::Accept)
     }
@@ -46,10 +44,12 @@ impl russh::server::Handler for TestSshSession {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
         self.channels.lock().await.insert(channel.id(), channel);
-        Ok(true)
+        Ok(())
     }
 
     async fn exec_request(
@@ -59,12 +59,12 @@ impl russh::server::Handler for TestSshSession {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let channel = self.channels.lock().await.remove(&channel_id).unwrap();
-        session.channel_success(channel_id);
+        let _ = session.channel_success(channel_id);
         let output = format!("CMD:{}\r\n", String::from_utf8_lossy(request));
-        session.data(channel_id, output.into_bytes().into());
-        session.extended_data(channel_id, 1, b"stderr-ok".to_vec().into());
-        session.exit_status_request(channel_id, 0);
-        session.eof(channel_id);
+        let _ = session.data(channel_id, bytes::Bytes::from(output.into_bytes()));
+        let _ = session.extended_data(channel_id, 1, bytes::Bytes::from_static(b"stderr-ok"));
+        let _ = session.exit_status_request(channel_id, 0);
+        let _ = session.eof(channel_id);
         let _ = channel;
         Ok(())
     }
@@ -80,9 +80,9 @@ impl russh::server::Handler for TestSshSession {
         _modes: &[(russh::Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        session.channel_success(channel_id);
+        let _ = session.channel_success(channel_id);
         let banner = format!("\r\nPTY({term} {col_width}x{row_height})\r\n");
-        session.data(channel_id, banner.into_bytes().into());
+        let _ = session.data(channel_id, bytes::Bytes::from(banner.into_bytes()));
         Ok(())
     }
 
@@ -91,7 +91,7 @@ impl russh::server::Handler for TestSshSession {
         channel_id: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        session.channel_success(channel_id);
+        let _ = session.channel_success(channel_id);
         Ok(())
     }
 
@@ -106,7 +106,7 @@ impl russh::server::Handler for TestSshSession {
             return Ok(());
         }
         let echo = format!("ECHO:{}", String::from_utf8_lossy(data));
-        session.data(channel_id, echo.into_bytes().into());
+        let _ = session.data(channel_id, bytes::Bytes::from(echo.into_bytes()));
         Ok(())
     }
 
@@ -120,7 +120,7 @@ impl russh::server::Handler for TestSshSession {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let msg = format!("\r\nRESIZED:{col_width}x{row_height}\r\n");
-        session.data(channel_id, msg.into_bytes().into());
+        let _ = session.data(channel_id, bytes::Bytes::from(msg.into_bytes()));
         Ok(())
     }
 
@@ -133,13 +133,13 @@ impl russh::server::Handler for TestSshSession {
         if name == "sftp" {
             self.sftp_channels.lock().await.insert(channel_id);
             let channel = self.channels.lock().await.remove(&channel_id).unwrap();
-            session.channel_success(channel_id);
+            let _ = session.channel_success(channel_id);
             let sftp = TestSftpSession::default();
             tokio::spawn(async move {
                 russh_sftp::server::run(channel.into_stream(), sftp).await;
             });
         } else {
-            session.channel_failure(channel_id);
+            let _ = session.channel_failure(channel_id);
         }
         Ok(())
     }
@@ -315,7 +315,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
 /// Démarre le serveur SSH de test sur un port libre, retourne le port.
 async fn spawn_test_sshd() -> u16 {
     let config = russh::server::Config {
-        keys: vec![KeyPair::generate_ed25519().unwrap()],
+        keys: vec![PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()],
         ..Default::default()
     };
     let config = Arc::new(config);
@@ -342,9 +342,9 @@ fn temp_key_path() -> std::path::PathBuf {
     let home = virtual_home();
     let path = std::path::PathBuf::from(home).join("id_ed25519");
     if !path.exists() {
-        let key = KeyPair::generate_ed25519().unwrap();
+        let key = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
         let mut buf = Vec::new();
-        russh_keys::encode_pkcs8_pem(&key, &mut buf).unwrap();
+        russh::keys::encode_pkcs8_pem(&key, &mut buf).unwrap();
         std::fs::write(&path, buf).unwrap();
     }
     path
@@ -472,9 +472,10 @@ async fn changed_host_key_is_refused() {
     let auth = test_auth(); // positionne HOME sur le home virtuel
 
     // On inscrit volontairement une cle qui n'est PAS celle du serveur.
-    let decoy = KeyPair::generate_ed25519().unwrap();
-    let decoy_pub = decoy.clone_public_key().unwrap();
-    russh_keys::learn_known_hosts("127.0.0.1", port, &decoy_pub).expect("ecriture known_hosts");
+    let decoy = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
+    let decoy_pub = decoy.public_key().clone();
+    russh::keys::known_hosts::learn_known_hosts("127.0.0.1", port, &decoy_pub)
+        .expect("ecriture known_hosts");
 
     // Le serveur presente sa vraie cle : elle differe de celle memorisee.
     let res = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth).await;

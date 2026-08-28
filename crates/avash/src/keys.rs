@@ -111,33 +111,33 @@ pub fn generate(name: &str, comment: &str) -> Result<KeyEntry> {
         ));
     }
 
-    let pair = russh_keys::key::KeyPair::generate_ed25519()
-        .ok_or_else(|| anyhow!("Génération de la clé ed25519 impossible"))?;
+    // Format OpenSSH natif (et non PKCS#8) : c'est celui qu'attendent
+    // ssh-agent, OpenSSH et les autres outils de l'ecosysteme.
+    let pair = russh::keys::PrivateKey::random(
+        // rand 0.10 : meme version que celle utilisee par ssh-key, sans quoi
+        // les traits rand_core ne concordent pas.
+        &mut rand::rng(),
+        russh::keys::Algorithm::Ed25519,
+    )
+    .map_err(|e| anyhow!("Génération de la clé ed25519 impossible : {e}"))?;
 
-    let mut pem = Vec::new();
-    russh_keys::encode_pkcs8_pem(&pair, &mut pem).context("Encodage de la clé privée")?;
-    std::fs::write(&private, &pem).with_context(|| format!("Écriture de {}", private.display()))?;
+    let pem = pair
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .context("Encodage de la clé privée")?;
+    std::fs::write(&private, pem.as_bytes())
+        .with_context(|| format!("Écriture de {}", private.display()))?;
     // Avant tout le reste : une cle privee lisible par d'autres est refusee
     // par OpenSSH, et exposee entre-temps.
     set_mode(&private, 0o600)?;
 
-    let pubkey = pair
-        .clone_public_key()
-        .context("Extraction de la clé publique")?;
-    let mut line = Vec::new();
-    russh_keys::write_public_key_base64(&mut line, &pubkey)
-        .context("Encodage de la clé publique")?;
-    let mut line = String::from_utf8(line).context("Clé publique non UTF-8")?;
-    let line = {
-        let trimmed = line.trim_end();
-        let comment = comment.trim();
-        line = if comment.is_empty() {
-            format!("{trimmed}\n")
-        } else {
-            format!("{trimmed} {comment}\n")
-        };
-        line
-    };
+    let mut pubkey = pair.public_key().clone();
+    // Le commentaire identifie la machine d'origine dans authorized_keys.
+    let comment = comment.trim();
+    if !comment.is_empty() {
+        pubkey.set_comment(comment);
+    }
+    let line = pubkey.to_openssh().context("Encodage de la clé publique")?;
+    let line = format!("{}\n", line.trim_end());
     std::fs::write(&public, line.as_bytes())
         .with_context(|| format!("Écriture de {}", public.display()))?;
     set_mode(&public, 0o644)?;
@@ -309,7 +309,7 @@ mod tests {
 
         // Et elle doit se relire : une cle qu'on ne peut pas recharger ne
         // sert a rien.
-        russh_keys::load_secret_key(&private, None).expect("cle privee illisible");
+        russh::keys::load_secret_key(&private, None).expect("cle privee illisible");
     }
 
     #[test]
