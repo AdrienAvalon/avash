@@ -9,6 +9,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic, fileIconName } from "./icons";
 import {
@@ -283,6 +284,7 @@ function setSessionState(id: number, st: SessionState) {
   s.tab.classList.toggle("dead", st === "closed");
   renderHosts();
   sftpSyncButton();
+  setTitlebar();
 }
 
 /** Cree l'onglet et le terminal. La connexion elle-meme est faite par l'appelant. */
@@ -614,6 +616,7 @@ function closeSession(id: number) {
         $("sftp-panel").classList.remove("open");
       }
       sftpSyncButton();
+      setTitlebar();
     } else {
       focusSession(first.value);
     }
@@ -1136,6 +1139,7 @@ function hydrateIcons() {
 hydrateIcons();
 $("theme-toggle").addEventListener("click", cycleTheme);
 applyTheme();
+setupWindowControls();
 
 loadHosts();
 // Prechargement : au moment du clic, la police est deja prete.
@@ -2276,3 +2280,46 @@ $("send-form").addEventListener("submit", async (e) => {
     $("send-error").hidden = false;
   }
 });
+
+
+// ---------- Barre de titre custom (decorations: false) ----------
+
+async function setupWindowControls() {
+  const win = getCurrentWindow();
+  $("win-min").innerHTML = ic("winMin");
+  $("win-close").innerHTML = ic("winClose");
+  const maxBtn = $("win-max");
+  const paintMax = async () => {
+    maxBtn.innerHTML = ic((await win.isMaximized()) ? "winRestore" : "winMax");
+  };
+  await paintMax();
+  $("win-min").addEventListener("click", () => win.minimize());
+  maxBtn.addEventListener("click", async () => { await win.toggleMaximize(); await paintMax(); });
+  $("win-close").addEventListener("click", () => win.close());
+  // L'état maximisé change aussi via double-clic système / raccourci.
+  win.onResized(() => { void paintMax(); });
+
+  // Poignées de redimensionnement : sans décorations, la fenêtre n'a plus de
+  // bords redimensionnables (surtout sous Wayland). On les recrée nous-mêmes.
+  const dirs: [string, string][] = [
+    ["rh-n", "North"], ["rh-s", "South"], ["rh-e", "East"], ["rh-w", "West"],
+    ["rh-ne", "NorthEast"], ["rh-nw", "NorthWest"], ["rh-se", "SouthEast"], ["rh-sw", "SouthWest"],
+  ];
+  const box = $("resize-handles");
+  for (const [cls, dir] of dirs) {
+    const h = document.createElement("div");
+    h.className = cls;
+    h.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      void win.startResizeDragging(dir as never);
+    });
+    box.appendChild(h);
+  }
+}
+
+/** Reflète la session active dans la barre de titre (utile + évite le doublon). */
+function setTitlebar() {
+  const s = state.active === null ? null : state.sessions.get(state.active);
+  $("tb-name").textContent = s && !s.closed ? `${s.alias} — Avash` : "Avash";
+}

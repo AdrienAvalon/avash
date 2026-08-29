@@ -94,6 +94,7 @@
     body {
       background: var(--bg); color: var(--text); font-family: var(--sans);
       font-size: 13px; line-height: 1.4; height: 100vh; overflow: hidden;
+      display: flex; flex-direction: column;
       user-select: none; -webkit-font-smoothing: antialiased;
       accent-color: var(--accent);
     }
@@ -118,7 +119,36 @@
       line-height: 17px; color: var(--text-dim);
     }
 
-    .app { display: flex; height: 100vh; }
+    .resize-handles { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+    .resize-handles > div { position: absolute; pointer-events: auto; }
+    .rh-n { top: 0; left: 6px; right: 6px; height: 4px; cursor: ns-resize; }
+    .rh-s { bottom: 0; left: 6px; right: 6px; height: 4px; cursor: ns-resize; }
+    .rh-e { top: 6px; bottom: 6px; right: 0; width: 4px; cursor: ew-resize; }
+    .rh-w { top: 6px; bottom: 6px; left: 0; width: 4px; cursor: ew-resize; }
+    .rh-ne { top: 0; right: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+    .rh-nw { top: 0; left: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+    .rh-se { bottom: 0; right: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+    .rh-sw { bottom: 0; left: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+    .titlebar {
+      height: 34px; flex: none; display: flex; align-items: center;
+      background: var(--bg-soft); border-bottom: 1px solid var(--border-soft);
+      user-select: none; -webkit-user-select: none;
+    }
+    .tb-title {
+      flex: 1; display: flex; align-items: center; gap: 8px; padding-left: 12px;
+      font-size: 12.5px; font-weight: 600; color: var(--text-dim); letter-spacing: .2px;
+    }
+    .tb-mascot { font-size: 14px; }
+    .tb-controls { display: flex; height: 100%; }
+    .tb-btn {
+      width: 46px; height: 100%; border: none; background: transparent;
+      color: var(--text-dim); display: grid; place-items: center;
+      transition: background var(--t-fast), color var(--t-fast);
+    }
+    .tb-btn .ic-svg { width: 15px; height: 15px; }
+    .tb-btn:hover { background: var(--card-hover); color: var(--text); }
+    .tb-close:hover { background: #e5484d; color: #fff; }
+    .app { display: flex; height: calc(100vh - 34px); }
 
     /* ===== Barre laterale ===== */
     .sidebar {
@@ -617,6 +647,15 @@
     </style>
 </head>
 <body>
+  <div class="resize-handles" id="resize-handles"></div>
+  <div class="titlebar" data-tauri-drag-region>
+    <div class="tb-title" data-tauri-drag-region><span class="tb-mascot">😼</span><span id="tb-name">Avash</span></div>
+    <div class="tb-controls">
+      <button class="tb-btn" id="win-min" title="Réduire" type="button"></button>
+      <button class="tb-btn" id="win-max" title="Agrandir" type="button"></button>
+      <button class="tb-btn tb-close" id="win-close" title="Fermer" type="button"></button>
+    </div>
+  </div>
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
