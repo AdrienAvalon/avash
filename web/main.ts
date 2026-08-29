@@ -2447,25 +2447,10 @@ $("app-version").addEventListener("click", checkForUpdates);
 
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
-import { Channel } from "@tauri-apps/api/core";
-
-type RdpMsg =
-  | { kind: "connected"; w: number; h: number }
-  | { kind: "frame"; x: number; y: number; w: number; h: number; data: string }
-  | { kind: "error"; message: string }
-  | { kind: "closed" };
 
 type RdpTarget = { host: string; port: number | null; user: string; password: string; width: number; height: number };
 
-const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement }>();
-
-/** Décode une frame base64 en octets bruts (RGBA). */
-function b64bytes(b64: string): Uint8ClampedArray {
-  const bin = atob(b64);
-  const out = new Uint8ClampedArray(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
+const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null }>();
 
 async function openRdp(t: RdpTarget) {
   const id = state.nextId++;
@@ -2491,14 +2476,17 @@ async function openRdp(t: RdpTarget) {
   wrap.appendChild(canvas);
   $("terminal").appendChild(wrap);
   const ctx = canvas.getContext("2d")!;
-  rdpSessions.set(id, { canvas, tab });
+  rdpSessions.set(id, { canvas, tab, ws: null });
   state.active = id;
 
   tab.addEventListener("click", () => focusRdp(id));
   tab.querySelector(".close")!.addEventListener("click", (e) => { e.stopPropagation(); closeRdp(id); });
 
-  // Souris → sidecar. Coordonnées ramenées à la taille du bureau.
-  const send = (bytes: number[]) => invoke("rdp_input", { id, bytes }).catch(() => {});
+  // Souris/clavier → sidecar via le WebSocket (binaire). Ignore si non prêt.
+  const send = (bytes: number[]) => {
+    const s = rdpSessions.get(id);
+    if (s?.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array(bytes));
+  };
   const pos = (e: MouseEvent): [number, number] => {
     const r = canvas.getBoundingClientRect();
     const x = Math.max(0, Math.min(t.width - 1, Math.round(((e.clientX - r.left) / r.width) * t.width)));
@@ -2511,39 +2499,53 @@ async function openRdp(t: RdpTarget) {
   canvas.addEventListener("mouseup", (e) => { const [x, y] = pos(e); send([2, e.button, 0, ...le16(x), ...le16(y)]); });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("wheel", (e) => { e.preventDefault(); const d = e.deltaY > 0 ? -120 : 120; send([3, ...le16(d & 0xffff), 0, 0, 0, 0]); });
-  canvas.addEventListener("keydown", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 1]); });
+  canvas.addEventListener("keydown", (e) => {
+    if (e.code === "F11") { e.preventDefault(); return; } // géré globalement (plein écran)
+    e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 1]);
+  });
   canvas.addEventListener("keyup", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 0]); });
 
-  // Canal de réception du framebuffer.
-  const chan = new Channel<RdpMsg>();
-  chan.onmessage = (msg) => {
-    const s = rdpSessions.get(id);
-    if (!s) return;
-    if (msg.kind === "connected") {
-      canvas.width = msg.w; canvas.height = msg.h;
-      tab.querySelector(".state")!.className = "state live";
-    } else if (msg.kind === "frame") {
-      const img = ctx.createImageData(msg.w, msg.h);
-      img.data.set(b64bytes(msg.data));
-      ctx.putImageData(img, msg.x, msg.y);
-    } else if (msg.kind === "error") {
-      tab.querySelector(".state")!.className = "state closed";
-      alert(`RDP : ${msg.message}`);
-    } else if (msg.kind === "closed") {
-      tab.querySelector(".state")!.className = "state closed";
-      tab.classList.add("dead");
-    }
-  };
-  focusRdp(id);
+  // Bureau reçu via WebSocket local BINAIRE (ArrayBuffer natif : ni base64 ni
+  // JSON — débit maximal, même en 3440×1440).
+  //   [1] CONNECTED w,h · [2] FRAME x,y,w,h + RGBA · [3] ERROR utf8
   try {
-    await invoke("rdp_open", {
+    const conn = await invoke<{ port: number; token: string }>("rdp_open", {
       id, host: t.host, port: t.port, user: t.user, password: t.password,
-      width: t.width, height: t.height, channel: chan,
+      width: t.width, height: t.height,
     });
+    const ws = new WebSocket(`ws://127.0.0.1:${conn.port}`);
+    ws.binaryType = "arraybuffer";
+    rdpSessions.get(id)!.ws = ws;
+    ws.onopen = () => ws.send(new TextEncoder().encode(conn.token));
+    ws.onmessage = (ev) => {
+      if (!rdpSessions.has(id)) return;
+      const buf = ev.data as ArrayBuffer;
+      const dv = new DataView(buf);
+      const kind = dv.getUint8(0);
+      if (kind === 2) {
+        const x = dv.getUint16(1, true), y = dv.getUint16(3, true);
+        const fw = dv.getUint16(5, true), fh = dv.getUint16(7, true);
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(buf, 9, fw * fh * 4), fw, fh), x, y);
+      } else if (kind === 1) {
+        canvas.width = dv.getUint16(1, true);
+        canvas.height = dv.getUint16(3, true);
+        tab.querySelector(".state")!.className = "state live";
+      } else if (kind === 3) {
+        tab.querySelector(".state")!.className = "state closed";
+        alert(`RDP : ${new TextDecoder().decode(new Uint8Array(buf, 1))}`);
+      }
+    };
+    ws.onclose = () => {
+      const st = tab.querySelector(".state");
+      if (st) st.className = "state closed";
+      tab.classList.add("dead");
+    };
+    ws.onerror = () => { /* onclose suivra */ };
   } catch (e) {
     tab.querySelector(".state")!.className = "state closed";
     alert(`Connexion RDP impossible : ${e}`);
   }
+  focusRdp(id);
 }
 
 function focusRdp(id: number) {
@@ -2560,6 +2562,11 @@ function focusRdp(id: number) {
 function closeRdp(id: number) {
   const s = rdpSessions.get(id);
   if (!s) return;
+  if (document.body.classList.contains("rdp-full")) {
+    document.body.classList.remove("rdp-full");
+    getCurrentWindow().setFullscreen(false).catch(() => {});
+  }
+  s.ws?.close();
   invoke("rdp_close", { id }).catch(() => {});
   s.canvas.parentElement?.remove();
   s.tab.remove();
@@ -2569,6 +2576,20 @@ function closeRdp(id: number) {
     if (state.sessions.size === 0 && rdpSessions.size === 0) $("terminal-empty").style.display = "flex";
   }
 }
+
+/** Plein écran du bureau RDP : fenêtre en plein écran + châssis masqué. */
+async function toggleRdpFullscreen() {
+  // N'a de sens que sur un onglet RDP.
+  if (state.active === null || !rdpSessions.has(state.active)) return;
+  const full = !document.body.classList.contains("rdp-full");
+  document.body.classList.toggle("rdp-full", full);
+  try { await getCurrentWindow().setFullscreen(full); } catch { /* */ }
+  const s = state.active !== null ? rdpSessions.get(state.active) : null;
+  s?.canvas.focus();
+}
+window.addEventListener("keydown", (e) => {
+  if (e.key === "F11") { e.preventDefault(); void toggleRdpFullscreen(); }
+});
 
 /** Table minimale code clavier → scancode PC (set 1). Suffisant pour saisir. */
 function rdpScancode(code: string): number | null {

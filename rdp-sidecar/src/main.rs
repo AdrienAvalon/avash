@@ -1,31 +1,29 @@
-//! Avash — sidecar client RDP (IronRDP), isole de russh.
+//! Avash — sidecar client RDP (IronRDP), isolé de russh.
 //!
-//! Streame le bureau distant vers Avash et recoit les entrees, via stdio :
-//!   stdout (sidecar -> app) : [u8 kind][u32 le len][payload]
-//!     1 CONNECTED  = w:u16, h:u16
-//!     2 FRAME      = x:u16, y:u16, w:u16, h:u16, puis w*h*4 octets RGBA
-//!     3 ERROR      = message UTF-8
-//!   stdin (app -> sidecar) : messages a taille fixe
-//!     1 MOUSE_MOVE   = x:u16, y:u16
-//!     2 MOUSE_BUTTON = button:u8, down:u8, x:u16, y:u16
-//!     3 WHEEL        = delta:i16, x:u16, y:u16
-//!     4 KEY          = scancode:u16, down:u8
+//! Sert le bureau distant à Avash via un **WebSocket local binaire** (vrai
+//! ArrayBuffer côté webview : pas de base64, pas de JSON — débit maximal, même
+//! en 3440×1440). Écoute sur 127.0.0.1:<port aléatoire> et n'accepte qu'un
+//! client présentant le bon jeton. Imprime « PORT TOKEN » sur stdout au départ.
 //!
-//! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS
-//!                   [--width W] [--height H] [--domain D]  (ou --shot out.png)
+//! Messages WebSocket (binaires, auto-délimités) :
+//!   sidecar -> app : [1]=CONNECTED w:u16 h:u16 · [2]=FRAME x,y,w,h:u16 + RGBA · [3]=ERROR utf8
+//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16 · [4]KEY sc:u16,down
+//!
+//! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png]
 
 use anyhow::{Context, Result};
+use futures_util::{SinkExt, StreamExt};
 use ironrdp::connector::{self, Credentials};
+use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::input::{Database, MousePosition, Operation, WheelRotations};
 use ironrdp::pdu::gcc::KeyboardType;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
-use ironrdp::graphics::image_processing::PixelFormat;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::tungstenite::Message;
 
 struct Args {
     host: String,
@@ -40,8 +38,8 @@ struct Args {
 
 struct Pa(Vec<String>);
 impl Pa {
-    fn opt(&self, key: &str) -> Option<String> {
-        self.0.iter().position(|a| a == key).and_then(|i| self.0.get(i + 1).cloned())
+    fn opt(&self, k: &str) -> Option<String> {
+        self.0.iter().position(|a| a == k).and_then(|i| self.0.get(i + 1).cloned())
     }
     fn req2(&self, k1: &str, k2: &str) -> Result<String> {
         self.opt(k1).or_else(|| self.opt(k2)).with_context(|| format!("argument requis : {k1}/{k2}"))
@@ -98,135 +96,74 @@ fn build_config(a: &Args) -> connector::Config {
 }
 
 fn server_public_key(cert: &x509_cert::Certificate) -> Result<Vec<u8>> {
-    cert.tbs_certificate
-        .subject_public_key_info
-        .subject_public_key
-        .as_bytes()
-        .context("clé publique non alignée")
-        .map(<[u8]>::to_vec)
-}
-
-/// Entrée reçue du front, déjà décodée.
-enum Input {
-    Move(u16, u16),
-    Button { button: u8, down: bool, x: u16, y: u16 },
-    Wheel { delta: i16 },
-    Key { scancode: u16, down: bool },
-}
-
-/// Lit stdin (bloquant) sur un thread dédié et pousse des `Input` décodés.
-fn spawn_stdin_reader(tx: mpsc::UnboundedSender<Input>) {
-    std::thread::spawn(move || {
-        use std::io::Read as _;
-        let mut stdin = std::io::stdin().lock();
-        let rd = |s: &mut dyn std::io::Read, n: usize| -> Option<Vec<u8>> {
-            let mut b = vec![0u8; n];
-            s.read_exact(&mut b).ok().map(|()| b)
-        };
-        loop {
-            let mut kind = [0u8; 1];
-            if stdin.read_exact(&mut kind).is_err() {
-                break;
-            }
-            let msg = match kind[0] {
-                1 => rd(&mut stdin, 4).map(|b| Input::Move(u16::from_le_bytes([b[0], b[1]]), u16::from_le_bytes([b[2], b[3]]))),
-                2 => rd(&mut stdin, 6).map(|b| Input::Button {
-                    button: b[0],
-                    down: b[1] != 0,
-                    x: u16::from_le_bytes([b[2], b[3]]),
-                    y: u16::from_le_bytes([b[4], b[5]]),
-                }),
-                3 => rd(&mut stdin, 6).map(|b| Input::Wheel { delta: i16::from_le_bytes([b[0], b[1]]) }),
-                4 => rd(&mut stdin, 3).map(|b| Input::Key { scancode: u16::from_le_bytes([b[0], b[1]]), down: b[2] != 0 }),
-                _ => None,
-            };
-            match msg {
-                Some(m) => {
-                    if tx.send(m).is_err() {
-                        break;
-                    }
-                }
-                None => break,
-            }
-        }
-    });
+    cert.tbs_certificate.subject_public_key_info.subject_public_key.as_bytes()
+        .context("clé publique non alignée").map(<[u8]>::to_vec)
 }
 
 fn mouse_button(n: u8) -> ironrdp::input::MouseButton {
     use ironrdp::input::MouseButton::{Left, Middle, Right, X1, X2};
-    match n {
-        1 => Middle,
-        2 => Right,
-        3 => X1,
-        4 => X2,
-        _ => Left,
+    match n { 1 => Middle, 2 => Right, 3 => X1, 4 => X2, _ => Left }
+}
+
+/// Décode un message d'entrée binaire en opérations IronRDP.
+fn input_ops(b: &[u8]) -> Vec<Operation> {
+    let u16le = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+    match b.first().copied() {
+        Some(1) if b.len() >= 5 => vec![Operation::MouseMove(MousePosition { x: u16le(1), y: u16le(3) })],
+        Some(2) if b.len() >= 7 => {
+            let bt = mouse_button(b[1]);
+            let click = if b[2] != 0 { Operation::MouseButtonPressed(bt) } else { Operation::MouseButtonReleased(bt) };
+            vec![Operation::MouseMove(MousePosition { x: u16le(3), y: u16le(5) }), click]
+        }
+        Some(3) if b.len() >= 3 => {
+            let d = i16::from_le_bytes([b[1], b[2]]);
+            vec![Operation::WheelRotations(WheelRotations { is_vertical: true, rotation_units: d })]
+        }
+        Some(4) if b.len() >= 4 => {
+            let sc = ironrdp::input::Scancode::from(u16le(1));
+            vec![if b[3] != 0 { Operation::KeyPressed(sc) } else { Operation::KeyReleased(sc) }]
+        }
+        _ => Vec::new(),
     }
 }
 
-fn input_to_ops(i: Input) -> Vec<Operation> {
-    match i {
-        Input::Move(x, y) => vec![Operation::MouseMove(MousePosition { x, y })],
-        Input::Button { button, down, x, y } => {
-            let b = mouse_button(button);
-            let click = if down { Operation::MouseButtonPressed(b) } else { Operation::MouseButtonReleased(b) };
-            vec![Operation::MouseMove(MousePosition { x, y }), click]
-        }
-        Input::Wheel { delta } => vec![Operation::WheelRotations(WheelRotations { is_vertical: true, rotation_units: delta })],
-        Input::Key { scancode, down } => {
-            let sc = ironrdp::input::Scancode::from(scancode);
-            vec![if down { Operation::KeyPressed(sc) } else { Operation::KeyReleased(sc) }]
-        }
-    }
-}
-
-/// Écrit un message encadré sur stdout.
-async fn emit(out: &mut (impl AsyncWriteExt + Unpin), kind: u8, payload: &[u8]) -> Result<()> {
-    let len = u32::try_from(payload.len()).unwrap_or(0);
-    out.write_all(&[kind]).await?;
-    out.write_all(&len.to_le_bytes()).await?;
-    out.write_all(payload).await?;
-    out.flush().await?;
-    Ok(())
-}
-
-/// Extrait le rectangle (RGBA) de l'image complète.
-fn crop(image: &DecodedImage, r: &ironrdp::pdu::geometry::InclusiveRectangle) -> (u16, u16, u16, u16, Vec<u8>) {
+/// Rectangle mis à jour -> message FRAME binaire [2][x][y][w][h][RGBA].
+fn frame_msg(image: &DecodedImage, r: &ironrdp::pdu::geometry::InclusiveRectangle) -> Vec<u8> {
     let iw = usize::from(image.width());
     let data = image.data();
-    let x = r.left;
-    let y = r.top;
-    let w = r.right - r.left + 1;
-    let h = r.bottom - r.top + 1;
-    let mut buf = Vec::with_capacity(usize::from(w) * usize::from(h) * 4);
+    let (x, y) = (r.left, r.top);
+    let (w, h) = (r.right - r.left + 1, r.bottom - r.top + 1);
+    let mut m = Vec::with_capacity(9 + usize::from(w) * usize::from(h) * 4);
+    m.push(2);
+    m.extend_from_slice(&x.to_le_bytes());
+    m.extend_from_slice(&y.to_le_bytes());
+    m.extend_from_slice(&w.to_le_bytes());
+    m.extend_from_slice(&h.to_le_bytes());
     for row in 0..usize::from(h) {
-        let sy = usize::from(y) + row;
-        let start = (sy * iw + usize::from(x)) * 4;
-        buf.extend_from_slice(&data[start..start + usize::from(w) * 4]);
+        let start = ((usize::from(y) + row) * iw + usize::from(x)) * 4;
+        m.extend_from_slice(&data[start..start + usize::from(w) * 4]);
     }
-    (x, y, w, h, buf)
+    m
 }
 
 async fn connect(
-    args: &Args,
+    a: &Args,
 ) -> Result<(connector::ConnectionResult, ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>)> {
-    let tcp = TcpStream::connect((args.host.as_str(), args.port))
-        .await
-        .with_context(|| format!("connexion TCP à {}:{}", args.host, args.port))?;
+    let tcp = TcpStream::connect((a.host.as_str(), a.port)).await
+        .with_context(|| format!("connexion TCP à {}:{}", a.host, a.port))?;
     let client_addr = tcp.local_addr()?;
     let mut framed = ironrdp_tokio::TokioFramed::new(tcp);
-    let mut connector = connector::ClientConnector::new(build_config(args), client_addr);
+    let mut connector = connector::ClientConnector::new(build_config(a), client_addr);
     let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector).await.context("début de connexion")?;
     let initial = framed.into_inner_no_leftover();
-    let (upgraded_stream, cert) = ironrdp_tls::upgrade(initial, &args.host).await.context("passage TLS")?;
+    let (upgraded_stream, cert) = ironrdp_tls::upgrade(initial, &a.host).await.context("passage TLS")?;
     let pubkey = server_public_key(&cert)?;
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
     let mut framed = ironrdp_tokio::TokioFramed::new(upgraded_stream);
     let mut net = ironrdp_tokio::reqwest::ReqwestNetworkClient::new();
     let result = ironrdp_tokio::connect_finalize(
-        upgraded, connector, &mut framed, &mut net, args.host.clone().into(), pubkey, None,
-    )
-    .await
-    .context("finalisation (CredSSP/NLA)")?;
+        upgraded, connector, &mut framed, &mut net, a.host.clone().into(), pubkey, None,
+    ).await.context("finalisation (CredSSP/NLA)")?;
     Ok((result, framed))
 }
 
@@ -234,11 +171,10 @@ async fn connect(
 async fn main() -> Result<()> {
     let args = parse_args()?;
     let (result, mut framed) = connect(&args).await?;
-    eprintln!("connecté : {}x{}", result.desktop_size.width, result.desktop_size.height);
-
     let (w, h) = (result.desktop_size.width, result.desktop_size.height);
+    eprintln!("connecté : {w}x{h}");
     let mut image = DecodedImage::new(PixelFormat::RgbA32, w, h);
-    let mut active: ActiveStage = ActiveStageBuilder {
+    let mut active = ActiveStageBuilder {
         static_channels: result.static_channels,
         user_channel_id: result.user_channel_id,
         io_channel_id: result.io_channel_id,
@@ -250,29 +186,53 @@ async fn main() -> Result<()> {
     }
     .build();
 
-    // Mode capture (--shot) : on tourne quelques secondes puis on enregistre.
     if let Some(path) = args.shot.clone() {
         return run_shot(&mut active, &mut image, &mut framed, &path).await;
     }
 
+    // Serveur WebSocket local : un seul client (Avash), jeton obligatoire.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.context("écoute WebSocket")?;
+    let port = listener.local_addr()?.port();
+    let token = format!("{:016x}", rand::random::<u64>());
+    // Annonce le point de connexion à Avash.
     let mut out = tokio::io::stdout();
-    emit(&mut out, 1, &[w.to_le_bytes(), h.to_le_bytes()].concat()).await?;
+    out.write_all(format!("{port} {token}\n").as_bytes()).await?;
+    out.flush().await?;
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Input>();
-    spawn_stdin_reader(tx);
+    let (tcp, _) = listener.accept().await.context("acceptation WebSocket")?;
+    let ws = tokio_tungstenite::accept_async(tcp).await.context("handshake WebSocket")?;
+    let (mut sink, mut stream) = ws.split();
+
+    // Premier message du client = le jeton (sinon on refuse).
+    match stream.next().await {
+        Some(Ok(Message::Binary(t))) if t == token.as_bytes() => {}
+        _ => return Ok(()),
+    }
+
+    // CONNECTED [1][w][h]
+    let mut hello = vec![1u8];
+    hello.extend_from_slice(&w.to_le_bytes());
+    hello.extend_from_slice(&h.to_le_bytes());
+    sink.send(Message::Binary(hello)).await?;
+
     let mut db = Database::new();
-
     use ironrdp_tokio::FramedWrite as _;
     loop {
         tokio::select! {
             biased;
-            maybe = rx.recv() => {
-                let Some(input) = maybe else { break }; // stdin fermé => fin
-                let events = db.apply(input_to_ops(input));
-                for o in active.process_fastpath_input(&mut image, &events)? {
-                    if let ActiveStageOutput::ResponseFrame(f) = o {
-                        framed.write_all(&f).await.context("écriture entrée")?;
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(b))) => {
+                        let events = db.apply(input_ops(&b));
+                        for o in active.process_fastpath_input(&mut image, &events)? {
+                            if let ActiveStageOutput::ResponseFrame(f) = o {
+                                framed.write_all(&f).await.context("écriture entrée")?;
+                            }
+                        }
                     }
+                    Some(Ok(Message::Close(_))) | None => break, // onglet fermé
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
                 }
             }
             read = framed.read_pdu() => {
@@ -281,14 +241,7 @@ async fn main() -> Result<()> {
                     match o {
                         ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await.context("écriture réponse")?,
                         ActiveStageOutput::GraphicsUpdate(rect) => {
-                            let (x, y, cw, ch, rgba) = crop(&image, &rect);
-                            let mut payload = Vec::with_capacity(8 + rgba.len());
-                            payload.extend_from_slice(&x.to_le_bytes());
-                            payload.extend_from_slice(&y.to_le_bytes());
-                            payload.extend_from_slice(&cw.to_le_bytes());
-                            payload.extend_from_slice(&ch.to_le_bytes());
-                            payload.extend_from_slice(&rgba);
-                            emit(&mut out, 2, &payload).await?;
+                            sink.send(Message::Binary(frame_msg(&image, &rect))).await.context("envoi frame")?;
                         }
                         ActiveStageOutput::Terminate(_) => return Ok(()),
                         _ => {}
@@ -317,9 +270,7 @@ async fn run_shot(
                 _ => {}
             }
         }
-        if done {
-            break;
-        }
+        if done { break; }
     }
     let buf: image::ImageBuffer<image::Rgba<u8>, _> =
         image::ImageBuffer::from_raw(u32::from(image.width()), u32::from(image.height()), image.data().to_vec())

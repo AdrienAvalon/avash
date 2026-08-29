@@ -263,6 +263,19 @@ procédure complète (build, vérification, signature, faux positifs AV).
   `SHA256SUMS` (+ signature GPG). Aucun packer, métadonnées complètes : la
   surface de faux positif antivirus est réduite au minimum contrôlable.
 
+## RDP — transport binaire (WebSocket) + plein écran (29/08, nuit)
+
+- **Ultra-performant** : le sidecar sert le bureau à la webview via un
+  **WebSocket local binaire** (vrai `ArrayBuffer` — ni base64, ni JSON), au
+  lieu d'un Channel Tauri qui livrait un tableau JSON de nombres (des dizaines
+  de Mo de texte pour un plein 3440×1440). 127.0.0.1 uniquement + jeton.
+  Les entrées repartent aussi en binaire sur le WS. Backend simplifié (plus de
+  relais). CSP ajustée (`connect-src ws://127.0.0.1:*`).
+- **Plein écran** : F11 met la fenêtre en plein écran et masque tout le
+  châssis ; le bureau remplit l'écran (letterbox si l'aspect diffère).
+  Résolutions jusqu'à **3440×1440 (ultrawide)**. Validé sur écran 3440×1440.
+- Erreurs de connexion (auth/NLA/TLS) remontées à l'interface.
+
 ## Interface — formulaire RDP + panneaux redimensionnables (29/08, nuit)
 
 - Le dialogue « Connexion directe » **s'adapte au protocole** : en RDP, plus

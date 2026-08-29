@@ -23,7 +23,6 @@ open = "5.4.2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-base64 = "0.23.1"
 
 [[bench]]
 name = "utf8"

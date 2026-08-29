@@ -56,7 +56,6 @@ pub fn run() {
             commands::tunnel_stop,
             commands::tunnel_status,
             rdp::rdp_open,
-            rdp::rdp_input,
             rdp::rdp_close,
             commands::open_sessions,
             commands::snippet_list,
