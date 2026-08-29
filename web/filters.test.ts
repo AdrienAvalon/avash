@@ -310,3 +310,18 @@ describe("tags", () => {
     expect(matchHost(th("srv", ["staging"]), "stag")).toBe(true);
   });
 });
+
+import { sortSftpEntries, type SftpEntry } from "./filters";
+
+describe("sortSftpEntries", () => {
+  const e = (name: string, is_dir: boolean): SftpEntry => ({ name, is_dir, size: 0, modified: null });
+  it("dossiers d'abord, puis alphabétique", () => {
+    const got = sortSftpEntries([e("b.txt", false), e("zeta", true), e("a.txt", false), e("alpha", true)]);
+    expect(got.map((x) => x.name)).toEqual(["alpha", "zeta", "a.txt", "b.txt"]);
+  });
+  it("ne mute pas l'entrée", () => {
+    const src = [e("b", false), e("a", true)];
+    sortSftpEntries(src);
+    expect(src.map((x) => x.name)).toEqual(["b", "a"]);
+  });
+});

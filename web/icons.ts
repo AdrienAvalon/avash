@@ -56,3 +56,29 @@ export function fileIconName(name: string, isDir: boolean): string {
   if (/^(key|pem|pub|crt|gpg|asc)$/.test(ext) || name.startsWith("id_")) return "key";
   return "file";
 }
+
+
+/** Remplace les marqueurs `[data-icon]` d'un arbre DOM par des SVG.
+ *  Pur DOM (aucune dépendance Tauri) — appelé au démarrage, testable. */
+export function hydrateIcons(root: ParentNode = document): void {
+  for (const el of root.querySelectorAll<HTMLElement>("[data-icon]")) {
+    const name = el.dataset.icon ?? "file";
+    const label = el.textContent?.trim() ?? "";
+    el.textContent = "";
+    if (el.classList.contains("manual-btn")) {
+      const box = document.createElement("span");
+      box.className = "ic";
+      box.innerHTML = ic(name);
+      const txt = document.createElement("span");
+      txt.textContent = label;
+      el.append(box, txt);
+    } else {
+      el.innerHTML = ic(name);
+      if (label) {
+        const txt = document.createElement("span");
+        txt.textContent = label;
+        el.append(txt);
+      }
+    }
+  }
+}

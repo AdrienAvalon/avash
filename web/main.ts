@@ -11,10 +11,10 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ic, fileIconName } from "./icons";
+import { ic, fileIconName, hydrateIcons } from "./icons";
 import {
   humanSize, filterHosts, allTags, remoteJoin, parentDir, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge,
-  shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
+  sortSftpEntries, shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
 } from "./filters";
@@ -841,7 +841,7 @@ async function sftpNavigate(path: string) {
     // La reponse peut arriver apres un changement d'onglet.
     if (sftpSession() !== s || s.sftpPath !== path) return;
     list.innerHTML = "";
-    entries.sort((a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || a.name.localeCompare(b.name));
+    const sorted = sortSftpEntries(entries);
     if (path !== "/") {
       const up = document.createElement("div");
       up.className = "sftp-entry dir up";
@@ -849,7 +849,7 @@ async function sftpNavigate(path: string) {
       up.addEventListener("dblclick", () => sftpNavigate(parentDir(path)));
       list.appendChild(up);
     }
-    for (const e of entries) {
+    for (const e of sorted) {
       const el = document.createElement("div");
       el.className = "sftp-entry" + (e.is_dir ? " dir" : "");
       el.innerHTML = `<span class="ic"></span><span class="nm"></span><span class="sz"></span>`;
@@ -1176,29 +1176,6 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && $("ask-modal").classList.contains("open")) askClose(null);
 });
 
-// Icones : remplacer les marqueurs data-icon par des SVG coherents.
-function hydrateIcons() {
-  for (const el of document.querySelectorAll<HTMLElement>("[data-icon]")) {
-    const name = el.dataset.icon ?? "file";
-    const label = el.textContent?.trim() ?? "";
-    el.textContent = "";
-    if (el.classList.contains("manual-btn")) {
-      const box = document.createElement("span");
-      box.className = "ic";
-      box.innerHTML = ic(name);
-      const txt = document.createElement("span");
-      txt.textContent = label;
-      el.append(box, txt);
-    } else {
-      el.innerHTML = ic(name);
-      if (label) {
-        const txt = document.createElement("span");
-        txt.textContent = label;
-        el.append(txt);
-      }
-    }
-  }
-}
 hydrateIcons();
 $("theme-toggle").addEventListener("click", cycleTheme);
 applyTheme();

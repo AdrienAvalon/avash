@@ -237,6 +237,13 @@ export function osBadge(os: OsInfo): { glyph: string; color: string } {
 
 export type SftpEntry = { name: string; is_dir: boolean; size: number; modified: number | null };
 
+/** Tri d'affichage : dossiers d'abord, puis ordre alphabétique. */
+export function sortSftpEntries(entries: SftpEntry[]): SftpEntry[] {
+  return [...entries].sort(
+    (a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || a.name.localeCompare(b.name),
+  );
+}
+
 /** Date courte : aujourd'hui → « 14:07 », sinon « 12/03/26 ». */
 export function shortDate(epochSec: number | null, now = new Date()): string {
   if (!epochSec) return "";

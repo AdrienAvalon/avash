@@ -20,6 +20,14 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 **162 tests verts** (117 Rust, 45 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
 
+### Tests d'interaction du front (29/08, soir)
+
+Mise en place de tests DOM (jsdom). Logique DOM extraite de `main.ts` vers des
+modules testables (`hydrateIcons` dans `icons.ts`, `sortSftpEntries` dans
+`filters.ts`) puis testée : hydratation des icônes, tri des entrées SFTP.
+51 tests front. Pattern établi pour en ajouter ; l'e2e complet des flux
+couplés à Tauri demanderait un refactor plus large de `main.ts`.
+
 ### Clé d'hôte changée : action guidée (29/08, soir)
 
 Quand la clé d'hôte change, Avash refuse toujours (sécurité), mais propose
