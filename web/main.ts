@@ -1196,7 +1196,6 @@ $("ask-form").addEventListener("submit", (e) => {
   askClose(($("ask-input") as HTMLInputElement).value.trim());
 });
 $("ask-cancel").addEventListener("click", () => askClose(null));
-$("ask-modal").addEventListener("click", (e) => { if (e.target === $("ask-modal")) askClose(null); });
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && $("ask-modal").classList.contains("open")) askClose(null);
 });
@@ -1358,10 +1357,7 @@ document
   .forEach((r) => r.addEventListener("change", manualSyncAuthRows));
 document.querySelectorAll('input[name="proto"]').forEach((r) => r.addEventListener("change", manualSyncProto));
 $("m-rdp-save").addEventListener("change", manualSyncProto);
-// Fermeture au clic hors du cadre, et a Echap.
-manualModal().addEventListener("click", (e) => {
-  if (e.target === manualModal()) manualClose();
-});
+// Fermeture à Échap seulement (pas au clic dehors : évite de perdre la saisie).
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && manualModal().classList.contains("open")) manualClose();
 });
@@ -1510,9 +1506,6 @@ $("keys-btn").addEventListener("click", keysOpen);
 $("k-close").addEventListener("click", keysClose);
 $("keygen-form").addEventListener("submit", keygenSubmit);
 $("deploy-form").addEventListener("submit", deploySubmit);
-keysModal().addEventListener("click", (e) => {
-  if (e.target === keysModal()) keysClose();
-});
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && keysModal().classList.contains("open")) keysClose();
 });
@@ -1610,9 +1603,6 @@ $("pass-form").addEventListener("submit", (e) => {
   });
 });
 $("pass-cancel").addEventListener("click", () => passClose(null));
-passModal().addEventListener("click", (e) => {
-  if (e.target === passModal()) passClose(null);
-});
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && passModal().classList.contains("open")) passClose(null);
 });
@@ -1785,9 +1775,6 @@ async function openEditHost(alias: string) {
 function closeEditHost() { $("edit-modal").classList.remove("open"); }
 
 $("e-cancel").addEventListener("click", closeEditHost);
-$("edit-modal").addEventListener("click", (e) => {
-  if (e.target === $("edit-modal")) closeEditHost();
-});
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if ($("edit-modal").classList.contains("open")) closeEditHost();
@@ -2109,9 +2096,6 @@ function tunnelsClose() {
 $("tunnels-btn").addEventListener("click", () => tunnelsOpen());
 $("t-close").addEventListener("click", tunnelsClose);
 $("t-reset").addEventListener("click", tunnelFormReset);
-tunnelsModal().addEventListener("click", (e) => {
-  if (e.target === tunnelsModal()) tunnelsClose();
-});
 for (const r of document.querySelectorAll('input[name="tkind"]')) {
   r.addEventListener("change", tunnelSyncKind);
 }
@@ -2266,7 +2250,6 @@ $("snippets-btn").addEventListener("click", snippetsOpen);
 $("sn-close").addEventListener("click", snippetsClose);
 $("sn-reset").addEventListener("click", snippetFormReset);
 $("sn-command").addEventListener("input", snippetSyncVars);
-snippetsModal().addEventListener("click", (e) => { if (e.target === snippetsModal()) snippetsClose(); });
 
 $("snippet-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -2367,7 +2350,6 @@ function updateSendPreview() {
 
 $("send-vars").addEventListener("input", updateSendPreview);
 $("send-cancel").addEventListener("click", () => $("send-modal").classList.remove("open"));
-$("send-modal").addEventListener("click", (e) => { if (e.target === $("send-modal")) $("send-modal").classList.remove("open"); });
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && $("send-modal").classList.contains("open")) $("send-modal").classList.remove("open");
 });
