@@ -6,7 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { humanSize, filterHosts, remoteJoin, type Host } from "./filters";
+import { humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, PASSWORD_REQUIRED, type Host } from "./filters";
 
 type Session = {
   id: number;
@@ -113,7 +113,7 @@ function renderHosts() {
   } else if (shown.length === 0) {
     const empty = document.createElement("div");
     empty.className = "host-empty";
-    empty.innerHTML = `<p>Aucun hôte ne correspond à « ${state.filter.replace(/[<>&]/g, "")} ».</p>`;
+    empty.innerHTML = `<p>Aucun hôte ne correspond à « ${stripHtml(state.filter)} ».</p>`;
     list.appendChild(empty);
   }
 }
@@ -229,8 +229,6 @@ function warnIfDeaf(term: Terminal) {
 }
 
 /** Marqueur pose par le backend quand seul le mot de passe manque. */
-const PASSWORD_REQUIRED = "[AVASH_PASSWORD_REQUIRED]";
-
 /** Ouvre une session sur un hote declare dans ~/.ssh/config. */
 async function openSession(h: Host) {
   await ensureFontLoaded();
@@ -275,7 +273,7 @@ async function openSession(h: Host) {
       return;
     } catch (e) {
       const msg = String(e);
-      if (!msg.includes(PASSWORD_REQUIRED)) {
+      if (!isPasswordRequired(msg)) {
         setSessionState(id, "closed");
         term.write(`\x1b[31m⚔️ Échec connexion : ${msg}\x1b[0m\r\n`);
         return;
@@ -436,7 +434,7 @@ function renderPalette() {
   res.innerHTML = "";
   const matches = filterHosts(state.hosts, q);
   if (matches.length === 0) {
-    res.innerHTML = `<div class="empty">Aucun hôte pour « ${q.replace(/[<>&]/g, "")} »</div>`;
+    res.innerHTML = `<div class="empty">Aucun hôte pour « ${stripHtml(q)} »</div>`;
     return;
   }
   for (const h of matches) {
@@ -492,8 +490,7 @@ async function sftpNavigate(path: string) {
       up.className = "sftp-entry dir";
       up.innerHTML = `<span>📁</span><span class="nm">..</span>`;
       up.addEventListener("click", () => {
-        const parent = path.replace(/\/[^/]+\/?$/, "") || "/";
-        sftpNavigate(parent);
+        sftpNavigate(parentDir(path));
       });
       list.appendChild(up);
     }

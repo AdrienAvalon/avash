@@ -343,4 +343,50 @@ mod tests {
         let cmd = deploy_command(k.public_line.as_ref().unwrap()).unwrap();
         assert!(cmd.contains("authorized_keys"));
     }
+    #[cfg(unix)]
+    #[test]
+    fn deploy_command_installe_reellement_via_un_shell() {
+        // Les autres tests verifient la commande generee ; celui-ci l'execute
+        // pour de vrai dans un HOME temporaire, ce qu'aucun test unitaire ne
+        // peut faire. Couvre l'idempotence et les droits poses.
+        use std::os::unix::fs::PermissionsExt;
+        let pub_line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITEST avash@test";
+        let cmd = deploy_command(pub_line).unwrap();
+        let home = std::env::temp_dir().join(format!(
+            "avash-deploy-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+
+        let run = || {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .env("HOME", &home)
+                .output()
+                .unwrap()
+        };
+
+        let un = run();
+        assert!(interpret_deploy(&String::from_utf8_lossy(&un.stdout))
+            .unwrap()
+            .contains("installée"));
+        // Relance : idempotent, pas de doublon.
+        let deux = run();
+        assert!(interpret_deploy(&String::from_utf8_lossy(&deux.stdout))
+            .unwrap()
+            .contains("déjà"));
+
+        let ak = std::fs::read_to_string(home.join(".ssh/authorized_keys")).unwrap();
+        assert_eq!(ak.lines().filter(|l| l.contains("TEST")).count(), 1);
+        let m = std::fs::metadata(home.join(".ssh/authorized_keys"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(m, 0o600, "authorized_keys doit etre en 600");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }

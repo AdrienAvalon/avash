@@ -60,11 +60,25 @@ impl russh::server::Handler for TestSshSession {
     ) -> Result<(), Self::Error> {
         let channel = self.channels.lock().await.remove(&channel_id).unwrap();
         let _ = session.channel_success(channel_id);
-        let output = format!("CMD:{}\r\n", String::from_utf8_lossy(request));
+        let cmd = String::from_utf8_lossy(request).into_owned();
+        let output = format!("CMD:{cmd}\r\n");
         let _ = session.data(channel_id, bytes::Bytes::from(output.into_bytes()));
         let _ = session.extended_data(channel_id, 1, bytes::Bytes::from_static(b"stderr-ok"));
-        let _ = session.exit_status_request(channel_id, 0);
+
+        // `exit N` dans la commande -> code N, pour tester les codes non nuls.
+        let code = cmd
+            .split_whitespace()
+            .skip_while(|w| *w != "exit")
+            .nth(1)
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or(0);
+
+        // ⚠️ ORDRE REEL D'OPENSSH : data, puis EOF, puis exit-status, puis
+        // close. Le code envoyait exit-status AVANT eof, ce qui masquait un
+        // bug ou run() cassait sur Eof et renvoyait toujours 0.
         let _ = session.eof(channel_id);
+        let _ = session.exit_status_request(channel_id, code);
+        let _ = session.close(channel_id);
         let _ = channel;
         Ok(())
     }
@@ -375,6 +389,23 @@ async fn connect_exec_roundtrip() {
         "stdout inattendu : {stdout}"
     );
     assert!(stdout.contains("stderr-ok"), "stderr manquant : {stdout}");
+    session.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn exec_rapporte_le_code_de_sortie() {
+    // Non-regression : run() cassait sur Eof, or exit-status arrive APRES.
+    // Le code etait donc toujours 0. Verifie ici sur un code non nul.
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion echouee");
+    let (_out, code) = session.run("sh -c exit 42").await.unwrap();
+    assert_eq!(code, 42, "le code de sortie non nul doit remonter");
+
+    let (_out, zero) = session.run("true").await.unwrap();
+    assert_eq!(zero, 0);
     session.disconnect().await.unwrap();
 }
 

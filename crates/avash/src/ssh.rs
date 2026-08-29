@@ -168,6 +168,11 @@ impl AvashSession {
         let mut stdout = String::new();
         let mut exit_code = 0u32;
 
+        // ⚠️ Ne PAS casser sur Eof : dans le protocole SSH, `exit-status`
+        // arrive APRES l'EOF. Casser sur Eof renverrait donc toujours 0, quel
+        // que soit le vrai code de sortie — verifie contre un vrai serveur.
+        // On laisse la boucle courir jusqu'a la fermeture du canal (wait()
+        // rend None), ou jusqu'a Close.
         while let Some(msg) = channel.wait().await {
             match msg {
                 russh::ChannelMsg::Data { ref data } => {
@@ -177,7 +182,7 @@ impl AvashSession {
                     stdout.push_str(&String::from_utf8_lossy(data));
                 }
                 russh::ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status,
-                russh::ChannelMsg::Eof => break,
+                russh::ChannelMsg::Close => break,
                 _ => {}
             }
         }

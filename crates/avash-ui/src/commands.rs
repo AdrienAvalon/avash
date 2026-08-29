@@ -413,7 +413,10 @@ pub async fn pty_resize(
 pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result<(), String> {
     let handle = state.inner.lock().unwrap().remove(&id);
     if let Some(h) = handle {
-        let sftp = h.sftp.into_inner().unwrap();
+        // into_inner() echoue si le mutex a ete empoisonne par un panic
+        // ailleurs. Fermer un onglet ne doit jamais planter pour autant :
+        // on recupere la valeur malgre l'empoisonnement.
+        let sftp = h.sftp.into_inner().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = sftp {
             // Fermeture explicite si on détient la dernière référence.
             if let Ok(owned) = std::sync::Arc::try_unwrap(s) {

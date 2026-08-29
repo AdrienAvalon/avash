@@ -93,3 +93,55 @@ describe("remoteJoin", () => {
     expect(remoteJoin("/srv/data/", "rapport.md")).toBe("/srv/data/rapport.md");
   });
 });
+
+import { parentDir, isPasswordRequired, stripHtml } from "./filters";
+
+describe("parentDir", () => {
+  it("remonte d'un niveau", () => {
+    expect(parentDir("/srv/data")).toBe("/srv");
+    expect(parentDir("/srv/data/logs")).toBe("/srv/data");
+  });
+  it("s'arrête à la racine", () => {
+    expect(parentDir("/srv")).toBe("/");
+    expect(parentDir("/")).toBe("/");
+    expect(parentDir("")).toBe("/");
+  });
+  it("tolère un slash final", () => {
+    expect(parentDir("/srv/data/")).toBe("/srv");
+    expect(parentDir("/srv/")).toBe("/");
+  });
+  it("ne remonte jamais au-dessus de la racine", () => {
+    // Cas piège : quel que soit le chemin, on reste dans l'arborescence.
+    for (const p of ["/", "//", "/a", "/a/", "a"]) {
+      const r = parentDir(p);
+      expect(r.startsWith("/")).toBe(true);
+      expect(r).not.toContain("..");
+    }
+  });
+});
+
+describe("isPasswordRequired", () => {
+  it("reconnaît le marqueur du backend", () => {
+    expect(isPasswordRequired("[AVASH_PASSWORD_REQUIRED] blabla")).toBe(true);
+  });
+  it("ignore les autres erreurs", () => {
+    expect(isPasswordRequired("Connection refused")).toBe(false);
+    expect(isPasswordRequired("host key changed")).toBe(false);
+  });
+});
+
+describe("stripHtml", () => {
+  it("retire les caractères d'injection", () => {
+    expect(stripHtml("<img onerror=x>")).toBe("img onerror=x");
+    expect(stripHtml("a & b < c > d")).toBe("a  b  c  d");
+  });
+  it("laisse le texte normal intact", () => {
+    expect(stripHtml("prod-web 10.0.0.1")).toBe("prod-web 10.0.0.1");
+  });
+  it("neutralise une tentative de script", () => {
+    const injection = "<script>window.invoke('rm')</script>";
+    const propre = stripHtml(injection);
+    expect(propre).not.toContain("<");
+    expect(propre).not.toContain(">");
+  });
+});
