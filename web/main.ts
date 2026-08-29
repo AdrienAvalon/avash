@@ -2473,6 +2473,7 @@ type RdpTarget = { host: string; port: number | null; user: string; password: st
 
 type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number };
 let rdpHostsList: RdpHostT[] = [];
+const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
 const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver }>();
 
 async function openRdp(t: RdpTarget) {
@@ -2505,7 +2506,13 @@ async function openRdp(t: RdpTarget) {
   canvas.width = rdpW;
   canvas.height = rdpH;
   canvas.tabIndex = 0;
+  // Indicateur de qualité en direct (fps / débit / latence). Clic pour masquer.
+  const hud = document.createElement("div");
+  hud.className = "rdp-hud";
+  hud.title = "Qualité de la session — clic pour masquer";
+  hud.addEventListener("click", () => hud.classList.toggle("mini"));
   wrap.appendChild(canvas);
+  wrap.appendChild(hud);
   $("terminal").appendChild(wrap);
   const ctx = canvas.getContext("2d")!;
   rdpSessions.set(id, { canvas, tab, ws: null });
@@ -2585,6 +2592,15 @@ async function openRdp(t: RdpTarget) {
         const x = dv.getUint16(1, true), y = dv.getUint16(3, true);
         const fw = dv.getUint16(5, true), fh = dv.getUint16(7, true);
         ctx.putImageData(new ImageData(new Uint8ClampedArray(buf, 9, fw * fh * 4), fw, fh), x, y);
+        // ACK de rendu → le sidecar cadence l'envoi suivant (anti-lag).
+        if (ws.readyState === WebSocket.OPEN) ws.send(RDP_ACK);
+      } else if (kind === 7) {
+        const fps = dv.getUint16(1, true);
+        const kbps = dv.getUint32(3, true);
+        const lat = dv.getUint16(7, true);
+        const q = lat < 40 ? "q-ok" : lat < 100 ? "q-mid" : "q-bad";
+        const rate = kbps >= 1024 ? `${(kbps / 1024).toFixed(1)} Mo/s` : `${kbps} Ko/s`;
+        hud.innerHTML = `<b>${fps}</b> fps · ${rate} · <span class="${q}">${lat} ms</span>`;
       } else if (kind === 1) {
         rdpW = dv.getUint16(1, true);
         rdpH = dv.getUint16(3, true);

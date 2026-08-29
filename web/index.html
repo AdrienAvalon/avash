@@ -366,6 +366,17 @@
     body.rdp-full .side-resize { display: none !important; }
     body.rdp-full .app { height: 100vh; }
     .rdp-container canvas { width: 100%; height: 100%; object-fit: contain; outline: none; }
+    .rdp-hud { position: absolute; top: 8px; right: 8px; z-index: 5; pointer-events: auto;
+      cursor: pointer; user-select: none; font: 11px/1.35 ui-monospace, "Cascadia Code", monospace;
+      padding: 3px 8px; border-radius: 7px; color: #cdd3df; letter-spacing: .02em;
+      background: rgba(18, 20, 26, .60); backdrop-filter: blur(4px);
+      box-shadow: 0 1px 6px rgba(0,0,0,.25); transition: opacity .2s; }
+    .rdp-hud:empty { display: none; }
+    .rdp-hud.mini { opacity: .12; }
+    .rdp-hud b { font-weight: 700; color: #eef1f6; }
+    .rdp-hud .q-ok { color: #5ad18a; }
+    .rdp-hud .q-mid { color: #e6c15a; }
+    .rdp-hud .q-bad { color: #e57373; }
     /* Ne PAS forcer la hauteur de .xterm-screen : xterm la calcule d'apres
        les lignes ; la forcer a 100 % laissait une bande noire en dessous. */
     .xterm { height: 100%; }

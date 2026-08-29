@@ -31,15 +31,21 @@ use ironrdp::dvc::DrdynvcClient;
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::input::{Database, MousePosition, Operation, WheelRotations};
 use ironrdp::pdu::gcc::KeyboardType;
+use ironrdp::pdu::geometry::InclusiveRectangle;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_tokio::single_sequence_step;
 use ironrdp_tokio::FramedWrite as _;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
+
+/// Filet anti-gel : si un ACK de rendu se perd, on renvoie l'état courant
+/// passé ce délai plutôt que de figer l'affichage.
+const ACK_TIMEOUT: Duration = Duration::from_millis(250);
 
 struct Args {
     host: String,
@@ -328,6 +334,42 @@ async fn main() -> Result<()> {
     sink.send(Message::Binary(hello)).await?;
 
     let mut db = Database::new();
+
+    // --- Cadencement adaptatif sur ACK (anti-lag) ---------------------------
+    // Au plus une trame « en vol ». Les mises à jour qui arrivent pendant le
+    // rendu de la webview sont fusionnées (union des rectangles) ; à l'ACK, on
+    // envoie l'état le plus récent. Rapide → chaque trame part aussitôt (aucune
+    // latence ajoutée) ; lent → on fusionne, jamais de file qui s'accumule.
+    let mut dirty: Option<InclusiveRectangle> = None;
+    let mut awaiting_ack = false;
+    let mut last_send = Instant::now();
+    // Métriques (fenêtre ~1 s) : fps, débit, latence de bout en bout.
+    let (mut stat_frames, mut stat_bytes): (u32, u64) = (0, 0);
+    let mut lat_ms: f32 = 0.0;
+    let mut stat_window = Instant::now();
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // Envoie la zone accumulée si la voie est libre. `sink`/`image`/compteurs
+    // viennent du scope englobant (macro non hygiénique volontairement).
+    #[allow(clippy::items_after_statements)]
+    macro_rules! flush_dirty {
+        () => {
+            if !awaiting_ack {
+                if let Some(r) = dirty.take() {
+                    let msg = frame_msg(&image, &r);
+                    stat_bytes += msg.len() as u64;
+                    stat_frames += 1;
+                    sink.send(Message::Binary(msg))
+                        .await
+                        .context("envoi frame")?;
+                    awaiting_ack = true;
+                    last_send = Instant::now();
+                }
+            }
+        };
+    }
+
     loop {
         tokio::select! {
             biased;
@@ -345,6 +387,13 @@ async fn main() -> Result<()> {
                             framed.write_all(&bytes).await.context("écriture resize")?;
                         }
                     }
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&6) => {
+                        // ACK de rendu : RTT de bout en bout, lissé.
+                        let rtt = last_send.elapsed().as_secs_f32() * 1000.0;
+                        lat_ms = if lat_ms == 0.0 { rtt } else { lat_ms.mul_add(0.8, rtt * 0.2) };
+                        awaiting_ack = false;
+                        flush_dirty!();
+                    }
                     Some(Ok(Message::Binary(b))) => {
                         let events = db.apply(input_ops(&b));
                         for o in active.process_fastpath_input(&mut image, &events)? {
@@ -357,13 +406,45 @@ async fn main() -> Result<()> {
                     Some(Ok(_)) => {}
                 }
             }
+            _ = tick.tick() => {
+                // Un ACK perdu ne doit pas geler l'écran : au-delà du délai, on
+                // considère la webview libre et on renvoie l'état courant.
+                if awaiting_ack && last_send.elapsed() > ACK_TIMEOUT {
+                    awaiting_ack = false;
+                }
+                flush_dirty!();
+                if stat_window.elapsed() >= Duration::from_secs(1) {
+                    let secs = stat_window.elapsed().as_secs_f32();
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+                    let fps = (stat_frames as f32 / secs).round() as u16;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+                    let kbps = ((stat_bytes as f32 / 1024.0) / secs).round() as u32;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let lat = lat_ms.round() as u16;
+                    // STATS [7] fps:u16 kbps:u32 lat_ms:u16
+                    let mut m = vec![7u8];
+                    m.extend_from_slice(&fps.to_le_bytes());
+                    m.extend_from_slice(&kbps.to_le_bytes());
+                    m.extend_from_slice(&lat.to_le_bytes());
+                    sink.send(Message::Binary(m)).await.ok();
+                    stat_frames = 0;
+                    stat_bytes = 0;
+                    stat_window = Instant::now();
+                }
+            }
             read = framed.read_pdu() => {
                 let (action, payload) = read.context("lecture PDU")?;
                 for o in active.process(&mut image, action, &payload)? {
                     match o {
                         ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await.context("écriture réponse")?,
                         ActiveStageOutput::GraphicsUpdate(rect) => {
-                            sink.send(Message::Binary(frame_msg(&image, &rect))).await.context("envoi frame")?;
+                            dirty = Some(dirty.map_or(rect.clone(), |d| InclusiveRectangle {
+                                left: d.left.min(rect.left),
+                                top: d.top.min(rect.top),
+                                right: d.right.max(rect.right),
+                                bottom: d.bottom.max(rect.bottom),
+                            }));
+                            flush_dirty!();
                         }
                         ActiveStageOutput::Terminate(_) => return Ok(()),
                         ActiveStageOutput::DeactivateAll => {
