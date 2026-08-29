@@ -4,6 +4,7 @@
 pub(crate) mod testutil;
 
 pub mod keys;
+pub mod osinfo;
 pub mod secrets;
 pub mod sftp;
 pub mod ssh;

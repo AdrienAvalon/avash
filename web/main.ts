@@ -9,10 +9,30 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, hostInitials, hostHue,
+  humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, hostInitials, hostHue, osBadge,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
-  type Host, type TunnelDef, type TunnelStatus, type TunnelKind,
+  type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
 } from "./filters";
+
+// ---------- Systeme distant par hote ----------
+//
+// Detecte a chaque ouverture de session (evenement `host-os`), memorise
+// dans localStorage pour afficher le logo des le lancement suivant, avant
+// meme de se connecter.
+
+const OS_CACHE_KEY = "avash.os.v1";
+const osByHost = new Map<string, OsInfo>();
+try {
+  const raw = localStorage.getItem(OS_CACHE_KEY);
+  if (raw) for (const [k, v] of Object.entries(JSON.parse(raw) as Record<string, OsInfo>)) osByHost.set(k, v);
+} catch { /* cache absent ou corrompu : on repart de zero */ }
+
+function rememberOs(label: string, os: OsInfo) {
+  osByHost.set(label, os);
+  try {
+    localStorage.setItem(OS_CACHE_KEY, JSON.stringify(Object.fromEntries(osByHost)));
+  } catch { /* stockage indisponible : le logo vivra le temps de la session */ }
+}
 
 type Session = {
   id: number;
@@ -122,13 +142,24 @@ function renderHosts() {
     const target = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
     el.innerHTML = `<span class="avatar"><span class="ini"></span><span class="dot"></span></span><span class="info">
       <div class="alias"></div><div class="meta"></div></span>`;
-    el.querySelector(".ini")!.textContent = hostInitials(h.alias);
+    const os = osByHost.get(h.alias);
+    const ini = el.querySelector(".ini") as HTMLElement;
+    if (os) {
+      // Logo de la distribution (glyphe Nerd Font), couleur de marque.
+      const b = osBadge(os);
+      ini.textContent = b.glyph;
+      ini.className = "ini logo";
+      el.style.setProperty("--hue", b.color);
+      el.title = `${os.pretty} — double-clic : connexion, clic droit : options`;
+    } else {
+      ini.textContent = hostInitials(h.alias);
+    }
     el.querySelector(".alias")!.textContent = h.alias;
     el.querySelector(".meta")!.textContent = target;
     // La pastille dit quelque chose de vrai : une session est ouverte ici.
     const dot = el.querySelector(".dot") as HTMLElement;
     dot.className = "dot " + hostSessionState(h.alias);
-    el.title = "Double-clic : connexion — clic droit : options";
+    if (!os) el.title = "Double-clic : connexion — clic droit : options";
     el.addEventListener("dblclick", () => openSession(h));
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -515,6 +546,10 @@ async function listenPty() {
         // bufferise même si pas actif : le terminal xterm stocke
         s.term.write(ev.payload.data);
       }
+    });
+    await listen<{ id: number; label: string; os: OsInfo }>("host-os", (ev) => {
+      rememberOs(ev.payload.label, ev.payload.os);
+      renderHosts();
     });
     await listen<{ id: number }>("pty-closed", (ev) => {
       const s = state.sessions.get(ev.payload.id);

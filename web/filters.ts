@@ -162,3 +162,60 @@ export function hostHue(alias: string): string {
   for (const c of alias) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return `hsl(${h % 360} 60% 62%)`;
 }
+
+// ---------- Logo de distribution ----------
+
+export type OsInfo = { id: string; like: string[]; pretty: string };
+
+/**
+ * Glyphes « Font Logos » de la Nerd Font embarquee (U+F300…), couleur de
+ * marque a cote. Une distribution inconnue retombe sur sa famille (ID_LIKE),
+ * puis sur Tux.
+ */
+const OS_BADGES: Record<string, { glyph: string; color: string }> = {
+  alpine: { glyph: "", color: "#0d597f" },
+  darwin: { glyph: "", color: "#c9ced6" },
+  macos: { glyph: "", color: "#c9ced6" },
+  arch: { glyph: "", color: "#1793d1" },
+  archlinux: { glyph: "", color: "#1793d1" },
+  centos: { glyph: "", color: "#9ccd2a" },
+  debian: { glyph: "", color: "#d70a53" },
+  deepin: { glyph: "", color: "#2ca7f8" },
+  devuan: { glyph: "", color: "#7f8fa6" },
+  elementary: { glyph: "", color: "#64baff" },
+  fedora: { glyph: "", color: "#51a2da" },
+  freebsd: { glyph: "", color: "#ab2b28" },
+  gentoo: { glyph: "", color: "#a79cd0" },
+  linuxmint: { glyph: "", color: "#87cf3e" },
+  mageia: { glyph: "", color: "#2397d4" },
+  manjaro: { glyph: "", color: "#35bf5c" },
+  nixos: { glyph: "", color: "#7ebae4" },
+  opensuse: { glyph: "", color: "#73ba25" },
+  "opensuse-leap": { glyph: "", color: "#73ba25" },
+  "opensuse-tumbleweed": { glyph: "", color: "#73ba25" },
+  suse: { glyph: "", color: "#73ba25" },
+  raspbian: { glyph: "", color: "#c51a4a" },
+  rhel: { glyph: "", color: "#ee0000" },
+  redhat: { glyph: "", color: "#ee0000" },
+  slackware: { glyph: "", color: "#4a90d9" },
+  ubuntu: { glyph: "", color: "#e95420" },
+  almalinux: { glyph: "", color: "#4cb4e3" },
+  artix: { glyph: "", color: "#10a0cc" },
+  endeavouros: { glyph: "", color: "#7f7fff" },
+  kali: { glyph: "", color: "#6ea0c8" },
+  openbsd: { glyph: "", color: "#f2ca30" },
+  pop: { glyph: "", color: "#48b9c7" },
+  rocky: { glyph: "", color: "#10b981" },
+  void: { glyph: "", color: "#478061" },
+  windows: { glyph: "", color: "#0078d4" },
+  linux: { glyph: "", color: "#e8b765" },
+  bsd: { glyph: "", color: "#ab2b28" },
+};
+
+export function osBadge(os: OsInfo): { glyph: string; color: string } {
+  for (const key of [os.id, ...os.like]) {
+    const b = OS_BADGES[key];
+    if (b) return b;
+  }
+  return OS_BADGES.linux;
+}

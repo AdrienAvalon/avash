@@ -215,3 +215,19 @@ describe("hostHue", () => {
     expect(hostHue("x")).toMatch(/^hsl\(\d+ 60% 62%\)$/);
   });
 });
+
+import { osBadge } from "./filters";
+
+describe("osBadge", () => {
+  it("connait les distributions courantes", () => {
+    expect(osBadge({ id: "debian", like: [], pretty: "" }).glyph).toBe("");
+    expect(osBadge({ id: "ubuntu", like: ["debian"], pretty: "" }).glyph).toBe("");
+  });
+  it("retombe sur la famille pour une derivee inconnue", () => {
+    expect(osBadge({ id: "cachyos", like: ["arch"], pretty: "" }).glyph).toBe("");
+    expect(osBadge({ id: "inconnue", like: ["rhel", "fedora"], pretty: "" }).glyph).toBe("");
+  });
+  it("sinon Tux", () => {
+    expect(osBadge({ id: "mystere", like: [], pretty: "" }).glyph).toBe("");
+  });
+});

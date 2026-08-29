@@ -17,8 +17,17 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 
 ## État (29/08 — tunnels SSH)
 
-**128 tests verts** (97 Rust, 31 TypeScript) · clippy strict · `cargo audit`
+**136 tests verts** (102 Rust, 34 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
+
+### Logo de la distribution (29/08, après-midi)
+
+À chaque ouverture de session, une sonde `cat /etc/os-release || uname -s ||
+ver` part sur un canal exec séparé (bornée à 4 s, sans retarder le terminal).
+Le front en tire le logo **Font Logos** de la Nerd Font déjà embarquée — aucune
+image — et la couleur de marque, mémorisés par hôte dans `localStorage` pour
+s'afficher dès le lancement suivant. Dérivées inconnues → famille (`ID_LIKE`,
+ex. CachyOS → Arch) → Tux. Vérifié dans l'application contre le `sshd` local.
 
 ### Refonte visuelle (29/08, après-midi)
 

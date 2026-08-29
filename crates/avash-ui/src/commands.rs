@@ -249,6 +249,7 @@ async fn open_on_target(
     // sessions : sans eviction, l'ancien pump continuerait d'emettre sous le
     // meme id. Lacher le SessionHandle ferme ses canaux et termine ce pump.
     let label = target.label.clone();
+    let label_for_event = label.clone();
     let evicted = state.inner.lock().unwrap().insert(
         id,
         SessionHandle {
@@ -271,6 +272,23 @@ async fn open_on_target(
     // perceptible (COALESCE_MS reste sous la durée d'une image à 60 Hz).
     let app2 = app.clone();
     let _pump = tokio::spawn(async move {
+        // Quel systeme en face ? Un canal exec a part, borne dans le temps :
+        // la liste des hotes affiche son logo. La sortie du PTY s'accumule
+        // dans son canal pendant ce temps, rien n'est perdu.
+        let probe = tokio::time::timeout(
+            std::time::Duration::from_secs(4),
+            session.run(avash::osinfo::PROBE_COMMAND),
+        )
+        .await;
+        if let Ok(Ok((out, _))) = probe {
+            if let Some(os) = avash::osinfo::parse_probe_output(&out) {
+                let _ = app2.emit(
+                    "host-os",
+                    serde_json::json!({ "id": sid, "label": label_for_event, "os": os }),
+                );
+            }
+        }
+
         let mut decoder = Utf8Stream::default();
         let mut buffer = String::new();
         let mut deadline: Option<tokio::time::Instant> = None;
