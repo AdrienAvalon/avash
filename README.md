@@ -20,6 +20,27 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 **162 tests verts** (117 Rust, 45 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
 
+### Refonte « pro » (29/08, soir)
+
+Quatre axes, chacun vérifié dans l'application réelle :
+
+1. **Icônes SVG** — tous les emoji du châssis remplacés par un jeu SVG
+   cohérent (`web/icons.ts`, trait fin, grille 24, `currentColor`). Mascotte
+   😼 conservée comme marque. Cross-plateforme, gratuit en perf.
+2. **Thème clair + suivi système** — palette claire complète (chrome ET
+   terminal), bascule système/clair/sombre persistée dans le bandeau, réaction
+   au thème de l'OS.
+3. **Barre de titre intégrée** — `decorations: false`, barre custom avec titre
+   dynamique (« <hôte> — Avash »), contrôles min/max/close thémés, poignées de
+   redimensionnement maison (Wayland ne les fournit plus sans décorations).
+4. **Performance** — idle sur l'accueil ramené de ~11 % à ~7 % CPU (le
+   bobbing perpétuel de la mascotte, remplacé par une entrée unique) ;
+   animations gelées quand la fenêtre perd le focus ; polling des tunnels
+   coupé quand il n'y en a aucun. RSS ~454 Mo (plancher WebKitGTK, inhérent
+   à la webview).
+
+Reste à valider sur Windows : redimensionnement/contrôles de la barre de titre.
+
 ### Audit complet + correctifs (29/08)
 
 Double relecture (cœur Rust orienté sécurité, front). Corrigés :

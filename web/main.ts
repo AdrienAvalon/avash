@@ -2027,10 +2027,12 @@ $("tunnel-form").addEventListener("submit", async (e) => {
   }
 });
 
-// Badges de la barre laterale : rafraichis a l'ouverture puis toutes les
-// 5 s, pour refleter un tunnel tombe meme quand la modale est fermee.
+// Badges de la barre laterale : un rafraichissement initial, puis toutes les
+// 5 s UNIQUEMENT s'il existe des tunnels a surveiller (sinon c'est un
+// aller-retour IPC gaspille en continu au repos).
 tunnelsRefresh();
 window.setInterval(() => {
+  if (tunnels.defs.length === 0) return;
   if (!tunnelsModal().classList.contains("open")) tunnelsRefresh();
 }, 5000);
 
@@ -2298,6 +2300,10 @@ async function setupWindowControls() {
   $("win-close").addEventListener("click", () => win.close());
   // L'état maximisé change aussi via double-clic système / raccourci.
   win.onResized(() => { void paintMax(); });
+  // Fenêtre en arrière-plan : geler les animations (CPU au repos ~0).
+  win.onFocusChanged(({ payload: focused }) => {
+    document.body.classList.toggle("win-blur", !focused);
+  });
 
   // Poignées de redimensionnement : sans décorations, la fenêtre n'a plus de
   // bords redimensionnables (surtout sous Wayland). On les recrée nous-mêmes.
