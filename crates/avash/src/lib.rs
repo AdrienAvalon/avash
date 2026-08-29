@@ -369,6 +369,82 @@ pub fn remove_host(alias: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Modifie un hôte de `~/.ssh/config` : remplace son bloc, en préservant sa
+/// position et tout le reste du fichier.
+///
+/// Si l'alias change, l'ancien bloc est retiré et le nouveau écrit à la même
+/// place. On refuse de renommer vers un alias déjà pris (hors l'hôte modifié
+/// lui-même). Les blocs à alias multiples ne sont pas modifiables ici — même
+/// raison que pour la suppression.
+pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
+    let old_alias = old_alias.trim();
+    validate_alias(host.alias.trim())?;
+
+    let path = ssh_config_path();
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow::anyhow!("Lecture de {} : {e}", path.display()))?;
+
+    // Renommage vers un alias existant (autre que celui qu'on modifie) : refus.
+    if !host.alias.eq_ignore_ascii_case(old_alias)
+        && parse_config_str(&content)
+            .iter()
+            .any(|h| h.alias.eq_ignore_ascii_case(host.alias.trim()))
+    {
+        return Err(anyhow::anyhow!(
+            "Un hôte « {} » existe déjà.",
+            host.alias.trim()
+        ));
+    }
+
+    let mut out = String::with_capacity(content.len());
+    let mut skipping = false;
+    let mut replaced = false;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let (key, value) = trimmed
+            .split_once(char::is_whitespace)
+            .map_or((trimmed, ""), |(k, v)| (k, v.trim()));
+        let key_lower = key.to_lowercase();
+
+        if key_lower == "host" {
+            let is_target = value.split_whitespace().eq(std::iter::once(old_alias));
+            if is_target {
+                // Bloc cible : on ecrit le nouveau contenu a sa place.
+                skipping = true;
+                replaced = true;
+                out.push_str(render_host_block(host).trim_end());
+                out.push('\n');
+                continue;
+            }
+            skipping = false;
+        } else if key_lower == "match" {
+            skipping = false;
+        }
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    if !replaced {
+        return Err(anyhow::anyhow!(
+            "Hôte « {old_alias} » introuvable dans {}.",
+            path.display()
+        ));
+    }
+    while out.contains("\n\n\n") {
+        out = out.replace("\n\n\n", "\n\n");
+    }
+    std::fs::write(&path, out.trim_start_matches('\n'))
+        .map_err(|e| anyhow::anyhow!("Écriture de {} : {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 /// Rend un bloc `Host` au format OpenSSH.
 #[must_use]
 pub fn render_host_block(host: &SshHost) -> String {
@@ -800,5 +876,72 @@ mod save_tests {
         std::fs::write(&path, "Host prod backup\n  User root\n").unwrap();
         let e = remove_host("prod").unwrap_err().to_string();
         assert!(e.contains("introuvable"), "{e}");
+    }
+
+    // ---------- update_host ----------
+
+    #[test]
+    fn update_host_remplace_le_bloc_sur_place() {
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "Host un\n  HostName 1.1.1.1\n\nHost prod\n  HostName 2.2.2.2\n  User old\n\nHost deux\n  HostName 3.3.3.3\n",
+        )
+        .unwrap();
+
+        let mut modifie = host("prod");
+        modifie.hostname = Some("9.9.9.9".into());
+        modifie.user = Some("nouveau".into());
+        update_host("prod", &modifie).unwrap();
+
+        let hosts = parse_ssh_config().unwrap();
+        // Ordre preserve : un, prod, deux.
+        let noms: Vec<_> = hosts.iter().map(|h| h.alias.as_str()).collect();
+        assert_eq!(noms, vec!["un", "prod", "deux"], "ordre casse");
+        let p = hosts.iter().find(|h| h.alias == "prod").unwrap();
+        assert_eq!(p.hostname.as_deref(), Some("9.9.9.9"));
+        assert_eq!(p.user.as_deref(), Some("nouveau"));
+    }
+
+    #[test]
+    fn update_host_gere_le_renommage() {
+        let _h = crate::testutil::temp_home();
+        append_host(&host("ancien")).unwrap();
+        let mut renomme = host("ancien");
+        renomme.alias = "nouveau".into();
+        update_host("ancien", &renomme).unwrap();
+        let noms: Vec<_> = parse_ssh_config()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.alias)
+            .collect();
+        assert_eq!(noms, vec!["nouveau"]);
+    }
+
+    #[test]
+    fn update_host_refuse_de_renommer_vers_un_alias_existant() {
+        let _h = crate::testutil::temp_home();
+        append_host(&host("a")).unwrap();
+        append_host(&host("b")).unwrap();
+        let mut collision = host("a");
+        collision.alias = "b".into();
+        let e = update_host("a", &collision).unwrap_err().to_string();
+        assert!(e.contains("existe déjà"), "{e}");
+    }
+
+    #[test]
+    fn update_host_meme_alias_ne_declenche_pas_la_collision() {
+        // Modifier sans renommer ne doit pas se heurter a « existe deja ».
+        let _h = crate::testutil::temp_home();
+        append_host(&host("stable")).unwrap();
+        let mut m = host("stable");
+        m.user = Some("change".into());
+        assert!(update_host("stable", &m).is_ok());
+        assert_eq!(
+            parse_ssh_config().unwrap()[0].user.as_deref(),
+            Some("change")
+        );
     }
 }

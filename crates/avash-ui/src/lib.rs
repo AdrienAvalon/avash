@@ -28,6 +28,8 @@ pub fn run() {
             commands::sftp_upload,
             commands::host_save,
             commands::host_delete,
+            commands::host_get,
+            commands::host_update,
             commands::password_save,
             commands::password_forget,
             commands::password_known,

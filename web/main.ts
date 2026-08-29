@@ -1082,6 +1082,8 @@ $("host-context").addEventListener("click", async (e) => {
   if (!h) return;
   if (act === "connect") {
     openSession(h);
+  } else if (act === "edit") {
+    await openEditHost(alias);
   } else if (act === "delete") {
     const ok = confirm(
       `Supprimer l'hôte « ${alias} » de ~/.ssh/config ?\n\n` +
@@ -1104,5 +1106,62 @@ $("host-context").addEventListener("click", async (e) => {
     } catch {
       /* pas de mot de passe memorise : rien a faire */
     }
+  }
+});
+
+
+// ---------- Modifier un hôte ----------
+
+async function openEditHost(alias: string) {
+  const err = $("e-error");
+  err.hidden = true;
+  try {
+    const h = await invoke<Host>("host_get", { alias });
+    ($("e-old") as HTMLInputElement).value = h.alias;
+    ($("e-alias") as HTMLInputElement).value = h.alias;
+    ($("e-addr") as HTMLInputElement).value = h.hostname ?? "";
+    ($("e-port") as HTMLInputElement).value = h.port ? String(h.port) : "";
+    ($("e-user") as HTMLInputElement).value = h.user ?? "";
+    ($("e-key") as HTMLInputElement).value = h.identity_file ?? "";
+    $("edit-modal").classList.add("open");
+    setTimeout(() => ($("e-alias") as HTMLInputElement).focus(), 30);
+  } catch (e) {
+    alert(`Impossible de charger l'hôte : ${e}`);
+  }
+}
+
+function closeEditHost() { $("edit-modal").classList.remove("open"); }
+
+$("e-cancel").addEventListener("click", closeEditHost);
+$("edit-modal").addEventListener("click", (e) => {
+  if (e.target === $("edit-modal")) closeEditHost();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("edit-modal").classList.contains("open")) closeEditHost();
+});
+
+$("e-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const val = (id: string) => ($(id) as HTMLInputElement).value.trim();
+  const portRaw = val("e-port");
+  const err = $("e-error");
+  const submit = $("e-submit") as HTMLButtonElement;
+  submit.disabled = true;
+  try {
+    await invoke("host_update", {
+      oldAlias: val("e-old"),
+      alias: val("e-alias"),
+      addr: val("e-addr"),
+      port: portRaw ? Number(portRaw) : null,
+      user: val("e-user") || null,
+      keyPath: val("e-key") || null,
+    });
+    closeEditHost();
+    await loadHosts();
+  } catch (ex) {
+    err.textContent = String(ex);
+    err.hidden = false;
+  } finally {
+    submit.disabled = false;
   }
 });

@@ -614,8 +614,35 @@
 
     <div class="ctx-menu" id="host-context">
       <div class="ctx-item" data-act="connect">Se connecter</div>
+      <div class="ctx-item" data-act="edit">Modifier…</div>
       <div class="ctx-item" data-act="forget">Oublier le mot de passe</div>
       <div class="ctx-sep"></div>
       <div class="ctx-item danger" data-act="delete">Supprimer l'hôte</div>
+    </div>
+    <div class="modal-backdrop" id="edit-modal">
+      <form class="modal" id="edit-form" autocomplete="off">
+        <h2>Modifier l'hôte</h2>
+        <input type="hidden" id="e-old" />
+        <label>Nom (alias)
+          <input id="e-alias" required />
+        </label>
+        <label>Adresse ou IP
+          <input id="e-addr" required />
+        </label>
+        <label>Port
+          <input id="e-port" type="number" min="1" max="65535" placeholder="22" />
+        </label>
+        <label>Utilisateur
+          <input id="e-user" />
+        </label>
+        <label>Chemin de la clé privée <span class="field-hint">(optionnel)</span>
+          <input id="e-key" placeholder="~/.ssh/id_ed25519" />
+        </label>
+        <p class="modal-error" id="e-error" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="e-cancel">Annuler</button>
+          <button type="submit" class="btn-primary" id="e-submit">Enregistrer</button>
+        </div>
+      </form>
     </div></body>
 </html>

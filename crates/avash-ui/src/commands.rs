@@ -1001,3 +1001,34 @@ pub fn host_delete(alias: String) -> Result<(), String> {
     }
     avash::remove_host(&alias).map_err(|e| format!("{e:#}"))
 }
+
+/// Renvoie les champs d'un hôte pour pré-remplir le formulaire d'édition.
+#[tauri::command]
+pub fn host_get(alias: String) -> Result<SshHost, String> {
+    find_host(&alias)
+}
+
+/// Modifie un hôte enregistré. Si l'alias change, le mot de passe mémorisé
+/// est déplacé vers le nouvel identifiant.
+#[tauri::command]
+pub fn host_update(
+    old_alias: String,
+    alias: String,
+    addr: String,
+    port: Option<u16>,
+    user: String,
+    key_path: Option<String>,
+) -> Result<(), String> {
+    let host = SshHost {
+        alias: alias.trim().to_string(),
+        hostname: Some(addr.trim().to_string()).filter(|a| !a.is_empty()),
+        user: Some(user.trim().to_string()).filter(|u| !u.is_empty()),
+        port,
+        identity_file: key_path
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty()),
+        proxy_jump: None,
+        tags: vec![],
+    };
+    avash::update_host(old_alias.trim(), &host).map_err(|e| format!("{e:#}"))
+}
