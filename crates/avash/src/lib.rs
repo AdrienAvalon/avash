@@ -259,7 +259,7 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
     use std::io::Write as _;
 
     let alias = host.alias.trim();
-    validate_alias(alias)?;
+    validate_host(host)?;
 
     let path = ssh_config_path();
     if let Some(parent) = path.parent() {
@@ -381,7 +381,7 @@ pub fn remove_host(alias: &str) -> anyhow::Result<()> {
 /// raison que pour la suppression.
 pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
     let old_alias = old_alias.trim();
-    validate_alias(host.alias.trim())?;
+    validate_host(host)?;
 
     let path = ssh_config_path();
     let content = std::fs::read_to_string(&path)
@@ -475,6 +475,35 @@ pub fn render_host_block(host: &SshHost) -> String {
 }
 
 /// Un alias finit dans un fichier de configuration lu par OpenSSH.
+/// Refuse un saut de ligne (ou un octet nul) dans une valeur destinee a
+/// `~/.ssh/config`. Sans ce controle, `HostName`, `User` ou `IdentityFile`
+/// pourraient contenir un `\n` suivi d'une directive arbitraire — dont
+/// `ProxyCommand`, qu'OpenSSH executerait a la connexion (exec de commande).
+/// Seul l'alias etait protege ; ce trou concernait les trois autres champs.
+fn validate_config_value(label: &str, value: &str) -> anyhow::Result<()> {
+    if value.contains(['\n', '\r', '\0']) {
+        return Err(anyhow::anyhow!(
+            "{label} contient un caractère interdit (saut de ligne)."
+        ));
+    }
+    Ok(())
+}
+
+/// Valide tous les champs d'un hote avant ecriture.
+fn validate_host(host: &SshHost) -> anyhow::Result<()> {
+    validate_alias(host.alias.trim())?;
+    if let Some(v) = &host.hostname {
+        validate_config_value("HostName", v)?;
+    }
+    if let Some(v) = &host.user {
+        validate_config_value("User", v)?;
+    }
+    if let Some(v) = &host.identity_file {
+        validate_config_value("IdentityFile", v)?;
+    }
+    Ok(())
+}
+
 fn validate_alias(alias: &str) -> anyhow::Result<()> {
     if alias.is_empty() {
         return Err(anyhow::anyhow!("Le nom de l'hôte est vide."));
@@ -567,6 +596,40 @@ mod save_tests {
                 "devrait etre refuse : {mechant:?}"
             );
         }
+    }
+
+    #[test]
+    fn append_host_refuse_une_injection_de_directive_dans_les_champs() {
+        // Regression securite : un saut de ligne dans HostName/User/
+        // IdentityFile injecterait une directive arbitraire (ex. ProxyCommand,
+        // execute par ssh a la connexion). Seul l'alias etait protege.
+        let _g = crate::testutil::temp_home();
+        for bad in [
+            SshHost {
+                alias: "srv".into(),
+                hostname: Some("1.2.3.4\n    ProxyCommand evil".into()),
+                ..Default::default()
+            },
+            SshHost {
+                alias: "srv".into(),
+                user: Some("root\nProxyCommand evil".into()),
+                ..Default::default()
+            },
+            SshHost {
+                alias: "srv".into(),
+                identity_file: Some("/k\r  ProxyCommand evil".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(append_host(&bad).is_err(), "doit refuser : {bad:?}");
+        }
+        // Un hote propre passe toujours.
+        assert!(append_host(&SshHost {
+            alias: "ok".into(),
+            hostname: Some("10.0.0.1".into()),
+            ..Default::default()
+        })
+        .is_ok());
     }
 
     #[test]

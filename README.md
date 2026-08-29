@@ -17,8 +17,38 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 
 ## État (29/08 — tunnels SSH)
 
-**160 tests verts** (115 Rust, 45 TypeScript) · clippy strict · `cargo audit`
+**162 tests verts** (117 Rust, 45 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
+
+### Audit complet + correctifs (29/08)
+
+Double relecture (cœur Rust orienté sécurité, front). Corrigés :
+
+- **[grave] Injection de directive SSH** : `HostName`/`User`/`IdentityFile`
+  n'étaient pas validés à l'écriture dans `~/.ssh/config` (seul l'alias
+  l'était). Un `\n` injectait une directive arbitraire — dont `ProxyCommand`,
+  exécuté par `ssh` à la connexion (exécution de commande). Les trois champs
+  sont désormais validés (`validate_host`). Test de non-régression.
+- **[correction] « Mémoriser le mot de passe » cassé sans `User`** : le front
+  envoyait `user: null` à des commandes attendant `String`, et la clé du
+  trousseau ne correspondait pas à celle de relecture. `user` devient
+  optionnel et résout l'utilisateur courant, comme `from_alias`. Vérifié.
+- **[correction] `pty-closed` fantôme** : après rechargement de fenêtre, la
+  session évincée fermait le nouvel onglet réutilisant son id. Chaque session
+  porte un `epoch` ; l'événement n'est plus émis si l'id porte une session
+  plus récente.
+- **[ressource] Course SFTP** : deux commandes concurrentes ouvraient deux
+  connexions ; la perdante fuyait sans `close()`. Vérification atomique sous
+  verrou, fermeture du handle en trop.
+- **[compat] Clés RSA** : présentées en SHA-1 (refusé par OpenSSH récent) →
+  `rsa-sha2-256`. Vérifié : connexion RSA réelle réussie.
+- **[front] Injection HTML** via un nom de variable de snippet (`innerHTML`) →
+  construction par le DOM. Palette couverte par le garde des raccourcis.
+  Retour visible si un téléchargement SFTP est lancé pendant un transfert.
+
+Restés documentés, non corrigés (faible gravité) : fenêtre de course sur un
+tunnel `-R` à port 0 (premières connexions), commentaires de `~/.ssh/config`
+entre un bloc supprimé et le suivant absorbés.
 
 ### Snippets (29/08)
 

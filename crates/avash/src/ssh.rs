@@ -274,9 +274,13 @@ impl AvashSession {
         if let Some(key_path) = &auth.key_path {
             let key = russh::keys::load_secret_key(key_path, None)
                 .with_context(|| format!("Chargement clé {}", key_path.display()))?;
-            // `None` en hash : ignore hors RSA, et pour RSA russh retombe sur
-            // l'algorithme historique. Nos cles generees sont ed25519.
-            let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), None);
+            // Pour une cle RSA, `None` demanderait le hash historique SHA-1
+            // (ssh-rsa), refuse par les serveurs OpenSSH recents. On presente
+            // donc rsa-sha2-256. Ignore pour les autres types (nos cles
+            // generees sont ed25519).
+            let hash = matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. })
+                .then_some(russh::keys::HashAlg::Sha256);
+            let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash);
             if session
                 .authenticate_publickey(&auth.user, key)
                 .await?

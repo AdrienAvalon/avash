@@ -5,7 +5,13 @@ use avash::ssh::AvashSession;
 use avash::tunnel::{Tunnel, TunnelDef, TunnelKind, TunnelSnapshot};
 use avash::{parse_ssh_config, sftp::SftpHandle, SshHost};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+
+/// Numero unique par session ouverte, pour distinguer deux sessions qui
+/// partagent le meme id d'onglet (le front renumerote a chaque rechargement
+/// de fenetre). Sert a ne pas emettre `pty-closed` depuis une session evincee.
+static SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::Sender;
 
@@ -14,6 +20,8 @@ pub struct SessionStore {
 }
 
 pub struct SessionHandle {
+    /// Identite unique de cette session (voir `SESSION_EPOCH`).
+    pub epoch: u64,
     /// Clavier du front → canal SSH
     pub input: Sender<Vec<u8>>,
     /// Resize du front → `window_change` SSH
@@ -209,6 +217,22 @@ impl Utf8Stream {
     }
 }
 
+/// Cet id d'onglet porte-t-il desormais une session plus recente que `epoch` ?
+///
+/// Le front renumerote ses onglets a chaque rechargement de fenetre : un id
+/// peut donc etre reattribue alors que l'ancienne session vit encore. Le pump
+/// evince s'en sert pour ne pas emettre un `pty-closed` qui fermerait le
+/// nouvel onglet.
+fn is_superseded(app: &AppHandle, sid: u64, epoch: u64) -> bool {
+    use tauri::Manager as _;
+    app.state::<SessionStore>()
+        .inner
+        .lock()
+        .unwrap()
+        .get(&sid)
+        .is_some_and(|h| h.epoch != epoch)
+}
+
 /// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
 #[tauri::command]
 async fn open_on_target(
@@ -251,9 +275,11 @@ async fn open_on_target(
     // meme id. Lacher le SessionHandle ferme ses canaux et termine ce pump.
     let label = target.label.clone();
     let label_for_event = label.clone();
+    let epoch = SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
     let evicted = state.inner.lock().unwrap().insert(
         id,
         SessionHandle {
+            epoch,
             input,
             resize,
             sftp: Mutex::new(None),
@@ -272,6 +298,7 @@ async fn open_on_target(
     // le débit s'effondre en nombre de messages sans que la latence devienne
     // perceptible (COALESCE_MS reste sous la durée d'une image à 60 Hz).
     let app2 = app.clone();
+    let pump_epoch = epoch;
     let _pump = tokio::spawn(async move {
         // Quel systeme en face ? Un canal exec a part, borne dans le temps :
         // la liste des hotes affiche son logo. La sortie du PTY s'accumule
@@ -344,11 +371,13 @@ async fn open_on_target(
                 serde_json::json!({ "id": sid, "data": buffer }),
             );
         }
-        // La session distante s'est terminee (exit, coupure reseau, kill).
-        // Sans cet evenement, l'onglet resterait muet et l'utilisateur ne
-        // saurait pas s'il attend encore ou si tout est fini.
+        // La session distante s'est terminee (exit, coupure, kill). On ne
+        // l'annonce que si cet id ne porte pas deja une session plus recente
+        // (voir `is_superseded`), sinon on fermerait le nouvel onglet.
         let _ = session.disconnect().await;
-        let _ = app2.emit("pty-closed", serde_json::json!({ "id": sid }));
+        if !is_superseded(&app2, sid, pump_epoch) {
+            let _ = app2.emit("pty-closed", serde_json::json!({ "id": sid }));
+        }
     });
 
     Ok(label)
@@ -498,13 +527,37 @@ async fn sftp_of(
     let session = AvashSession::connect(&target.addr, target.port, &target.auth())
         .await
         .map_err(|e| e.to_string())?;
-    let sftp = std::sync::Arc::new(SftpHandle::open(session).await.map_err(|e| e.to_string())?);
+    let mut fresh = Some(SftpHandle::open(session).await.map_err(|e| e.to_string())?);
 
-    let store = state.inner.lock().unwrap();
-    if let Some(h) = store.get(&id) {
-        *h.sftp.lock().unwrap() = Some(sftp.clone());
+    // Course : deux commandes SFTP concurrentes sur le meme onglet ont pu, le
+    // temps de cette connexion, en ouvrir chacune une. On re-verifie et on
+    // stocke atomiquement sous le verrou ; aucun `await` n'y a lieu (les gardes
+    // de Mutex ne sont pas Send). Le handle perdant est ferme ensuite, hors du
+    // verrou, sinon la session SSH dupliquee fuirait.
+    let mut to_close: Option<SftpHandle> = None;
+    let chosen: Option<std::sync::Arc<SftpHandle>> = {
+        let store = state.inner.lock().unwrap();
+        match store.get(&id) {
+            None => None,
+            Some(h) => {
+                let mut slot = h.sftp.lock().unwrap();
+                if let Some(existing) = slot.as_ref() {
+                    // Un autre appel a gagne : on fermera notre connexion.
+                    to_close = fresh.take();
+                    Some(existing.clone())
+                } else {
+                    let arc = std::sync::Arc::new(fresh.take().unwrap());
+                    *slot = Some(arc.clone());
+                    Some(arc)
+                }
+            }
+        }
+    };
+    // Handle en trop (course perdue) ou session disparue : on ferme proprement.
+    if let Some(f) = to_close.or(fresh) {
+        let _ = f.close().await;
     }
-    Ok(sftp)
+    chosen.ok_or_else(|| format!("Session {id} inconnue"))
 }
 
 /// Determine le chemin local d'un telechargement.
@@ -931,6 +984,20 @@ mod tests {
         let mut t = target_with(None);
         t.override_password(Some("saisi".into()));
         assert_eq!(t.password.as_deref(), Some("saisi"));
+    }
+
+    #[test]
+    fn effective_user_retombe_sur_l_utilisateur_courant() {
+        // Cle du trousseau coherente entre save et load : un hote sans `User`
+        // doit resoudre le meme utilisateur des deux cotes (regression :
+        // « mémoriser » etait casse pour ces hotes).
+        assert_eq!(effective_user(Some("deploy".into())), "deploy");
+        assert_eq!(effective_user(Some("  deploy ".into())), "deploy");
+        assert_eq!(effective_user(None), avash::ssh::current_username());
+        assert_eq!(
+            effective_user(Some(String::new())),
+            avash::ssh::current_username()
+        );
     }
 
     #[test]
@@ -1361,29 +1428,46 @@ pub fn host_save(
 /// Jamais dans `~/.ssh/config` : ce fichier est en clair. Le trousseau
 /// (`KWallet`, GNOME Keyring, Credential Manager, Trousseau macOS) gère le
 /// chiffrement, le déverrouillage et la révocation.
+/// Utilisateur effectif d'un hote pour la cle du trousseau.
+///
+/// Doit correspondre EXACTEMENT a ce que `Target::from_alias` utilise pour
+/// *relire* le mot de passe : un hote sans directive `User` retombe sur
+/// l'utilisateur courant. Sans cette resolution commune, un mot de passe
+/// enregistre sous une cle et relu sous une autre ne serait jamais retrouve
+/// (bug : « mémoriser » cassé pour tout hote sans `User`).
+fn effective_user(user: Option<String>) -> String {
+    user.map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(avash::ssh::current_username)
+}
+
 #[tauri::command]
 pub fn password_save(
     addr: String,
     port: Option<u16>,
-    user: String,
+    user: Option<String>,
     password: String,
 ) -> Result<(), String> {
-    let id = avash::secrets::account_id(user.trim(), addr.trim(), port.unwrap_or(22));
+    let id = avash::secrets::account_id(&effective_user(user), addr.trim(), port.unwrap_or(22));
     avash::secrets::save(&id, &password).map_err(|e| format!("{e:#}"))
 }
 
 /// Oublie un mot de passe mémorisé.
 #[tauri::command]
-pub fn password_forget(addr: String, port: Option<u16>, user: String) -> Result<(), String> {
-    let id = avash::secrets::account_id(user.trim(), addr.trim(), port.unwrap_or(22));
+pub fn password_forget(
+    addr: String,
+    port: Option<u16>,
+    user: Option<String>,
+) -> Result<(), String> {
+    let id = avash::secrets::account_id(&effective_user(user), addr.trim(), port.unwrap_or(22));
     avash::secrets::forget(&id).map_err(|e| format!("{e:#}"))
 }
 
 /// Un mot de passe est-il déjà mémorisé pour cet hôte ?
 #[tauri::command]
 #[must_use]
-pub fn password_known(addr: String, port: Option<u16>, user: String) -> bool {
-    let id = avash::secrets::account_id(user.trim(), addr.trim(), port.unwrap_or(22));
+pub fn password_known(addr: String, port: Option<u16>, user: Option<String>) -> bool {
+    let id = avash::secrets::account_id(&effective_user(user), addr.trim(), port.unwrap_or(22));
     avash::secrets::load(&id).is_some()
 }
 
@@ -1430,13 +1514,13 @@ pub fn host_update(
     alias: String,
     addr: String,
     port: Option<u16>,
-    user: String,
+    user: Option<String>,
     key_path: Option<String>,
 ) -> Result<(), String> {
     let host = SshHost {
         alias: alias.trim().to_string(),
         hostname: Some(addr.trim().to_string()).filter(|a| !a.is_empty()),
-        user: Some(user.trim().to_string()).filter(|u| !u.is_empty()),
+        user: user.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()),
         port,
         identity_file: key_path
             .map(|k| k.trim().to_string())

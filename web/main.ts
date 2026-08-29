@@ -796,7 +796,11 @@ $("sftp-panel").addEventListener("transitionend", (e) => {
 
 async function sftpDownload(remote: string, name: string) {
   const s = sftpSession();
-  if (!s || sftp.busy) return;
+  if (!s) return;
+  if (sftp.busy) {
+    sftpStatus("Un transfert est déjà en cours.", "err");
+    return;
+  }
   sftp.busy = true;
   sftpProgress(0, 0, `⬇︎ ${name}`);
   try {
@@ -1321,9 +1325,9 @@ function cycleSession(step: number) {
 }
 
 window.addEventListener("keydown", (e) => {
-  // Ne pas capturer pendant qu'un formulaire est ouvert : l'utilisateur
-  // y tape, Ctrl+W fermerait un onglet sous ses doigts.
-  if (document.querySelector(".modal-backdrop.open")) return;
+  // Ne pas capturer pendant qu'un formulaire OU la palette est ouvert :
+  // l'utilisateur y tape, Ctrl+W fermerait un onglet sous ses doigts.
+  if (document.querySelector(".modal-backdrop.open, .palette-backdrop.open")) return;
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
 
@@ -2099,9 +2103,16 @@ async function snippetSendFlow(sn: Snippet) {
   const varsBox = $("send-vars");
   varsBox.innerHTML = "";
   for (const v of snippetVars(sn.command)) {
+    // Le nom de variable vient du snippet : on le pose via le DOM (dataset,
+    // textContent) et jamais via innerHTML, pour qu'un « " » ou « > » dans un
+    // nom ne casse pas l'attribut.
     const label = document.createElement("label");
-    label.innerHTML = `<span></span><input data-var="${v}" spellcheck="false" />`;
-    label.querySelector("span")!.textContent = v;
+    const span = document.createElement("span");
+    span.textContent = v;
+    const input = document.createElement("input");
+    input.spellcheck = false;
+    input.dataset.var = v;
+    label.append(span, input);
     varsBox.appendChild(label);
   }
 
