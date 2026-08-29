@@ -1,0 +1,21 @@
+[package]
+name = "avash-rdp"
+version = "0.1.0"
+edition = "2021"
+description = "Avash — sidecar client RDP (IronRDP), isolé de russh"
+license = "MIT"
+
+[[bin]]
+name = "avash-rdp"
+path = "src/main.rs"
+
+[dependencies]
+ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "pdu"] }
+ironrdp-tokio = { version = "0.10", features = ["reqwest"] }
+ironrdp-tls = { version = "0.2", features = ["rustls"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+x509-cert = "0.2"

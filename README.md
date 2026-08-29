@@ -263,6 +263,22 @@ procédure complète (build, vérification, signature, faux positifs AV).
   `SHA256SUMS` (+ signature GPG). Aucun packer, métadonnées complètes : la
   surface de faux positif antivirus est réduite au minimum contrôlable.
 
+## RDP (en cours — étape 1/4)
+
+Le bureau distant RDP arrive via **IronRDP** (client RDP pur Rust). Contrainte
+technique : IronRDP épingle des pré-versions cryptographiques incompatibles
+avec russh (SSH) — impossible dans le même binaire. Solution : un **sidecar
+isolé** (`rdp-sidecar/`, hors workspace, sans russh), lancé par Avash, qui
+streamera le bureau dans la fenêtre.
+
+- **Étape 1 (faite)** : sidecar `avash-rdp` — connexion TCP + TLS + CredSSP/NLA
+  + décodage graphique + capture du bureau en PNG. Compile, s'exécute, échoue
+  proprement. Suit l'exemple officiel IronRDP. **À valider contre un vrai
+  serveur RDP** (aucun disponible localement pour l'instant).
+- Étapes suivantes : protocole de streaming framebuffer/entrées (sidecar ↔
+  Avash), bundling sidecar (Tauri), rendu canvas + souris/clavier dans un
+  onglet RDP.
+
 ## Feuille de route
 - v0.1 (ce soir/aujourd'hui) : CLI + parseur + connexion russh → **GUI dès webkit installé**
 - v0.2 : ~~tunnels~~ ✅, ~~SFTP glisser-déposer~~ ✅, snippets

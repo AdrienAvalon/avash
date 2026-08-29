@@ -4,3 +4,4 @@ web/dist/
 
 # Artefacts de release (générés par scripts/release.sh)
 dist-release/
+rdp-sidecar/target/

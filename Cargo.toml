@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/avash", "crates/avash-ui"]
+exclude = ["rdp-sidecar"]
 
 # Metadonnees communes : un seul endroit a modifier pour une release.
 [workspace.package]
