@@ -2558,12 +2558,18 @@ async function openRdp(t: RdpTarget) {
   // demande au serveur de re-rendre à la nouvelle taille (Display Control DVC).
   // Débounce pour ne pas spammer pendant le glissé de la fenêtre. Message [5].
   let resizeTimer: number | undefined;
+  let resizeInFlight = false; // une seule renégociation RDP à la fois
+  let resizeGuard: number | undefined;
   const sendResize = () => {
     if (state.active !== id) return; // seul le bureau visible se redimensionne
     const a = $("terminal").getBoundingClientRect();
     const w = Math.max(200, Math.min(8192, even(Math.round(a.width))));
     const h = Math.max(200, Math.min(8192, Math.round(a.height)));
-    if (w === rdpW && h === rdpH) return;
+    if (Math.abs(w - rdpW) < 8 && Math.abs(h - rdpH) < 8) return; // négligeable
+    if (resizeInFlight) return; // on rejouera la taille finale à la fin (kind 1)
+    resizeInFlight = true;
+    window.clearTimeout(resizeGuard);
+    resizeGuard = window.setTimeout(() => { resizeInFlight = false; }, 3000); // filet
     send([5, ...le16(w), ...le16(h)]);
   };
   const ro = new ResizeObserver(() => {
@@ -2604,11 +2610,29 @@ async function openRdp(t: RdpTarget) {
         const rate = kbps >= 1024 ? `${(kbps / 1024).toFixed(1)} Mo/s` : `${kbps} Ko/s`;
         hud.innerHTML = `<b>${fps}</b> fps · ${rate} · <span class="${q}">${lat} ms</span>`;
       } else if (kind === 1) {
-        rdpW = dv.getUint16(1, true);
-        rdpH = dv.getUint16(3, true);
+        // Changer la taille du canvas l'efface : on capture l'image courante et
+        // on la réétire dans la nouvelle taille, le temps que le serveur renvoie
+        // une image complète. Plus de flash noir pendant la renégociation.
+        const nw = dv.getUint16(1, true), nh = dv.getUint16(3, true);
+        let snap: HTMLCanvasElement | null = null;
+        if (canvas.width > 0 && canvas.height > 0) {
+          snap = document.createElement("canvas");
+          snap.width = canvas.width;
+          snap.height = canvas.height;
+          snap.getContext("2d")!.drawImage(canvas, 0, 0);
+        }
+        rdpW = nw;
+        rdpH = nh;
         canvas.width = rdpW;
         canvas.height = rdpH;
+        if (snap) ctx.drawImage(snap, 0, 0, rdpW, rdpH);
         tab.querySelector(".state")!.className = "state live";
+        // Renégociation terminée : si la fenêtre a encore bougé entre-temps, on
+        // applique la taille finale (une seule fois, évite les cascades).
+        resizeInFlight = false;
+        window.clearTimeout(resizeGuard);
+        window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(sendResize, 120);
       } else if (kind === 3) {
         tab.querySelector(".state")!.className = "state closed";
         alert(`RDP : ${new TextDecoder().decode(new Uint8Array(buf, 1))}`);

@@ -469,6 +469,12 @@ async fn main() -> Result<()> {
                             msg.extend_from_slice(&size.width.to_le_bytes());
                             msg.extend_from_slice(&size.height.to_le_bytes());
                             sink.send(Message::Binary(msg)).await.context("annonce resize")?;
+                            // Réinitialise le cadencement : une image en attente à
+                            // l'ancienne taille n'a plus de sens, et un ACK laissé en
+                            // suspens gèlerait la reprise. Le serveur va renvoyer un
+                            // rafraîchissement complet.
+                            dirty = None;
+                            awaiting_ack = false;
                         }
                         _ => {}
                     }
