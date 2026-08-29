@@ -275,9 +275,11 @@ streamera le bureau dans la fenêtre.
   CredSSP/NLA + décodage graphique + capture du bureau en PNG. Validé
   bout-en-bout contre un serveur RDP réel (`test-rdp-server/`, exemple IronRDP
   adapté, pur Rust) : bureau 1920×1080 reçu, décodé et enregistré correctement.
-- Étapes suivantes : protocole de streaming framebuffer/entrées (sidecar ↔
-  Avash), bundling sidecar (Tauri), rendu canvas + souris/clavier dans un
-  onglet RDP.
+- **Étape 2 (faite, VALIDÉE)** : le sidecar streame le bureau (framebuffer par
+  rectangles) sur stdout et reçoit les entrées (souris/clavier) sur stdin.
+  Validé contre le serveur de test : 6 frames encadrées reçues + le serveur
+  logue exactement les mouvements/clics/touches envoyés.
+- Étapes suivantes : bundling sidecar (Tauri), onglet RDP avec canvas + entrées.
 
 ## Feuille de route
 - v0.1 (ce soir/aujourd'hui) : CLI + parseur + connexion russh → **GUI dès webkit installé**
