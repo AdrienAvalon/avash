@@ -195,6 +195,20 @@ SSH) ne se voyaient qu'en conditions réelles. `examples/pty_probe.rs`,
 
 L'objectif de 100 Mo n'est pas atteignable avec une webview ; voir plus bas.
 
+## Distribution
+
+**Un fichier par système**, déployable par copie. Voir **`RELEASE.md`** pour la
+procédure complète (build, vérification, signature, faux positifs AV).
+
+- **Linux** : `Avash_<version>_amd64.AppImage` — un seul fichier autonome
+  (embarque WebKitGTK), `chmod +x` et lancer. Construit et vérifié ici.
+- **Windows** : installeur NSIS `.exe` (à construire sur Windows ; dépend de
+  WebView2, préinstallé Win10 récent/Win11). Signature Authenticode câblée,
+  certificat à fournir.
+- `./scripts/release.sh [--sign-gpg <KEYID>]` : valide, construit, produit
+  `SHA256SUMS` (+ signature GPG). Aucun packer, métadonnées complètes : la
+  surface de faux positif antivirus est réduite au minimum contrôlable.
+
 ## Feuille de route
 - v0.1 (ce soir/aujourd'hui) : CLI + parseur + connexion russh → **GUI dès webkit installé**
 - v0.2 : ~~tunnels~~ ✅, ~~SFTP glisser-déposer~~ ✅, snippets

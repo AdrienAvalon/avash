@@ -1,3 +1,6 @@
 /target
 web/node_modules/
 web/dist/
+
+# Artefacts de release (générés par scripts/release.sh)
+dist-release/

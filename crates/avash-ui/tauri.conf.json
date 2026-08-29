@@ -4,6 +4,7 @@
   "version": "0.2.0",
   "identifier": "dev.avash.app",
   "build": {
+    "beforeBuildCommand": "npm --prefix ../../web run build",
     "frontendDist": "../../web/dist"
   },
   "app": {
@@ -19,6 +20,37 @@
     ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "appimage",
+      "nsis"
+    ],
+    "publisher": "Adrien Cros",
+    "homepage": "https://github.com/vela-kern/avash",
+    "category": "Utility",
+    "copyright": "Copyright © 2026 Adrien Cros. MIT.",
+    "licenseFile": "../../LICENSE",
+    "shortDescription": "Gestionnaire de connexions SSH natif.",
+    "longDescription": "Avash — gestionnaire graphique de connexions SSH/SFTP : léger, rapide, sécurisé. Terminal xterm.js, tunnels visuels (-L/-R/-D), SFTP glisser-déposer, snippets, clés et trousseau système. Sans télémétrie.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "French",
+          "English"
+        ]
+      }
     }
   }
 }
