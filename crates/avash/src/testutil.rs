@@ -28,7 +28,9 @@ impl Drop for HomeGuard {
 pub fn temp_home() -> HomeGuard {
     // `unwrap_or_else(into_inner)` : un test qui panique empoisonne le
     // verrou ; sans cela tous les tests suivants echoueraient en cascade.
-    let lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let lock = HOME_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = std::env::temp_dir().join(format!(
         "avash-test-{}-{:?}",
         std::process::id(),

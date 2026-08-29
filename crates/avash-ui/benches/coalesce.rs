@@ -1,9 +1,11 @@
 //! Combien de messages IPC economise le regroupement ?
 //!
-//! Rejoue une trace realiste de blocs SSH (relevee par pty_probe contre un
+//! Rejoue une trace realiste de blocs SSH (relevee par `pty_probe` contre un
 //! vrai serveur) et compte les emissions avec et sans regroupement.
 
 fn main() {
+    const FLUSH: usize = 16 * 1024; // seuil d'ecoulement, cf. open_on_target
+
     // Tailles reellement observees a l'ouverture d'un shell fish distant.
     let trace: Vec<usize> = vec![
         83, 1, 374, 282, 123, 127, 167, 374, 2068, 38, 4, 58, 101, 12, 7, 3, 45, 9, 2, 220,
@@ -14,9 +16,6 @@ fn main() {
     let total: usize = blocs.iter().sum();
 
     let sans = blocs.len();
-
-    // Simulation du regroupement : on additionne jusqu'a 16 Ko.
-    const FLUSH: usize = 16 * 1024;
     let mut avec = 0usize;
     let mut acc = 0usize;
     for b in &blocs {

@@ -6,7 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, PASSWORD_REQUIRED, type Host } from "./filters";
+import { humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, type Host } from "./filters";
 
 type Session = {
   id: number;

@@ -12,6 +12,28 @@ repository = "https://github.com/vela-kern/avash"
 # Un seul cargo build --release pour tout le workspace : les dependances
 # communes (russh, tokio, serde) ne sont compilees qu'une fois, et le
 # repertoire target est partage au lieu d'etre duplique par crate.
+# Qualite de code : le mode pedant de clippy est le socle. Les exceptions
+# ci-dessous sont justifiees, pas des renoncements.
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Les commandes Tauri recoivent leurs arguments par valeur (deserialisation
+# owned) : les passer par reference n'a pas de sens a cette frontiere.
+needless_pass_by_value = "allow"
+# Application, pas bibliotheque publiee : documenter # Errors / # Panics sur
+# chaque fonction faillible alourdirait sans lecteur pour en profiter.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Des bras de match volontairement distincts pour la lisibilite (ex. « NoEntry
+# n'est pas une erreur ») valent mieux fusionnes.
+match_same_arms = "allow"
+# Les methodes du trait Handler (russh, cote client comme serveur de test)
+# ont une signature async imposee ; certains corps n'ont pas de .await.
+unused_async_trait_impl = "allow"
+# Beaucoup de nos casts sont bornes en amont (codes de sortie 8 bits, tailles
+# de terminal). Les cas dangereux sont traites au cas par cas.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

@@ -42,9 +42,10 @@ fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
 #[cfg(unix)]
 fn mode_of(path: &Path) -> String {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|m| format!("{:o}", m.permissions().mode() & 0o777))
-        .unwrap_or_else(|_| "?".into())
+    std::fs::metadata(path).map_or_else(
+        |_| "?".into(),
+        |m| format!("{:o}", m.permissions().mode() & 0o777),
+    )
 }
 
 #[cfg(not(unix))]

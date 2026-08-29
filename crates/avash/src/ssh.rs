@@ -1,6 +1,6 @@
 //! Avash — moteur SSH v0.3 : sessions exécution + PTY interactif complet.
-//! v0.1 : connect/auth/exec. v0.2 : request_pty.
-//! v0.3 : write stdin réel, window_change (resize), known_hosts strict.
+//! v0.1 : connect/auth/exec. v0.2 : `request_pty`.
+//! v0.3 : write stdin réel, `window_change` (resize), `known_hosts` strict.
 
 use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
@@ -9,6 +9,20 @@ use tokio::sync::mpsc;
 
 /// Marqueur place en tete du message quand seule l'absence de mot de passe
 /// explique l'echec. L'interface le reconnait pour proposer une saisie.
+/// Nom de l'utilisateur courant, avec repli.
+///
+/// `whoami::username()` est faillible depuis la version 2 (compte systeme
+/// illisible, environnement minimal). Un client SSH a toujours besoin d'un
+/// nom : on retombe sur $USER, puis sur "user", plutot que d'echouer.
+#[must_use]
+pub fn current_username() -> String {
+    whoami::username()
+        .ok()
+        .or_else(|| std::env::var("USER").ok())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| "user".to_string())
+}
+
 pub const PASSWORD_REQUIRED: &str = "[AVASH_PASSWORD_REQUIRED]";
 
 pub struct ClientAuth {
@@ -25,7 +39,7 @@ pub struct ClientAuth {
 /// c'est l'avertissement le plus important de l'application.
 type HostKeyVerdict = Arc<std::sync::Mutex<Option<String>>>;
 
-/// Handler d'auth + vérification known_hosts.
+/// Handler d'auth + vérification `known_hosts`.
 struct AvashAuth {
     host: String,
     port: u16,
@@ -190,8 +204,8 @@ impl AvashSession {
     }
 
     /// Ouvre un canal PTY interactif.
-    /// Le front écrit dans in_tx (touches clavier), lit out_rx (flux terminal),
-    /// et appelle resize_tx pour window_change.
+    /// Le front écrit dans `in_tx` (touches clavier), lit `out_rx` (flux terminal),
+    /// et appelle `resize_tx` pour `window_change`.
     pub async fn open_pty(&mut self, cols: u32, rows: u32, term: &str) -> Result<PtyChannel> {
         let channel = self.session.channel_open_session().await?;
         channel
@@ -288,4 +302,16 @@ pub struct PtyChannel {
     pub in_tx: mpsc::Sender<Vec<u8>>,
     pub resize_tx: mpsc::Sender<(u32, u32)>,
     _pump: tokio::task::JoinHandle<()>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_username_ne_rend_jamais_vide() {
+        // Un client SSH a toujours besoin d'un nom : le repli garantit une
+        // valeur non vide meme sans compte systeme lisible.
+        assert!(!current_username().is_empty());
+    }
 }

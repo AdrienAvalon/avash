@@ -5,7 +5,7 @@
 //! reviendrait à le poser en clair sur le disque.
 //!
 //! Le trousseau du système fait ce travail correctement, et il est déjà là :
-//! KWallet ou GNOME Keyring sous Linux (via Secret Service), le Gestionnaire
+//! `KWallet` ou GNOME Keyring sous Linux (via Secret Service), le Gestionnaire
 //! d'identifiants sous Windows, le Trousseau sous macOS. Le déverrouillage,
 //! le chiffrement et la révocation sont gérés par le système — pas par nous.
 
@@ -15,7 +15,8 @@ use anyhow::{anyhow, Result};
 const SERVICE: &str = "avash";
 
 /// Identifiant d'une entrée. `user@hôte:port` est lisible tel quel dans
-/// KWallet ou seahorse, ce qui permet de retrouver et révoquer à la main.
+/// `KWallet` ou seahorse, ce qui permet de retrouver et révoquer à la main.
+#[must_use]
 pub fn account_id(user: &str, addr: &str, port: u16) -> String {
     format!("{user}@{addr}:{port}")
 }
@@ -35,6 +36,7 @@ pub fn save(account: &str, password: &str) -> Result<()> {
 }
 
 /// Relit un mot de passe. `None` si aucune entrée — ce n'est pas une erreur.
+#[must_use]
 pub fn load(account: &str) -> Option<String> {
     // Toute erreur (trousseau verrouillé, absent, entrée inexistante) est
     // traitee comme « pas de mot de passe » : l'interface demandera la

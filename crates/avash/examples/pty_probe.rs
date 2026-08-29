@@ -1,5 +1,5 @@
 //! Sonde manuelle : ouvre un PTY sur un vrai serveur et affiche ce qui arrive.
-//! Usage : cargo run -p avash --example pty_probe -- <port> <chemin_cle>
+//! Usage : cargo run -p avash --example `pty_probe` -- <port> <`chemin_cle`>
 use std::time::Duration;
 
 #[tokio::main]
@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
     let key = args.next().unwrap();
 
     let auth = avash::ssh::ClientAuth {
-        user: whoami::username(),
+        user: avash::ssh::current_username(),
         key_path: Some(key.into()),
         password: None,
     };

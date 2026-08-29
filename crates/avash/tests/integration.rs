@@ -164,7 +164,7 @@ impl russh::server::Handler for TestSshSession {
 #[derive(Default)]
 struct TestSftpSession {
     root_read_done: bool,
-    /// Octets deja servis par read() : sans cet etat, le serveur renvoie le
+    /// Octets deja servis par `read()` : sans cet etat, le serveur renvoie le
     /// contenu indefiniment et le client telecharge en boucle infinie.
     file_read_done: bool,
 }
@@ -228,8 +228,8 @@ impl russh_sftp::server::Handler for TestSftpSession {
             Ok(Status {
                 id,
                 status_code: StatusCode::Ok,
-                error_message: "".into(),
-                language_tag: "".into(),
+                error_message: String::new(),
+                language_tag: String::new(),
             })
         }
     }
@@ -243,8 +243,8 @@ impl russh_sftp::server::Handler for TestSftpSession {
             Ok(Status {
                 id,
                 status_code: StatusCode::Ok,
-                error_message: "".into(),
-                language_tag: "".into(),
+                error_message: String::new(),
+                language_tag: String::new(),
             })
         }
     }
@@ -289,7 +289,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
                         longname: "-rw-r--r-- rapport.md".into(),
                         attrs: FileAttributes {
                             size: Some(1234),
-                            permissions: Some(0o100644),
+                            permissions: Some(0o100_644),
                             ..Default::default()
                         },
                     },
@@ -344,7 +344,7 @@ async fn spawn_test_sshd() -> u16 {
     port
 }
 
-/// HOME virtuel pour ne pas toucher au known_hosts réel (TOFU du client).
+/// HOME virtuel pour ne pas toucher au `known_hosts` réel (TOFU du client).
 fn virtual_home() -> String {
     let home = format!("/tmp/avash-it-home-{}", std::process::id());
     std::fs::create_dir_all(&home).unwrap();
@@ -494,7 +494,7 @@ async fn sftp_list_download_upload() {
 /// presentee ne correspond plus. OpenSSH refuse et affiche
 /// REMOTE HOST IDENTIFICATION HAS CHANGED ; avash doit faire de meme.
 ///
-/// Regression corrigee : le `match` sur check_known_hosts confondait
+/// Regression corrigee : le `match` sur `check_known_hosts` confondait
 /// "hote inconnu" (Ok(false)) et "cle changee" (Err(KeyChanged)) dans un bras
 /// `_` commun, et reapprenait la cle dans les deux cas.
 #[tokio::test]

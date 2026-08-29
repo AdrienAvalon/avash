@@ -23,6 +23,7 @@ pub struct SshHost {
     pub tags: Vec<String>,
 }
 
+#[must_use]
 pub fn ssh_config_path() -> std::path::PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -58,8 +59,7 @@ fn resolve_includes(content: &str, base: &Path, depth: usize) -> String {
         let line = raw.trim();
         let is_include = line
             .split_once(char::is_whitespace)
-            .map(|(k, _)| k.eq_ignore_ascii_case("include"))
-            .unwrap_or(false);
+            .is_some_and(|(k, _)| k.eq_ignore_ascii_case("include"));
         if !is_include {
             out.push_str(raw);
             out.push('\n');
@@ -111,13 +111,12 @@ fn expand_include(pattern: &str, base: &Path) -> Vec<PathBuf> {
         return vec![];
     };
     let mut found: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_file())
         .filter(|p| {
             p.file_name()
-                .map(|n| glob_match(&pat, &n.to_string_lossy()))
-                .unwrap_or(false)
+                .is_some_and(|n| glob_match(&pat, &n.to_string_lossy()))
         })
         .collect();
     // Ordre stable : OpenSSH lit dans l'ordre lexicographique.
@@ -159,7 +158,7 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
                     hosts.push(h);
                 }
                 current = Some(SshHost {
-                    alias: value.to_string(),
+                    alias: value.clone(),
                     ..Default::default()
                 });
             }
@@ -215,7 +214,7 @@ mod tests {
 
     #[test]
     fn parses_basic_config() {
-        let cfg = r#"
+        let cfg = r"
 # commentaire
 Host web
     HostName 10.0.0.5
@@ -226,7 +225,7 @@ Host web
 Host db bastion
     HostName 10.0.0.9
     User root
-"#;
+";
         let hosts = parse_config_str(cfg);
         assert_eq!(hosts.len(), 3);
         assert_eq!(hosts[0].alias, "web");
@@ -254,6 +253,8 @@ Host db bastion
 /// ⚠️ Aucun mot de passe n'est enregistre — ce fichier est en clair. Pour se
 /// passer de saisie, la voie propre est de deployer une cle.
 pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
     let alias = host.alias.trim();
     validate_alias(alias)?;
 
@@ -291,7 +292,6 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
     }
     block.push_str(&render_host_block(host));
 
-    use std::io::Write;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -308,23 +308,27 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
 }
 
 /// Rend un bloc `Host` au format OpenSSH.
+#[must_use]
 pub fn render_host_block(host: &SshHost) -> String {
-    let mut out = format!("Host {}\n", host.alias.trim());
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let _ = writeln!(out, "Host {}", host.alias.trim());
     if let Some(v) = host.hostname.as_deref().filter(|v| !v.trim().is_empty()) {
-        out.push_str(&format!("    HostName {}\n", v.trim()));
+        let _ = writeln!(out, "    HostName {}", v.trim());
     }
     if let Some(v) = host.user.as_deref().filter(|v| !v.trim().is_empty()) {
-        out.push_str(&format!("    User {}\n", v.trim()));
+        let _ = writeln!(out, "    User {}", v.trim());
     }
     if let Some(p) = host.port.filter(|p| *p != 22) {
-        out.push_str(&format!("    Port {p}\n"));
+        let _ = writeln!(out, "    Port {p}");
     }
     if let Some(v) = host
         .identity_file
         .as_deref()
         .filter(|v| !v.trim().is_empty())
     {
-        out.push_str(&format!("    IdentityFile {}\n", v.trim()));
+        let _ = writeln!(out, "    IdentityFile {}", v.trim());
     }
     out
 }

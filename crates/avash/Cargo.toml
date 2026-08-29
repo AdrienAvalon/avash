@@ -27,13 +27,16 @@ russh = { version = "0.63", default-features = false, features = [
 russh-sftp = "2"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-dirs = "5"
+dirs = "6"
 anyhow = "1"
 smol = "2"
-whoami = "1"
+whoami = "2"
 rand = "0.10"
 keyring = "4"
 
 [dev-dependencies]
 bytes = "1.12.1"
 log = "0.4.34"
+
+[lints]
+workspace = true

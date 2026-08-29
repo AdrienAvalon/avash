@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    avash_ui_lib::run()
+    avash_ui_lib::run();
 }

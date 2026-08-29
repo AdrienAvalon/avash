@@ -10,7 +10,12 @@
       "DOM.Iterable"
     ],
     "skipLibCheck": true,
-    "types": []
+    "types": [],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true
   },
   "include": [
     "*.ts"

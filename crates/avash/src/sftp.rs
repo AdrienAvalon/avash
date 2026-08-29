@@ -51,7 +51,7 @@ impl SftpHandle {
                     name: e.file_name(),
                     is_dir: e.file_type().is_dir(),
                     size: m.len(),
-                    modified: m.mtime.map(|t| t as u64),
+                    modified: m.mtime.map(u64::from),
                 }
             })
             .collect())

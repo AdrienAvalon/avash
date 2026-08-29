@@ -5,8 +5,11 @@ use avash::parse_ssh_config;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(|s| s.as_str()) {
-        Some("list") | None => cmd_list(),
+    match args.get(1).map(std::string::String::as_str) {
+        Some("list") | None => {
+            cmd_list();
+            Ok(())
+        }
         Some("run") => {
             // run ALIAS CMD… : connexion réelle via russh, exécution, sortie
             let alias = args
@@ -33,7 +36,7 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn cmd_list() -> anyhow::Result<()> {
+fn cmd_list() {
     let hosts = match parse_ssh_config() {
         Ok(h) => h,
         Err(e) => {
@@ -54,22 +57,24 @@ fn cmd_list() -> anyhow::Result<()> {
             "{}@{}:{}",
             h.user.as_deref().unwrap_or("?"),
             h.hostname.as_deref().unwrap_or(h.alias.as_str()),
-            h.port.map(|p| p.to_string()).unwrap_or_else(|| "22".into())
+            h.port.map_or_else(|| "22".into(), |p| p.to_string())
         );
         let jump = h
             .proxy_jump
             .as_ref()
-            .map(|j| format!("  (via {})", j))
+            .map(|j| format!("  (via {j})"))
             .unwrap_or_default();
         println!("  • {:<20} → {}{}", h.alias, target, jump);
     }
-    Ok(())
 }
 
 async fn cmd_run(host: avash::SshHost, command: String) -> anyhow::Result<()> {
     let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
     let auth = avash::ssh::ClientAuth {
-        user: host.user.clone().unwrap_or_else(whoami::username),
+        user: host
+            .user
+            .clone()
+            .unwrap_or_else(avash::ssh::current_username),
         key_path: host.identity_file.as_ref().map(std::path::PathBuf::from),
         password: None,
     };
@@ -78,5 +83,7 @@ async fn cmd_run(host: avash::SshHost, command: String) -> anyhow::Result<()> {
     let (stdout, code) = session.run(&command).await?;
     print!("{stdout}");
     session.disconnect().await?;
-    std::process::exit(code as i32);
+    // Un code de sortie Unix tient sur 8 bits. Borner evite le
+    // debordement u32 -> i32 signale par clippy, et reflete la realite.
+    std::process::exit(i32::from((code & 0xFF) as u8));
 }

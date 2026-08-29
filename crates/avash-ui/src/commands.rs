@@ -14,7 +14,7 @@ pub struct SessionStore {
 pub struct SessionHandle {
     /// Clavier du front → canal SSH
     pub input: Sender<Vec<u8>>,
-    /// Resize du front → window_change SSH
+    /// Resize du front → `window_change` SSH
     pub resize: Sender<(u32, u32)>,
     /// Session SFTP dédiée ouverte à la demande (lazy), par onglet.
     pub sftp: Mutex<Option<std::sync::Arc<SftpHandle>>>,
@@ -62,7 +62,10 @@ impl Target {
         let host = find_host(alias)?;
         let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
         let port = host.port.unwrap_or(22);
-        let user = host.user.clone().unwrap_or_else(whoami::username);
+        let user = host
+            .user
+            .clone()
+            .unwrap_or_else(avash::ssh::current_username);
         // Mot de passe deja memorise ? Le trousseau evite de le redemander.
         // Une absence n'est pas une erreur : l'interface fera la saisie.
         let password = avash::secrets::load(&avash::secrets::account_id(&user, &addr, port));
@@ -202,6 +205,10 @@ async fn open_on_target(
     cols: u32,
     rows: u32,
 ) -> Result<String, String> {
+    // Regroupement des sorties : voir plus bas, dans la boucle du pump.
+    const COALESCE_MS: u64 = 8;
+    const FLUSH_BYTES: usize = 16 * 1024;
+
     let mut session = AvashSession::connect(&target.addr, target.port, &target.auth())
         .await
         .map_err(|e| e.to_string())?;
@@ -249,8 +256,6 @@ async fn open_on_target(
     // et une écriture xterm. On les regroupe donc sur une courte fenêtre :
     // le débit s'effondre en nombre de messages sans que la latence devienne
     // perceptible (COALESCE_MS reste sous la durée d'une image à 60 Hz).
-    const COALESCE_MS: u64 = 8;
-    const FLUSH_BYTES: usize = 16 * 1024;
     let app2 = app.clone();
     let _pump = tokio::spawn(async move {
         let mut decoder = Utf8Stream::default();
@@ -261,9 +266,10 @@ async fn open_on_target(
             // Tant que le tampon attend, on borne l'attente a l'echeance :
             // sans cela un octet isole resterait bloque jusqu'au suivant.
             let recu = match deadline {
-                Some(d) => match tokio::time::timeout_at(d, out_rx.recv()).await {
-                    Ok(v) => v,
-                    Err(_) => {
+                Some(d) => {
+                    if let Ok(v) = tokio::time::timeout_at(d, out_rx.recv()).await {
+                        v
+                    } else {
                         if !buffer.is_empty() {
                             let _ = app2.emit(
                                 "pty-output",
@@ -274,7 +280,7 @@ async fn open_on_target(
                         deadline = None;
                         continue;
                     }
-                },
+                }
                 None => out_rx.recv().await,
             };
 
@@ -391,7 +397,7 @@ pub async fn pty_write(
     Ok(())
 }
 
-/// Redimensionne le PTY (resize fenêtre / onglet) — window_change SSH.
+/// Redimensionne le PTY (resize fenêtre / onglet) — `window_change` SSH.
 #[tauri::command]
 pub async fn pty_resize(
     state: tauri::State<'_, SessionStore>,
@@ -416,7 +422,10 @@ pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result
         // into_inner() echoue si le mutex a ete empoisonne par un panic
         // ailleurs. Fermer un onglet ne doit jamais planter pour autant :
         // on recupere la valeur malgre l'empoisonnement.
-        let sftp = h.sftp.into_inner().unwrap_or_else(|e| e.into_inner());
+        let sftp = h
+            .sftp
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(s) = sftp {
             // Fermeture explicite si on détient la dernière référence.
             if let Ok(owned) = std::sync::Arc::try_unwrap(s) {
@@ -533,13 +542,15 @@ mod tests {
 
     /// HOME est global au processus : deux tests qui le modifient en parallele
     /// se marchent dessus. Ce verrou les serialise (les autres tests restent
-    /// paralleles). Sans lui, find_host_* echoue une fois sur deux.
+    /// paralleles). Sans lui, `find_host`_* echoue une fois sur deux.
     static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Isole HOME pour ne pas dependre du ~/.ssh/config reel de la machine.
     /// Le HOME precedent est restaure a la destruction du garde.
     fn with_ssh_config(contents: &str) -> HomeGuard {
-        let lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = HOME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!(
             "avash-ui-test-{}-{:?}",
             std::process::id(),
@@ -647,7 +658,11 @@ mod tests {
         let _g = with_ssh_config("Host simple\n  HostName 10.0.0.9\n");
         let t = Target::from_alias("simple").unwrap();
         assert_eq!(t.port, 22, "port par defaut");
-        assert_eq!(t.user, whoami::username(), "utilisateur courant par defaut");
+        assert_eq!(
+            t.user,
+            avash::ssh::current_username(),
+            "utilisateur courant par defaut"
+        );
         assert!(t.key_path.is_none());
     }
     // ---------- Utf8Stream ----------
@@ -747,7 +762,8 @@ mod tests {
 
     #[test]
     fn manual_refuse_un_utilisateur_vide() {
-        let e = Target::manual("srv".into(), None, "".into(), Some("p".into()), None).unwrap_err();
+        let e =
+            Target::manual("srv".into(), None, String::new(), Some("p".into()), None).unwrap_err();
         assert!(e.contains("utilisateur"), "{e}");
     }
 
@@ -840,8 +856,8 @@ pub fn key_generate(
         // authorized_keys — utile quand on revoque des annees plus tard.
         format!(
             "{}@{}",
-            whoami::username(),
-            whoami::fallible::hostname().unwrap_or_else(|_| "avash".into())
+            avash::ssh::current_username(),
+            whoami::hostname().unwrap_or_else(|_| "avash".into())
         )
     });
     avash::keys::generate(&name, &comment).map_err(|e| format!("{e:#}"))
@@ -876,7 +892,7 @@ pub async fn key_deploy(
         ));
     }
     avash::keys::interpret_deploy(&stdout)
-        .map(|m| m.to_string())
+        .map(std::string::ToString::to_string)
         .map_err(|e| format!("{e:#}"))
 }
 
@@ -912,7 +928,7 @@ pub fn host_save(
 /// Mémorise un mot de passe dans le trousseau du système.
 ///
 /// Jamais dans `~/.ssh/config` : ce fichier est en clair. Le trousseau
-/// (KWallet, GNOME Keyring, Credential Manager, Trousseau macOS) gère le
+/// (`KWallet`, GNOME Keyring, Credential Manager, Trousseau macOS) gère le
 /// chiffrement, le déverrouillage et la révocation.
 #[tauri::command]
 pub fn password_save(
@@ -934,6 +950,7 @@ pub fn password_forget(addr: String, port: Option<u16>, user: String) -> Result<
 
 /// Un mot de passe est-il déjà mémorisé pour cet hôte ?
 #[tauri::command]
+#[must_use]
 pub fn password_known(addr: String, port: Option<u16>, user: String) -> bool {
     let id = avash::secrets::account_id(user.trim(), addr.trim(), port.unwrap_or(22));
     avash::secrets::load(&id).is_some()
