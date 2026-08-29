@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -2474,6 +2475,31 @@ type RdpTarget = { host: string; port: number | null; user: string; password: st
 type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number };
 let rdpHostsList: RdpHostT[] = [];
 const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
+
+// Presse-papiers poste -> bureau distant (CLIPRDR). On lit le presse-papiers
+// local et on l'annonce à la session RDP active quand Avash reprend le focus
+// (tu copies ailleurs, tu reviens, tu colles dans le distant). Message [8].
+let lastClipText = "";
+async function pushLocalClipboard(): Promise<void> {
+  if (state.active === null || !rdpSessions.has(state.active)) return;
+  let text = "";
+  try {
+    text = (await clipReadText()) ?? "";
+  } catch {
+    return; // pas de texte (image/fichier) ou accès refusé
+  }
+  if (!text || text === lastClipText) return;
+  lastClipText = text;
+  const s = rdpSessions.get(state.active);
+  if (s?.ws && s.ws.readyState === WebSocket.OPEN) {
+    const body = new TextEncoder().encode(text);
+    const msg = new Uint8Array(1 + body.length);
+    msg[0] = 8;
+    msg.set(body, 1);
+    s.ws.send(msg);
+  }
+}
+window.addEventListener("focus", () => void pushLocalClipboard());
 const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver }>();
 
 async function openRdp(t: RdpTarget) {
@@ -2590,7 +2616,11 @@ async function openRdp(t: RdpTarget) {
     const ws = new WebSocket(`ws://127.0.0.1:${conn.port}`);
     ws.binaryType = "arraybuffer";
     rdpSessions.get(id)!.ws = ws;
-    ws.onopen = () => ws.send(new TextEncoder().encode(conn.token));
+    ws.onopen = () => {
+      ws.send(new TextEncoder().encode(conn.token));
+      // Annonce initiale du presse-papiers local au bureau distant.
+      window.setTimeout(() => void pushLocalClipboard(), 600);
+    };
     ws.onmessage = (ev) => {
       if (!rdpSessions.has(id)) return;
       const buf = ev.data as ArrayBuffer;
@@ -2633,6 +2663,11 @@ async function openRdp(t: RdpTarget) {
         window.clearTimeout(resizeGuard);
         window.clearTimeout(resizeTimer);
         resizeTimer = window.setTimeout(sendResize, 120);
+      } else if (kind === 8) {
+        // Le bureau distant a copié du texte -> presse-papiers du poste.
+        const text = new TextDecoder().decode(new Uint8Array(buf, 1));
+        lastClipText = text; // ne pas le renvoyer aussitôt au distant
+        clipWriteText(text).catch(() => {});
       } else if (kind === 3) {
         tab.querySelector(".state")!.className = "state closed";
         alert(`RDP : ${new TextDecoder().decode(new Uint8Array(buf, 1))}`);

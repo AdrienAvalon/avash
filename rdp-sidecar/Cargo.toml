@@ -10,7 +10,7 @@ name = "avash-rdp"
 path = "src/main.rs"
 
 [dependencies]
-ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "pdu", "core"] }
+ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr", "pdu", "core"] }
 ironrdp-tokio = { version = "0.10", features = ["reqwest"] }
 ironrdp-tls = { version = "0.2", features = ["rustls"] }
 tokio = { version = "1", features = ["full"] }

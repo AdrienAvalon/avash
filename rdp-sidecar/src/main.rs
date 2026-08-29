@@ -22,8 +22,16 @@
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use ironrdp::cliprdr::backend::CliprdrBackend;
+use ironrdp::cliprdr::pdu::{
+    ClipboardFormat, ClipboardFormatId, ClipboardGeneralCapabilityFlags, FileContentsRequest,
+    FileContentsResponse, FormatDataRequest, FormatDataResponse, LockDataId,
+    OwnedFormatDataResponse,
+};
+use ironrdp::cliprdr::CliprdrClient;
 use ironrdp::connector::connection_activation::ConnectionActivationState;
 use ironrdp::connector::{self, Credentials};
+use ironrdp::core::IntoOwned;
 use ironrdp::core::WriteBuf;
 use ironrdp::displaycontrol::client::DisplayControlClient;
 use ironrdp::displaycontrol::pdu::MonitorLayoutEntry;
@@ -42,6 +50,85 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
+
+/// Presse-papiers local partagé (texte), alimenté par le front, servi au serveur.
+type LocalClip = std::sync::Arc<std::sync::Mutex<Option<String>>>;
+
+/// Requêtes du backend CLIPRDR vers la boucle principale. Le backend est
+/// encapsulé dans l'ActiveStage et ne peut pas la rappeler : il passe par ce
+/// canal, la boucle exécute l'action SVC correspondante.
+#[derive(Debug)]
+enum ClipReq {
+    /// Annoncer au serveur qu'on a du texte (initiate_copy).
+    Advertise,
+    /// Servir des données réclamées par le serveur (submit_format_data).
+    ServeData(OwnedFormatDataResponse),
+    /// Réclamer au serveur les données d'un format (initiate_paste).
+    RequestPaste(ClipboardFormatId),
+    /// Texte reçu du serveur → à pousser vers le presse-papiers du poste.
+    RemoteText(String),
+}
+
+/// Pont entre le canal CLIPRDR et le presse-papiers du poste (via le front).
+/// Texte seulement (CF_UNICODETEXT).
+#[derive(Debug)]
+struct ClipBackend {
+    local_text: LocalClip,
+    tx: tokio::sync::mpsc::UnboundedSender<ClipReq>,
+}
+
+ironrdp::core::impl_as_any!(ClipBackend);
+
+impl CliprdrBackend for ClipBackend {
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn temporary_directory(&self) -> &str {
+        "."
+    }
+    fn client_capabilities(&self) -> ClipboardGeneralCapabilityFlags {
+        ClipboardGeneralCapabilityFlags::empty()
+    }
+    fn on_ready(&mut self) {
+        if self.local_text.lock().is_ok_and(|t| t.is_some()) {
+            let _ = self.tx.send(ClipReq::Advertise);
+        }
+    }
+    fn on_request_format_list(&mut self) {
+        let _ = self.tx.send(ClipReq::Advertise);
+    }
+    fn on_process_negotiated_capabilities(&mut self, _caps: ClipboardGeneralCapabilityFlags) {}
+    fn on_remote_copy(&mut self, formats: &[ClipboardFormat]) {
+        if formats
+            .iter()
+            .any(|f| f.id == ClipboardFormatId::CF_UNICODETEXT)
+        {
+            let _ = self
+                .tx
+                .send(ClipReq::RequestPaste(ClipboardFormatId::CF_UNICODETEXT));
+        }
+    }
+    fn on_format_data_request(&mut self, req: FormatDataRequest) {
+        let resp = if req.format == ClipboardFormatId::CF_UNICODETEXT {
+            match self.local_text.lock().ok().and_then(|t| t.clone()) {
+                Some(text) => FormatDataResponse::new_unicode_string(&text).into_owned(),
+                None => FormatDataResponse::new_error().into_owned(),
+            }
+        } else {
+            FormatDataResponse::new_error().into_owned()
+        };
+        let _ = self.tx.send(ClipReq::ServeData(resp));
+    }
+    fn on_format_data_response(&mut self, resp: FormatDataResponse<'_>) {
+        if !resp.is_error() {
+            if let Ok(text) = resp.to_unicode_string() {
+                let _ = self.tx.send(ClipReq::RemoteText(text));
+            }
+        }
+    }
+    fn on_file_contents_request(&mut self, _req: FileContentsRequest) {}
+    fn on_file_contents_response(&mut self, _resp: FileContentsResponse<'_>) {}
+    fn on_lock(&mut self, _id: LockDataId) {}
+    fn on_unlock(&mut self, _id: LockDataId) {}
+}
 
 /// Filet anti-gel : si un ACK de rendu se perd, on renvoie l'état courant
 /// passé ce délai plutôt que de figer l'affichage.
@@ -235,6 +322,7 @@ fn frame_msg(image: &DecodedImage, r: &ironrdp::pdu::geometry::InclusiveRectangl
 
 async fn connect(
     a: &Args,
+    clip_backend: ClipBackend,
 ) -> Result<(
     connector::ConnectionResult,
     ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
@@ -252,7 +340,9 @@ async fn connect(
         .with_static_channel(
             DrdynvcClient::new()
                 .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new()))),
-        );
+        )
+        // Canal CLIPRDR : presse-papiers partagé poste <-> bureau distant (texte).
+        .with_static_channel(CliprdrClient::new(Box::new(clip_backend)));
     let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
         .await
         .context("début de connexion")?;
@@ -281,7 +371,13 @@ async fn connect(
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = parse_args()?;
-    let (result, mut framed) = connect(&args).await?;
+    let local_text: LocalClip = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel::<ClipReq>();
+    let clip_backend = ClipBackend {
+        local_text: local_text.clone(),
+        tx: clip_tx.clone(),
+    };
+    let (result, mut framed) = connect(&args, clip_backend).await?;
     let (w, h) = (result.desktop_size.width, result.desktop_size.height);
     let activation_factory = result.activation_factory;
     eprintln!("connecté : {w}x{h}");
@@ -370,6 +466,17 @@ async fn main() -> Result<()> {
         };
     }
 
+    // Envoie au serveur les messages d'un canal statique (ici CLIPRDR).
+    #[allow(clippy::items_after_statements)]
+    macro_rules! send_svc {
+        ($msgs:expr) => {{
+            let bytes = active
+                .process_svc_processor_messages($msgs)
+                .context("encodage SVC")?;
+            framed.write_all(&bytes).await.context("écriture SVC")?;
+        }};
+    }
+
     loop {
         tokio::select! {
             biased;
@@ -393,6 +500,16 @@ async fn main() -> Result<()> {
                         lat_ms = if lat_ms == 0.0 { rtt } else { lat_ms.mul_add(0.8, rtt * 0.2) };
                         awaiting_ack = false;
                         flush_dirty!();
+                    }
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&8) => {
+                        // Presse-papiers du poste : on mémorise le texte et on
+                        // l'annonce au serveur (collage possible dans le distant).
+                        if let Ok(text) = std::str::from_utf8(&b[1..]) {
+                            if let Ok(mut g) = local_text.lock() {
+                                *g = Some(text.to_owned());
+                            }
+                            let _ = clip_tx.send(ClipReq::Advertise);
+                        }
                     }
                     Some(Ok(Message::Binary(b))) => {
                         let events = db.apply(input_ops(&b));
@@ -430,6 +547,40 @@ async fn main() -> Result<()> {
                     stat_frames = 0;
                     stat_bytes = 0;
                     stat_window = Instant::now();
+                }
+            }
+            Some(req) = clip_rx.recv() => {
+                match req {
+                    ClipReq::Advertise => {
+                        let msgs = active.get_svc_processor_mut::<CliprdrClient>().and_then(|c| {
+                            c.initiate_copy(&[ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]).ok()
+                        });
+                        if let Some(msgs) = msgs {
+                            send_svc!(msgs);
+                        }
+                    }
+                    ClipReq::RequestPaste(fmt) => {
+                        let msgs = active
+                            .get_svc_processor_mut::<CliprdrClient>()
+                            .and_then(|c| c.initiate_paste(fmt).ok());
+                        if let Some(msgs) = msgs {
+                            send_svc!(msgs);
+                        }
+                    }
+                    ClipReq::ServeData(resp) => {
+                        let msgs = active
+                            .get_svc_processor_mut::<CliprdrClient>()
+                            .and_then(|c| c.submit_format_data(resp).ok());
+                        if let Some(msgs) = msgs {
+                            send_svc!(msgs);
+                        }
+                    }
+                    ClipReq::RemoteText(text) => {
+                        // CLIPBOARD [8] vers le front : le distant a copié du texte.
+                        let mut m = vec![8u8];
+                        m.extend_from_slice(text.as_bytes());
+                        sink.send(Message::Binary(m)).await.context("envoi presse-papiers")?;
+                    }
                 }
             }
             read = framed.read_pdu() => {
