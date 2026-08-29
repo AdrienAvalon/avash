@@ -102,8 +102,12 @@ function renderHosts() {
       <div class="alias"></div><div class="meta"></div></span>`;
     el.querySelector(".alias")!.textContent = h.alias;
     el.querySelector(".meta")!.textContent = target;
-    el.title = "Double-clic : connexion";
+    el.title = "Double-clic : connexion — clic droit : options";
     el.addEventListener("dblclick", () => openSession(h));
+    el.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openHostMenu(h, e as MouseEvent);
+    });
     list.appendChild(el);
   }
   $("host-count").textContent = `${shown.length} hôte${shown.length > 1 ? "s" : ""}`;
@@ -1053,4 +1057,52 @@ ctxMenu().addEventListener("click", (e) => {
     s.term.clear();
   }
   hideContext();
+});
+
+
+// ---------- Menu contextuel d'un hôte ----------
+
+function openHostMenu(h: Host, e: MouseEvent) {
+  const m = $("host-context");
+  m.dataset.alias = h.alias;
+  m.style.left = `${e.clientX}px`;
+  m.style.top = `${e.clientY}px`;
+  m.classList.add("open");
+}
+function hideHostMenu() { $("host-context").classList.remove("open"); }
+window.addEventListener("click", hideHostMenu);
+window.addEventListener("blur", hideHostMenu);
+
+$("host-context").addEventListener("click", async (e) => {
+  const act = (e.target as HTMLElement).closest("[data-act]")?.getAttribute("data-act");
+  const alias = $("host-context").dataset.alias;
+  hideHostMenu();
+  if (!alias) return;
+  const h = state.hosts.find((x) => x.alias === alias);
+  if (!h) return;
+  if (act === "connect") {
+    openSession(h);
+  } else if (act === "delete") {
+    const ok = confirm(
+      `Supprimer l'hôte « ${alias} » de ~/.ssh/config ?\n\n` +
+        `Son mot de passe mémorisé sera aussi oublié. Cette action est définitive.`,
+    );
+    if (!ok) return;
+    try {
+      await invoke("host_delete", { alias });
+      await loadHosts();
+    } catch (err) {
+      alert(`Suppression impossible : ${err}`);
+    }
+  } else if (act === "forget") {
+    try {
+      await invoke("password_forget", {
+        addr: h.hostname ?? h.alias,
+        port: h.port,
+        user: h.user ?? null,
+      });
+    } catch {
+      /* pas de mot de passe memorise : rien a faire */
+    }
+  }
 });

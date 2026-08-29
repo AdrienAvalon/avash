@@ -990,3 +990,14 @@ pub fn open_external(url: String) -> Result<(), String> {
     }
     open::that(url).map_err(|e| format!("Ouverture impossible : {e}"))
 }
+
+/// Supprime un hôte de `~/.ssh/config` et oublie son mot de passe mémorisé.
+#[tauri::command]
+pub fn host_delete(alias: String) -> Result<(), String> {
+    // On récupère la cible AVANT de supprimer, pour connaître l'identifiant
+    // du trousseau à oublier.
+    if let Ok(t) = Target::from_alias(&alias) {
+        let _ = avash::secrets::forget(&avash::secrets::account_id(&t.user, &t.addr, t.port));
+    }
+    avash::remove_host(&alias).map_err(|e| format!("{e:#}"))
+}

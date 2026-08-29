@@ -419,6 +419,8 @@
       .ctx-item.disabled { opacity: .4; pointer-events: none; }
       .ctx-key { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
       .ctx-sep { height: 1px; background: var(--border-soft); margin: 4px 6px; }
+      .ctx-item.danger { color: var(--err); }
+      .ctx-item.danger:hover { background: var(--err); color: #fff; }
     </style>
 </head>
 <body>
@@ -609,5 +611,11 @@
         </div>
       </form>
     </div>
-</body>
+
+    <div class="ctx-menu" id="host-context">
+      <div class="ctx-item" data-act="connect">Se connecter</div>
+      <div class="ctx-item" data-act="forget">Oublier le mot de passe</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item danger" data-act="delete">Supprimer l'hôte</div>
+    </div></body>
 </html>

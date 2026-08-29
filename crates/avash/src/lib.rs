@@ -307,6 +307,68 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Supprime un hôte de `~/.ssh/config`, en préservant tout le reste.
+///
+/// On retire le bloc `Host <alias>` et ses directives indentées, jusqu'au
+/// prochain `Host`/`Match` ou la fin du fichier. Les commentaires et les
+/// autres hôtes de l'utilisateur restent intacts.
+pub fn remove_host(alias: &str) -> anyhow::Result<()> {
+    let alias = alias.trim();
+    if alias.is_empty() {
+        return Err(anyhow::anyhow!("Nom d'hôte vide."));
+    }
+    let path = ssh_config_path();
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow::anyhow!("Lecture de {} : {e}", path.display()))?;
+
+    let mut out = String::with_capacity(content.len());
+    let mut skipping = false;
+    let mut removed = false;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let (key, value) = trimmed
+            .split_once(char::is_whitespace)
+            .map_or((trimmed, ""), |(k, v)| (k, v.trim()));
+        let key_lower = key.to_lowercase();
+
+        if key_lower == "host" {
+            // Un bloc Host commence : on saute celui qui matche exactement.
+            // Les alias multiples (`Host a b`) : on ne retire que si l'alias
+            // vise est le seul du bloc — sinon on toucherait aux autres.
+            skipping = value.split_whitespace().eq(std::iter::once(alias));
+            if skipping {
+                removed = true;
+                continue;
+            }
+        } else if key_lower == "match" {
+            skipping = false;
+        }
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    if !removed {
+        return Err(anyhow::anyhow!(
+            "Hôte « {alias} » introuvable dans {}.",
+            path.display()
+        ));
+    }
+    // Compacter les lignes vides en trop laissees par la suppression.
+    while out.contains("\n\n\n") {
+        out = out.replace("\n\n\n", "\n\n");
+    }
+    std::fs::write(&path, out.trim_start_matches('\n'))
+        .map_err(|e| anyhow::anyhow!("Écriture de {} : {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 /// Rend un bloc `Host` au format OpenSSH.
 #[must_use]
 pub fn render_host_block(host: &SshHost) -> String {
@@ -675,5 +737,68 @@ mod save_tests {
         assert!(!glob_match("config?", "config12"));
         assert!(!glob_match("10-*", "20-web"));
         assert!(glob_match("a*b*c", "axxbyyc"));
+    }
+
+    // ---------- remove_host ----------
+
+    #[test]
+    fn remove_host_supprime_le_bon_bloc_et_garde_le_reste() {
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "# entete perso\nHost prod\n  HostName 1.1.1.1\n\nHost staging\n  HostName 2.2.2.2\n",
+        )
+        .unwrap();
+
+        remove_host("prod").unwrap();
+
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            apres.contains("# entete perso"),
+            "commentaire perdu : {apres}"
+        );
+        assert!(
+            !apres.contains("prod"),
+            "prod aurait du disparaitre : {apres}"
+        );
+        assert!(apres.contains("staging"), "staging efface a tort : {apres}");
+        let noms: Vec<_> = parse_ssh_config()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.alias)
+            .collect();
+        assert_eq!(noms, vec!["staging"]);
+    }
+
+    #[test]
+    fn remove_host_ajoute_puis_retire_revient_a_l_etat_initial() {
+        let _h = crate::testutil::temp_home();
+        append_host(&host("temporaire")).unwrap();
+        assert_eq!(parse_ssh_config().unwrap().len(), 1);
+        remove_host("temporaire").unwrap();
+        assert_eq!(parse_ssh_config().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn remove_host_signale_un_alias_absent() {
+        let _h = crate::testutil::temp_home();
+        append_host(&host("existe")).unwrap();
+        let e = remove_host("absent").unwrap_err().to_string();
+        assert!(e.contains("introuvable"), "{e}");
+    }
+
+    #[test]
+    fn remove_host_ne_touche_pas_un_bloc_a_alias_multiples() {
+        // `Host prod backup` partage des directives : retirer « prod » ne doit
+        // pas casser « backup ». On laisse le bloc entier plutot que d'abimer
+        // l'autre alias.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "Host prod backup\n  User root\n").unwrap();
+        let e = remove_host("prod").unwrap_err().to_string();
+        assert!(e.contains("introuvable"), "{e}");
     }
 }
