@@ -145,3 +145,51 @@ describe("stripHtml", () => {
     expect(propre).not.toContain(">");
   });
 });
+
+import {
+  describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
+  type TunnelDef, type TunnelStatus,
+} from "./filters";
+
+const tdef = (o: Partial<TunnelDef>): TunnelDef => ({
+  id: "t-1", alias: "prod", kind: "local", bind_port: 8080,
+  target_host: "db.interne", target_port: 5432, name: "", ...o,
+});
+const tstatus = (o: Partial<TunnelStatus>): TunnelStatus => ({
+  id: "t-1", bound_port: 8080, active: 0, total: 0, bytes_up: 0, bytes_down: 0,
+  alive: true, last_error: null, ...o,
+});
+
+describe("describeTunnel", () => {
+  it("suit le sens du trafic pour les trois types", () => {
+    expect(describeTunnel(tdef({}))).toBe("localhost:8080 → prod → db.interne:5432");
+    expect(describeTunnel(tdef({ kind: "remote" }))).toBe("prod:8080 → localhost → db.interne:5432");
+    expect(describeTunnel(tdef({ kind: "dynamic" }))).toBe("SOCKS5 localhost:8080 → prod");
+  });
+  it("donne la lettre ssh", () => {
+    expect(tunnelFlag("local")).toBe("-L");
+    expect(tunnelFlag("remote")).toBe("-R");
+    expect(tunnelFlag("dynamic")).toBe("-D");
+  });
+});
+
+describe("tunnelTraffic", () => {
+  it("montre les connexions en cours quand il y en a, sinon le cumul", () => {
+    expect(tunnelTraffic(tstatus({ active: 2, total: 5, bytes_up: 1024, bytes_down: 3481 })))
+      .toBe("2 conn · ↑1.0 Ko ↓3.4 Ko");
+    expect(tunnelTraffic(tstatus({ total: 5 }))).toBe("5 au total · ↑0 o ↓0 o");
+  });
+});
+
+describe("activeTunnelsByHost", () => {
+  it("ne compte que les tunnels vivants", () => {
+    const defs = [tdef({ id: "a" }), tdef({ id: "b" }), tdef({ id: "c", alias: "dev" })];
+    const status = new Map([
+      ["a", tstatus({ id: "a" })],
+      ["b", tstatus({ id: "b", alive: false })],
+    ]);
+    const m = activeTunnelsByHost(defs, status);
+    expect(m.get("prod")).toBe(1);
+    expect(m.has("dev")).toBe(false);
+  });
+});

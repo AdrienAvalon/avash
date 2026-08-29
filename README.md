@@ -15,10 +15,30 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 - **Tauri 2** + xterm.js + russh (SSH pur Rust) + IronRDP
 - Locale : `/home/avalon/dev/avash`
 
-## État (29/08 — passe de consolidation)
+## État (29/08 — tunnels SSH)
 
-**92 tests verts** (68 Rust, 24 TypeScript) · clippy strict · `cargo audit`
+**123 tests verts** (95 Rust, 28 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
+
+### Tunnels SSH (nouveau)
+
+Les trois redirections d'OpenSSH, visuelles : **`-L`** (local → serveur →
+destination), **`-R`** (serveur → local → destination) et **`-D`** (mandataire
+SOCKS5 sortant par le serveur). Menu contextuel d'un hôte → *Tunnels…*, ou
+bouton *Tunnels* de la barre latérale.
+
+- Chaque tunnel vit sur **sa propre connexion SSH** : fermer un onglet ne le
+  coupe pas, et inversement. Keepalive 30 s (3 échecs → tunnel marqué
+  « connexion perdue », bouton *Relancer*).
+- Compteurs en direct : connexions en cours, octets ↑/↓ — mis à jour pendant
+  la connexion, pas seulement à sa fin (une session VNC ou Postgres dure).
+- Définitions dans `~/.config/avash/tunnels.yaml` (écriture atomique).
+- Écoute **loopback uniquement** ; un `-R` ne relaie que vers la destination
+  déclarée (un serveur malveillant ne peut pas faire ouvrir une connexion
+  locale arbitraire). SOCKS : CONNECT seul, sans authentification, SOCKS4
+  refusé.
+- Vérifié contre **OpenSSH 10.5 réel** avec `examples/tunnel_probe.rs` : les
+  trois types relaient, le port `-R` est libéré à la fermeture.
 
 ### Bugs de correction trouvés pendant l'audit
 
@@ -48,8 +68,8 @@ est en échec sécurisé (il refuse), et le défaut de `russh` refuse aussi.
 ### Vérifié contre un vrai serveur, pas un simulacre
 
 Les bugs les plus pénibles (terminal muet, code de sortie, ordre des messages
-SSH) ne se voyaient qu'en conditions réelles. `examples/pty_probe.rs` et
-`examples/keyring_check.rs` sont conservés comme outils : ils testent contre le
+SSH) ne se voyaient qu'en conditions réelles. `examples/pty_probe.rs`,
+`examples/tunnel_probe.rs` et `examples/keyring_check.rs` sont conservés comme outils : ils testent contre le
 `sshd` et le trousseau réels de la machine, là où un simulacre ment.
 
 ### Objectifs de la spec, mesurés
@@ -63,6 +83,6 @@ L'objectif de 100 Mo n'est pas atteignable avec une webview ; voir plus bas.
 
 ## Feuille de route
 - v0.1 (ce soir/aujourd'hui) : CLI + parseur + connexion russh → **GUI dès webkit installé**
-- v0.2 : SFTP glisser-déposer, tunnels, snippets
+- v0.2 : ~~tunnels~~ ✅, SFTP glisser-déposer, snippets
 - v0.3 : chiffrement secrets, imports, recherche instantanée
 - v1 : RDP + multi-exécution + santé hôtes

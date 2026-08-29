@@ -13,6 +13,9 @@ pub fn run() {
         .manage(commands::SessionStore {
             inner: Mutex::new(HashMap::new()),
         })
+        .manage(commands::TunnelStore {
+            inner: Mutex::new(HashMap::new()),
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_hosts,
             commands::run_command,
@@ -35,7 +38,13 @@ pub fn run() {
             commands::password_known,
             commands::keys_list,
             commands::key_generate,
-            commands::key_deploy
+            commands::key_deploy,
+            commands::tunnel_defs,
+            commands::tunnel_def_save,
+            commands::tunnel_def_delete,
+            commands::tunnel_start,
+            commands::tunnel_stop,
+            commands::tunnel_status
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement d'Avash");

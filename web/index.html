@@ -378,6 +378,45 @@
       .modal .check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); cursor: pointer; }
       .modal .check input { width: auto; }
       .field-hint { font-size: 11px; color: var(--text-dim); opacity: .85; }
+
+      /* ===== Tunnels ===== */
+      .tunnel-list { display: flex; flex-direction: column; gap: 6px; }
+      .tunnel-row {
+        display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: center;
+        padding: 9px 12px; border-radius: 9px; background: var(--card);
+        border: 1px solid var(--border-soft, var(--border)); font-size: 12.5px;
+      }
+      .tunnel-row.alive { border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+      .tunnel-row.dead { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
+      .tunnel-row .tdot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint, var(--text-dim)); opacity: .5; }
+      .tunnel-row.alive .tdot { background: var(--ok); opacity: 1; box-shadow: 0 0 6px var(--ok); }
+      .tunnel-row.dead .tdot { background: var(--err); opacity: 1; }
+      .tunnel-row .tmain { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+      .tunnel-row .ttitle { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tunnel-row .tflag {
+        font-family: var(--mono); font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 5px;
+        background: var(--accent-soft); color: var(--accent); flex-shrink: 0;
+      }
+      .tunnel-row .tdesc, .tunnel-row .tstats { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tunnel-row .terr { font-size: 11px; color: var(--err); white-space: normal; }
+      .tunnel-row .tacts { display: flex; gap: 4px; }
+      .tbtn {
+        border: 1px solid var(--border); background: transparent; color: var(--text-dim);
+        border-radius: 7px; padding: 5px 9px; font-size: 12px; cursor: pointer; font-family: inherit;
+      }
+      .tbtn:hover { color: var(--text); border-color: var(--accent-line, var(--accent)); }
+      .tbtn.go { color: var(--ok); }
+      .tbtn.stop { color: var(--warn, #e8b765); }
+      .tbtn.danger:hover { color: var(--err); border-color: var(--err); }
+      .tbtn:disabled { opacity: .5; cursor: progress; }
+      .tunnel-empty { padding: 10px 4px; font-size: 12px; color: var(--text-dim); }
+      .tunnel-target { display: grid; grid-template-columns: 1fr 110px; gap: 10px; }
+      .key-block select#t-alias { width: 100%; }
+      .host .tun {
+        margin-left: auto; flex-shrink: 0; font-size: 10.5px; font-family: var(--mono);
+        color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent);
+        padding: 1px 6px; border-radius: 6px;
+      }
       .modal code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
     
       /* --- Recherche dans le terminal --- */
@@ -435,6 +474,7 @@
       <div id="host-list" class="host-list"></div>
       <button id="manual-btn" class="manual-btn" type="button">＋ Connexion directe</button>
       <button id="keys-btn" class="manual-btn" type="button">🔑 Mes clés SSH</button>
+      <button id="tunnels-btn" class="manual-btn" type="button">🔀 Tunnels</button>
       <div class="footer"><span id="host-count">—</span><span>avash</span></div>
     </aside>
 
@@ -615,9 +655,57 @@
     <div class="ctx-menu" id="host-context">
       <div class="ctx-item" data-act="connect">Se connecter</div>
       <div class="ctx-item" data-act="edit">Modifier…</div>
+      <div class="ctx-item" data-act="tunnels">Tunnels…</div>
       <div class="ctx-item" data-act="forget">Oublier le mot de passe</div>
       <div class="ctx-sep"></div>
       <div class="ctx-item danger" data-act="delete">Supprimer l'hôte</div>
+    </div>
+    <div class="modal-backdrop" id="tunnels-modal">
+      <div class="modal modal-wide">
+        <h2>Tunnels SSH</h2>
+        <p class="modal-hint">Un tunnel vit sur sa propre connexion : fermer un onglet ne le coupe pas.</p>
+
+        <div class="tunnel-list" id="tunnel-list"></div>
+
+        <details class="key-block" id="tunnel-block">
+          <summary id="tunnel-form-title">Nouveau tunnel</summary>
+          <form id="tunnel-form" autocomplete="off">
+            <input type="hidden" id="t-id" />
+            <label>Hôte
+              <select id="t-alias" required></select>
+            </label>
+            <div class="auth-switch">
+              <label class="radio"><input type="radio" name="tkind" value="local" checked /> Local <code>-L</code></label>
+              <label class="radio"><input type="radio" name="tkind" value="remote" /> Distant <code>-R</code></label>
+              <label class="radio"><input type="radio" name="tkind" value="dynamic" /> SOCKS <code>-D</code></label>
+            </div>
+            <p class="field-hint" id="t-kind-hint"></p>
+            <label><span id="t-bind-label">Port local d'écoute</span>
+              <input id="t-bind" type="number" min="1" max="65535" placeholder="8080" required />
+            </label>
+            <div class="tunnel-target" id="t-target-row">
+              <label><span id="t-host-label">Destination (vue du serveur)</span>
+                <input id="t-host" placeholder="localhost" />
+              </label>
+              <label>Port
+                <input id="t-port" type="number" min="1" max="65535" placeholder="5432" />
+              </label>
+            </div>
+            <label>Nom <span class="field-hint">(optionnel)</span>
+              <input id="t-name" placeholder="Base de prod" />
+            </label>
+            <p class="modal-error" id="t-error" hidden></p>
+            <div class="modal-actions">
+              <button type="button" class="btn-ghost" id="t-reset" hidden>Annuler la modification</button>
+              <button type="submit" class="btn-primary" id="t-submit">Enregistrer</button>
+            </div>
+          </form>
+        </details>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="t-close">Fermer</button>
+        </div>
+      </div>
     </div>
     <div class="modal-backdrop" id="edit-modal">
       <form class="modal" id="edit-form" autocomplete="off">

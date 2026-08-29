@@ -7,6 +7,7 @@ pub mod keys;
 pub mod secrets;
 pub mod sftp;
 pub mod ssh;
+pub mod tunnel;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

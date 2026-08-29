@@ -12,6 +12,9 @@ use tokio::sync::Mutex;
 
 // ---------- Serveur SSH de test ----------
 
+/// Reponses recues par le serveur sur ses canaux `forwarded-tcpip` (test -R).
+static REMOTE_REPLY: Mutex<Vec<Vec<u8>>> = Mutex::const_new(Vec::new());
+
 #[derive(Clone)]
 struct TestSshServer;
 
@@ -119,8 +122,27 @@ impl russh::server::Handler for TestSshSession {
         if self.sftp_channels.lock().await.contains(&channel_id) {
             return Ok(());
         }
+        // Un canal ouvert par le serveur lui-meme (forwarded-tcpip, test -R)
+        // n'est pas dans la table : sa reponse est lue par la tache qui l'a
+        // ouvert, pas renvoyee en echo.
+        if !self.channels.lock().await.contains_key(&channel_id) {
+            return Ok(());
+        }
         let echo = format!("ECHO:{}", String::from_utf8_lossy(data));
         let _ = session.data(channel_id, bytes::Bytes::from(echo.into_bytes()));
+        Ok(())
+    }
+
+    /// Le client a fini d'ecrire : un vrai sshd ferme alors la connexion
+    /// vers la destination, puis le canal. On imite pour que le relais du
+    /// client termine bien sa connexion.
+    async fn channel_eof(
+        &mut self,
+        channel_id: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.channels.lock().await.remove(&channel_id);
+        let _ = session.close(channel_id);
         Ok(())
     }
 
@@ -136,6 +158,67 @@ impl russh::server::Handler for TestSshSession {
         let msg = format!("\r\nRESIZED:{col_width}x{row_height}\r\n");
         let _ = session.data(channel_id, bytes::Bytes::from(msg.into_bytes()));
         Ok(())
+    }
+
+    /// `ssh -L` / `-D` : le client demande a joindre une destination. Le
+    /// serveur de test ne joint rien : il accepte et fait echo (via `data`),
+    /// ce qui suffit a prouver que les octets traversent le tunnel.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // Une destination sentinelle simule un refus (hote injoignable).
+        if host_to_connect == "injoignable" {
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+            return Ok(());
+        }
+        reply.accept().await;
+        let _ = port_to_connect;
+        self.channels.lock().await.insert(channel.id(), channel);
+        Ok(())
+    }
+
+    /// `ssh -R` : le client demande qu'on ecoute pour lui. Le serveur de test
+    /// n'ecoute rien : il ouvre aussitot un canal `forwarded-tcpip` vers le
+    /// client, envoie « hello » et renvoie la reponse recue dans un second
+    /// message, pour que le test constate le trajet complet.
+    async fn tcpip_forward(
+        &mut self,
+        _address: &str,
+        port: &mut u32,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        if *port == 0 {
+            *port = 40_000;
+        }
+        let port = *port;
+        let handle = session.handle();
+        tokio::spawn(async move {
+            // Laisse au client le temps d'enregistrer la redirection.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let Ok(mut ch) = handle
+                .channel_open_forwarded_tcpip("localhost", port, "10.9.8.7", 5555)
+                .await
+            else {
+                return;
+            };
+            let _ = ch.data(&b"hello"[..]).await;
+            // Relit la reponse et la stocke pour le test.
+            while let Some(msg) = ch.wait().await {
+                if let russh::ChannelMsg::Data { data } = msg {
+                    REMOTE_REPLY.lock().await.push(data.to_vec());
+                    break;
+                }
+            }
+            let _ = ch.close().await;
+        });
+        Ok(true)
     }
 
     async fn subsystem_request(
@@ -588,4 +671,187 @@ async fn dropping_resize_channel_keeps_pty_alive_and_idle() {
         "le PTY doit rester vivant : {:?}",
         String::from_utf8_lossy(&echoed)
     );
+}
+
+// ---------- Tunnels ----------
+
+use avash::tunnel::{Tunnel, TunnelDef, TunnelKind};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+async fn connect_for_tunnel(port: u16) -> avash::ssh::AvashSession {
+    avash::ssh::AvashSession::connect("127.0.0.1", port, &test_auth())
+        .await
+        .expect("connexion")
+}
+
+#[tokio::test]
+async fn tunnel_local_relaie_les_octets_dans_les_deux_sens() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    // Port 0 : on laisse l'OS choisir, puis on lit le port lie.
+    let mut def = TunnelDef::new("test", TunnelKind::Local, 1, "db.interne", 5432, "");
+    def.bind_port = 0;
+    // validate() refuse 0 pour un humain ; ici on contourne pour le test en
+    // ouvrant sur un port libre trouve nous-memes.
+    let free = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    def.bind_port = free.local_addr().unwrap().port();
+    drop(free);
+    let tunnel = Tunnel::open(session, def)
+        .await
+        .expect("ouverture tunnel -L");
+    assert_eq!(tunnel.bound_port(), tunnel.def().bind_port);
+
+    let mut client = tokio::net::TcpStream::connect(("127.0.0.1", tunnel.bound_port()))
+        .await
+        .expect("le port local doit accepter");
+    client.write_all(b"ping").await.unwrap();
+    let mut buf = vec![0u8; 64];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(3), client.read(&mut buf))
+        .await
+        .expect("reponse dans les temps")
+        .unwrap();
+    assert_eq!(
+        &buf[..n],
+        b"ECHO:ping",
+        "les octets doivent traverser le tunnel"
+    );
+    drop(client);
+
+    // Les compteurs refletent la connexion.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let snap = tunnel.snapshot();
+    assert!(snap.alive);
+    assert_eq!(snap.total, 1);
+    assert_eq!(snap.active, 0, "connexion terminee");
+    assert_eq!(snap.bytes_up, 4);
+    assert_eq!(snap.bytes_down, "ECHO:ping".len() as u64);
+
+    tunnel.close().await;
+}
+
+#[tokio::test]
+async fn tunnel_local_signale_une_destination_injoignable() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let free = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let bind = free.local_addr().unwrap().port();
+    drop(free);
+    let def = TunnelDef::new("test", TunnelKind::Local, bind, "injoignable", 1, "");
+    let tunnel = Tunnel::open(session, def).await.unwrap();
+
+    let mut client = tokio::net::TcpStream::connect(("127.0.0.1", bind))
+        .await
+        .unwrap();
+    // Le serveur refuse le canal : notre cote ferme la connexion locale.
+    let mut buf = [0u8; 8];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(3), client.read(&mut buf))
+        .await
+        .expect("fermeture dans les temps")
+        .unwrap();
+    assert_eq!(n, 0, "connexion fermee sans donnees");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let snap = tunnel.snapshot();
+    assert!(snap.alive, "le tunnel lui-meme reste debout");
+    assert!(
+        snap.last_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("injoignable:1"),
+        "l'erreur doit nommer la destination : {:?}",
+        snap.last_error
+    );
+    tunnel.close().await;
+}
+
+#[tokio::test]
+async fn tunnel_dynamique_negocie_socks5_puis_relaie() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let free = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let bind = free.local_addr().unwrap().port();
+    drop(free);
+    let def = TunnelDef::new("test", TunnelKind::Dynamic, bind, "", 0, "");
+    let tunnel = Tunnel::open(session, def).await.unwrap();
+
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", bind))
+        .await
+        .unwrap();
+    c.write_all(&[5, 1, 0]).await.unwrap();
+    let mut rep = [0u8; 2];
+    c.read_exact(&mut rep).await.unwrap();
+    assert_eq!(rep, [5, 0]);
+    let mut req = vec![5, 1, 0, 3, 9];
+    req.extend_from_slice(b"intranet.");
+    req.extend_from_slice(&80u16.to_be_bytes());
+    c.write_all(&req).await.unwrap();
+    let mut ok = [0u8; 10];
+    c.read_exact(&mut ok).await.unwrap();
+    assert_eq!(ok[1], 0, "CONNECT accepte");
+
+    c.write_all(b"GET /").await.unwrap();
+    let mut buf = vec![0u8; 64];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(3), c.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&buf[..n], b"ECHO:GET /");
+    tunnel.close().await;
+}
+
+#[tokio::test]
+async fn tunnel_distant_relaie_vers_un_service_local() {
+    // Service local que le serveur doit atteindre a travers nous.
+    let local = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let local_port = local.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut s, _) = local.accept().await.unwrap();
+        let mut buf = [0u8; 16];
+        let n = s.read(&mut buf).await.unwrap();
+        let up = String::from_utf8_lossy(&buf[..n]).to_uppercase();
+        s.write_all(up.as_bytes()).await.unwrap();
+    });
+
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let def = TunnelDef::new(
+        "test",
+        TunnelKind::Remote,
+        40_000,
+        "127.0.0.1",
+        local_port,
+        "",
+    );
+    let tunnel = Tunnel::open(session, def).await.expect("ouverture -R");
+    assert_eq!(tunnel.bound_port(), 40_000);
+
+    // Le serveur de test ouvre le canal de lui-meme et attend la reponse.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if let Some(reply) = REMOTE_REPLY.lock().await.first().cloned() {
+            assert_eq!(
+                reply, b"HELLO",
+                "la reponse du service local doit revenir au serveur"
+            );
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "aucune reponse recue via -R"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let snap = tunnel.snapshot();
+    assert_eq!(snap.total, 1);
+    assert_eq!(snap.bytes_down, 5, "« hello » vers le service local");
+    assert_eq!(snap.bytes_up, 5, "« HELLO » vers le serveur");
+    tunnel.close().await;
 }

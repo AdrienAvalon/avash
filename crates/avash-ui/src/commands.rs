@@ -1,6 +1,7 @@
-//! Commandes Tauri d'Avash : hôtes, one-shot, sessions PTY, SFTP.
+//! Commandes Tauri d'Avash : hôtes, one-shot, sessions PTY, SFTP, tunnels.
 
 use avash::ssh::AvashSession;
+use avash::tunnel::{Tunnel, TunnelDef, TunnelKind, TunnelSnapshot};
 use avash::{parse_ssh_config, sftp::SftpHandle, SshHost};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -536,9 +537,154 @@ pub async fn sftp_upload(
         .map_err(|e| e.to_string())
 }
 
+// ---------- Tunnels ----------
+
+/// Tunnels ouverts, par identifiant de definition. Independants des onglets.
+pub struct TunnelStore {
+    pub inner: Mutex<HashMap<String, Tunnel>>,
+}
+
+/// Etat d'un tunnel ouvert, tel que l'interface l'affiche.
+#[derive(serde::Serialize)]
+pub struct TunnelStatus {
+    pub id: String,
+    #[serde(flatten)]
+    pub snapshot: TunnelSnapshot,
+}
+
+fn parse_kind(kind: &str) -> Result<TunnelKind, String> {
+    match kind {
+        "local" => Ok(TunnelKind::Local),
+        "remote" => Ok(TunnelKind::Remote),
+        "dynamic" => Ok(TunnelKind::Dynamic),
+        other => Err(format!("Type de tunnel inconnu : {other}")),
+    }
+}
+
+/// Definitions enregistrees, tous hotes confondus.
+#[tauri::command]
+pub fn tunnel_defs() -> Result<Vec<TunnelDef>, String> {
+    avash::tunnel::load_defs().map_err(|e| e.to_string())
+}
+
+/// Cree (`id` absent) ou modifie une definition.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn tunnel_def_save(
+    id: Option<String>,
+    alias: String,
+    kind: String,
+    bind_port: u16,
+    target_host: Option<String>,
+    target_port: Option<u16>,
+    name: Option<String>,
+) -> Result<TunnelDef, String> {
+    let kind = parse_kind(&kind)?;
+    // L'hote doit exister : un tunnel vers un alias fantome echouerait plus
+    // tard avec un message moins clair.
+    find_host(&alias)?;
+    let mut def = TunnelDef::new(
+        &alias,
+        kind,
+        bind_port,
+        target_host.as_deref().unwrap_or(""),
+        target_port.unwrap_or(0),
+        name.as_deref().unwrap_or(""),
+    );
+    if let Some(id) = id.filter(|i| !i.is_empty()) {
+        def.id = id;
+    }
+    avash::tunnel::upsert_def_in(&avash::tunnel::defs_path(), def.clone())
+        .map_err(|e| e.to_string())?;
+    Ok(def)
+}
+
+/// Supprime une definition ; ferme d'abord le tunnel s'il tourne.
+#[tauri::command]
+pub async fn tunnel_def_delete(
+    tunnels: tauri::State<'_, TunnelStore>,
+    id: String,
+) -> Result<(), String> {
+    let running = tunnels.inner.lock().unwrap().remove(&id);
+    if let Some(t) = running {
+        t.close().await;
+    }
+    avash::tunnel::remove_def_in(&avash::tunnel::defs_path(), &id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Ouvre un tunnel. `password` suit la meme convention que `pty_open` : le
+/// marqueur `PASSWORD_REQUIRED` dans l'erreur invite l'interface a le
+/// demander puis a reessayer.
+#[tauri::command]
+pub async fn tunnel_start(
+    tunnels: tauri::State<'_, TunnelStore>,
+    id: String,
+    password: Option<String>,
+) -> Result<TunnelStatus, String> {
+    let def = avash::tunnel::load_defs()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|d| d.id == id)
+        .ok_or_else(|| format!("Tunnel inconnu : {id}"))?;
+    let mut target = Target::from_alias(&def.alias)?;
+    if let Some(p) = password.filter(|p| !p.is_empty()) {
+        target.password = Some(p);
+    }
+    // Un tunnel deja ouvert (ou mort) sous cet id est remplace : c'est le
+    // geste « relancer » de l'interface.
+    let previous = tunnels.inner.lock().unwrap().remove(&id);
+    if let Some(t) = previous {
+        t.close().await;
+    }
+    let session = AvashSession::connect(&target.addr, target.port, &target.auth())
+        .await
+        .map_err(|e| e.to_string())?;
+    let tunnel = Tunnel::open(session, def)
+        .await
+        .map_err(|e| e.to_string())?;
+    let snapshot = tunnel.snapshot();
+    tunnels.inner.lock().unwrap().insert(id.clone(), tunnel);
+    Ok(TunnelStatus { id, snapshot })
+}
+
+#[tauri::command]
+pub async fn tunnel_stop(tunnels: tauri::State<'_, TunnelStore>, id: String) -> Result<(), String> {
+    let t = tunnels.inner.lock().unwrap().remove(&id);
+    if let Some(t) = t {
+        t.close().await;
+    }
+    Ok(())
+}
+
+/// Etat de tous les tunnels ouverts (les morts inclus, marques `alive: false`,
+/// jusqu'a ce que l'utilisateur les relance ou les arrete).
+#[tauri::command]
+#[must_use]
+pub fn tunnel_status(tunnels: tauri::State<'_, TunnelStore>) -> Vec<TunnelStatus> {
+    tunnels
+        .inner
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, t)| TunnelStatus {
+            id: id.clone(),
+            snapshot: t.snapshot(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_kind_reconnait_les_trois_types_et_refuse_le_reste() {
+        assert_eq!(parse_kind("local").unwrap(), TunnelKind::Local);
+        assert_eq!(parse_kind("remote").unwrap(), TunnelKind::Remote);
+        assert_eq!(parse_kind("dynamic").unwrap(), TunnelKind::Dynamic);
+        assert!(parse_kind("socks").is_err());
+    }
 
     /// HOME est global au processus : deux tests qui le modifient en parallele
     /// se marchent dessus. Ce verrou les serialise (les autres tests restent

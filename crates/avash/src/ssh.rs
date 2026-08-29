@@ -3,7 +3,9 @@
 //! v0.3 : write stdin réel, `window_change` (resize), `known_hosts` strict.
 
 use anyhow::{anyhow, Context, Result};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -39,11 +41,91 @@ pub struct ClientAuth {
 /// c'est l'avertissement le plus important de l'application.
 type HostKeyVerdict = Arc<std::sync::Mutex<Option<String>>>;
 
+/// Compteurs d'un tunnel, partages entre le relais et l'interface.
+///
+/// Atomiques : mis a jour depuis des taches concurrentes, lus a tout moment
+/// par un instantane sans verrou.
+#[derive(Debug, Default)]
+pub struct ForwardCounters {
+    /// Connexions en cours.
+    pub active: AtomicU64,
+    /// Connexions relayees depuis l'ouverture.
+    pub total: AtomicU64,
+    /// Octets client -> destination.
+    pub bytes_up: AtomicU64,
+    /// Octets destination -> client.
+    pub bytes_down: AtomicU64,
+}
+
+impl ForwardCounters {
+    /// Relaie `a` <-> `b` jusqu'a la fin de la connexion, en comptant.
+    ///
+    /// Ecrit a la main plutot que via `copy_bidirectional` : celui-ci ne rend
+    /// les volumes qu'a la fin, alors qu'un tunnel porte souvent des
+    /// connexions longues (base de donnees, VNC) que l'interface doit voir
+    /// progresser.
+    pub async fn relay<A, B>(&self, a: &mut A, b: &mut B)
+    where
+        A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
+        B: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        self.active.fetch_add(1, Ordering::Relaxed);
+        self.total.fetch_add(1, Ordering::Relaxed);
+        let mut buf_a = vec![0u8; 32 * 1024];
+        let mut buf_b = vec![0u8; 32 * 1024];
+        let (mut a_done, mut b_done) = (false, false);
+        while !(a_done && b_done) {
+            tokio::select! {
+                r = a.read(&mut buf_a), if !a_done => match r {
+                    Ok(0) | Err(_) => {
+                        a_done = true;
+                        // Fin de lecture d'un cote : on signale la fin
+                        // d'ecriture a l'autre, qui repondra par son EOF.
+                        let _ = b.shutdown().await;
+                    }
+                    Ok(n) => {
+                        if b.write_all(&buf_a[..n]).await.is_err() { break; }
+                        self.bytes_up.fetch_add(n as u64, Ordering::Relaxed);
+                    }
+                },
+                r = b.read(&mut buf_b), if !b_done => match r {
+                    Ok(0) | Err(_) => {
+                        b_done = true;
+                        let _ = a.shutdown().await;
+                    }
+                    Ok(n) => {
+                        if a.write_all(&buf_b[..n]).await.is_err() { break; }
+                        self.bytes_down.fetch_add(n as u64, Ordering::Relaxed);
+                    }
+                },
+            }
+        }
+        self.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Destination locale d'une redirection distante (`ssh -R`).
+struct RemoteTarget {
+    host: String,
+    port: u16,
+    counters: Arc<ForwardCounters>,
+}
+
+/// Redirections distantes actives sur une session : port ecoute par le
+/// serveur -> destination locale a joindre pour chaque connexion.
+///
+/// Le serveur ouvre lui-meme un canal `forwarded-tcpip` a chaque client qui
+/// frappe a ce port ; le handler consulte cette table pour savoir vers quelle
+/// adresse locale relayer.
+type RemoteForwards = Arc<std::sync::Mutex<HashMap<u32, Arc<RemoteTarget>>>>;
+
 /// Handler d'auth + vérification `known_hosts`.
 struct AvashAuth {
     host: String,
     port: u16,
     verdict: HostKeyVerdict,
+    forwards: RemoteForwards,
 }
 
 impl russh::client::Handler for AvashAuth {
@@ -106,20 +188,69 @@ impl russh::client::Handler for AvashAuth {
             }
         }
     }
+
+    /// Le serveur relaie une connexion recue sur un port redirige (`-R`).
+    ///
+    /// On ne relaie que vers une destination enregistree par `remote_forward` :
+    /// un serveur malveillant ne peut pas nous faire ouvrir une connexion
+    /// locale arbitraire.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let dest = self.forwards.lock().unwrap().get(&connected_port).cloned();
+        let Some(target) = dest else {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        // On accepte AVANT de joindre la destination : le serveur attend une
+        // reponse rapide, et un echec local ferme simplement le canal.
+        reply.accept().await;
+        tokio::spawn(async move {
+            let Ok(mut local) =
+                tokio::net::TcpStream::connect((target.host.as_str(), target.port)).await
+            else {
+                let _ = channel.close().await;
+                return;
+            };
+            let mut remote = channel.into_stream();
+            target.counters.relay(&mut remote, &mut local).await;
+        });
+        Ok(())
+    }
 }
 
 pub struct AvashSession {
     session: russh::client::Handle<AvashAuth>,
+    forwards: RemoteForwards,
 }
 
 impl AvashSession {
     pub async fn connect(host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
-        let config = Arc::new(russh::client::Config::default());
+        let config = Arc::new(russh::client::Config {
+            // Un tunnel ou un terminal inactif derriere un NAT se fait couper
+            // en silence apres quelques minutes. Le keepalive detecte la
+            // coupure (3 pings sans reponse) au lieu de laisser une session
+            // zombie que l'utilisateur croit vivante.
+            keepalive_interval: Some(std::time::Duration::from_secs(30)),
+            keepalive_max: 3,
+            ..Default::default()
+        });
         let verdict: HostKeyVerdict = Arc::new(std::sync::Mutex::new(None));
+        let forwards: RemoteForwards = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let handler = AvashAuth {
             host: host.to_string(),
             port,
             verdict: verdict.clone(),
+            forwards: forwards.clone(),
         };
         let mut session = match russh::client::connect(config, (host, port), handler).await {
             Ok(s) => s,
@@ -133,7 +264,7 @@ impl AvashSession {
             }
         };
         Self::authenticate(&mut session, auth).await?;
-        Ok(Self { session })
+        Ok(Self { session, forwards })
     }
 
     async fn authenticate(
@@ -281,9 +412,86 @@ impl AvashSession {
         })
     }
 
-    pub async fn disconnect(self) -> Result<()> {
+    pub async fn disconnect(&self) -> Result<()> {
         self.session
             .disconnect(russh::Disconnect::ByApplication, "au revoir", "")
+            .await?;
+        Ok(())
+    }
+
+    // ---------- Redirections de port ----------
+
+    /// Ouvre un canal `direct-tcpip` : le serveur joint `host:port` pour nous
+    /// (`ssh -L` et `-D`). Le canal se manipule comme un flux TCP.
+    pub async fn open_direct_tcpip(
+        &self,
+        host: &str,
+        port: u16,
+        originator: std::net::SocketAddr,
+    ) -> Result<russh::Channel<russh::client::Msg>> {
+        self.session
+            .channel_open_direct_tcpip(
+                host,
+                u32::from(port),
+                originator.ip().to_string(),
+                u32::from(originator.port()),
+            )
+            .await
+            .with_context(|| format!("Le serveur n'a pas pu joindre {host}:{port}"))
+    }
+
+    /// Demande au serveur d'ecouter sur `bind_addr:port` (`ssh -R`) et de
+    /// relayer chaque connexion vers `local_host:local_port` chez nous.
+    ///
+    /// Rend le port effectivement ecoute (le serveur en choisit un si `port`
+    /// vaut 0).
+    pub async fn remote_forward(
+        &self,
+        bind_addr: &str,
+        port: u16,
+        local_host: &str,
+        local_port: u16,
+        counters: Arc<ForwardCounters>,
+    ) -> Result<u16> {
+        // Enregistre avant la demande : une connexion peut arriver des que le
+        // serveur ecoute, avant meme que sa reponse nous parvienne.
+        let dest = Arc::new(RemoteTarget {
+            host: local_host.to_string(),
+            port: local_port,
+            counters,
+        });
+        self.forwards
+            .lock()
+            .unwrap()
+            .insert(u32::from(port), dest.clone());
+        let bound = self
+            .session
+            .tcpip_forward(bind_addr, u32::from(port))
+            .await
+            .with_context(|| format!("Le serveur refuse d'écouter sur {bind_addr}:{port}"))?;
+        // Port 0 : le serveur a choisi, on retient le vrai numero.
+        let bound = if port == 0 && bound != 0 {
+            let mut f = self.forwards.lock().unwrap();
+            f.remove(&0);
+            f.insert(bound, dest);
+            u16::try_from(bound).unwrap_or(0)
+        } else {
+            port
+        };
+        Ok(bound)
+    }
+
+    /// La connexion au serveur est-elle tombee (reseau, keepalive, kill) ?
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.session.is_closed()
+    }
+
+    /// Annule une redirection distante.
+    pub async fn cancel_remote_forward(&self, bind_addr: &str, port: u16) -> Result<()> {
+        self.forwards.lock().unwrap().remove(&u32::from(port));
+        self.session
+            .cancel_tcpip_forward(bind_addr, u32::from(port))
             .await?;
         Ok(())
     }

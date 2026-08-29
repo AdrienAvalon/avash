@@ -87,3 +87,60 @@ export function isPasswordRequired(errorMessage: string): boolean {
 export function stripHtml(text: string): string {
   return text.replace(/[<>&]/g, "");
 }
+
+// ---------- Tunnels ----------
+
+export type TunnelKind = "local" | "remote" | "dynamic";
+
+export type TunnelDef = {
+  id: string;
+  alias: string;
+  kind: TunnelKind;
+  bind_port: number;
+  target_host: string;
+  target_port: number;
+  name: string;
+};
+
+export type TunnelStatus = {
+  id: string;
+  bound_port: number;
+  active: number;
+  total: number;
+  bytes_up: number;
+  bytes_down: number;
+  alive: boolean;
+  last_error: string | null;
+};
+
+/** Lettre `ssh` correspondante : repere familier pour qui connait la ligne de commande. */
+export function tunnelFlag(kind: TunnelKind): string {
+  return { local: "-L", remote: "-R", dynamic: "-D" }[kind];
+}
+
+/** Resume dans le sens du trafic, identique a `TunnelDef::describe` cote Rust. */
+export function describeTunnel(d: TunnelDef): string {
+  switch (d.kind) {
+    case "local":
+      return `localhost:${d.bind_port} → ${d.alias} → ${d.target_host}:${d.target_port}`;
+    case "remote":
+      return `${d.alias}:${d.bind_port} → localhost → ${d.target_host}:${d.target_port}`;
+    case "dynamic":
+      return `SOCKS5 localhost:${d.bind_port} → ${d.alias}`;
+  }
+}
+
+/** « 2 conn · ↑1.0 Ko ↓3.4 Ko » — compact, pour une ligne de liste. */
+export function tunnelTraffic(s: TunnelStatus): string {
+  const conn = s.active > 0 ? `${s.active} conn` : `${s.total} au total`;
+  return `${conn} · ↑${humanSize(s.bytes_up)} ↓${humanSize(s.bytes_down)}`;
+}
+
+/** Nombre de tunnels vivants par hote, pour le badge de la barre laterale. */
+export function activeTunnelsByHost(defs: TunnelDef[], status: Map<string, TunnelStatus>): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const d of defs) {
+    if (status.get(d.id)?.alive) out.set(d.alias, (out.get(d.alias) ?? 0) + 1);
+  }
+  return out;
+}
