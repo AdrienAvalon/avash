@@ -7,7 +7,7 @@
 //!
 //! Messages WebSocket (binaires, auto-délimités) :
 //!   sidecar -> app : [1]=CONNECTED w:u16 h:u16 · [2]=FRAME x,y,w,h:u16 + RGBA · [3]=ERROR utf8
-//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16 · [4]KEY sc:u16,down · [5]RESIZE w:u16,h:u16
+//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16 · [4]KEY sc:u16,down · [5]RESIZE w,h · [6]ACK · [8]CLIPBOARD utf8 · [9]REFRESH
 //!
 //! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png]
 
@@ -510,6 +510,23 @@ async fn main() -> Result<()> {
                             }
                             let _ = clip_tx.send(ClipReq::Advertise);
                         }
+                    }
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&9) => {
+                        // REFRESH : l'onglet a été réaffiché et son canvas peut être
+                        // vide ; on renvoie l'image entière, hors cadencement.
+                        let full = InclusiveRectangle {
+                            left: 0,
+                            top: 0,
+                            right: image.width().saturating_sub(1),
+                            bottom: image.height().saturating_sub(1),
+                        };
+                        let msg = frame_msg(&image, &full);
+                        stat_bytes += msg.len() as u64;
+                        stat_frames += 1;
+                        sink.send(Message::Binary(msg)).await.context("envoi refresh")?;
+                        awaiting_ack = true;
+                        last_send = Instant::now();
+                        dirty = None;
                     }
                     Some(Ok(Message::Binary(b))) => {
                         let events = db.apply(input_ops(&b));

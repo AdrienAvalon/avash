@@ -679,6 +679,12 @@ function focusSession(id: number) {
     (s.term.element?.parentElement as HTMLElement).style.display = active ? "block" : "none";
     if (active) focusTerminal(s);
   });
+  // Masquer les bureaux RDP (conteneurs absolus qui recouvriraient le terminal).
+  for (const r of rdpSessions.values()) {
+    (r.canvas.parentElement as HTMLElement).style.display = "none";
+    r.tab.classList.remove("active");
+  }
+  $("terminal-empty").style.display = "none";
   const cur = state.sessions.get(id);
   sftpSyncButton();
   if (sftp.open && cur) sftpOpenAt(cur, cur.sftpPath);
@@ -2601,7 +2607,7 @@ async function openRdp(t: RdpTarget) {
   };
   const ro = new ResizeObserver(() => {
     window.clearTimeout(resizeTimer);
-    resizeTimer = window.setTimeout(sendResize, 250);
+    resizeTimer = window.setTimeout(sendResize, 400);
   });
   ro.observe($("terminal"));
   rdpSessions.get(id)!.ro = ro;
@@ -2690,12 +2696,19 @@ async function openRdp(t: RdpTarget) {
 function focusRdp(id: number) {
   state.active = id;
   for (const [sid, s] of rdpSessions) {
-    s.tab.classList.toggle("active", sid === id);
-    (s.canvas.parentElement as HTMLElement).style.display = sid === id ? "flex" : "none";
-    if (sid === id) s.canvas.focus();
+    const active = sid === id;
+    s.tab.classList.toggle("active", active);
+    (s.canvas.parentElement as HTMLElement).style.display = active ? "flex" : "none";
+    if (active) {
+      s.canvas.focus();
+      // Un canvas caché peut avoir perdu son contenu (backing-store WebKitGTK) :
+      // on demande au sidecar de renvoyer l'image entière. Message [9].
+      if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([9]));
+    }
   }
   // Masquer les terminaux PTY.
   state.sessions.forEach((s) => { (s.term.element?.parentElement as HTMLElement).style.display = "none"; s.tab.classList.remove("active"); });
+  $("terminal-empty").style.display = "none";
 }
 
 function closeRdp(id: number) {
