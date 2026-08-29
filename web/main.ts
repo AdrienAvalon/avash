@@ -4,6 +4,8 @@ import "@xterm/xterm/css/xterm.css";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, type Host } from "./filters";
@@ -14,7 +16,13 @@ type Session = {
   term: Terminal;
   fit: FitAddon;
   tab: HTMLElement;
+  search: SearchAddon;
 };
+
+/** Taille de police partagée par tous les terminaux (Ctrl +/−). */
+let terminalFontSize = 14;
+const FONT_MIN = 9;
+const FONT_MAX = 28;
 
 const state = {
   hosts: [] as Host[],
@@ -145,7 +153,7 @@ function newSessionShell(label: string) {
     theme: THEME,
     fontFamily: FONT_STACK,
     // Taille entiere : une valeur fractionnaire donne un rendu flou.
-    fontSize: 14,
+    fontSize: terminalFontSize,
     lineHeight: 1.25,
     letterSpacing: 0,
     fontWeight: "400",
@@ -201,6 +209,55 @@ function newSessionShell(label: string) {
     /* rendu DOM par defaut */
   }
 
+  const search = new SearchAddon();
+  term.loadAddon(search);
+  // Liens cliquables : ouverts dans le navigateur du systeme, jamais dans la
+  // webview (qui a acces a invoke). openUrl passe par l'API Tauri.
+  term.loadAddon(
+    new WebLinksAddon((_e, uri) => {
+      invoke("open_external", { url: uri }).catch(() => {});
+    }),
+  );
+
+  // Copier/coller — indispensable, et attendu par tout le monde :
+  //   Ctrl+Shift+C copie la selection, Ctrl+Shift+V colle.
+  // On n'intercepte QUE ces combinaisons ; tout le reste (dont Ctrl+C
+  // d'interruption) part au shell distant.
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== "keydown") return true;
+    const mod = e.ctrlKey && e.shiftKey;
+    if (mod && e.code === "KeyC") {
+      const sel = term.getSelection();
+      if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+      return false;
+    }
+    if (mod && e.code === "KeyV") {
+      navigator.clipboard.readText().then(
+        (t) => invoke("pty_write", { id, data: t }).catch(() => {}),
+        () => {},
+      );
+      return false;
+    }
+    if (mod && e.code === "KeyF") {
+      openTermSearch(id);
+      return false;
+    }
+    // Ctrl +/- / 0 : zoom de police, comme un navigateur.
+    if (e.ctrlKey && (e.code === "Equal" || e.code === "NumpadAdd")) {
+      setFontSize(terminalFontSize + 1);
+      return false;
+    }
+    if (e.ctrlKey && (e.code === "Minus" || e.code === "NumpadSubtract")) {
+      setFontSize(terminalFontSize - 1);
+      return false;
+    }
+    if (e.ctrlKey && e.code === "Digit0") {
+      setFontSize(14);
+      return false;
+    }
+    return true;
+  });
+
   term.onData((data) => {
     invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${e}\r\n`));
   });
@@ -208,7 +265,7 @@ function newSessionShell(label: string) {
     invoke("pty_resize", { id, cols, rows }).catch(() => {});
   });
 
-  const s: Session = { id, alias: label, term, fit, tab };
+  const s: Session = { id, alias: label, term, fit, tab, search };
   state.sessions.set(id, s);
   state.active = id;
   focusTerminal(s);
@@ -906,4 +963,94 @@ passModal().addEventListener("click", (e) => {
 });
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && passModal().classList.contains("open")) passClose(null);
+});
+
+
+// ---------- Zoom de police, recherche, menu clic droit ----------
+
+/** Applique une taille de police à tous les terminaux et la borne. */
+function setFontSize(px: number) {
+  terminalFontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
+  for (const s of state.sessions.values()) {
+    s.term.options.fontSize = terminalFontSize;
+    s.fit.fit();
+    invoke("pty_resize", { id: s.id, cols: s.term.cols, rows: s.term.rows }).catch(() => {});
+  }
+}
+
+/** Ouvre la barre de recherche du terminal actif. */
+function openTermSearch(id: number) {
+  if (state.active !== id) return;
+  const bar = $("term-search");
+  bar.classList.add("open");
+  const input = $("term-search-input") as HTMLInputElement;
+  input.value = "";
+  input.focus();
+}
+
+function closeTermSearch() {
+  $("term-search").classList.remove("open");
+  const s = state.active !== null ? state.sessions.get(state.active) : undefined;
+  s?.search.clearDecorations();
+  s?.term.focus();
+}
+
+function runTermSearch(next: boolean) {
+  if (state.active === null) return;
+  const s = state.sessions.get(state.active);
+  if (!s) return;
+  const q = ($("term-search-input") as HTMLInputElement).value;
+  if (!q) return;
+  const opts = { decorations: { matchOverviewRuler: "#8b7cf6", activeMatchColorOverviewRuler: "#a598f8" } };
+  if (next) s.search.findNext(q, opts);
+  else s.search.findPrevious(q, opts);
+}
+
+$("term-search-input").addEventListener("keydown", (e) => {
+  const k = e as KeyboardEvent;
+  if (k.key === "Enter") { k.preventDefault(); runTermSearch(!k.shiftKey); }
+  else if (k.key === "Escape") { k.preventDefault(); closeTermSearch(); }
+});
+$("term-search-next").addEventListener("click", () => runTermSearch(true));
+$("term-search-prev").addEventListener("click", () => runTermSearch(false));
+$("term-search-close").addEventListener("click", closeTermSearch);
+
+// Menu contextuel du terminal : copier / coller / rechercher / tout sélectionner.
+const ctxMenu = () => $("term-context");
+function hideContext() { ctxMenu().classList.remove("open"); }
+
+$("terminal").addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  if (state.active === null) return;
+  const m = ctxMenu();
+  const s = state.sessions.get(state.active);
+  const hasSel = !!s?.term.getSelection();
+  // Griser « copier » sans sélection.
+  (m.querySelector('[data-act="copy"]') as HTMLElement).classList.toggle("disabled", !hasSel);
+  m.style.left = `${(e as MouseEvent).clientX}px`;
+  m.style.top = `${(e as MouseEvent).clientY}px`;
+  m.classList.add("open");
+});
+window.addEventListener("click", hideContext);
+window.addEventListener("blur", hideContext);
+ctxMenu().addEventListener("click", (e) => {
+  const act = (e.target as HTMLElement).closest("[data-act]")?.getAttribute("data-act");
+  const s = state.active !== null ? state.sessions.get(state.active) : undefined;
+  if (!s) return;
+  if (act === "copy") {
+    const sel = s.term.getSelection();
+    if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+  } else if (act === "paste") {
+    navigator.clipboard.readText().then(
+      (t) => invoke("pty_write", { id: s.id, data: t }).catch(() => {}),
+      () => {},
+    );
+  } else if (act === "search") {
+    openTermSearch(s.id);
+  } else if (act === "selectall") {
+    s.term.selectAll();
+  } else if (act === "clear") {
+    s.term.clear();
+  }
+  hideContext();
 });

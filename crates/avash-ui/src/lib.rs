@@ -16,6 +16,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_hosts,
             commands::run_command,
+            commands::open_external,
             commands::pty_open,
             commands::host_needs_password,
             commands::pty_open_manual,

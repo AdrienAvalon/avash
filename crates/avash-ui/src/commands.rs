@@ -835,6 +835,23 @@ mod tests {
         );
         assert!(rendu.contains("masqué"), "{rendu}");
     }
+
+    #[test]
+    fn open_external_refuse_les_schemas_dangereux() {
+        // Un lien du terminal ne doit jamais ouvrir file://, javascript:, etc.
+        for mauvais in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<script>",
+            "vbscript:x",
+            "  file:///home",
+        ] {
+            assert!(
+                open_external(mauvais.into()).is_err(),
+                "devrait refuser : {mauvais}"
+            );
+        }
+    }
 }
 
 // ---------- Clés SSH ----------
@@ -954,4 +971,22 @@ pub fn password_forget(addr: String, port: Option<u16>, user: String) -> Result<
 pub fn password_known(addr: String, port: Option<u16>, user: String) -> bool {
     let id = avash::secrets::account_id(user.trim(), addr.trim(), port.unwrap_or(22));
     avash::secrets::load(&id).is_some()
+}
+
+/// Ouvre une URL dans le navigateur du système, jamais dans la webview.
+///
+/// Un lien cliquable du terminal ne doit pas naviguer dans la fenêtre Avash :
+/// celle-ci a accès à `invoke`. On délègue au système, et on n'ouvre que des
+/// schémas sûrs.
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), String> {
+    let url = url.trim();
+    // Whitelist stricte : ni file://, ni javascript:, ni schéma inconnu.
+    let ok = ["http://", "https://", "mailto:", "ftp://"]
+        .iter()
+        .any(|p| url.starts_with(p));
+    if !ok {
+        return Err(format!("Schéma d'URL non autorisé : {url}"));
+    }
+    open::that(url).map_err(|e| format!("Ouverture impossible : {e}"))
 }
