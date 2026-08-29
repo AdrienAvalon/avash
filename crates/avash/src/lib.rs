@@ -5,6 +5,7 @@ pub(crate) mod testutil;
 
 pub mod keys;
 pub mod osinfo;
+pub mod rdphost;
 pub mod secrets;
 pub mod sftp;
 pub mod snippet;

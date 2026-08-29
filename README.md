@@ -263,6 +263,21 @@ procédure complète (build, vérification, signature, faux positifs AV).
   `SHA256SUMS` (+ signature GPG). Aucun packer, métadonnées complètes : la
   surface de faux positif antivirus est réduite au minimum contrôlable.
 
+## RDP — connexions enregistrées + résolution adaptative (29/08, nuit)
+
+- **Enregistrement** (comme le SSH) : une connexion RDP se sauvegarde dans
+  `~/.config/avash/rdp.yaml`, avec le mot de passe dans le **trousseau système**
+  (compte préfixé `rdp:` pour ne pas entrer en collision avec un compte SSH).
+  Les bureaux enregistrés apparaissent dans une section « Bureaux RDP » de la
+  barre latérale ; double-clic = connexion (mot de passe repris du trousseau,
+  demandé sinon) ; clic droit = connecter / oublier le mot de passe / supprimer.
+- **Résolution adaptative** : plus de taille fixe — le bureau se connecte à la
+  **taille de la zone d'Avash** (natif, net, remplit la fenêtre) et suit la
+  mise à l'échelle CSS quand tu redimensionnes. (Le reflow natif live du serveur
+  via Display Control est une évolution possible.)
+- Validé bout-en-bout : sauvegarde + trousseau (connexion sans re-saisie) +
+  résolution qui remplit la zone.
+
 ## RDP — transport binaire (WebSocket) + plein écran (29/08, nuit)
 
 - **Ultra-performant** : le sidecar sert le bureau à la webview via un

@@ -254,6 +254,8 @@
       border: 1px solid color-mix(in srgb, var(--hue, var(--accent)) 35%, transparent);
     }
     .host .avatar .logo { font-size: 17px; line-height: 1; color: var(--hue); font-weight: 400; }
+    .host .avatar.rdp { background: color-mix(in srgb, var(--accent) 22%, var(--card)); border-color: var(--accent-line); }
+    .host .avatar.rdp .ic-svg { width: 16px; height: 16px; color: var(--accent-soft); }
     .host .avatar .dot {
       position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px;
       border-radius: 50%; border: 2px solid var(--bg-soft); display: none;
@@ -850,20 +852,21 @@
         <label id="m-key-row" hidden>Chemin de la clé privée
           <input id="m-key" name="key" placeholder="~/.ssh/id_ed25519" />
         </label>
+        <label class="check" id="m-rdp-remember-row" hidden>
+          <input type="checkbox" id="m-rdp-remember" />
+          <span>Mémoriser le mot de passe (trousseau système)</span>
+        </label>
+        <label class="check" id="m-rdp-save-row" hidden>
+          <input type="checkbox" id="m-rdp-save" />
+          <span>Enregistrer cette connexion RDP</span>
+        </label>
+        <label id="m-rdp-name-row" hidden>Nom
+          <input id="m-rdp-name" placeholder="Serveur prod" />
+        </label>
 
         <label class="check" id="m-save-row">
           <input type="checkbox" id="m-save" />
           <span>Enregistrer cet hôte dans <code>~/.ssh/config</code></span>
-        </label>
-        <label id="m-res-row" hidden>Résolution du bureau
-          <select id="m-res">
-            <option value="1280x800">1280 × 800</option>
-            <option value="1366x768">1366 × 768</option>
-            <option value="1600x900">1600 × 900</option>
-            <option value="1920x1080">1920 × 1080</option>
-            <option value="2560x1440">2560 × 1440</option>
-            <option value="3440x1440">3440 × 1440 (ultrawide)</option>
-          </select>
         </label>
         <label id="m-alias-row" hidden>Nom à donner à l'hôte
           <input id="m-alias" placeholder="prod-web" />
@@ -950,6 +953,12 @@
       </form>
     </div>
 
+    <div class="ctx-menu" id="rdp-context">
+      <div class="ctx-item" data-act="connect">Se connecter</div>
+      <div class="ctx-item" data-act="forget">Oublier le mot de passe</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item danger" data-act="delete">Supprimer</div>
+    </div>
     <div class="ctx-menu" id="host-context">
       <div class="ctx-item" data-act="connect">Se connecter</div>
       <div class="ctx-item" data-act="edit">Modifier…</div>

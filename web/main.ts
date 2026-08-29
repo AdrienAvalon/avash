@@ -295,6 +295,28 @@ function renderHosts() {
   }
   $("host-count").textContent = String(shown.length);
 
+  // Bureaux RDP enregistrés (filtrés par la recherche aussi).
+  const q = state.filter.trim().toLowerCase();
+  const rdpShown = rdpHostsList.filter((h) => !q || h.name.toLowerCase().includes(q) || h.host.toLowerCase().includes(q) || h.user.toLowerCase().includes(q));
+  if (rdpShown.length > 0) {
+    const title = document.createElement("div");
+    title.className = "section-title";
+    title.innerHTML = `<span>Bureaux RDP</span><span>${rdpShown.length}</span>`;
+    list.appendChild(title);
+    for (const h of rdpShown) {
+      const el = document.createElement("div");
+      el.className = "host";
+      el.innerHTML = `<span class="avatar rdp"><span class="ini logo"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
+      (el.querySelector(".ini") as HTMLElement).innerHTML = ic("monitor");
+      el.querySelector(".alias")!.textContent = h.name;
+      el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
+      el.title = "Double-clic : connexion RDP — clic droit : options";
+      el.addEventListener("dblclick", () => connectRdpSaved(h));
+      el.addEventListener("contextmenu", (e) => { e.preventDefault(); openRdpMenu(h, e as MouseEvent); });
+      list.appendChild(el);
+    }
+  }
+
   // Aucun hote declare : conseiller « double-clic sur un hote » n'aide
   // personne. On oriente vers la seule voie disponible.
   if (state.hosts.length === 0) {
@@ -740,6 +762,7 @@ async function loadHosts() {
   } catch (e) {
     console.warn("Config SSH illisible :", e);
   }
+  rdpHostsList = await invoke<RdpHostT[]>("rdp_hosts").catch(() => []);
   renderHosts();
   refreshEmptyHint();
 }
@@ -1214,10 +1237,12 @@ function manualSyncProto() {
   $("m-key-row").hidden = rdp || (document.querySelector('input[name="auth"]:checked') as HTMLInputElement | null)?.value !== "key";
   $("m-save-row").hidden = rdp;
   $("m-alias-row").hidden = rdp || !($("m-save") as HTMLInputElement).checked;
-  $("m-res-row").hidden = !rdp;
   // Mot de passe toujours visible en RDP (seule auth), sinon selon le mode.
   if (rdp) $("m-password-row").hidden = false;
   else manualSyncAuthRows();
+  $("m-rdp-remember-row").hidden = !rdp;
+  $("m-rdp-save-row").hidden = !rdp;
+  $("m-rdp-name-row").hidden = !rdp || !($("m-rdp-save") as HTMLInputElement).checked;
   ($("m-port") as HTMLInputElement).placeholder = rdp ? "3389" : "22";
   ($("m-password") as HTMLInputElement).placeholder = "";
 }
@@ -1265,9 +1290,22 @@ async function manualSubmit(ev: Event) {
     const password = ($("m-password") as HTMLInputElement).value;
     if (!addr || !user) { manualError().textContent = "Adresse et utilisateur requis."; manualError().hidden = false; return; }
     const portRaw = ($("m-port") as HTMLInputElement).value.trim();
-    const [rw, rh] = ($("m-res") as HTMLSelectElement).value.split("x").map(Number);
+    const rport2 = portRaw ? Number(portRaw) : 3389;
+    const rport = rport2;
+    if (($("m-rdp-save") as HTMLInputElement).checked) {
+      try {
+        await invoke("rdp_host_save", {
+          id: null, name: ($("m-rdp-name") as HTMLInputElement).value.trim(),
+          host: addr, port: rport, user, width: 0, height: 0,
+        });
+        if (($("m-rdp-remember") as HTMLInputElement).checked && password) {
+          await invoke("rdp_password_save", { host: addr, port: rport, user, password }).catch(() => {});
+        }
+        await loadHosts();
+      } catch (e) { manualError().textContent = String(e); manualError().hidden = false; return; }
+    }
     manualClose();
-    await openRdp({ host: addr, port: portRaw ? Number(portRaw) : 3389, user, password, width: rw || 1280, height: rh || 800 });
+    await openRdp({ host: addr, port: rport, user, password });
     return;
   }
   const target = manualReadForm();
@@ -1319,6 +1357,7 @@ document
   .querySelectorAll('input[name="auth"]')
   .forEach((r) => r.addEventListener("change", manualSyncAuthRows));
 document.querySelectorAll('input[name="proto"]').forEach((r) => r.addEventListener("change", manualSyncProto));
+$("m-rdp-save").addEventListener("change", manualSyncProto);
 // Fermeture au clic hors du cadre, et a Echap.
 manualModal().addEventListener("click", (e) => {
   if (e.target === manualModal()) manualClose();
@@ -2448,8 +2487,10 @@ $("app-version").addEventListener("click", checkForUpdates);
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
 
-type RdpTarget = { host: string; port: number | null; user: string; password: string; width: number; height: number };
+type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number };
 
+type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number };
+let rdpHostsList: RdpHostT[] = [];
 const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null }>();
 
 async function openRdp(t: RdpTarget) {
@@ -2465,13 +2506,20 @@ async function openRdp(t: RdpTarget) {
   tabs.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
   tabs.appendChild(tab);
 
+  // Résolution = taille de la zone disponible d'Avash (adaptatif), sauf si
+  // une taille précise est imposée. RDP : largeur paire, bornes 200..8192.
+  const area = $("terminal").getBoundingClientRect();
+  const even = (n: number) => n - (n % 2);
+  const initW = Math.max(200, Math.min(8192, even(Math.round(t.width || area.width || 1280))));
+  const initH = Math.max(200, Math.min(8192, Math.round(t.height || area.height || 800)));
+
   // Canvas dans la zone terminal
   $("terminal-empty").style.display = "none";
   const wrap = document.createElement("div");
   wrap.className = "rdp-container";
   const canvas = document.createElement("canvas");
-  canvas.width = t.width;
-  canvas.height = t.height;
+  canvas.width = initW;
+  canvas.height = initH;
   canvas.tabIndex = 0;
   wrap.appendChild(canvas);
   $("terminal").appendChild(wrap);
@@ -2489,8 +2537,8 @@ async function openRdp(t: RdpTarget) {
   };
   const pos = (e: MouseEvent): [number, number] => {
     const r = canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(t.width - 1, Math.round(((e.clientX - r.left) / r.width) * t.width)));
-    const y = Math.max(0, Math.min(t.height - 1, Math.round(((e.clientY - r.top) / r.height) * t.height)));
+    const x = Math.max(0, Math.min(initW - 1, Math.round(((e.clientX - r.left) / r.width) * initW)));
+    const y = Math.max(0, Math.min(initH - 1, Math.round(((e.clientY - r.top) / r.height) * initH)));
     return [x, y];
   };
   const le16 = (n: number) => [n & 0xff, (n >> 8) & 0xff];
@@ -2511,7 +2559,7 @@ async function openRdp(t: RdpTarget) {
   try {
     const conn = await invoke<{ port: number; token: string }>("rdp_open", {
       id, host: t.host, port: t.port, user: t.user, password: t.password,
-      width: t.width, height: t.height,
+      width: initW, height: initH,
     });
     const ws = new WebSocket(`ws://127.0.0.1:${conn.port}`);
     ws.binaryType = "arraybuffer";
@@ -2576,6 +2624,44 @@ function closeRdp(id: number) {
     if (state.sessions.size === 0 && rdpSessions.size === 0) $("terminal-empty").style.display = "flex";
   }
 }
+
+/** Connexion à un bureau RDP enregistré (mot de passe du trousseau, sinon demandé). */
+async function connectRdpSaved(h: RdpHostT) {
+  let pw = await invoke<string | null>("rdp_password_load", { host: h.host, port: h.port, user: h.user }).catch(() => null);
+  if (!pw) {
+    const rep = await askPassword(`${h.user}@${h.host}:${h.port}`);
+    if (!rep) return;
+    pw = rep.password;
+    if (rep.remember && pw) {
+      await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw }).catch(() => {});
+    }
+  }
+  await openRdp({ host: h.host, port: h.port, user: h.user, password: pw ?? "" });
+}
+
+function openRdpMenu(h: RdpHostT, e: MouseEvent) {
+  const m = $("rdp-context");
+  m.dataset.id = h.id;
+  m.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
+  m.style.top = `${Math.min(e.clientY, window.innerHeight - 160)}px`;
+  m.classList.add("open");
+}
+window.addEventListener("click", () => $("rdp-context").classList.remove("open"));
+$("rdp-context").addEventListener("click", async (e) => {
+  const act = (e.target as HTMLElement).closest("[data-act]")?.getAttribute("data-act");
+  const id = $("rdp-context").dataset.id;
+  $("rdp-context").classList.remove("open");
+  const h = rdpHostsList.find((x) => x.id === id);
+  if (!act || !h) return;
+  if (act === "connect") connectRdpSaved(h);
+  else if (act === "forget") {
+    await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user }).catch(() => {});
+  } else if (act === "delete") {
+    if (!confirm(`Supprimer le bureau RDP « ${h.name} » ?\n\nSon mot de passe mémorisé sera aussi oublié.`)) return;
+    await invoke("rdp_host_delete", { id: h.id }).catch((err) => alert(`Suppression impossible : ${err}`));
+    await loadHosts();
+  }
+});
 
 /** Plein écran du bureau RDP : fenêtre en plein écran + châssis masqué. */
 async function toggleRdpFullscreen() {

@@ -110,3 +110,68 @@ pub fn rdp_close(state: tauri::State<'_, RdpStore>, id: u64) -> Result<(), Strin
     }
     Ok(())
 }
+
+// ---------- Connexions RDP enregistrées ----------
+
+use avash::rdphost::{self, RdpHost};
+
+#[tauri::command]
+pub fn rdp_hosts() -> Result<Vec<RdpHost>, String> {
+    rdphost::load_hosts().map_err(|e| e.to_string())
+}
+
+/// Cree (`id` absent) ou modifie une connexion RDP enregistree.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn rdp_host_save(
+    id: Option<String>,
+    name: String,
+    host: String,
+    port: u16,
+    user: String,
+    width: u16,
+    height: u16,
+) -> Result<RdpHost, String> {
+    let mut h = RdpHost::new(&name, &host, port, &user, width, height);
+    if let Some(id) = id.filter(|i| !i.is_empty()) {
+        h.id = id;
+    }
+    rdphost::upsert_host_in(&rdphost::hosts_path(), h.clone()).map_err(|e| e.to_string())?;
+    Ok(h)
+}
+
+/// Supprime une connexion enregistree et oublie son mot de passe.
+#[tauri::command]
+pub fn rdp_host_delete(id: String) -> Result<(), String> {
+    // Retrouver l'hote pour oublier son mot de passe avant suppression.
+    if let Ok(hosts) = rdphost::load_hosts() {
+        if let Some(h) = hosts.iter().find(|h| h.id == id) {
+            let _ = avash::secrets::forget(&rdphost::keyring_account(&h.user, &h.host, h.port));
+        }
+    }
+    rdphost::remove_host_in(&rdphost::hosts_path(), &id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn rdp_password_save(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+) -> Result<(), String> {
+    let id = rdphost::keyring_account(&user, &host, port);
+    avash::secrets::save(&id, &password).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+#[must_use]
+pub fn rdp_password_load(host: String, port: u16, user: String) -> Option<String> {
+    avash::secrets::load(&rdphost::keyring_account(&user, &host, port))
+}
+
+#[tauri::command]
+pub fn rdp_password_forget(host: String, port: u16, user: String) -> Result<(), String> {
+    let id = rdphost::keyring_account(&user, &host, port);
+    avash::secrets::forget(&id).map_err(|e| format!("{e:#}"))
+}
