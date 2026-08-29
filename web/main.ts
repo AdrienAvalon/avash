@@ -2473,7 +2473,7 @@ type RdpTarget = { host: string; port: number | null; user: string; password: st
 
 type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number };
 let rdpHostsList: RdpHostT[] = [];
-const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null }>();
+const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver }>();
 
 async function openRdp(t: RdpTarget) {
   const id = state.nextId++;
@@ -2492,16 +2492,18 @@ async function openRdp(t: RdpTarget) {
   // une taille précise est imposée. RDP : largeur paire, bornes 200..8192.
   const area = $("terminal").getBoundingClientRect();
   const even = (n: number) => n - (n % 2);
-  const initW = Math.max(200, Math.min(8192, even(Math.round(t.width || area.width || 1280))));
-  const initH = Math.max(200, Math.min(8192, Math.round(t.height || area.height || 800)));
+  // Mutables : au redimensionnement natif, le serveur renvoie la vraie taille
+  // (message CONNECTED) et on les remet à jour — le mappage souris suit.
+  let rdpW = Math.max(200, Math.min(8192, even(Math.round(t.width || area.width || 1280))));
+  let rdpH = Math.max(200, Math.min(8192, Math.round(t.height || area.height || 800)));
 
   // Canvas dans la zone terminal
   $("terminal-empty").style.display = "none";
   const wrap = document.createElement("div");
   wrap.className = "rdp-container";
   const canvas = document.createElement("canvas");
-  canvas.width = initW;
-  canvas.height = initH;
+  canvas.width = rdpW;
+  canvas.height = rdpH;
   canvas.tabIndex = 0;
   wrap.appendChild(canvas);
   $("terminal").appendChild(wrap);
@@ -2518,9 +2520,17 @@ async function openRdp(t: RdpTarget) {
     if (s?.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array(bytes));
   };
   const pos = (e: MouseEvent): [number, number] => {
+    // Le canvas est affiche en object-fit:contain : l'image est mise a l'echelle
+    // pour tenir dans l'element en gardant son ratio, donc letterboxee (bandes).
+    // On retrouve le rectangle reellement peint pour mapper le clic aux pixels RDP.
     const r = canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(initW - 1, Math.round(((e.clientX - r.left) / r.width) * initW)));
-    const y = Math.max(0, Math.min(initH - 1, Math.round(((e.clientY - r.top) / r.height) * initH)));
+    const scale = Math.min(r.width / rdpW, r.height / rdpH);
+    const dispW = rdpW * scale;
+    const dispH = rdpH * scale;
+    const offX = (r.width - dispW) / 2;
+    const offY = (r.height - dispH) / 2;
+    const x = Math.max(0, Math.min(rdpW - 1, Math.round(((e.clientX - r.left - offX) / dispW) * rdpW)));
+    const y = Math.max(0, Math.min(rdpH - 1, Math.round(((e.clientY - r.top - offY) / dispH) * rdpH)));
     return [x, y];
   };
   const le16 = (n: number) => [n & 0xff, (n >> 8) & 0xff];
@@ -2535,13 +2545,32 @@ async function openRdp(t: RdpTarget) {
   });
   canvas.addEventListener("keyup", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 0]); });
 
+  // Redimensionnement NATIF du bureau distant : quand la zone Avash change, on
+  // demande au serveur de re-rendre à la nouvelle taille (Display Control DVC).
+  // Débounce pour ne pas spammer pendant le glissé de la fenêtre. Message [5].
+  let resizeTimer: number | undefined;
+  const sendResize = () => {
+    if (state.active !== id) return; // seul le bureau visible se redimensionne
+    const a = $("terminal").getBoundingClientRect();
+    const w = Math.max(200, Math.min(8192, even(Math.round(a.width))));
+    const h = Math.max(200, Math.min(8192, Math.round(a.height)));
+    if (w === rdpW && h === rdpH) return;
+    send([5, ...le16(w), ...le16(h)]);
+  };
+  const ro = new ResizeObserver(() => {
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(sendResize, 250);
+  });
+  ro.observe($("terminal"));
+  rdpSessions.get(id)!.ro = ro;
+
   // Bureau reçu via WebSocket local BINAIRE (ArrayBuffer natif : ni base64 ni
   // JSON — débit maximal, même en 3440×1440).
   //   [1] CONNECTED w,h · [2] FRAME x,y,w,h + RGBA · [3] ERROR utf8
   try {
     const conn = await invoke<{ port: number; token: string }>("rdp_open", {
       id, host: t.host, port: t.port, user: t.user, password: t.password,
-      width: initW, height: initH,
+      width: rdpW, height: rdpH,
     });
     const ws = new WebSocket(`ws://127.0.0.1:${conn.port}`);
     ws.binaryType = "arraybuffer";
@@ -2557,8 +2586,10 @@ async function openRdp(t: RdpTarget) {
         const fw = dv.getUint16(5, true), fh = dv.getUint16(7, true);
         ctx.putImageData(new ImageData(new Uint8ClampedArray(buf, 9, fw * fh * 4), fw, fh), x, y);
       } else if (kind === 1) {
-        canvas.width = dv.getUint16(1, true);
-        canvas.height = dv.getUint16(3, true);
+        rdpW = dv.getUint16(1, true);
+        rdpH = dv.getUint16(3, true);
+        canvas.width = rdpW;
+        canvas.height = rdpH;
         tab.querySelector(".state")!.className = "state live";
       } else if (kind === 3) {
         tab.querySelector(".state")!.className = "state closed";
@@ -2596,6 +2627,7 @@ function closeRdp(id: number) {
     document.body.classList.remove("rdp-full");
     getCurrentWindow().setFullscreen(false).catch(() => {});
   }
+  s.ro?.disconnect();
   s.ws?.close();
   invoke("rdp_close", { id }).catch(() => {});
   s.canvas.parentElement?.remove();

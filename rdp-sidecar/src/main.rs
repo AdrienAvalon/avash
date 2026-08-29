@@ -7,13 +7,27 @@
 //!
 //! Messages WebSocket (binaires, auto-délimités) :
 //!   sidecar -> app : [1]=CONNECTED w:u16 h:u16 · [2]=FRAME x,y,w,h:u16 + RGBA · [3]=ERROR utf8
-//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16 · [4]KEY sc:u16,down
+//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16 · [4]KEY sc:u16,down · [5]RESIZE w:u16,h:u16
 //!
 //! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png]
 
+// Lints stylistiques assumés pour ce petit binaire d'orchestration :
+// noms de produits en prose (doc_markdown), main() qui séquence tout le
+// flux (too_many_lines), et coordonnées/RGBA aux noms courts idiomatiques.
+#![allow(
+    clippy::doc_markdown,
+    clippy::too_many_lines,
+    clippy::many_single_char_names
+)]
+
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use ironrdp::connector::connection_activation::ConnectionActivationState;
 use ironrdp::connector::{self, Credentials};
+use ironrdp::core::WriteBuf;
+use ironrdp::displaycontrol::client::DisplayControlClient;
+use ironrdp::displaycontrol::pdu::MonitorLayoutEntry;
+use ironrdp::dvc::DrdynvcClient;
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::input::{Database, MousePosition, Operation, WheelRotations};
 use ironrdp::pdu::gcc::KeyboardType;
@@ -21,6 +35,8 @@ use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
+use ironrdp_tokio::single_sequence_step;
+use ironrdp_tokio::FramedWrite as _;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
@@ -39,10 +55,15 @@ struct Args {
 struct Pa(Vec<String>);
 impl Pa {
     fn opt(&self, k: &str) -> Option<String> {
-        self.0.iter().position(|a| a == k).and_then(|i| self.0.get(i + 1).cloned())
+        self.0
+            .iter()
+            .position(|a| a == k)
+            .and_then(|i| self.0.get(i + 1).cloned())
     }
     fn req2(&self, k1: &str, k2: &str) -> Result<String> {
-        self.opt(k1).or_else(|| self.opt(k2)).with_context(|| format!("argument requis : {k1}/{k2}"))
+        self.opt(k1)
+            .or_else(|| self.opt(k2))
+            .with_context(|| format!("argument requis : {k1}/{k2}"))
     }
 }
 
@@ -54,16 +75,43 @@ fn parse_args() -> Result<Args> {
         user: a.req2("-u", "--username")?,
         pass: a.req2("-p", "--password")?,
         domain: a.opt("--domain"),
-        width: a.opt("--width").and_then(|s| s.parse().ok()).unwrap_or(1280),
-        height: a.opt("--height").and_then(|s| s.parse().ok()).unwrap_or(800),
+        width: a
+            .opt("--width")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1280),
+        height: a
+            .opt("--height")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(800),
         shot: a.opt("--shot"),
     })
 }
 
+/// Sépare un domaine éventuellement collé au nom d'utilisateur.
+/// NLA/CredSSP attend le domaine à part : « DOMAINE\\user » ou « user@domaine »
+/// sont acceptés par les utilisateurs, on les découpe ici. `--domain` explicite
+/// est prioritaire (le nom est alors laissé intact).
+fn split_credentials(user: &str, explicit_domain: Option<&str>) -> (String, Option<String>) {
+    if let Some(d) = explicit_domain {
+        return (user.to_string(), Some(d.to_string()));
+    }
+    if let Some((dom, name)) = user.split_once('\\') {
+        return (name.to_string(), Some(dom.to_string()));
+    }
+    if let Some((name, dom)) = user.split_once('@') {
+        return (name.to_string(), Some(dom.to_string()));
+    }
+    (user.to_string(), None)
+}
+
 fn build_config(a: &Args) -> connector::Config {
+    let (username, domain) = split_credentials(&a.user, a.domain.as_deref());
     connector::Config {
-        credentials: Credentials::UsernamePassword { username: a.user.clone(), password: a.pass.clone() },
-        domain: a.domain.clone(),
+        credentials: Credentials::UsernamePassword {
+            username,
+            password: a.pass.clone(),
+        },
+        domain,
         enable_tls: true,
         enable_credssp: true,
         keyboard_type: KeyboardType::IbmEnhanced,
@@ -72,7 +120,10 @@ fn build_config(a: &Args) -> connector::Config {
         keyboard_functional_keys_count: 12,
         ime_file_name: String::new(),
         dig_product_id: String::new(),
-        desktop_size: connector::DesktopSize { width: a.width, height: a.height },
+        desktop_size: connector::DesktopSize {
+            width: a.width,
+            height: a.height,
+        },
         bitmap: None,
         client_build: 0,
         client_name: "avash-rdp".to_owned(),
@@ -96,32 +147,62 @@ fn build_config(a: &Args) -> connector::Config {
 }
 
 fn server_public_key(cert: &x509_cert::Certificate) -> Result<Vec<u8>> {
-    cert.tbs_certificate.subject_public_key_info.subject_public_key.as_bytes()
-        .context("clé publique non alignée").map(<[u8]>::to_vec)
+    cert.tbs_certificate
+        .subject_public_key_info
+        .subject_public_key
+        .as_bytes()
+        .context("clé publique non alignée")
+        .map(<[u8]>::to_vec)
 }
 
 fn mouse_button(n: u8) -> ironrdp::input::MouseButton {
     use ironrdp::input::MouseButton::{Left, Middle, Right, X1, X2};
-    match n { 1 => Middle, 2 => Right, 3 => X1, 4 => X2, _ => Left }
+    match n {
+        1 => Middle,
+        2 => Right,
+        3 => X1,
+        4 => X2,
+        _ => Left,
+    }
 }
 
 /// Décode un message d'entrée binaire en opérations IronRDP.
 fn input_ops(b: &[u8]) -> Vec<Operation> {
     let u16le = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
     match b.first().copied() {
-        Some(1) if b.len() >= 5 => vec![Operation::MouseMove(MousePosition { x: u16le(1), y: u16le(3) })],
+        Some(1) if b.len() >= 5 => vec![Operation::MouseMove(MousePosition {
+            x: u16le(1),
+            y: u16le(3),
+        })],
         Some(2) if b.len() >= 7 => {
             let bt = mouse_button(b[1]);
-            let click = if b[2] != 0 { Operation::MouseButtonPressed(bt) } else { Operation::MouseButtonReleased(bt) };
-            vec![Operation::MouseMove(MousePosition { x: u16le(3), y: u16le(5) }), click]
+            let click = if b[2] != 0 {
+                Operation::MouseButtonPressed(bt)
+            } else {
+                Operation::MouseButtonReleased(bt)
+            };
+            vec![
+                Operation::MouseMove(MousePosition {
+                    x: u16le(3),
+                    y: u16le(5),
+                }),
+                click,
+            ]
         }
         Some(3) if b.len() >= 3 => {
             let d = i16::from_le_bytes([b[1], b[2]]);
-            vec![Operation::WheelRotations(WheelRotations { is_vertical: true, rotation_units: d })]
+            vec![Operation::WheelRotations(WheelRotations {
+                is_vertical: true,
+                rotation_units: d,
+            })]
         }
         Some(4) if b.len() >= 4 => {
             let sc = ironrdp::input::Scancode::from(u16le(1));
-            vec![if b[3] != 0 { Operation::KeyPressed(sc) } else { Operation::KeyReleased(sc) }]
+            vec![if b[3] != 0 {
+                Operation::KeyPressed(sc)
+            } else {
+                Operation::KeyReleased(sc)
+            }]
         }
         _ => Vec::new(),
     }
@@ -148,22 +229,44 @@ fn frame_msg(image: &DecodedImage, r: &ironrdp::pdu::geometry::InclusiveRectangl
 
 async fn connect(
     a: &Args,
-) -> Result<(connector::ConnectionResult, ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>)> {
-    let tcp = TcpStream::connect((a.host.as_str(), a.port)).await
+) -> Result<(
+    connector::ConnectionResult,
+    ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
+)> {
+    let tcp = TcpStream::connect((a.host.as_str(), a.port))
+        .await
         .with_context(|| format!("connexion TCP à {}:{}", a.host, a.port))?;
     let client_addr = tcp.local_addr()?;
     let mut framed = ironrdp_tokio::TokioFramed::new(tcp);
-    let mut connector = connector::ClientConnector::new(build_config(a), client_addr);
-    let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector).await.context("début de connexion")?;
+    // Canal Display Control (DVC) : permet le redimensionnement natif du
+    // bureau distant (le serveur re-rend à la nouvelle résolution).
+    let mut connector = connector::ClientConnector::new(build_config(a), client_addr)
+        .with_static_channel(
+            DrdynvcClient::new()
+                .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new()))),
+        );
+    let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
+        .await
+        .context("début de connexion")?;
     let initial = framed.into_inner_no_leftover();
-    let (upgraded_stream, cert) = ironrdp_tls::upgrade(initial, &a.host).await.context("passage TLS")?;
+    let (upgraded_stream, cert) = ironrdp_tls::upgrade(initial, &a.host)
+        .await
+        .context("passage TLS")?;
     let pubkey = server_public_key(&cert)?;
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
     let mut framed = ironrdp_tokio::TokioFramed::new(upgraded_stream);
     let mut net = ironrdp_tokio::reqwest::ReqwestNetworkClient::new();
     let result = ironrdp_tokio::connect_finalize(
-        upgraded, connector, &mut framed, &mut net, a.host.clone().into(), pubkey, None,
-    ).await.context("finalisation (CredSSP/NLA)")?;
+        upgraded,
+        connector,
+        &mut framed,
+        &mut net,
+        a.host.clone().into(),
+        pubkey,
+        None,
+    )
+    .await
+    .context("finalisation (CredSSP/NLA)")?;
     Ok((result, framed))
 }
 
@@ -172,6 +275,7 @@ async fn main() -> Result<()> {
     let args = parse_args()?;
     let (result, mut framed) = connect(&args).await?;
     let (w, h) = (result.desktop_size.width, result.desktop_size.height);
+    let activation_factory = result.activation_factory;
     eprintln!("connecté : {w}x{h}");
     let mut image = DecodedImage::new(PixelFormat::RgbA32, w, h);
     let mut active = ActiveStageBuilder {
@@ -191,16 +295,21 @@ async fn main() -> Result<()> {
     }
 
     // Serveur WebSocket local : un seul client (Avash), jeton obligatoire.
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.context("écoute WebSocket")?;
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .context("écoute WebSocket")?;
     let port = listener.local_addr()?.port();
     let token = format!("{:016x}", rand::random::<u64>());
     // Annonce le point de connexion à Avash.
     let mut out = tokio::io::stdout();
-    out.write_all(format!("{port} {token}\n").as_bytes()).await?;
+    out.write_all(format!("{port} {token}\n").as_bytes())
+        .await?;
     out.flush().await?;
 
     let (tcp, _) = listener.accept().await.context("acceptation WebSocket")?;
-    let ws = tokio_tungstenite::accept_async(tcp).await.context("handshake WebSocket")?;
+    let ws = tokio_tungstenite::accept_async(tcp)
+        .await
+        .context("handshake WebSocket")?;
     let (mut sink, mut stream) = ws.split();
 
     // Premier message du client = le jeton (sinon on refuse).
@@ -216,12 +325,23 @@ async fn main() -> Result<()> {
     sink.send(Message::Binary(hello)).await?;
 
     let mut db = Database::new();
-    use ironrdp_tokio::FramedWrite as _;
     loop {
         tokio::select! {
             biased;
             msg = stream.next() => {
                 match msg {
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&5) && b.len() >= 5 => {
+                        // RESIZE : demande au serveur de re-rendre à la nouvelle
+                        // taille via Display Control. Sans effet tant que le canal
+                        // n'a pas reçu ses capacités (encode_resize renvoie None).
+                        let rw = u16::from_le_bytes([b[1], b[2]]);
+                        let rh = u16::from_le_bytes([b[3], b[4]]);
+                        let (aw, ah) = MonitorLayoutEntry::adjust_display_size(u32::from(rw), u32::from(rh));
+                        if let Some(res) = active.encode_resize(aw, ah, None, None) {
+                            let bytes = res.context("encodage resize")?;
+                            framed.write_all(&bytes).await.context("écriture resize")?;
+                        }
+                    }
                     Some(Ok(Message::Binary(b))) => {
                         let events = db.apply(input_ops(&b));
                         for o in active.process_fastpath_input(&mut image, &events)? {
@@ -230,9 +350,8 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => break, // onglet fermé
+                    Some(Ok(Message::Close(_)) | Err(_)) | None => break, // fin/erreur
                     Some(Ok(_)) => {}
-                    Some(Err(_)) => break,
                 }
             }
             read = framed.read_pdu() => {
@@ -244,6 +363,29 @@ async fn main() -> Result<()> {
                             sink.send(Message::Binary(frame_msg(&image, &rect))).await.context("envoi frame")?;
                         }
                         ActiveStageOutput::Terminate(_) => return Ok(()),
+                        ActiveStageOutput::DeactivateAll => {
+                            // Le serveur a accepté le changement de résolution : dérouler
+                            // la séquence désactivation/réactivation pour renégocier.
+                            let mut buf = WriteBuf::new();
+                            let mut seq = activation_factory.create();
+                            let size = loop {
+                                single_sequence_step(&mut framed, &mut seq, &mut buf)
+                                    .await
+                                    .context("réactivation")?;
+                                if let ConnectionActivationState::Finalized { desktop_size, share_id, .. } =
+                                    seq.connection_activation_state()
+                                {
+                                    active.set_share_id(share_id);
+                                    break desktop_size;
+                                }
+                            };
+                            image = DecodedImage::new(PixelFormat::RgbA32, size.width, size.height);
+                            // Annonce la nouvelle taille à Avash (réutilise CONNECTED [1][w][h]).
+                            let mut msg = vec![1u8];
+                            msg.extend_from_slice(&size.width.to_le_bytes());
+                            msg.extend_from_slice(&size.height.to_le_bytes());
+                            sink.send(Message::Binary(msg)).await.context("annonce resize")?;
+                        }
                         _ => {}
                     }
                 }
@@ -259,9 +401,9 @@ async fn run_shot(
     framed: &mut ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
     path: &str,
 ) -> Result<()> {
-    use ironrdp_tokio::FramedWrite as _;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    while let Ok(Ok((action, payload))) = tokio::time::timeout_at(deadline, framed.read_pdu()).await {
+    while let Ok(Ok((action, payload))) = tokio::time::timeout_at(deadline, framed.read_pdu()).await
+    {
         let mut done = false;
         for o in active.process(image, action, &payload)? {
             match o {
@@ -270,11 +412,16 @@ async fn run_shot(
                 _ => {}
             }
         }
-        if done { break; }
+        if done {
+            break;
+        }
     }
-    let buf: image::ImageBuffer<image::Rgba<u8>, _> =
-        image::ImageBuffer::from_raw(u32::from(image.width()), u32::from(image.height()), image.data().to_vec())
-            .context("image invalide")?;
+    let buf: image::ImageBuffer<image::Rgba<u8>, _> = image::ImageBuffer::from_raw(
+        u32::from(image.width()),
+        u32::from(image.height()),
+        image.data().to_vec(),
+    )
+    .context("image invalide")?;
     buf.save(path)?;
     eprintln!("capture : {path}");
     Ok(())
