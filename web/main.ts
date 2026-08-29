@@ -9,7 +9,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml,
+  humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, hostInitials, hostHue,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind,
 } from "./filters";
@@ -98,26 +98,36 @@ function ensureFontLoaded(): Promise<void> {
   return fontReady;
 }
 
+/** Etat agrege des sessions d'un hote, pour la pastille de la liste. */
+function hostSessionState(alias: string): "" | "live" | "connecting" {
+  let st: "" | "live" | "connecting" = "";
+  for (const s of state.sessions.values()) {
+    if (s.alias !== alias || s.closed) continue;
+    const dot = s.tab.querySelector(".state");
+    if (dot?.classList.contains("live")) return "live";
+    if (dot?.classList.contains("connecting")) st = "connecting";
+  }
+  return st;
+}
+
 function renderHosts() {
   const list = $("host-list");
   list.innerHTML = "";
   const shown = filterHosts(state.hosts, state.filter);
   for (const h of shown) {
     const el = document.createElement("div");
-    el.className = "host" + (state.sessions.has(state.active ?? -1) && state.sessions.get(state.active!)?.alias === h.alias ? " selected" : "");
+    const selected = state.active !== null && state.sessions.get(state.active)?.alias === h.alias;
+    el.className = "host" + (selected ? " selected" : "");
+    el.style.setProperty("--hue", hostHue(h.alias));
     const target = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
-    el.innerHTML = `<span class="dot ok"></span><span class="info">
+    el.innerHTML = `<span class="avatar"><span class="ini"></span><span class="dot"></span></span><span class="info">
       <div class="alias"></div><div class="meta"></div></span>`;
+    el.querySelector(".ini")!.textContent = hostInitials(h.alias);
     el.querySelector(".alias")!.textContent = h.alias;
     el.querySelector(".meta")!.textContent = target;
-    const nTun = tunnels.byHost.get(h.alias) ?? 0;
-    if (nTun > 0) {
-      const badge = document.createElement("span");
-      badge.className = "tun";
-      badge.textContent = `⇄ ${nTun}`;
-      badge.title = `${nTun} tunnel${nTun > 1 ? "s" : ""} actif${nTun > 1 ? "s" : ""}`;
-      el.appendChild(badge);
-    }
+    // La pastille dit quelque chose de vrai : une session est ouverte ici.
+    const dot = el.querySelector(".dot") as HTMLElement;
+    dot.className = "dot " + hostSessionState(h.alias);
     el.title = "Double-clic : connexion — clic droit : options";
     el.addEventListener("dblclick", () => openSession(h));
     el.addEventListener("contextmenu", (e) => {
@@ -126,7 +136,7 @@ function renderHosts() {
     });
     list.appendChild(el);
   }
-  $("host-count").textContent = `${shown.length} hôte${shown.length > 1 ? "s" : ""}`;
+  $("host-count").textContent = String(shown.length);
 
   // Aucun hote declare : conseiller « double-clic sur un hote » n'aide
   // personne. On oriente vers la seule voie disponible.
@@ -164,6 +174,7 @@ function setSessionState(id: number, st: SessionState) {
   dot.title =
     st === "connecting" ? "Connexion en cours…" : st === "live" ? "Connectée" : "Session terminée";
   s.tab.classList.toggle("dead", st === "closed");
+  renderHosts();
 }
 
 /** Cree l'onglet et le terminal. La connexion elle-meme est faite par l'appelant. */

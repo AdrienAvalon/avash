@@ -193,3 +193,25 @@ describe("activeTunnelsByHost", () => {
     expect(m.has("dev")).toBe(false);
   });
 });
+
+import { hostInitials, hostHue } from "./filters";
+
+describe("hostInitials", () => {
+  it("prend une lettre par mot quand le nom en a plusieurs", () => {
+    expect(hostInitials("prod-web")).toBe("PW");
+    expect(hostInitials("nas_maison")).toBe("NM");
+  });
+  it("sinon les deux premiers caracteres", () => {
+    expect(hostInitials("192.168.2.40")).toBe("19");
+    expect(hostInitials("ava")).toBe("AV");
+    expect(hostInitials("")).toBe("?");
+  });
+});
+
+describe("hostHue", () => {
+  it("est stable et differe entre deux noms", () => {
+    expect(hostHue("prod")).toBe(hostHue("prod"));
+    expect(hostHue("prod")).not.toBe(hostHue("dev"));
+    expect(hostHue("x")).toMatch(/^hsl\(\d+ 60% 62%\)$/);
+  });
+});

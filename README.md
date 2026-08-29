@@ -17,8 +17,30 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 
 ## État (29/08 — tunnels SSH)
 
-**125 tests verts** (97 Rust, 28 TypeScript) · clippy strict · `cargo audit`
+**128 tests verts** (97 Rust, 31 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
+
+### Refonte visuelle (29/08, après-midi)
+
+Audit par captures de chaque état dans l'application réelle, puis réécriture
+du bloc de style en un seul système de jetons (3 profondeurs de fond, un
+accent, rayons/ombres/durées nommés). Sans bibliothèque, CSS seul.
+
+- **Bugs trouvés par l'audit** : `hidden` vaincu par `display:flex` (les
+  champs mot de passe, clé **et** alias s'affichaient tous en même temps
+  dans « Connexion directe ») ; le bouton *Enregistrer* du formulaire
+  Tunnels rogné (bloc `<details>` comprimé par la modale en `flex-column`) ;
+  « Aucune session » restait affiché à côté des onglets.
+- Barre latérale : avatar d'hôte aux initiales (teinte stable par nom),
+  pastille **uniquement** quand une session est ouverte dessus (l'ancien point
+  vert permanent ne voulait rien dire), en-tête de section, icône de
+  recherche SVG + rappel `Ctrl K`, actions en liste.
+- Onglets : indicateur souligné, croix révélée au survol.
+- Formulaires : interrupteur segmenté à la place des radios natives,
+  `<select>` et champs nombre sans chrome système, `accent-color`.
+- Performance : transitions ≤ 160 ms sur `background`/`color`/`transform`
+  seulement (pas d'ombre animée), flou de fond limité à 3 px,
+  `prefers-reduced-motion` respecté.
 
 ### Reconnexion et mot de passe mémorisé (29/08, après-midi)
 

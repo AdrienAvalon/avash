@@ -144,3 +144,21 @@ export function activeTunnelsByHost(defs: TunnelDef[], status: Map<string, Tunne
   }
   return out;
 }
+
+// ---------- Avatar d'hote ----------
+
+/** Deux caracteres pour l'avatar : « prod-web » → « PW », « 10.0.0.7 » → « 10 ». */
+export function hostInitials(alias: string): string {
+  const parts = alias.split(/[^a-z0-9]+/i).filter(Boolean);
+  if (parts.length >= 2 && /[a-z]/i.test(parts[0]) && /[a-z]/i.test(parts[1])) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return alias.replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "?";
+}
+
+/** Couleur stable par nom : le meme hote garde la meme teinte a chaque lancement. */
+export function hostHue(alias: string): string {
+  let h = 0;
+  for (const c of alias) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return `hsl(${h % 360} 60% 62%)`;
+}
