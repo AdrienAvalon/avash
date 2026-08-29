@@ -270,3 +270,25 @@ describe("validFileName", () => {
     for (const bad of ["", ".", "..", "a/b", "../x"]) expect(validFileName(bad)).toBe(false);
   });
 });
+
+import { snippetPreview, snippetVars, renderSnippet } from "./filters";
+
+describe("snippetVars / renderSnippet", () => {
+  it("liste les variables sans doublon et dans l'ordre", () => {
+    expect(snippetVars("systemctl {{action}} {{svc}} && journalctl -u {{svc}}"))
+      .toEqual(["action", "svc"]);
+    expect(snippetVars("echo {{ hote }}")).toEqual(["hote"]);
+    expect(snippetVars("rien ici")).toEqual([]);
+  });
+  it("substitue, l'inconnue devient vide", () => {
+    expect(renderSnippet("ssh {{user}}@{{host}}", { user: "root", host: "srv" })).toBe("ssh root@srv");
+    expect(renderSnippet("a {{x}} b", {})).toBe("a  b");
+  });
+});
+
+describe("snippetPreview", () => {
+  it("aplati les sauts de ligne et tronque", () => {
+    expect(snippetPreview("cd /x\ngit pull")).toBe("cd /x ⏎ git pull");
+    expect(snippetPreview("x".repeat(80)).endsWith("…")).toBe(true);
+  });
+});

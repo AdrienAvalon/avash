@@ -7,6 +7,7 @@ pub mod keys;
 pub mod osinfo;
 pub mod secrets;
 pub mod sftp;
+pub mod snippet;
 pub mod ssh;
 pub mod tunnel;
 

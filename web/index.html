@@ -395,6 +395,41 @@
     .modal .check { flex-direction: row; align-items: center; gap: 9px; color: var(--text); cursor: pointer; }
     .modal .check input { width: 15px; height: 15px; margin: 0; }
     .field-hint { font-size: 11px; color: var(--text-faint); }
+    .modal textarea {
+      background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
+      padding: 9px 11px; color: var(--text); font-family: var(--mono); font-size: 12.5px;
+      resize: vertical; min-height: 64px; transition: border-color var(--t-base), box-shadow var(--t-base);
+    }
+    .modal textarea:focus { outline: none; border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+    /* ===== Snippets ===== */
+    .snippet-list { display: flex; flex-direction: column; gap: 6px; }
+    .snippet-row {
+      display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+      padding: 9px 12px; border-radius: var(--r-md); background: var(--card);
+      border: 1px solid var(--border-soft); font-size: 12.5px;
+    }
+    .snippet-row .smain { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+    .snippet-row .sname { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 7px; }
+    .snippet-row .svar { font-size: 10px; font-weight: 600; color: var(--accent-soft); background: var(--accent-tint); padding: 1px 6px; border-radius: 5px; }
+    .snippet-row .scmd { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .snippet-row .sacts { display: flex; gap: 4px; }
+    .snippet-empty { color: var(--text-dim); font-size: 12px; padding: 6px 2px; }
+    .send-preview {
+      margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--bg);
+      border: 1px solid var(--border-soft); font-family: var(--mono); font-size: 12px;
+      color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow-y: auto;
+    }
+    .send-section { font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--text-faint); margin-bottom: 6px; }
+    #send-vars { display: flex; flex-direction: column; gap: 8px; }
+    #send-vars:empty { display: none; }
+    .send-targets { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
+    .send-targets label {
+      flex-direction: row; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 7px;
+      background: var(--card); border: 1px solid var(--border-soft); color: var(--text); cursor: pointer; font-size: 12.5px;
+    }
+    .send-targets label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-tint); }
+    .send-targets input { margin: 0; }
     .modal-error {
       margin: 0; padding: 8px 10px; border-radius: 7px; font-size: 12px; white-space: pre-wrap; line-height: 1.45;
       background: color-mix(in srgb, var(--err) 12%, transparent); border: 1px solid color-mix(in srgb, var(--err) 40%, transparent); color: #ff9a9a;
@@ -547,6 +582,7 @@
         <button id="manual-btn" class="manual-btn" type="button"><span class="ic">＋</span>Connexion directe</button>
         <button id="keys-btn" class="manual-btn" type="button"><span class="ic">🔑</span>Mes clés SSH</button>
         <button id="tunnels-btn" class="manual-btn" type="button"><span class="ic">⇄</span>Tunnels</button>
+        <button id="snippets-btn" class="manual-btn" type="button"><span class="ic">⚡</span>Snippets</button>
       </div>
       <div class="footer"><span>~/.ssh/config</span><span>avash v0.1</span></div>
     </aside>
@@ -799,6 +835,58 @@
           <button type="button" class="btn-ghost" id="t-close">Fermer</button>
         </div>
       </div>
+    </div>
+    <div class="modal-backdrop" id="snippets-modal">
+      <div class="modal modal-wide">
+        <h2>Snippets</h2>
+        <p class="modal-hint">Des commandes prêtes à envoyer dans le terminal. Variables <code>{{nom}}</code> demandées à l'envoi ; envoi possible sur plusieurs sessions.</p>
+        <div class="snippet-list" id="snippet-list"></div>
+        <details class="key-block" id="snippet-block">
+          <summary id="snippet-form-title">Nouveau snippet</summary>
+          <form id="snippet-form" autocomplete="off">
+            <input type="hidden" id="sn-id" />
+            <label>Nom
+              <input id="sn-name" placeholder="Redémarrer nginx" required />
+            </label>
+            <label><span>Commande <span class="field-hint">— <code>{{variable}}</code> pour un champ demandé à l'envoi</span></span>
+              <textarea id="sn-command" rows="3" spellcheck="false" placeholder="sudo systemctl restart {{service}}"></textarea>
+            </label>
+            <p class="field-hint" id="sn-vars"></p>
+            <label class="check">
+              <input type="checkbox" id="sn-run" checked />
+              <span>Exécuter (envoyer avec Entrée) — sinon insérer sans valider</span>
+            </label>
+            <p class="modal-error" id="sn-error" hidden></p>
+            <div class="modal-actions">
+              <button type="button" class="btn-ghost" id="sn-reset" hidden>Annuler la modification</button>
+              <button type="submit" class="btn-primary" id="sn-submit">Enregistrer</button>
+            </div>
+          </form>
+        </details>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="sn-close">Fermer</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-backdrop" id="send-modal">
+      <form class="modal" id="send-form" autocomplete="off">
+        <h2 id="send-title">Envoyer</h2>
+        <pre class="send-preview" id="send-preview"></pre>
+        <div id="send-vars"></div>
+        <div id="send-targets-wrap" hidden>
+          <div class="send-section">Envoyer à</div>
+          <div class="send-targets" id="send-targets"></div>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="send-run" />
+          <span>Exécuter (avec Entrée)</span>
+        </label>
+        <p class="modal-error" id="send-error" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="send-cancel">Annuler</button>
+          <button type="submit" class="btn-primary" id="send-submit">Envoyer</button>
+        </div>
+      </form>
     </div>
     <div class="modal-backdrop" id="ask-modal">
       <form class="modal" id="ask-form" autocomplete="off">

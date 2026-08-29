@@ -17,8 +17,23 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 
 ## État (29/08 — tunnels SSH)
 
-**144 tests verts** (106 Rust, 38 TypeScript) · clippy strict · `cargo audit`
+**160 tests verts** (115 Rust, 45 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
+
+### Snippets (29/08)
+
+Des commandes réutilisables, envoyées dans le terminal en un clic.
+
+- **Variables `{{nom}}`** : demandées à l'envoi, avec aperçu en direct de la
+  commande rendue.
+- **Multi-exécution** : envoi sur plusieurs sessions ouvertes à la fois
+  (cases à cocher, l'active pré-cochée) — pratique pour une flotte.
+- **Exécuter** (avec Entrée) ou **insérer** (relire avant de valider) ;
+  multi-lignes gérées (`\n` → `\r`, une commande par ligne).
+- Persistés dans `~/.config/avash/snippets.yaml` (écriture atomique).
+- Logique testée des deux côtés (extraction/rendu/charge terminal en Rust,
+  helpers front) ; multi-exécution vérifiée contre `sshd` réel (le snippet
+  crée bien un fichier sur les deux sessions).
 
 ### Ajustements UX (29/08, après-midi)
 

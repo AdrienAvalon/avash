@@ -258,3 +258,31 @@ export function shellQuote(path: string): string {
 export function validFileName(name: string): boolean {
   return name.length > 0 && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\0");
 }
+
+// ---------- Snippets ----------
+
+export type Snippet = { id: string; name: string; command: string; run: boolean; category: string };
+
+/** Apercu sur une ligne : saut de ligne visible, tronque proprement. */
+export function snippetPreview(command: string, max = 60): string {
+  const oneLine = command.replace(/\r?\n/g, " ⏎ ").trim();
+  return oneLine.length > max ? oneLine.slice(0, max - 1) + "…" : oneLine;
+}
+
+/** Variables {{nom}} d'une commande, sans doublon, dans l'ordre — miroir du
+ *  Rust pour un apercu instantane cote formulaire. */
+export function snippetVars(command: string): string[] {
+  const out: string[] = [];
+  const re = /\{\{\s*([^}]*?)\s*\}\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(command)) !== null) {
+    const name = m[1].trim();
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+/** Substitue {{nom}} par sa valeur ; variable absente → chaine vide. */
+export function renderSnippet(command: string, vars: Record<string, string>): string {
+  return command.replace(/\{\{\s*([^}]*?)\s*\}\}/g, (_, name) => vars[name.trim()] ?? "");
+}

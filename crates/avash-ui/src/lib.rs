@@ -49,7 +49,13 @@ pub fn run() {
             commands::tunnel_def_delete,
             commands::tunnel_start,
             commands::tunnel_stop,
-            commands::tunnel_status
+            commands::tunnel_status,
+            commands::open_sessions,
+            commands::snippet_list,
+            commands::snippet_vars,
+            commands::snippet_save,
+            commands::snippet_delete,
+            commands::snippet_send
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement d'Avash");
