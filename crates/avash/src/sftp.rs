@@ -1,10 +1,15 @@
-//! Avash — SFTP v0.3 : list/download/upload via russh-sftp.
-//! Ouverture de canal SFTP sur une session existante.
+//! Avash — SFTP : liste, transferts avec progression, dossiers, renommage,
+//! suppression, via russh-sftp sur une session existante.
 
 use anyhow::{anyhow, Context, Result};
 use russh_sftp::client::SftpSession;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Taille des blocs de transfert. 64 Kio : au-dessus, le gain est nul ;
+/// en dessous, la progression est fine mais les allers-retours coutent.
+const CHUNK: usize = 64 * 1024;
 
 use super::ssh::AvashSession;
 
@@ -59,6 +64,23 @@ impl SftpHandle {
 
     /// Télécharge un fichier distant → local.
     pub async fn download(&self, remote: &str, local: &Path) -> Result<u64> {
+        self.download_with(remote, local, |_, _| {}).await
+    }
+
+    /// Téléverse un fichier local → distant.
+    pub async fn upload(&self, local: &Path, remote: &str) -> Result<u64> {
+        self.upload_with(local, remote, |_, _| {}).await
+    }
+
+    /// Telechargement avec progression : `progress(octets_faits, total)`.
+    /// `total` vaut 0 si le serveur ne donne pas la taille.
+    pub async fn download_with(
+        &self,
+        remote: &str,
+        local: &Path,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<u64> {
+        let total = self.sftp.metadata(remote).await.map_or(0, |m| m.len());
         let mut remote_file = self
             .sftp
             .open(remote)
@@ -67,26 +89,89 @@ impl SftpHandle {
         let mut local_file = tokio::fs::File::create(local)
             .await
             .with_context(|| format!("Création local {}", local.display()))?;
-        let n = tokio::io::copy(&mut remote_file, &mut local_file)
-            .await
-            .context("Copie download")?;
-        Ok(n)
+        let mut buf = vec![0u8; CHUNK];
+        let mut done = 0u64;
+        loop {
+            let n = remote_file
+                .read(&mut buf)
+                .await
+                .context("Lecture distante")?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buf[..n])
+                .await
+                .context("Écriture locale")?;
+            done += n as u64;
+            progress(done, total);
+        }
+        local_file.flush().await?;
+        Ok(done)
     }
 
-    /// Téléverse un fichier local → distant.
-    pub async fn upload(&self, local: &Path, remote: &str) -> Result<u64> {
+    /// Televersement avec progression.
+    pub async fn upload_with(
+        &self,
+        local: &Path,
+        remote: &str,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<u64> {
         let mut local_file = tokio::fs::File::open(local)
             .await
             .with_context(|| format!("Ouverture local {}", local.display()))?;
+        let total = local_file.metadata().await.map_or(0, |m| m.len());
         let mut remote_file = self
             .sftp
             .create(remote)
             .await
             .with_context(|| format!("Création distant {remote}"))?;
-        let n = tokio::io::copy(&mut local_file, &mut remote_file)
+        let mut buf = vec![0u8; CHUNK];
+        let mut done = 0u64;
+        loop {
+            let n = local_file.read(&mut buf).await.context("Lecture locale")?;
+            if n == 0 {
+                break;
+            }
+            remote_file
+                .write_all(&buf[..n])
+                .await
+                .context("Écriture distante")?;
+            done += n as u64;
+            progress(done, total);
+        }
+        remote_file.shutdown().await.context("Fermeture distante")?;
+        Ok(done)
+    }
+
+    pub async fn mkdir(&self, path: &str) -> Result<()> {
+        self.sftp
+            .create_dir(path)
             .await
-            .context("Copie upload")?;
-        Ok(n)
+            .with_context(|| format!("Création du dossier {path}"))
+    }
+
+    /// Supprime un fichier, ou un dossier **vide** (`is_dir`). Un dossier
+    /// plein est refuse par le serveur : on ne fait pas de `rm -rf` implicite.
+    pub async fn remove(&self, path: &str, is_dir: bool) -> Result<()> {
+        if is_dir {
+            self.sftp
+                .remove_dir(path)
+                .await
+                .with_context(|| format!("Suppression du dossier {path} (doit être vide)"))
+        } else {
+            self.sftp
+                .remove_file(path)
+                .await
+                .with_context(|| format!("Suppression de {path}"))
+        }
+    }
+
+    pub async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        self.sftp
+            .rename(from, to)
+            .await
+            .with_context(|| format!("Renommage {from} → {to}"))
     }
 
     pub async fn close(self) -> Result<()> {

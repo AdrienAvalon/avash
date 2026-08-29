@@ -219,3 +219,42 @@ export function osBadge(os: OsInfo): { glyph: string; color: string } {
   }
   return OS_BADGES.linux;
 }
+
+
+// ---------- SFTP ----------
+
+export type SftpEntry = { name: string; is_dir: boolean; size: number; modified: number | null };
+
+/** Icone par type de fichier — un repere visuel, pas une taxonomie. */
+export function fileIcon(name: string, isDir: boolean): string {
+  if (isDir) return "📁";
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+  if (/^(png|jpe?g|gif|webp|svg|bmp|ico|heic)$/.test(ext)) return "🖼️";
+  if (/^(zip|tar|gz|tgz|bz2|xz|zst|7z|rar|deb|rpm)$/.test(ext)) return "📦";
+  if (/^(mp4|mkv|webm|mov|avi|mp3|flac|ogg|wav)$/.test(ext)) return "🎞️";
+  if (/^(sh|bash|zsh|fish|py|rs|js|ts|go|c|h|cpp|java|rb|php|lua|toml|ya?ml|json|xml|html|css|sql)$/.test(ext)) return "📜";
+  if (/^(pdf|docx?|odt|xlsx?|pptx?)$/.test(ext)) return "📕";
+  if (/^(key|pem|pub|crt|gpg|asc)$/.test(ext) || name.startsWith("id_")) return "🔑";
+  if (/^(log|txt|md|conf|cfg|ini|env)$/.test(ext) || name.startsWith(".")) return "📄";
+  return "📄";
+}
+
+/** Date courte : aujourd'hui → « 14:07 », sinon « 12/03/26 ». */
+export function shortDate(epochSec: number | null, now = new Date()): string {
+  if (!epochSec) return "";
+  const d = new Date(epochSec * 1000);
+  const sameDay = d.toDateString() === now.toDateString();
+  const two = (n: number) => String(n).padStart(2, "0");
+  if (sameDay) return `${two(d.getHours())}:${two(d.getMinutes())}`;
+  return `${two(d.getDate())}/${two(d.getMonth() + 1)}/${two(d.getFullYear() % 100)}`;
+}
+
+/** Cite un chemin pour un shell POSIX : `'a b'` , apostrophe echappee. */
+export function shellQuote(path: string): string {
+  return "'" + path.replace(/'/g, "'\\''") + "'";
+}
+
+/** Refuse les noms qui sortiraient du dossier ou seraient invalides. */
+export function validFileName(name: string): boolean {
+  return name.length > 0 && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\0");
+}

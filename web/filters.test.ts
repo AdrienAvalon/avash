@@ -231,3 +231,42 @@ describe("osBadge", () => {
     expect(osBadge({ id: "mystere", like: [], pretty: "" }).glyph).toBe("");
   });
 });
+
+
+import { fileIcon, shortDate, shellQuote, validFileName } from "./filters";
+
+describe("fileIcon", () => {
+  it("distingue dossier, image, archive, code, cle", () => {
+    expect(fileIcon("x", true)).toBe("📁");
+    expect(fileIcon("photo.JPG", false)).toBe("🖼️");
+    expect(fileIcon("site.tar.gz", false)).toBe("📦");
+    expect(fileIcon("deploy.sh", false)).toBe("📜");
+    expect(fileIcon("id_ed25519", false)).toBe("🔑");
+    expect(fileIcon("notes", false)).toBe("📄");
+  });
+});
+
+describe("shortDate", () => {
+  it("heure le jour meme, date sinon, rien sans valeur", () => {
+    const now = new Date(2026, 7, 29, 15, 0);
+    const today = new Date(2026, 7, 29, 14, 7).getTime() / 1000;
+    expect(shortDate(today, now)).toBe("14:07");
+    const old = new Date(2026, 2, 12, 9, 0).getTime() / 1000;
+    expect(shortDate(old, now)).toBe("12/03/26");
+    expect(shortDate(null, now)).toBe("");
+  });
+});
+
+describe("shellQuote", () => {
+  it("protege espaces et apostrophes", () => {
+    expect(shellQuote("/srv/mon dossier")).toBe("'/srv/mon dossier'");
+    expect(shellQuote("/srv/l'ami")).toBe("'/srv/l'\\''ami'");
+  });
+});
+
+describe("validFileName", () => {
+  it("refuse vide, ., .. et les slashs", () => {
+    expect(validFileName("ok.txt")).toBe(true);
+    for (const bad of ["", ".", "..", "a/b", "../x"]) expect(validFileName(bad)).toBe(false);
+  });
+});

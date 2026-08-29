@@ -20,6 +20,7 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 whoami = "2"
 open = "5.4.2"
+tauri-plugin-dialog = "2"
 
 [[bench]]
 name = "utf8"

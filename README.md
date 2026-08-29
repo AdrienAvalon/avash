@@ -17,8 +17,23 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 
 ## État (29/08 — tunnels SSH)
 
-**136 tests verts** (102 Rust, 34 TypeScript) · clippy strict · `cargo audit`
+**143 tests verts** (105 Rust, 38 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
+
+### SFTP complet (29/08, midi)
+
+- **Glisser-déposer** depuis le bureau : le panneau s'ouvre de lui-même et
+  envoie les fichiers dans le dossier courant (événement drag-drop de Tauri,
+  chemins natifs — pas de lecture du fichier par la webview).
+- Sélecteur natif (*Envoyer…*, plugin `dialog`), **progression** en direct
+  (barre + octets, événement `sftp-progress` borné à 12/s), blocs de 64 Kio.
+- Chemin **éditable** (Entrée), dossier parent, rafraîchir, **par onglet**.
+- Menu contextuel : télécharger, *aller ici dans le terminal* (`cd` cité pour
+  le shell), copier le chemin, renommer, nouveau dossier, supprimer (dossier
+  vide seulement — pas de `rm -rf` implicite).
+- Icônes par type, tailles, dates courtes.
+- Le bouton *Envoyer* n'avait **aucun** gestionnaire avant cette passe.
+- Vérifié contre `sshd` réel : envoi de 5 Mo octet pour octet identique.
 
 ### Logo de la distribution (29/08, après-midi)
 
@@ -126,6 +141,6 @@ L'objectif de 100 Mo n'est pas atteignable avec une webview ; voir plus bas.
 
 ## Feuille de route
 - v0.1 (ce soir/aujourd'hui) : CLI + parseur + connexion russh → **GUI dès webkit installé**
-- v0.2 : ~~tunnels~~ ✅, SFTP glisser-déposer, snippets
+- v0.2 : ~~tunnels~~ ✅, ~~SFTP glisser-déposer~~ ✅, snippets
 - v0.3 : chiffrement secrets, imports, recherche instantanée
 - v1 : RDP + multi-exécution + santé hôtes

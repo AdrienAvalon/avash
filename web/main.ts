@@ -8,8 +8,11 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, hostInitials, hostHue, osBadge,
+  fileIcon, shortDate, shellQuote, validFileName, type SftpEntry,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
 } from "./filters";
@@ -45,6 +48,8 @@ type Session = {
   closed: boolean;
   /** Rouvre la meme cible dans ce meme onglet (Entree apres deconnexion). */
   reconnect: (() => Promise<void>) | null;
+  /** Dossier distant courant du panneau SFTP, propre a chaque onglet. */
+  sftpPath: string;
 };
 
 /** Taille de police partagée par tous les terminaux (Ctrl +/−). */
@@ -340,7 +345,7 @@ function newSessionShell(label: string) {
     }, 60);
   });
 
-  const s: Session = { id, alias: label, term, fit, tab, search, closed: false, reconnect: null };
+  const s: Session = { id, alias: label, term, fit, tab, search, closed: false, reconnect: null, sftpPath: "" };
   state.sessions.set(id, s);
   state.active = id;
   focusTerminal(s);
@@ -512,6 +517,7 @@ function focusSession(id: number) {
     (s.term.element?.parentElement as HTMLElement).style.display = active ? "block" : "none";
     if (active) focusTerminal(s);
   });
+  if (sftp.open) sftpNavigate(state.sessions.get(id)?.sftpPath || ".");
 }
 
 function closeSession(id: number) {
@@ -646,85 +652,349 @@ window.addEventListener("resize", () => {
 });
 
 // ===== SFTP =====
-type SftpEntry = { name: string; is_dir: boolean; size: number; modified: number | null };
 
 const sftp = {
-  path: "" as string,
   open: false,
+  /** Transfert en cours : on refuse d'en lancer un second en parallele. */
+  busy: false,
+  /** Entree visee par le menu contextuel. */
+  ctx: null as { entry: SftpEntry | null; path: string } | null,
 };
 
+function sftpSession(): Session | null {
+  return state.active === null ? null : (state.sessions.get(state.active) ?? null);
+}
+
+function sftpStatus(msg: string, kind: "" | "ok" | "err" = "") {
+  const el = $("sftp-status");
+  el.textContent = msg;
+  el.className = "sftp-status" + (kind ? ` ${kind}` : "");
+}
+
+function sftpProgress(done: number, total: number, label: string) {
+  const box = $("sftp-progress");
+  box.hidden = false;
+  box.classList.toggle("indeterminate", total === 0);
+  ($("sftp-bar") as HTMLElement).style.width = total ? `${Math.round((done / total) * 100)}%` : "";
+  sftpStatus(total ? `${label} ${humanSize(done)} / ${humanSize(total)}` : `${label} ${humanSize(done)}`);
+}
+function sftpProgressDone() {
+  $("sftp-progress").hidden = true;
+}
 
 async function sftpNavigate(path: string) {
-  const id = state.active;
-  if (id === null) return;
-  sftp.path = path;
-  $("sftp-path").textContent = path;
-  $("sftp-list").innerHTML = `<div class="sftp-status">Chargement…</div>`;
+  const s = sftpSession();
+  if (!s) return;
+  s.sftpPath = path;
+  ($("sftp-path") as HTMLInputElement).value = path;
+  const list = $("sftp-list");
+  list.innerHTML = `<div class="sftp-status">Chargement…</div>`;
   try {
-    const entries = await invoke<SftpEntry[]>("sftp_list", { id, path });
-    const list = $("sftp-list");
+    const entries = await invoke<SftpEntry[]>("sftp_list", { id: s.id, path });
+    // La reponse peut arriver apres un changement d'onglet.
+    if (sftpSession() !== s || s.sftpPath !== path) return;
     list.innerHTML = "";
-    // Dossiers d'abord, tri alpha
     entries.sort((a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || a.name.localeCompare(b.name));
     if (path !== "/") {
       const up = document.createElement("div");
-      up.className = "sftp-entry dir";
-      up.innerHTML = `<span>📁</span><span class="nm">..</span>`;
-      up.addEventListener("click", () => {
-        sftpNavigate(parentDir(path));
-      });
+      up.className = "sftp-entry dir up";
+      up.innerHTML = `<span class="ic">↰</span><span class="nm">..</span><span class="sz"></span>`;
+      up.addEventListener("click", () => sftpNavigate(parentDir(path)));
       list.appendChild(up);
     }
     for (const e of entries) {
       const el = document.createElement("div");
       el.className = "sftp-entry" + (e.is_dir ? " dir" : "");
-      el.innerHTML = `<span>${e.is_dir ? "📁" : "📄"}</span><span class="nm"></span><span class="sz"></span>`;
+      el.innerHTML = `<span class="ic"></span><span class="nm"></span><span class="sz"></span>`;
+      el.querySelector(".ic")!.textContent = fileIcon(e.name, e.is_dir);
       el.querySelector(".nm")!.textContent = e.name;
-      el.querySelector(".sz")!.textContent = e.is_dir ? "" : humanSize(e.size);
-      if (e.is_dir) {
-        el.addEventListener("click", () =>
-          sftpNavigate(remoteJoin(path, e.name))
-        );
-      } else {
-        el.title = "Clic : télécharger";
-        el.addEventListener("click", async () => {
-          const remote = remoteJoin(path, e.name);
-          $("sftp-status").textContent = `⬇︎ ${e.name}…`;
-          try {
-            const res = await invoke<string>("sftp_download", { id, remote });
-            $("sftp-status").textContent = `✅ ${res}`;
-          } catch (err) {
-            $("sftp-status").textContent = `⚠️ ${err}`;
-          }
-        });
-      }
+      el.querySelector(".sz")!.textContent = e.is_dir ? shortDate(e.modified) : humanSize(e.size);
+      el.title = e.is_dir
+        ? `${e.name} — modifié ${shortDate(e.modified) || "?"}`
+        : `${e.name} — ${humanSize(e.size)}, modifié ${shortDate(e.modified) || "?"} — clic : télécharger`;
+      el.addEventListener("click", () => {
+        if (e.is_dir) sftpNavigate(remoteJoin(path, e.name));
+        else sftpDownload(remoteJoin(path, e.name), e.name);
+      });
+      el.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault();
+        sftpOpenMenu(e, path, ev as MouseEvent);
+      });
       list.appendChild(el);
     }
-    $("sftp-status").textContent = `${entries.length} éléments`;
+    sftpStatus(`${entries.length} élément${entries.length > 1 ? "s" : ""}`);
   } catch (e) {
-    $("sftp-list").innerHTML = "";
-    $("sftp-status").textContent = `⚠️ ${e}`;
+    list.innerHTML = "";
+    sftpStatus(`⚠️ ${e}`, "err");
   }
+}
+
+function sftpRefresh() {
+  const s = sftpSession();
+  if (s) sftpNavigate(s.sftpPath || ".");
 }
 
 function sftpToggle() {
-  const id = state.active;
-  if (id === null) return;
+  const s = sftpSession();
+  if (!s) return;
   sftp.open = !sftp.open;
   $("sftp-panel").classList.toggle("open", sftp.open);
-  if (sftp.open) {
-    // "." = cwd du serveur au login (home en général)
-    sftpNavigate(sftp.path.length > 0 ? sftp.path : ".");
+  // "." = cwd du serveur au login (home en general)
+  if (sftp.open) sftpNavigate(s.sftpPath || ".");
+}
+// Le panneau prend sa place par une transition : le terminal ne recoit pas
+// d'evenement resize et resterait coupe a droite. On l'ajuste a la fin.
+$("sftp-panel").addEventListener("transitionend", (e) => {
+  if (e.propertyName === "width") sftpSession()?.fit.fit();
+});
+
+async function sftpDownload(remote: string, name: string) {
+  const s = sftpSession();
+  if (!s || sftp.busy) return;
+  sftp.busy = true;
+  sftpProgress(0, 0, `⬇︎ ${name}`);
+  try {
+    const res = await invoke<string>("sftp_download", { id: s.id, remote });
+    sftpStatus(`✅ ${res}`, "ok");
+  } catch (err) {
+    sftpStatus(`⚠️ ${err}`, "err");
+  } finally {
+    sftp.busy = false;
+    sftpProgressDone();
   }
 }
 
-// Toggle SFTP : bouton rafraîchissement
-$("sftp-refresh-btn").addEventListener("click", () => sftpNavigate(sftp.path || "."));
+/** Envoie des fichiers locaux (chemins absolus) dans le dossier courant. */
+async function sftpUploadPaths(paths: string[]) {
+  const s = sftpSession();
+  if (!s || paths.length === 0) return;
+  if (sftp.busy) {
+    sftpStatus("Un transfert est déjà en cours.", "err");
+    return;
+  }
+  sftp.busy = true;
+  const dir = s.sftpPath || ".";
+  let ok = 0;
+  const errors: string[] = [];
+  try {
+    for (const local of paths) {
+      const name = local.split(/[\\/]/).pop() ?? local;
+      sftpProgress(0, 0, `⬆︎ ${name}`);
+      try {
+        await invoke<string>("sftp_upload", { id: s.id, local, remoteDir: dir });
+        ok++;
+      } catch (e) {
+        errors.push(`${name} : ${e}`);
+      }
+    }
+  } finally {
+    sftp.busy = false;
+    sftpProgressDone();
+  }
+  if (errors.length === 0) sftpStatus(`✅ ${ok} fichier${ok > 1 ? "s" : ""} envoyé${ok > 1 ? "s" : ""}`, "ok");
+  else sftpStatus(`⚠️ ${errors.join(" · ")}`, "err");
+  if (sftpSession() === s) sftpNavigate(dir);
+}
+
+async function sftpPickAndUpload() {
+  if (!sftpSession()) return;
+  let picked: string[] | string | null = null;
+  try {
+    picked = await openDialog({ multiple: true, directory: false, title: "Fichiers à envoyer" });
+  } catch (e) {
+    sftpStatus(`⚠️ Sélecteur indisponible : ${e}`, "err");
+    return;
+  }
+  if (!picked) return;
+  await sftpUploadPaths(Array.isArray(picked) ? picked : [picked]);
+}
+
+async function sftpMkdir(dir: string) {
+  const s = sftpSession();
+  if (!s) return;
+  const name = await askText("Nouveau dossier", "Nom du dossier", "");
+  if (name === null) return;
+  if (!validFileName(name)) {
+    sftpStatus("Nom de dossier invalide.", "err");
+    return;
+  }
+  try {
+    await invoke("sftp_mkdir", { id: s.id, path: remoteJoin(dir, name) });
+    sftpNavigate(dir);
+  } catch (e) {
+    sftpStatus(`⚠️ ${e}`, "err");
+  }
+}
+
+async function sftpRename(entry: SftpEntry, dir: string) {
+  const s = sftpSession();
+  if (!s) return;
+  const name = await askText("Renommer", "Nouveau nom", entry.name);
+  if (name === null || name === entry.name) return;
+  if (!validFileName(name)) {
+    sftpStatus("Nom invalide.", "err");
+    return;
+  }
+  try {
+    await invoke("sftp_rename", { id: s.id, from: remoteJoin(dir, entry.name), to: remoteJoin(dir, name) });
+    sftpNavigate(dir);
+  } catch (e) {
+    sftpStatus(`⚠️ ${e}`, "err");
+  }
+}
+
+async function sftpDelete(entry: SftpEntry, dir: string) {
+  const s = sftpSession();
+  if (!s) return;
+  const what = entry.is_dir ? `le dossier « ${entry.name} » (doit être vide)` : `« ${entry.name} »`;
+  if (!confirm(`Supprimer ${what} sur le serveur ?\n\nCette action est définitive.`)) return;
+  try {
+    await invoke("sftp_remove", { id: s.id, path: remoteJoin(dir, entry.name), isDir: entry.is_dir });
+    sftpNavigate(dir);
+  } catch (e) {
+    sftpStatus(`⚠️ ${e}`, "err");
+  }
+}
+
+// ----- Menu contextuel du panneau -----
+
+function sftpOpenMenu(entry: SftpEntry | null, path: string, e: MouseEvent) {
+  const m = $("sftp-context");
+  sftp.ctx = { entry, path };
+  // Sans entree (clic dans le vide) : seules les actions de dossier.
+  for (const item of m.querySelectorAll<HTMLElement>("[data-act]")) {
+    const act = item.dataset.act!;
+    const needsEntry = ["download", "rename", "delete", "copy"].includes(act);
+    const dirOnly = act === "cd";
+    item.hidden = (needsEntry && !entry) || (act === "download" && !!entry?.is_dir) || (dirOnly && !!entry && !entry.is_dir);
+  }
+  m.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
+  m.style.top = `${Math.min(e.clientY, window.innerHeight - 240)}px`;
+  m.classList.add("open");
+}
+function sftpHideMenu() { $("sftp-context").classList.remove("open"); }
+window.addEventListener("click", sftpHideMenu);
+window.addEventListener("blur", sftpHideMenu);
+
+$("sftp-context").addEventListener("click", async (e) => {
+  const act = (e.target as HTMLElement).closest("[data-act]")?.getAttribute("data-act");
+  const ctx = sftp.ctx;
+  sftpHideMenu();
+  if (!act || !ctx) return;
+  const s = sftpSession();
+  if (!s) return;
+  const { entry, path } = ctx;
+  const full = entry ? remoteJoin(path, entry.name) : path;
+  if (act === "download" && entry && !entry.is_dir) sftpDownload(full, entry.name);
+  else if (act === "cd") {
+    const target = entry?.is_dir ? full : path;
+    invoke("pty_write", { id: s.id, data: `cd ${shellQuote(target)}\r` }).catch(() => {});
+    s.term.focus();
+  } else if (act === "copy") {
+    navigator.clipboard.writeText(full).then(() => sftpStatus(`Chemin copié : ${full}`, "ok"), () => {});
+  } else if (act === "rename" && entry) sftpRename(entry, path);
+  else if (act === "mkdir") sftpMkdir(path);
+  else if (act === "delete" && entry) sftpDelete(entry, path);
+});
+
+$("sftp-list").addEventListener("contextmenu", (e) => {
+  if ((e.target as HTMLElement).closest(".sftp-entry")) return;
+  e.preventDefault();
+  const s = sftpSession();
+  if (s) sftpOpenMenu(null, s.sftpPath || ".", e as MouseEvent);
+});
+
+// ----- Barre du panneau -----
+
+$("sftp-refresh-btn").addEventListener("click", sftpRefresh);
+$("sftp-up").addEventListener("click", () => {
+  const s = sftpSession();
+  if (s && s.sftpPath !== "/") sftpNavigate(parentDir(s.sftpPath || "."));
+});
+$("sftp-up-btn").addEventListener("click", sftpPickAndUpload);
+$("sftp-mkdir-btn").addEventListener("click", () => {
+  const s = sftpSession();
+  if (s) sftpMkdir(s.sftpPath || ".");
+});
+$("sftp-path").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const v = ($("sftp-path") as HTMLInputElement).value.trim();
+    if (v) sftpNavigate(v);
+  } else if (e.key === "Escape") {
+    ($("sftp-path") as HTMLInputElement).value = sftpSession()?.sftpPath ?? "";
+    ($("sftp-path") as HTMLInputElement).blur();
+  }
+});
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
     e.preventDefault();
     sftpToggle();
   }
+});
+
+// ----- Progression des transferts -----
+
+listen<{ id: number; name: string; kind: string; done: number; total: number }>("sftp-progress", (ev) => {
+  if (ev.payload.id !== state.active) return;
+  sftpProgress(ev.payload.done, ev.payload.total, `${ev.payload.kind === "upload" ? "⬆︎" : "⬇︎"} ${ev.payload.name}`);
+}).catch(() => {});
+
+// ----- Glisser-deposer depuis le bureau -----
+//
+// Tauri livre les chemins des fichiers deposes sur la fenetre. Le panneau
+// s'ouvre de lui-meme si besoin : deposer un fichier dit assez clairement
+// ce qu'on veut.
+getCurrentWebview()
+  .onDragDropEvent((ev) => {
+    const panel = $("sftp-panel");
+    const t = ev.payload.type;
+    if (t === "enter" || t === "over") {
+      if (!sftpSession()) return;
+      if (!sftp.open) sftpToggle();
+      panel.classList.add("dragging");
+    } else if (t === "leave") {
+      panel.classList.remove("dragging");
+    } else if (t === "drop") {
+      panel.classList.remove("dragging");
+      sftpUploadPaths(ev.payload.paths);
+    }
+  })
+  .catch(() => { /* hors Tauri (tests) : pas de glisser-deposer */ });
+
+// ---------- Saisie d'un texte (nom de fichier, de dossier) ----------
+
+let askResolve: ((v: string | null) => void) | null = null;
+
+function askText(title: string, label: string, initial: string): Promise<string | null> {
+  $("ask-title").textContent = title;
+  $("ask-label").textContent = label;
+  const input = $("ask-input") as HTMLInputElement;
+  input.value = initial;
+  $("ask-error").hidden = true;
+  $("ask-modal").classList.add("open");
+  setTimeout(() => {
+    input.focus();
+    // Renommer : on selectionne le nom sans l'extension.
+    const dot = initial.lastIndexOf(".");
+    input.setSelectionRange(0, dot > 0 ? dot : initial.length);
+  }, 30);
+  return new Promise((resolve) => { askResolve = resolve; });
+}
+function askClose(v: string | null) {
+  $("ask-modal").classList.remove("open");
+  const r = askResolve;
+  askResolve = null;
+  r?.(v);
+}
+$("ask-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  askClose(($("ask-input") as HTMLInputElement).value.trim());
+});
+$("ask-cancel").addEventListener("click", () => askClose(null));
+$("ask-modal").addEventListener("click", (e) => { if (e.target === $("ask-modal")) askClose(null); });
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("ask-modal").classList.contains("open")) askClose(null);
 });
 
 loadHosts();

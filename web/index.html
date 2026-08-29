@@ -435,22 +435,56 @@
 
     /* ===== Panneau SFTP ===== */
     .sftp-panel {
-      width: 0; overflow: hidden; transition: width .18s var(--ease);
+      position: relative; width: 0; overflow: hidden; transition: width .18s var(--ease);
       background: var(--bg-soft); border-left: 1px solid var(--border-soft);
       display: flex; flex-direction: column; flex-shrink: 0;
     }
-    .sftp-panel.open { width: 300px; }
-    .sftp-head { padding: 10px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
-    .sftp-path { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-    .sftp-path:hover { color: var(--text); }
+    .sftp-panel.open { width: 320px; }
+    .sftp-head { padding: 8px 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border-soft); }
+    .sftp-ib {
+      flex: none; width: 28px; height: 28px; border-radius: 7px; border: 1px solid transparent;
+      background: transparent; color: var(--text-dim); font-size: 14px;
+      transition: background var(--t-fast), color var(--t-fast);
+    }
+    .sftp-ib:hover { background: var(--card-hover); color: var(--text); }
+    .sftp-path {
+      flex: 1; min-width: 0; height: 28px; padding: 0 9px; border-radius: 7px;
+      background: var(--card); border: 1px solid var(--border-soft); outline: none;
+      font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+      transition: border-color var(--t-base), color var(--t-base);
+    }
+    .sftp-path:focus { border-color: var(--accent-line); color: var(--text); }
     .sftp-list { flex: 1; overflow-y: auto; padding: 6px; }
-    .sftp-entry { padding: 7px 10px; border-radius: 7px; cursor: pointer; font-size: 12.5px; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; }
-    .sftp-entry:hover { background: var(--accent-tint); }
-    .sftp-entry .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-    .sftp-entry .sz { font-size: 10.5px; color: var(--text-dim); font-family: var(--mono); }
+    .sftp-entry {
+      padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
+      display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center;
+      white-space: nowrap; overflow: hidden;
+    }
+    .sftp-entry:hover, .sftp-entry.hl { background: var(--accent-tint); }
+    .sftp-entry .ic { font-size: 13px; text-align: center; }
+    .sftp-entry .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .sftp-entry .sz { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); text-align: right; }
     .sftp-entry.dir .nm { color: var(--accent-soft); font-weight: 600; }
-    .sftp-foot { padding: 8px 12px; border-top: 1px solid var(--border-soft); display: flex; gap: 8px; }
-    .sftp-status { padding: 4px 12px 8px; font-size: 10.5px; color: var(--text-dim); font-family: var(--mono); }
+    .sftp-entry.up .nm { color: var(--text-dim); font-weight: 400; }
+    .sftp-foot { padding: 8px 10px; border-top: 1px solid var(--border-soft); display: flex; gap: 8px; }
+    .sftp-progress { height: 3px; margin: 0 10px; border-radius: 2px; background: var(--card); overflow: hidden; }
+    .sftp-progress .bar { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
+    .sftp-progress.indeterminate .bar { width: 40%; animation: slide 1s ease-in-out infinite alternate; }
+    @keyframes slide { from { transform: translateX(-100%) } to { transform: translateX(250%) } }
+    .sftp-status {
+      padding: 6px 12px 8px; font-size: 10.5px; color: var(--text-dim); font-family: var(--mono);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .sftp-status.err { color: var(--err); white-space: normal; }
+    .sftp-status.ok { color: var(--ok); }
+    .sftp-drop {
+      position: absolute; inset: 8px; z-index: 5; display: none; flex-direction: column;
+      align-items: center; justify-content: center; gap: 6px; border-radius: 12px;
+      border: 2px dashed var(--accent-line); background: rgba(11,13,20,.82);
+      color: var(--accent-soft); font-size: 13px; font-weight: 600; pointer-events: none;
+    }
+    .sftp-drop span { font-size: 26px; }
+    .sftp-panel.dragging .sftp-drop { display: flex; }
 
     /* ===== Recherche dans le terminal ===== */
     .term-search {
@@ -536,16 +570,29 @@
         </div>
         <aside class="sftp-panel" id="sftp-panel">
           <div class="sftp-head">
-            <span>📁</span>
-            <span class="sftp-path" id="sftp-path" title="Cliquer pour changer de chemin">…</span>
+            <button class="sftp-ib" id="sftp-up" title="Dossier parent" type="button">↑</button>
+            <input class="sftp-path" id="sftp-path" spellcheck="false" autocomplete="off" title="Chemin distant — Entrée pour y aller" />
+            <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" type="button">↻</button>
           </div>
           <div class="sftp-list" id="sftp-list"></div>
+          <div class="sftp-drop" id="sftp-drop"><span>⬆︎</span>Déposer pour envoyer ici</div>
           <div class="sftp-foot">
-            <button class="btn-mini" id="sftp-up-btn">⬆︎ Envoyer</button>
-            <button class="btn-mini" id="sftp-refresh-btn">↻ Rafraîchir</button>
+            <button class="btn-mini" id="sftp-up-btn" type="button">⬆︎ Envoyer…</button>
+            <button class="btn-mini" id="sftp-mkdir-btn" type="button">＋ Dossier</button>
           </div>
-          <div class="sftp-status" id="sftp-status">SFTP prêt</div>
+          <div class="sftp-progress" id="sftp-progress" hidden><div class="bar" id="sftp-bar"></div></div>
+          <div class="sftp-status" id="sftp-status">Glisse des fichiers ici, ou clique sur un fichier pour le télécharger.</div>
         </aside>
+        <div class="ctx-menu" id="sftp-context">
+          <div class="ctx-item" data-act="download">Télécharger</div>
+          <div class="ctx-item" data-act="cd">Aller ici dans le terminal</div>
+          <div class="ctx-item" data-act="copy">Copier le chemin</div>
+          <div class="ctx-sep"></div>
+          <div class="ctx-item" data-act="rename">Renommer…</div>
+          <div class="ctx-item" data-act="mkdir">Nouveau dossier…</div>
+          <div class="ctx-sep"></div>
+          <div class="ctx-item danger" data-act="delete">Supprimer</div>
+        </div>
       </div>
     </section>
   </div>
@@ -729,6 +776,19 @@
           <button type="button" class="btn-ghost" id="t-close">Fermer</button>
         </div>
       </div>
+    </div>
+    <div class="modal-backdrop" id="ask-modal">
+      <form class="modal" id="ask-form" autocomplete="off">
+        <h2 id="ask-title">—</h2>
+        <label><span id="ask-label">Nom</span>
+          <input id="ask-input" required spellcheck="false" />
+        </label>
+        <p class="modal-error" id="ask-error" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="ask-cancel">Annuler</button>
+          <button type="submit" class="btn-primary" id="ask-submit">OK</button>
+        </div>
+      </form>
     </div>
     <div class="modal-backdrop" id="edit-modal">
       <form class="modal" id="edit-form" autocomplete="off">

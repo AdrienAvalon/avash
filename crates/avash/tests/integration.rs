@@ -244,6 +244,18 @@ impl russh::server::Handler for TestSshSession {
 
 // ---------- Système de fichiers SFTP factice en mémoire ----------
 
+/// Operations de modification recues par le simulacre SFTP.
+static SFTP_OPS: Mutex<Vec<String>> = Mutex::const_new(Vec::new());
+
+fn ok_status(id: u32) -> Status {
+    Status {
+        id,
+        status_code: StatusCode::Ok,
+        error_message: String::new(),
+        language_tag: String::new(),
+    }
+}
+
 #[derive(Default)]
 struct TestSftpSession {
     root_read_done: bool,
@@ -329,6 +341,59 @@ impl russh_sftp::server::Handler for TestSftpSession {
                 error_message: String::new(),
                 language_tag: String::new(),
             })
+        }
+    }
+
+    fn mkdir(
+        &mut self,
+        id: u32,
+        path: String,
+        _attrs: FileAttributes,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        async move {
+            SFTP_OPS.lock().await.push(format!("mkdir {path}"));
+            Ok(ok_status(id))
+        }
+    }
+
+    fn remove(
+        &mut self,
+        id: u32,
+        filename: String,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        async move {
+            SFTP_OPS.lock().await.push(format!("remove {filename}"));
+            Ok(ok_status(id))
+        }
+    }
+
+    fn rmdir(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        async move {
+            // Un dossier « plein » est refuse, comme le ferait OpenSSH.
+            if path.ends_with("plein") {
+                return Err(StatusCode::Failure);
+            }
+            SFTP_OPS.lock().await.push(format!("rmdir {path}"));
+            Ok(ok_status(id))
+        }
+    }
+
+    fn rename(
+        &mut self,
+        id: u32,
+        oldpath: String,
+        newpath: String,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        async move {
+            SFTP_OPS
+                .lock()
+                .await
+                .push(format!("rename {oldpath} {newpath}"));
+            Ok(ok_status(id))
         }
     }
 
@@ -854,4 +919,57 @@ async fn tunnel_distant_relaie_vers_un_service_local() {
     assert_eq!(snap.bytes_down, 5, "« hello » vers le service local");
     assert_eq!(snap.bytes_up, 5, "« HELLO » vers le serveur");
     tunnel.close().await;
+}
+
+// ---------- SFTP : dossiers, renommage, suppression, progression ----------
+
+#[tokio::test]
+async fn sftp_mkdir_rename_remove_atteignent_le_serveur() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    sftp.mkdir("/srv/nouveau").await.unwrap();
+    sftp.rename("/srv/a.txt", "/srv/b.txt").await.unwrap();
+    sftp.remove("/srv/b.txt", false).await.unwrap();
+    sftp.remove("/srv/vide", true).await.unwrap();
+    let err = sftp.remove("/srv/plein", true).await.unwrap_err();
+    assert!(
+        err.to_string().contains("doit être vide"),
+        "le message doit expliquer pourquoi : {err:#}"
+    );
+    let ops = SFTP_OPS.lock().await.clone();
+    for expected in [
+        "mkdir /srv/nouveau",
+        "rename /srv/a.txt /srv/b.txt",
+        "remove /srv/b.txt",
+        "rmdir /srv/vide",
+    ] {
+        assert!(
+            ops.iter().any(|o| o == expected),
+            "{expected} absent de {ops:?}"
+        );
+    }
+    sftp.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn sftp_download_rapporte_sa_progression() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    let local = std::env::temp_dir().join(format!("avash-progress-{}.bin", std::process::id()));
+    let mut seen = Vec::new();
+    let n = sftp
+        .download_with("/srv/fichier.txt", &local, |done, _total| seen.push(done))
+        .await
+        .unwrap();
+    assert_eq!(n, "CONTENU-FICHIER-TEST".len() as u64);
+    assert_eq!(
+        seen.last().copied(),
+        Some(n),
+        "la derniere progression = total transfere"
+    );
+    assert_eq!(std::fs::read(&local).unwrap(), b"CONTENU-FICHIER-TEST");
+    let _ = std::fs::remove_file(&local);
+    sftp.close().await.unwrap();
 }

@@ -10,6 +10,7 @@ use std::sync::Mutex;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(commands::SessionStore {
             inner: Mutex::new(HashMap::new()),
         })
@@ -29,6 +30,9 @@ pub fn run() {
             commands::sftp_list,
             commands::sftp_download,
             commands::sftp_upload,
+            commands::sftp_mkdir,
+            commands::sftp_remove,
+            commands::sftp_rename,
             commands::host_save,
             commands::host_delete,
             commands::host_get,

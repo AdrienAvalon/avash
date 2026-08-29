@@ -536,9 +536,29 @@ pub async fn sftp_list(
     sftp.list(&path).await.map_err(|e| e.to_string())
 }
 
+/// Rapporte la progression d'un transfert au front, sans le noyer : au plus
+/// un evenement toutes les 80 ms, plus le dernier.
+fn progress_reporter(app: &AppHandle, id: u64, name: &str, kind: &str) -> impl FnMut(u64, u64) {
+    let app = app.clone();
+    let name = name.to_string();
+    let kind = kind.to_string();
+    let mut last: Option<std::time::Instant> = None;
+    move |done, total| {
+        let due = last.is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(80));
+        if due || done == total {
+            last = Some(std::time::Instant::now());
+            let _ = app.emit(
+                "sftp-progress",
+                serde_json::json!({ "id": id, "name": name, "kind": kind, "done": done, "total": total }),
+            );
+        }
+    }
+}
+
 /// Télécharge un fichier distant → local (dossier Téléchargements par défaut).
 #[tauri::command]
 pub async fn sftp_download(
+    app: AppHandle,
     state: tauri::State<'_, SessionStore>,
     id: u64,
     remote: String,
@@ -546,25 +566,91 @@ pub async fn sftp_download(
 ) -> Result<String, String> {
     let sftp = sftp_of(&state, id).await?;
     let local = local_target(&remote, local)?;
+    let name = std::path::Path::new(&remote)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let report = progress_reporter(&app, id, &name, "download");
     let n = sftp
-        .download(&remote, std::path::Path::new(&local))
+        .download_with(&remote, std::path::Path::new(&local), report)
         .await
         .map_err(|e| e.to_string())?;
     Ok(format!("{local} ({n} octets)"))
 }
 
-/// Téléverse un fichier local → distant.
+/// Téléverse un fichier local dans un dossier distant, sous son propre nom.
+/// Rend le chemin distant cree.
 #[tauri::command]
 pub async fn sftp_upload(
+    app: AppHandle,
     state: tauri::State<'_, SessionStore>,
     id: u64,
     local: String,
-    remote: String,
-) -> Result<u64, String> {
+    remote_dir: String,
+) -> Result<String, String> {
+    let local_path = std::path::Path::new(&local);
+    if local_path.is_dir() {
+        return Err(format!(
+            "{} est un dossier : seuls les fichiers sont envoyés.",
+            local_path.display()
+        ));
+    }
+    let name = local_path
+        .file_name()
+        .ok_or_else(|| format!("Nom de fichier illisible : {local}"))?
+        .to_string_lossy()
+        .into_owned();
+    let remote = remote_join(&remote_dir, &name);
     let sftp = sftp_of(&state, id).await?;
-    sftp.upload(std::path::Path::new(&local), &remote)
+    let report = progress_reporter(&app, id, &name, "upload");
+    sftp.upload_with(local_path, &remote, report)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(remote)
+}
+
+/// Concatene un dossier distant et un nom, comme le fait le front.
+fn remote_join(dir: &str, name: &str) -> String {
+    if dir.is_empty() || dir == "." {
+        return name.to_string();
+    }
+    if dir.ends_with('/') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_mkdir(
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+    path: String,
+) -> Result<(), String> {
+    let sftp = sftp_of(&state, id).await?;
+    sftp.mkdir(&path).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_remove(
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+    path: String,
+    is_dir: bool,
+) -> Result<(), String> {
+    let sftp = sftp_of(&state, id).await?;
+    sftp.remove(&path, is_dir).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_rename(
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    let sftp = sftp_of(&state, id).await?;
+    sftp.rename(&from, &to).await.map_err(|e| e.to_string())
 }
 
 // ---------- Tunnels ----------
@@ -738,6 +824,19 @@ mod tests {
         let mut t = target_with(None);
         t.override_password(Some("saisi".into()));
         assert_eq!(t.password.as_deref(), Some("saisi"));
+    }
+
+    #[test]
+    fn remote_join_gere_racine_point_et_slash_final() {
+        assert_eq!(remote_join("/srv", "a.txt"), "/srv/a.txt");
+        assert_eq!(remote_join("/srv/", "a.txt"), "/srv/a.txt");
+        assert_eq!(remote_join("/", "a.txt"), "/a.txt");
+        assert_eq!(
+            remote_join(".", "a.txt"),
+            "a.txt",
+            "cwd du login : chemin relatif"
+        );
+        assert_eq!(remote_join("", "a.txt"), "a.txt");
     }
 
     #[test]
