@@ -99,12 +99,25 @@ pub async fn rdp_open(
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Lancement du sidecar RDP impossible : {e}"))?;
 
     let mut stdin = child.stdin.take().ok_or("stdin sidecar indisponible")?;
     let mut stdout = child.stdout.take().ok_or("stdout sidecar indisponible")?;
+    let mut stderr = child.stderr.take().ok_or("stderr sidecar indisponible")?;
+
+    // Le sidecar écrit ses diagnostics (échec d'auth, TLS, NLA…) sur stderr :
+    // on les collecte pour les remonter au front si la connexion échoue.
+    let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    {
+        let buf = stderr_buf.clone();
+        tokio::spawn(async move {
+            let mut s = String::new();
+            let _ = stderr.read_to_string(&mut s).await;
+            *buf.lock().unwrap() = s;
+        });
+    }
 
     // Tâche d'écriture : elle seule possède le stdin, alimentée par une file.
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -129,6 +142,7 @@ pub async fn rdp_open(
     // Pompe stdout -> Channel, dans une tâche.
     let b64 = base64::engine::general_purpose::STANDARD;
     tokio::spawn(async move {
+        let mut connected = false;
         loop {
             let Some(hdr) = read_exact(&mut stdout, 5).await else {
                 break;
@@ -139,10 +153,13 @@ pub async fn rdp_open(
                 break;
             };
             let msg = match kind {
-                1 if payload.len() >= 4 => RdpMsg::Connected {
-                    w: u16::from_le_bytes([payload[0], payload[1]]),
-                    h: u16::from_le_bytes([payload[2], payload[3]]),
-                },
+                1 if payload.len() >= 4 => {
+                    connected = true;
+                    RdpMsg::Connected {
+                        w: u16::from_le_bytes([payload[0], payload[1]]),
+                        h: u16::from_le_bytes([payload[2], payload[3]]),
+                    }
+                }
                 2 if payload.len() >= 8 => RdpMsg::Frame {
                     x: u16::from_le_bytes([payload[0], payload[1]]),
                     y: u16::from_le_bytes([payload[2], payload[3]]),
@@ -158,6 +175,21 @@ pub async fn rdp_open(
             if channel.send(msg).is_err() {
                 break;
             }
+        }
+        // Fin du flux : si on n'a jamais reçu CONNECTED, la connexion a
+        // échoué — on remonte le diagnostic du sidecar plutôt qu'une
+        // fermeture muette.
+        if !connected {
+            // Laisse le lecteur de stderr finir.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let diag = stderr_buf.lock().unwrap().trim().to_string();
+            let message = if diag.is_empty() {
+                "Connexion RDP fermée avant établissement.".to_string()
+            } else {
+                // Dernière ligne = la cause la plus parlante.
+                diag.lines().last().unwrap_or(&diag).to_string()
+            };
+            let _ = channel.send(RdpMsg::Error { message });
         }
         let _ = channel.send(RdpMsg::Closed);
     });
