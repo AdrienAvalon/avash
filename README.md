@@ -271,10 +271,10 @@ avec russh (SSH) — impossible dans le même binaire. Solution : un **sidecar
 isolé** (`rdp-sidecar/`, hors workspace, sans russh), lancé par Avash, qui
 streamera le bureau dans la fenêtre.
 
-- **Étape 1 (faite)** : sidecar `avash-rdp` — connexion TCP + TLS + CredSSP/NLA
-  + décodage graphique + capture du bureau en PNG. Compile, s'exécute, échoue
-  proprement. Suit l'exemple officiel IronRDP. **À valider contre un vrai
-  serveur RDP** (aucun disponible localement pour l'instant).
+- **Étape 1 (faite, VALIDÉE)** : sidecar `avash-rdp` — connexion TCP + TLS +
+  CredSSP/NLA + décodage graphique + capture du bureau en PNG. Validé
+  bout-en-bout contre un serveur RDP réel (`test-rdp-server/`, exemple IronRDP
+  adapté, pur Rust) : bureau 1920×1080 reçu, décodé et enregistré correctement.
 - Étapes suivantes : protocole de streaming framebuffer/entrées (sidecar ↔
   Avash), bundling sidecar (Tauri), rendu canvas + souris/clavier dans un
   onglet RDP.

@@ -1,0 +1,15 @@
+[package]
+name = "test-rdp-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ironrdp = { version = "0.17", features = ["server", "cliprdr", "rdpsnd", "connector"] }
+ironrdp-cliprdr-native = "0.4"
+anyhow = "1"
+async-trait = "0.1"
+rand = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+pico-args = "0.5"
+opus2 = "0.4.0"

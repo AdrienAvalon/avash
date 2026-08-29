@@ -5,3 +5,5 @@ web/dist/
 # Artefacts de release (générés par scripts/release.sh)
 dist-release/
 rdp-sidecar/target/
+test-rdp-server/target/
+test-rdp-server/*.pem
