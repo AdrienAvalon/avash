@@ -10,9 +10,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ic, fileIconName } from "./icons";
 import {
   humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, hostInitials, hostHue, osBadge,
-  fileIcon, shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
+  shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
 } from "./filters";
@@ -640,7 +641,7 @@ function renderPalette() {
   for (const h of matches) {
     const item = document.createElement("div");
     item.className = "item";
-    item.innerHTML = `<span>😈</span><span class="name"></span><span class="sub"></span>`;
+    item.innerHTML = `<span class="pico">${ic("terminal")}</span><span class="name"></span><span class="sub"></span>`;
     item.querySelector(".name")!.textContent = h.alias;
     item.querySelector(".sub")!.textContent = `${h.user ?? "?"}@${h.hostname ?? h.alias}`;
     item.addEventListener("click", () => { paletteClose(); openSession(h); });
@@ -717,7 +718,7 @@ async function sftpNavigate(path: string) {
     if (path !== "/") {
       const up = document.createElement("div");
       up.className = "sftp-entry dir up";
-      up.innerHTML = `<span class="ic">↰</span><span class="nm">..</span><span class="sz"></span>`;
+      up.innerHTML = `<span class="ic">${ic("cornerUpLeft")}</span><span class="nm">..</span><span class="sz"></span>`;
       up.addEventListener("dblclick", () => sftpNavigate(parentDir(path)));
       list.appendChild(up);
     }
@@ -725,7 +726,7 @@ async function sftpNavigate(path: string) {
       const el = document.createElement("div");
       el.className = "sftp-entry" + (e.is_dir ? " dir" : "");
       el.innerHTML = `<span class="ic"></span><span class="nm"></span><span class="sz"></span>`;
-      el.querySelector(".ic")!.textContent = fileIcon(e.name, e.is_dir);
+      el.querySelector(".ic")!.innerHTML = ic(fileIconName(e.name, e.is_dir));
       el.querySelector(".nm")!.textContent = e.name;
       el.querySelector(".sz")!.textContent = e.is_dir ? shortDate(e.modified) : humanSize(e.size);
       el.title = e.is_dir
@@ -1047,6 +1048,31 @@ $("ask-modal").addEventListener("click", (e) => { if (e.target === $("ask-modal"
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && $("ask-modal").classList.contains("open")) askClose(null);
 });
+
+// Icones : remplacer les marqueurs data-icon par des SVG coherents.
+function hydrateIcons() {
+  for (const el of document.querySelectorAll<HTMLElement>("[data-icon]")) {
+    const name = el.dataset.icon ?? "file";
+    const label = el.textContent?.trim() ?? "";
+    el.textContent = "";
+    if (el.classList.contains("manual-btn")) {
+      const box = document.createElement("span");
+      box.className = "ic";
+      box.innerHTML = ic(name);
+      const txt = document.createElement("span");
+      txt.textContent = label;
+      el.append(box, txt);
+    } else {
+      el.innerHTML = ic(name);
+      if (label) {
+        const txt = document.createElement("span");
+        txt.textContent = label;
+        el.append(txt);
+      }
+    }
+  }
+}
+hydrateIcons();
 
 loadHosts();
 // Prechargement : au moment du clic, la police est deja prete.
@@ -1685,8 +1711,8 @@ function renderTunnels() {
       </div>
       <div class="tacts">
         <button class="tbtn" data-act="toggle"></button>
-        <button class="tbtn" data-act="edit" title="Modifier">✎</button>
-        <button class="tbtn danger" data-act="delete" title="Supprimer">🗑</button>
+        <button class="tbtn" data-act="edit" title="Modifier">${ic("pencil")}</button>
+        <button class="tbtn danger" data-act="delete" title="Supprimer">${ic("trash")}</button>
       </div>`;
     row.querySelector(".tflag")!.textContent = tunnelFlag(d.kind);
     row.querySelector(".tname")!.textContent = d.name || d.alias;
@@ -1707,11 +1733,11 @@ function renderTunnels() {
       toggle.textContent = "…";
       toggle.disabled = true;
     } else if (alive) {
-      toggle.textContent = "■ Arrêter";
-      toggle.className = "tbtn stop";
+      toggle.innerHTML = `${ic("stop")}<span>Arrêter</span>`;
+      toggle.className = "tbtn stop labeled";
     } else {
-      toggle.textContent = running ? "↻ Relancer" : "▶ Démarrer";
-      toggle.className = "tbtn go";
+      toggle.innerHTML = `${ic("refresh")}<span>${running ? "Relancer" : "Démarrer"}</span>`;
+      toggle.className = "tbtn go labeled";
     }
     toggle.addEventListener("click", () => tunnelToggle(d));
     row.querySelector('[data-act="edit"]')!.addEventListener("click", () => tunnelEdit(d));
@@ -1981,9 +2007,9 @@ function renderSnippets() {
         <div class="scmd"></div>
       </div>
       <div class="sacts">
-        <button class="tbtn go" data-act="send" title="Envoyer">▶</button>
-        <button class="tbtn" data-act="edit" title="Modifier">✎</button>
-        <button class="tbtn danger" data-act="delete" title="Supprimer">🗑</button>
+        <button class="tbtn go" data-act="send" title="Envoyer">${ic("play")}</button>
+        <button class="tbtn" data-act="edit" title="Modifier">${ic("pencil")}</button>
+        <button class="tbtn danger" data-act="delete" title="Supprimer">${ic("trash")}</button>
       </div>`;
     row.querySelector(".snm")!.textContent = sn.name;
     if (nVars > 0) {

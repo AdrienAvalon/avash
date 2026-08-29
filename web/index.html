@@ -79,6 +79,7 @@
     input[type=number] { -moz-appearance: textfield; appearance: textfield; }
     input[type=number]::-webkit-inner-spin-button,
     input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    .ic-svg { width: 16px; height: 16px; flex: none; display: inline-block; vertical-align: middle; }
     kbd {
       display: inline-block; min-width: 18px; text-align: center;
       background: var(--card); border: 1px solid var(--border); border-bottom-width: 2px;
@@ -177,10 +178,11 @@
       transition: background var(--t-fast), color var(--t-fast);
     }
     .manual-btn .ic {
-      width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center;
-      background: var(--card); border: 1px solid var(--border-soft); font-size: 12.5px;
-      color: var(--text);
+      width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center;
+      background: var(--card); border: 1px solid var(--border-soft); color: var(--text-dim);
+      transition: color var(--t-fast), border-color var(--t-fast);
     }
+    .manual-btn:hover .ic { color: var(--accent-soft); }
     .manual-btn:hover { background: var(--card-hover); color: var(--text); }
     .manual-btn:hover .ic { border-color: var(--accent-line); }
     .footer {
@@ -300,9 +302,11 @@
     .btn-ghost:hover { color: var(--text); background: var(--card-hover); border-color: var(--border); }
     .btn-mini {
       flex: 1; padding: 6px 0; border-radius: 7px; border: 1px solid var(--border-soft);
-      background: var(--card); font-size: 12px; text-align: center;
+      background: var(--card); font-size: 12px; color: var(--text);
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
       transition: border-color var(--t-fast), background var(--t-fast);
     }
+    .btn-mini .ic-svg { width: 14px; height: 14px; }
     .btn-mini:hover { border-color: var(--accent-line); background: var(--card-hover); }
     .tbtn {
       border: 1px solid var(--border-soft); background: transparent; color: var(--text-dim);
@@ -439,6 +443,15 @@
       background: color-mix(in srgb, var(--ok) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); color: #8ee0ac;
     }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+    .btn-primary[data-icon], .btn-ghost[data-icon] { display: inline-flex; align-items: center; gap: 7px; }
+    .btn-primary .ic-svg, .btn-ghost .ic-svg { width: 15px; height: 15px; }
+    .tbtn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+    .tbtn .ic-svg { width: 14px; height: 14px; }
+    .tbtn.labeled { padding: 5px 10px; }
+    .sftp-ib .ic-svg { width: 15px; height: 15px; }
+    .term-search button .ic-svg { width: 14px; height: 14px; }
+    .palette .item .pico { display: inline-flex; color: var(--text-dim); }
+    .palette .item .pico .ic-svg { width: 15px; height: 15px; }
 
     /* Listes dans les modales (cles, tunnels) */
     .key-list, .tunnel-list { display: flex; flex-direction: column; gap: 6px; }
@@ -569,7 +582,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <span class="mascot">😈</span> Avash <span class="ver">v0.1</span>
+        <span class="mascot">😼</span> Avash <span class="ver">v0.1</span>
       </div>
       <div class="search-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -579,10 +592,10 @@
       <div class="section-title"><span>Hôtes</span><span id="host-count">—</span></div>
       <div id="host-list" class="host-list"></div>
       <div class="side-actions">
-        <button id="manual-btn" class="manual-btn" type="button"><span class="ic">＋</span>Connexion directe</button>
-        <button id="keys-btn" class="manual-btn" type="button"><span class="ic">🔑</span>Mes clés SSH</button>
-        <button id="tunnels-btn" class="manual-btn" type="button"><span class="ic">⇄</span>Tunnels</button>
-        <button id="snippets-btn" class="manual-btn" type="button"><span class="ic">⚡</span>Snippets</button>
+        <button id="manual-btn" class="manual-btn" type="button" data-icon="plus">Connexion directe</button>
+        <button id="keys-btn" class="manual-btn" type="button" data-icon="key">Mes clés SSH</button>
+        <button id="tunnels-btn" class="manual-btn" type="button" data-icon="tunnel">Tunnels</button>
+        <button id="snippets-btn" class="manual-btn" type="button" data-icon="zap">Snippets</button>
       </div>
       <div class="footer"><span>~/.ssh/config</span><span>avash v0.1</span></div>
     </aside>
@@ -601,8 +614,8 @@
           <div class="title">Prêt quand tu l'es.</div>
           <div class="hint" id="empty-hint">Double-clic sur un hôte pour te connecter</div>
           <div class="empty-actions">
-            <button class="btn-primary" id="empty-connect" type="button">＋ Connexion directe</button>
-            <button class="btn-ghost" id="empty-keys" type="button">🔑 Mes clés SSH</button>
+            <button class="btn-primary" id="empty-connect" type="button" data-icon="plus">Connexion directe</button>
+            <button class="btn-ghost" id="empty-keys" type="button" data-icon="key">Mes clés SSH</button>
           </div>
           <div class="shortcuts">
             <span><kbd>Ctrl</kbd>+<kbd>K</kbd> palette</span>
@@ -615,9 +628,9 @@
         <div id="terminal"></div>
         <div class="term-search" id="term-search">
           <input id="term-search-input" placeholder="Rechercher…" spellcheck="false" />
-          <button id="term-search-prev" title="Précédent (Maj+Entrée)">↑</button>
-          <button id="term-search-next" title="Suivant (Entrée)">↓</button>
-          <button id="term-search-close" title="Fermer (Échap)">✕</button>
+          <button id="term-search-prev" title="Précédent (Maj+Entrée)" data-icon="arrowUp"></button>
+          <button id="term-search-next" title="Suivant (Entrée)" data-icon="arrowDown"></button>
+          <button id="term-search-close" title="Fermer (Échap)" data-icon="x"></button>
         </div>
         <div class="ctx-menu" id="term-context">
           <div class="ctx-item" data-act="copy">Copier<span class="ctx-key">Ctrl+Maj+C</span></div>
@@ -629,15 +642,15 @@
         </div>
         <aside class="sftp-panel" id="sftp-panel">
           <div class="sftp-head">
-            <button class="sftp-ib" id="sftp-up" title="Dossier parent" type="button">↑</button>
+            <button class="sftp-ib" id="sftp-up" title="Dossier parent" type="button" data-icon="arrowUp"></button>
             <input class="sftp-path" id="sftp-path" spellcheck="false" autocomplete="off" title="Chemin distant — Entrée pour y aller" />
-            <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" type="button">↻</button>
+            <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" type="button" data-icon="refresh"></button>
           </div>
           <div class="sftp-list" id="sftp-list"></div>
           <div class="sftp-drop" id="sftp-drop"><span>⬆︎</span>Déposer pour envoyer ici</div>
           <div class="sftp-foot">
-            <button class="btn-mini" id="sftp-up-btn" type="button">⬆︎ Envoyer…</button>
-            <button class="btn-mini" id="sftp-mkdir-btn" type="button">＋ Dossier</button>
+            <button class="btn-mini" id="sftp-up-btn" type="button" data-icon="upload">Envoyer…</button>
+            <button class="btn-mini" id="sftp-mkdir-btn" type="button" data-icon="plus">Dossier</button>
           </div>
           <div class="sftp-progress" id="sftp-progress" hidden><div class="bar" id="sftp-bar"></div></div>
           <div class="sftp-status" id="sftp-status">Glisse des fichiers ici, ou clique sur un fichier pour le télécharger.</div>

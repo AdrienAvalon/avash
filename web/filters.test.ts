@@ -233,16 +233,17 @@ describe("osBadge", () => {
 });
 
 
-import { fileIcon, shortDate, shellQuote, validFileName } from "./filters";
+import { shortDate, shellQuote, validFileName } from "./filters";
+import { fileIconName } from "./icons";
 
-describe("fileIcon", () => {
+describe("fileIconName", () => {
   it("distingue dossier, image, archive, code, cle", () => {
-    expect(fileIcon("x", true)).toBe("📁");
-    expect(fileIcon("photo.JPG", false)).toBe("🖼️");
-    expect(fileIcon("site.tar.gz", false)).toBe("📦");
-    expect(fileIcon("deploy.sh", false)).toBe("📜");
-    expect(fileIcon("id_ed25519", false)).toBe("🔑");
-    expect(fileIcon("notes", false)).toBe("📄");
+    expect(fileIconName("x", true)).toBe("folder");
+    expect(fileIconName("photo.JPG", false)).toBe("image");
+    expect(fileIconName("site.tar.gz", false)).toBe("fileArchive");
+    expect(fileIconName("deploy.sh", false)).toBe("fileCode");
+    expect(fileIconName("id_ed25519", false)).toBe("key");
+    expect(fileIconName("notes", false)).toBe("file");
   });
 });
 
