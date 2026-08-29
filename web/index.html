@@ -43,6 +43,7 @@
       --accent-line: rgba(139,124,246,.55);
       --accent-tint: rgba(139,124,246,.12);
       --ok: #4ad295; --warn: #e8b765; --err: #ef6b73;
+      --term-bg: #0d0f16;
       --mono: "Avash Mono", ui-monospace, monospace;
       --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
       --r-sm: 6px; --r-md: 9px; --r-lg: 14px;
@@ -55,11 +56,41 @@
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
 
+    /* Thème clair : suit le système par défaut, forçable via data-theme. */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+      --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #ffffff;
+      --card: #ffffff; --card-hover: #eef1f6;
+      --border: #d7dce6; --border-soft: #e6e9f0;
+      --text: #171b26; --text-dim: #5a6478; --text-faint: #929bad;
+      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff;
+      --accent-glow: rgba(109,92,240,.16); --accent-line: rgba(109,92,240,.42);
+      --accent-tint: rgba(109,92,240,.10);
+      --ok: #1a9d5f; --warn: #b0791f; --err: #d6455a;
+      --term-bg: #f6f7f9;
+      --shadow-soft: 0 1px 2px rgba(24,28,45,.06), 0 6px 18px rgba(24,28,45,.08);
+      --shadow-pop: 0 18px 50px rgba(24,28,45,.18), 0 0 0 1px rgba(24,28,45,.04) inset;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #ffffff;
+      --card: #ffffff; --card-hover: #eef1f6;
+      --border: #d7dce6; --border-soft: #e6e9f0;
+      --text: #171b26; --text-dim: #5a6478; --text-faint: #929bad;
+      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff;
+      --accent-glow: rgba(109,92,240,.16); --accent-line: rgba(109,92,240,.42);
+      --accent-tint: rgba(109,92,240,.10);
+      --ok: #1a9d5f; --warn: #b0791f; --err: #d6455a;
+      --term-bg: #f6f7f9;
+      --shadow-soft: 0 1px 2px rgba(24,28,45,.06), 0 6px 18px rgba(24,28,45,.08);
+      --shadow-pop: 0 18px 50px rgba(24,28,45,.18), 0 0 0 1px rgba(24,28,45,.04) inset;
+    }
+    html { color-scheme: light dark; }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
     /* L'attribut hidden doit gagner sur tout display: fixe les champs de
        formulaire qui restaient visibles alors qu'ils etaient masques. */
     [hidden] { display: none !important; }
-    html { color-scheme: dark; }
     body {
       background: var(--bg); color: var(--text); font-family: var(--sans);
       font-size: 13px; line-height: 1.4; height: 100vh; overflow: hidden;
@@ -110,6 +141,13 @@
       color: var(--accent-soft); background: var(--accent-tint);
       padding: 2px 7px; border-radius: 20px;
     }
+    .theme-toggle {
+      width: 28px; height: 28px; border-radius: 8px; border: 1px solid transparent;
+      background: transparent; color: var(--text-dim); display: grid; place-items: center;
+      transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+    }
+    .theme-toggle:hover { background: var(--card-hover); color: var(--text); border-color: var(--border-soft); }
+    .theme-toggle .ic-svg { width: 16px; height: 16px; }
     .search-wrap { padding: 2px 12px 8px; position: relative; }
     .search-wrap svg {
       position: absolute; left: 22px; top: 11px; width: 14px; height: 14px;
@@ -246,7 +284,7 @@
     .terminal-zone { flex: 1; position: relative; display: flex; }
     /* Meme fond que le theme xterm : l'espace entre la derniere ligne et le
        bord (les lignes ne tombent jamais juste) ne se voit pas. */
-    .terminal-zone > #terminal { flex: 1; position: relative; min-width: 0; background: #0d0f16; }
+    .terminal-zone > #terminal { flex: 1; position: relative; min-width: 0; background: var(--term-bg); }
     .xterm-container { display: block; border-radius: 6px; }
     /* Ne PAS forcer la hauteur de .xterm-screen : xterm la calcule d'apres
        les lignes ; la forcer a 100 % laissait une bande noire en dessous. */
@@ -254,7 +292,7 @@
     /* xterm.css peint la couche de defilement en noir pur ; sous la derniere
        ligne rendue (les lignes ne tombent jamais juste) elle apparaissait en
        bande noire. Meme couleur que le theme. */
-    .xterm .xterm-viewport { background-color: #0d0f16 !important; }
+    .xterm .xterm-viewport { background-color: var(--term-bg) !important; }
     .xterm-viewport::-webkit-scrollbar-thumb { background: #262c3d; border: 2px solid var(--bg); }
     .xterm.xterm-cursor-blink .xterm-cursor-layer { opacity: 1; }
 
@@ -583,6 +621,7 @@
     <aside class="sidebar">
       <div class="brand">
         <span class="mascot">😼</span> Avash <span class="ver">v0.1</span>
+        <button id="theme-toggle" class="theme-toggle" type="button" title="Thème"></button>
       </div>
       <div class="search-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>

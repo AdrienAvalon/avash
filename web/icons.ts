@@ -29,6 +29,9 @@ const P: Record<string, string> = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
   terminal: '<path d="M5 5 11 12l-6 7"/><path d="M13 19h6"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
 };
 
 /** Renvoie une icône SVG inline. `cls` s'ajoute à la classe `ic-svg`. */

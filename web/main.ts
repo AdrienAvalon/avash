@@ -73,7 +73,7 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 // ⚠️ `fontFamily` n'appartient PAS au theme : c'est une option du Terminal.
 // Place ici, il etait purement ignore et xterm.js retombait sur son defaut
 // (courier-new), d'ou un rendu tres laid.
-const THEME = {
+const THEME_DARK = {
   background: "#0d0f16",
   foreground: "#dfe3ee",
   cursor: "#8b7cf6",
@@ -87,6 +87,67 @@ const THEME = {
   brightYellow: "#ffd083", brightBlue: "#97bcff", brightMagenta: "#d5adff",
   brightCyan: "#8ce4f7", brightWhite: "#ffffff",
 };
+
+/** Thème clair du terminal : fond clair, ANSI assombris pour rester lisibles. */
+const THEME_LIGHT = {
+  background: "#f6f7f9",
+  foreground: "#1f2430",
+  cursor: "#6d5cf0",
+  cursorAccent: "#f6f7f9",
+  selectionBackground: "rgba(109,92,240,.22)",
+  selectionForeground: "#0b0d14",
+  black: "#2c3140", red: "#c8353d", green: "#1f9d57", yellow: "#9a6a15",
+  blue: "#3059c8", magenta: "#8043c8", cyan: "#0d7d97", white: "#5a6478",
+  brightBlack: "#7a8296", brightRed: "#e0555d", brightGreen: "#28b26a",
+  brightYellow: "#b3841f", brightBlue: "#4a76e8", brightMagenta: "#9a5fe0",
+  brightCyan: "#1596b0", brightWhite: "#1f2430",
+};
+
+// --- Thème de l'interface : système (défaut), clair, ou sombre ---
+
+type ThemePref = "system" | "light" | "dark";
+const THEME_KEY = "avash.theme";
+const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+function readThemePref(): ThemePref {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (v === "light" || v === "dark" || v === "system") return v;
+  } catch { /* stockage indispo */ }
+  return "system";
+}
+let themePref: ThemePref = readThemePref();
+
+/** Sombre effectif, une fois la préférence système résolue. */
+function isDark(): boolean {
+  return themePref === "dark" || (themePref === "system" && systemDark.matches);
+}
+
+function terminalTheme() {
+  return isDark() ? THEME_DARK : THEME_LIGHT;
+}
+
+/** Applique la préférence : attribut racine, terminaux ouverts, bouton. */
+function applyTheme() {
+  const root = document.documentElement;
+  if (themePref === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", themePref);
+  const th = terminalTheme();
+  for (const s of state.sessions.values()) s.term.options.theme = th;
+  const btn = $("theme-toggle");
+  const icon = themePref === "system" ? "monitor" : themePref === "light" ? "sun" : "moon";
+  btn.innerHTML = ic(icon);
+  btn.title = `Thème : ${themePref === "system" ? "système" : themePref === "light" ? "clair" : "sombre"} (cliquer pour changer)`;
+}
+
+function cycleTheme() {
+  themePref = themePref === "system" ? "light" : themePref === "light" ? "dark" : "system";
+  try { localStorage.setItem(THEME_KEY, themePref); } catch { /* stockage indispo */ }
+  applyTheme();
+}
+
+// Le système change (nuit/jour) : ne recolorer que si on le suit.
+systemDark.addEventListener("change", () => { if (themePref === "system") applyTheme(); });
 
 /**
  * Nerd Font en tete : l'invite d'un shell moderne (fish, starship, powerlevel)
@@ -228,7 +289,7 @@ function setSessionState(id: number, st: SessionState) {
 function newSessionShell(label: string) {
   const id = state.nextId++;
   const term = new Terminal({
-    theme: THEME,
+    theme: terminalTheme(),
     fontFamily: FONT_STACK,
     // Taille entiere : une valeur fractionnaire donne un rendu flou.
     fontSize: terminalFontSize,
@@ -1073,6 +1134,8 @@ function hydrateIcons() {
   }
 }
 hydrateIcons();
+$("theme-toggle").addEventListener("click", cycleTheme);
+applyTheme();
 
 loadHosts();
 // Prechargement : au moment du clic, la police est deja prete.
