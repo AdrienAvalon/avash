@@ -155,10 +155,25 @@
 
     /* ===== Barre laterale ===== */
     .sidebar {
-      width: 268px; min-width: 228px; background: var(--bg-soft);
-      border-right: 1px solid var(--border-soft);
-      display: flex; flex-direction: column;
+      position: relative; width: var(--side-w, 268px); flex: none;
+      background: var(--bg-soft); border-right: 1px solid var(--border-soft);
+      display: flex; flex-direction: column; min-width: 0;
     }
+    body.side-collapsed .sidebar { width: 0; border-right: none; }
+    body.side-collapsed .sidebar > * { display: none; }
+    /* Poignée de redimensionnement (bord droit de la barre latérale). */
+    .side-resize {
+      position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
+      cursor: ew-resize; z-index: 30;
+    }
+    body.side-collapsed .side-resize { display: none; }
+    .side-resize::after {
+      content: ""; position: absolute; inset: 0 2px; background: transparent;
+      transition: background var(--t-fast);
+    }
+    .side-resize:hover::after, body.resizing .side-resize::after { background: var(--accent-line); }
+    /* Pas de transition pendant un glissement (évite la latence). */
+    body.resizing .sidebar, body.resizing .sftp-panel { transition: none !important; }
     .brand {
       padding: 14px 16px 12px; display: flex; align-items: center; gap: 10px;
       font-weight: 700; font-size: 15px; letter-spacing: .1px;
@@ -303,6 +318,8 @@
     .tabbar-btn:hover:not(:disabled) { background: var(--card-hover); color: var(--text); }
     .tabbar-btn:disabled { opacity: .4; }
     .tabbar-btn.active { background: var(--accent-tint); border-color: var(--accent-line); color: var(--accent-soft); }
+    .tabbar-btn.tb-icon { padding: 0 8px; }
+    .tabbar-btn.tb-icon svg { width: 16px; height: 16px; }
     .tabs::-webkit-scrollbar { display: none; }
     .tabs .no-session { align-self: center; padding-left: 8px; font-size: 12px; color: var(--text-faint); }
     .sftp-entry.sel { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 0 0 0 1px var(--accent-line); }
@@ -598,7 +615,17 @@
       background: var(--bg-soft); border-left: 1px solid var(--border-soft);
       display: flex; flex-direction: column; flex-shrink: 0;
     }
-    .sftp-panel.open { width: 320px; }
+    .sftp-panel.open { width: var(--sftp-w, 320px); }
+    .sftp-resize {
+      position: absolute; top: 0; left: -3px; width: 6px; height: 100%;
+      cursor: ew-resize; z-index: 30; display: none;
+    }
+    .sftp-panel.open .sftp-resize { display: block; }
+    .sftp-resize::after {
+      content: ""; position: absolute; inset: 0 2px; background: transparent;
+      transition: background var(--t-fast);
+    }
+    .sftp-resize:hover::after, body.resizing .sftp-resize::after { background: var(--accent-line); }
     .sftp-head { padding: 8px 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border-soft); }
     .sftp-ib {
       flex: none; width: 28px; height: 28px; border-radius: 7px; border: 1px solid transparent;
@@ -703,10 +730,14 @@
         <button id="snippets-btn" class="manual-btn" type="button" data-icon="zap">Snippets</button>
       </div>
       <div class="footer"><span>~/.ssh/config</span><span>avash v0.1</span></div>
+      <div class="side-resize" id="side-resize"></div>
     </aside>
 
     <section class="main">
       <div class="tabbar">
+        <button class="tabbar-btn tb-icon" id="side-toggle" type="button" title="Réduire/afficher la barre latérale (Ctrl+.)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+        </button>
         <div class="tabs" id="tabs"><span class="no-session">Aucune session</span></div>
         <button class="tabbar-btn" id="sftp-toggle" type="button" title="Fichiers distants (SFTP) — Ctrl+B" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -746,6 +777,7 @@
           <div class="ctx-item" data-act="clear">Effacer l'écran</div>
         </div>
         <aside class="sftp-panel" id="sftp-panel">
+          <div class="sftp-resize" id="sftp-resize"></div>
           <div class="sftp-head">
             <button class="sftp-ib" id="sftp-up" title="Dossier parent" type="button" data-icon="arrowUp"></button>
             <input class="sftp-path" id="sftp-path" spellcheck="false" autocomplete="off" title="Chemin distant — Entrée pour y aller" />
@@ -802,7 +834,7 @@
           <input id="m-user" name="user" placeholder="root" required />
         </label>
 
-        <div class="auth-switch">
+        <div class="auth-switch" id="m-auth-switch">
           <label class="radio"><input type="radio" name="auth" value="password" checked /> Mot de passe</label>
           <label class="radio"><input type="radio" name="auth" value="key" /> Clé privée</label>
         </div>
@@ -814,9 +846,18 @@
           <input id="m-key" name="key" placeholder="~/.ssh/id_ed25519" />
         </label>
 
-        <label class="check">
+        <label class="check" id="m-save-row">
           <input type="checkbox" id="m-save" />
           <span>Enregistrer cet hôte dans <code>~/.ssh/config</code></span>
+        </label>
+        <label id="m-res-row" hidden>Résolution du bureau
+          <select id="m-res">
+            <option value="1280x800">1280 × 800</option>
+            <option value="1366x768">1366 × 768</option>
+            <option value="1600x900">1600 × 900</option>
+            <option value="1920x1080">1920 × 1080</option>
+            <option value="2560x1440">2560 × 1440</option>
+          </select>
         </label>
         <label id="m-alias-row" hidden>Nom à donner à l'hôte
           <input id="m-alias" placeholder="prod-web" />

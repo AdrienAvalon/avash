@@ -263,6 +263,17 @@ procédure complète (build, vérification, signature, faux positifs AV).
   `SHA256SUMS` (+ signature GPG). Aucun packer, métadonnées complètes : la
   surface de faux positif antivirus est réduite au minimum contrôlable.
 
+## Interface — formulaire RDP + panneaux redimensionnables (29/08, nuit)
+
+- Le dialogue « Connexion directe » **s'adapte au protocole** : en RDP, plus
+  de champs SSH (clé, mode d'auth, sauvegarde `~/.ssh/config`, alias) ;
+  à la place, port 3389 par défaut et un choix de **résolution du bureau**.
+- **Panneaux redimensionnables** : la barre latérale (poignée bord droit,
+  repli via bouton/`Ctrl+.`) et le panneau SFTP (poignée bord gauche). Largeurs
+  persistées, double-clic = réinitialiser. Redimensionnement **fluide** : fit
+  du terminal throttlé au rAF, transitions coupées pendant le glissement,
+  resize serveur débounced. Le canvas RDP suit en CSS (gratuit).
+
 ## RDP (embarqué, fonctionnel — MVP)
 
 Le bureau distant RDP arrive via **IronRDP** (client RDP pur Rust). Contrainte
