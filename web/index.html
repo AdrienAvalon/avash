@@ -226,9 +226,17 @@
     .tab .close:hover { opacity: 1; background: var(--err); color: #fff; }
 
     .terminal-zone { flex: 1; position: relative; display: flex; }
-    .terminal-zone > #terminal { flex: 1; position: relative; min-width: 0; }
+    /* Meme fond que le theme xterm : l'espace entre la derniere ligne et le
+       bord (les lignes ne tombent jamais juste) ne se voit pas. */
+    .terminal-zone > #terminal { flex: 1; position: relative; min-width: 0; background: #0d0f16; }
     .xterm-container { display: block; border-radius: 6px; }
-    .xterm, .xterm .xterm-screen { height: 100%; }
+    /* Ne PAS forcer la hauteur de .xterm-screen : xterm la calcule d'apres
+       les lignes ; la forcer a 100 % laissait une bande noire en dessous. */
+    .xterm { height: 100%; }
+    /* xterm.css peint la couche de defilement en noir pur ; sous la derniere
+       ligne rendue (les lignes ne tombent jamais juste) elle apparaissait en
+       bande noire. Meme couleur que le theme. */
+    .xterm .xterm-viewport { background-color: #0d0f16 !important; }
     .xterm-viewport::-webkit-scrollbar-thumb { background: #262c3d; border: 2px solid var(--bg); }
     .xterm.xterm-cursor-blink .xterm-cursor-layer { opacity: 1; }
 

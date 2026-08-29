@@ -298,8 +298,15 @@ function newSessionShell(label: string) {
     }
     invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${e}\r\n`));
   });
+  // Le shell distant n'a besoin que de la taille finale : on attend une
+  // courte accalmie avant de la lui envoyer (un SIGWINCH par image le
+  // ferait redessiner son invite en boucle).
+  let resizeTimer = 0;
   term.onResize(({ cols, rows }) => {
-    invoke("pty_resize", { id, cols, rows }).catch(() => {});
+    clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      invoke("pty_resize", { id, cols, rows }).catch(() => {});
+    }, 60);
   });
 
   const s: Session = { id, alias: label, term, fit, tab, search, closed: false, reconnect: null };
@@ -590,11 +597,17 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Le redimensionnement a la souris envoie des dizaines d'evenements par
+// seconde ; ajuster le terminal a chacun (canvas WebGL refait, shell distant
+// notifie) figeait l'interface. Un seul ajustement par image suffit.
+let resizeRaf = 0;
 window.addEventListener("resize", () => {
-  if (state.active !== null) {
-    const s = state.sessions.get(state.active);
-    if (s) s.fit.fit();
-  }
+  if (resizeRaf) return;
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = 0;
+    if (state.active === null) return;
+    state.sessions.get(state.active)?.fit.fit();
+  });
 });
 
 // ===== SFTP =====
