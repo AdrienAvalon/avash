@@ -258,7 +258,9 @@
 
     /* ===== Etat vide ===== */
     .terminal-empty {
-      position: absolute; inset: 0; display: flex; flex-direction: column;
+      /* Au-dessus de #terminal, qui a un fond opaque (fix barre noire) et
+         le recouvrirait sinon. Masque par JS des qu'une session s'ouvre. */
+      position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 10px; color: var(--text-dim);
       background:
         radial-gradient(ellipse 60% 45% at 50% 42%, rgba(139,124,246,.16), transparent 70%),
