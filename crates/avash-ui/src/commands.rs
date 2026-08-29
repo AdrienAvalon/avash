@@ -478,9 +478,14 @@ pub async fn pty_open(
 /// connexion vouee a l'echec, plutot qu'apres. `from_alias` ayant deja
 /// consulte le trousseau, un mot de passe memorise compte comme suffisant.
 #[tauri::command]
-pub fn host_needs_password(alias: String) -> Result<bool, String> {
+pub async fn host_needs_password(alias: String) -> Result<bool, String> {
     let t = Target::from_alias(&alias)?;
-    Ok(t.key_path.is_none() && t.password.is_none())
+    // Une cle, un mot de passe memorise, ou un agent qui a des identites :
+    // dans les trois cas, inutile de reclamer une saisie a l'avance.
+    if t.key_path.is_some() || t.password.is_some() {
+        return Ok(false);
+    }
+    Ok(!AvashSession::agent_has_identities().await)
 }
 
 /// Ouvre une session sur une adresse saisie a la main, sans `~/.ssh/config`.

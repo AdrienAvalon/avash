@@ -20,6 +20,15 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 **162 tests verts** (117 Rust, 45 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
 
+### Agent SSH (29/08, soir)
+
+Authentification via l'agent (`ssh-agent`, `gpg-agent`, Pageant/pipe sous
+Windows). Ordre, comme OpenSSH : clé de l'hôte → **agent** → mot de passe.
+Une clé déverrouillée une fois, ou sur token matériel (YubiKey), évite toute
+saisie. L'interface ne réclame plus de mot de passe quand l'agent a des
+identités. Vérifié bout-en-bout avec un vrai `ssh-agent` (connexion réussie
+sans clé ni mot de passe fournis à Avash).
+
 ### Refonte « pro » (29/08, soir)
 
 Quatre axes, chacun vérifié dans l'application réelle :

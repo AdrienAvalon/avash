@@ -30,7 +30,7 @@ pub const PASSWORD_REQUIRED: &str = "[AVASH_PASSWORD_REQUIRED]";
 #[derive(Clone)]
 pub struct ClientAuth {
     pub user: String,
-    /// Chemin de la clé privée (OpenSSH). Support agent à venir.
+    /// Chemin de la clé privée (OpenSSH). À défaut, l'agent SSH est tenté.
     pub key_path: Option<PathBuf>,
     pub password: Option<String>,
 }
@@ -376,6 +376,13 @@ impl AvashSession {
                 return Ok(());
             }
         }
+        // Agent SSH : comme OpenSSH, on tente les cles chargees dans l'agent
+        // (ssh-agent, gpg-agent, Pageant/pipe sous Windows via connect_env).
+        // Une cle deverrouillee une fois, ou sur token materiel (YubiKey),
+        // evite de saisir quoi que ce soit.
+        if Self::authenticate_agent(session, &auth.user).await? {
+            return Ok(());
+        }
         if let Some(password) = &auth.password {
             if session
                 .authenticate_password(&auth.user, password)
@@ -395,6 +402,52 @@ impl AvashSession {
             ));
         }
         Err(anyhow!("Authentification échouée pour {}", auth.user))
+    }
+
+    /// L'agent SSH expose-t-il au moins une identite ? Permet a l'interface de
+    /// ne PAS reclamer de mot de passe quand l'agent peut authentifier.
+    pub async fn agent_has_identities() -> bool {
+        use russh::keys::agent::client::AgentClient;
+        let Ok(mut agent) = AgentClient::connect_env().await else {
+            return false;
+        };
+        agent
+            .request_identities()
+            .await
+            .is_ok_and(|ids| !ids.is_empty())
+    }
+
+    /// Tente l'authentification via l'agent SSH. `Ok(true)` si une cle de
+    /// l'agent a ete acceptee. Une absence d'agent n'est pas une erreur.
+    async fn authenticate_agent(
+        session: &mut russh::client::Handle<AvashAuth>,
+        user: &str,
+    ) -> Result<bool> {
+        use russh::keys::agent::client::AgentClient;
+        let Ok(mut agent) = AgentClient::connect_env().await else {
+            return Ok(false);
+        };
+        let Ok(identities) = agent.request_identities().await else {
+            return Ok(false);
+        };
+        for id in identities {
+            // On ne gere que les cles publiques ; les certificats plus tard.
+            let russh::keys::agent::AgentIdentity::PublicKey { key, .. } = id else {
+                continue;
+            };
+            let hash = matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. })
+                .then_some(russh::keys::HashAlg::Sha256);
+            // L'agent signe le defi ; on ne detient jamais la cle privee.
+            if let Ok(res) = session
+                .authenticate_publickey_with(user, key, hash, &mut agent)
+                .await
+            {
+                if res.success() {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Exécution one-shot : stdout + exit code.
