@@ -172,8 +172,9 @@
     .brand .ver {
       margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .4px;
       color: var(--accent-soft); background: var(--accent-tint);
-      padding: 2px 7px; border-radius: 20px;
+      padding: 2px 7px; border-radius: 20px; cursor: pointer;
     }
+    .brand .ver:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
     .theme-toggle {
       width: 28px; height: 28px; border-radius: 8px; border: 1px solid transparent;
       background: transparent; color: var(--text-dim); display: grid; place-items: center;
@@ -682,7 +683,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <span class="mascot">😼</span> Avash <span class="ver">v0.1</span>
+        <span class="mascot">😼</span> Avash <span class="ver" id="app-version" title="Vérifier les mises à jour">v0.1</span>
         <button id="theme-toggle" class="theme-toggle" type="button" title="Thème"></button>
       </div>
       <div class="search-wrap">

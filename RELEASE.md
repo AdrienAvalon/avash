@@ -120,3 +120,36 @@ est fourni.
 
 À fournir par toi : le **certificat Authenticode** (Windows) et, si tu veux
 signer l'AppImage, une **clé GPG**.
+
+## 7. Mises à jour automatiques
+
+Avash embarque le plugin updater (Tauri). En cliquant sur la pastille de
+version, l'app vérifie un manifeste distant et propose d'installer.
+
+**Ce qui est déjà en place :**
+- Plugins `updater` + `process`, permissions, UI de vérification.
+- Clé publique de signature dans `tauri.conf.json` (`plugins.updater.pubkey`).
+- Endpoint (à adapter) : `releases/latest/download/latest.json`.
+
+**Clé de signature des updates** (minisign, générée le 29/08) :
+- Privée : `~/.config/avash-release/updater.key` — **hors dépôt, à garder
+  secrète**. C'est elle qui signe chaque artefact de mise à jour.
+- Publique (dans la config) : `dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5M0RGQ0EyRUE1RjFFMzkKUldRNUhsL3Fvdnc5K2RCTHVLZklWLzYrazR5VDNoL1Q1UVBUWEVlMW9lTWVtMTBSWWVJemZ6VEEK`
+- Pour en régénérer une : `cargo tauri signer generate -w <chemin>`, puis
+  remplacer `pubkey` dans `tauri.conf.json`.
+
+**Publier une mise à jour :**
+1. Build en signant les artefacts updater :
+   ```
+   export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.config/avash-release/updater.key)"
+   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # si passphrase
+   cd crates/avash-ui && cargo tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+   ```
+   (`createUpdaterArtifacts` n'est PAS activé par défaut pour ne pas exiger la
+   clé à chaque build local.)
+2. Publier les artefacts + leur `.sig` sur l'hébergement.
+3. Générer/mettre à jour `latest.json` (version, notes, URLs + signatures) et
+   le servir à l'endpoint configuré. Format : voir la doc Tauri updater.
+
+Sans manifeste publié, le bouton affiche simplement « vérification
+impossible » — c'est attendu tant que la première release n'est pas en ligne.

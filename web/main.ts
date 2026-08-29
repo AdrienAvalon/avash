@@ -11,6 +11,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { check as checkUpdate } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { ic, fileIconName, hydrateIcons } from "./icons";
 import {
   humanSize, filterHosts, allTags, remoteJoin, parentDir, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge,
@@ -2375,3 +2377,39 @@ function setTitlebar() {
   const s = state.active === null ? null : state.sessions.get(state.active);
   $("tb-name").textContent = s && !s.closed ? `${s.alias} — Avash` : "Avash";
 }
+
+
+// ---------- Mise à jour ----------
+
+let updateBusy = false;
+async function checkForUpdates() {
+  if (updateBusy) return;
+  updateBusy = true;
+  const ver = $("app-version");
+  const prev = ver.textContent;
+  ver.textContent = "…";
+  try {
+    const update = await checkUpdate();
+    if (!update) {
+      ver.textContent = "à jour";
+      setTimeout(() => (ver.textContent = prev), 1800);
+      return;
+    }
+    ver.textContent = prev;
+    const ok = confirm(
+      `Version ${update.version} disponible (actuelle : ${update.currentVersion}).\n\n` +
+        `${update.body ?? ""}\n\nTélécharger et installer maintenant ?`,
+    );
+    if (!ok) return;
+    await update.downloadAndInstall();
+    if (confirm("Mise à jour installée. Redémarrer Avash maintenant ?")) await relaunch();
+  } catch (e) {
+    // Endpoint injoignable / pas encore configuré / hors ligne : on le dit
+    // sans dramatiser.
+    ver.textContent = prev;
+    alert(`Vérification des mises à jour impossible : ${e}`);
+  } finally {
+    updateBusy = false;
+  }
+}
+$("app-version").addEventListener("click", checkForUpdates);

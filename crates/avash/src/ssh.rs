@@ -4,7 +4,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -665,7 +665,16 @@ pub struct PtyChannel {
 /// lignes correspondantes de `~/.ssh/known_hosts`. Le prochain contact
 /// re-apprendra la nouvelle cle (TOFU). Rend le nombre de lignes retirees.
 pub fn forget_host_key(host: &str, port: u16) -> Result<usize> {
-    let lines: Vec<usize> = russh::keys::known_hosts::known_host_keys(host, port)
+    let path = dirs::home_dir()
+        .ok_or_else(|| anyhow!("Répertoire personnel introuvable"))?
+        .join(".ssh/known_hosts");
+    forget_host_key_at(host, port, &path)
+}
+
+/// Coeur testable de [`forget_host_key`], sur un fichier `known_hosts`
+/// explicite (evite toute dependance a `HOME` dans les tests).
+pub fn forget_host_key_at(host: &str, port: u16, path: &Path) -> Result<usize> {
+    let lines: Vec<usize> = russh::keys::known_hosts::known_host_keys_path(host, port, path)
         .map_err(|e| anyhow!("Lecture de known_hosts : {e}"))?
         .into_iter()
         .map(|(line, _key)| line)
@@ -673,11 +682,8 @@ pub fn forget_host_key(host: &str, port: u16) -> Result<usize> {
     if lines.is_empty() {
         return Ok(0);
     }
-    let path = dirs::home_dir()
-        .ok_or_else(|| anyhow!("Répertoire personnel introuvable"))?
-        .join(".ssh/known_hosts");
     let content =
-        std::fs::read_to_string(&path).with_context(|| format!("Lecture de {}", path.display()))?;
+        std::fs::read_to_string(path).with_context(|| format!("Lecture de {}", path.display()))?;
     // known_host_keys numerote les lignes a partir de 1.
     let to_drop: std::collections::HashSet<usize> = lines.into_iter().collect();
     let kept: Vec<&str> = content
@@ -690,7 +696,7 @@ pub fn forget_host_key(host: &str, port: u16) -> Result<usize> {
     if content.ends_with('\n') {
         out.push('\n');
     }
-    std::fs::write(&path, out).with_context(|| format!("Écriture de {}", path.display()))?;
+    std::fs::write(path, out).with_context(|| format!("Écriture de {}", path.display()))?;
     Ok(to_drop.len())
 }
 

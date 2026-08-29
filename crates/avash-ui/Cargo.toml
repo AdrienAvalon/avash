@@ -21,6 +21,8 @@ anyhow = "1"
 whoami = "2"
 open = "5.4.2"
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [[bench]]
 name = "utf8"
