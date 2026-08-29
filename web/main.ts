@@ -1215,6 +1215,7 @@ async function manualSubmit(ev: Event) {
         port: target.port,
         user: target.user,
         keyPath: target.key_path,
+        proxyJump: null,
       });
       await loadHosts();
     }
@@ -1659,6 +1660,7 @@ async function openEditHost(alias: string) {
     ($("e-port") as HTMLInputElement).value = h.port ? String(h.port) : "";
     ($("e-user") as HTMLInputElement).value = h.user ?? "";
     ($("e-key") as HTMLInputElement).value = h.identity_file ?? "";
+    ($("e-jump") as HTMLInputElement).value = h.proxy_jump ?? "";
     $("edit-modal").classList.add("open");
     setTimeout(() => ($("e-alias") as HTMLInputElement).focus(), 30);
   } catch (e) {
@@ -1693,6 +1695,7 @@ $("edit-form").addEventListener("submit", async (e) => {
       port: portRaw ? Number(portRaw) : null,
       user: val("e-user") || null,
       keyPath: val("e-key") || null,
+      proxyJump: val("e-jump") || null,
     });
     closeEditHost();
     await loadHosts();

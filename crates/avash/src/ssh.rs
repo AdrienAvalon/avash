@@ -27,6 +27,7 @@ pub fn current_username() -> String {
 
 pub const PASSWORD_REQUIRED: &str = "[AVASH_PASSWORD_REQUIRED]";
 
+#[derive(Clone)]
 pub struct ClientAuth {
     pub user: String,
     /// Chemin de la clé privée (OpenSSH). Support agent à venir.
@@ -228,22 +229,36 @@ impl russh::client::Handler for AvashAuth {
     }
 }
 
+/// Un rebond (bastion) d'une chaine `ProxyJump`.
+#[derive(Clone)]
+pub struct Hop {
+    pub addr: String,
+    pub port: u16,
+    pub auth: ClientAuth,
+}
+
 pub struct AvashSession {
     session: russh::client::Handle<AvashAuth>,
     forwards: RemoteForwards,
+    /// Rebonds gardes vivants : le transport de cette session passe par leurs
+    /// canaux ; les lacher couperait la connexion. Jamais relu, seulement
+    /// possede — d'ou l'allow.
+    #[allow(dead_code)]
+    jumps: Vec<AvashSession>,
 }
 
 impl AvashSession {
-    pub async fn connect(host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
-        let config = Arc::new(russh::client::Config {
-            // Un tunnel ou un terminal inactif derriere un NAT se fait couper
-            // en silence apres quelques minutes. Le keepalive detecte la
-            // coupure (3 pings sans reponse) au lieu de laisser une session
-            // zombie que l'utilisateur croit vivante.
+    /// Config russh commune (keepalive : detecte une coupure NAT au lieu de
+    /// laisser une session zombie).
+    fn config() -> Arc<russh::client::Config> {
+        Arc::new(russh::client::Config {
             keepalive_interval: Some(std::time::Duration::from_secs(30)),
             keepalive_max: 3,
             ..Default::default()
-        });
+        })
+    }
+
+    fn handler(host: &str, port: u16) -> (AvashAuth, HostKeyVerdict, RemoteForwards) {
         let verdict: HostKeyVerdict = Arc::new(std::sync::Mutex::new(None));
         let forwards: RemoteForwards = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let handler = AvashAuth {
@@ -252,7 +267,14 @@ impl AvashSession {
             verdict: verdict.clone(),
             forwards: forwards.clone(),
         };
-        let mut session = match russh::client::connect(config, (host, port), handler).await {
+        (handler, verdict, forwards)
+    }
+
+    /// Connexion directe (TCP), sans rebond.
+    pub async fn connect(host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
+        let (handler, verdict, forwards) = Self::handler(host, port);
+        let mut session = match russh::client::connect(Self::config(), (host, port), handler).await
+        {
             Ok(s) => s,
             Err(e) => {
                 // Un refus de cle d'hote porte un message explicite : on le
@@ -264,7 +286,72 @@ impl AvashSession {
             }
         };
         Self::authenticate(&mut session, auth).await?;
-        Ok(Self { session, forwards })
+        Ok(Self {
+            session,
+            forwards,
+            jumps: Vec::new(),
+        })
+    }
+
+    /// Connexion a travers zero, un ou plusieurs rebonds (`ProxyJump`).
+    ///
+    /// Chaque rebond est joint par un canal `direct-tcpip` ouvert sur le
+    /// precedent : exactement ce que fait `ssh -J`. La cle d'hote de CHAQUE
+    /// maillon est verifiee (`known_hosts`), pas seulement celle de la cible.
+    pub async fn connect_via(
+        hops: &[Hop],
+        host: &str,
+        port: u16,
+        auth: &ClientAuth,
+    ) -> Result<Self> {
+        let Some((first, rest)) = hops.split_first() else {
+            return Self::connect(host, port, auth).await;
+        };
+        let mut chain: Vec<AvashSession> = Vec::new();
+        let mut current = Self::connect(&first.addr, first.port, &first.auth)
+            .await
+            .with_context(|| format!("Rebond {}:{}", first.addr, first.port))?;
+        for hop in rest {
+            let next = current
+                .connect_hop(&hop.addr, hop.port, &hop.auth)
+                .await
+                .with_context(|| format!("Rebond {}:{}", hop.addr, hop.port))?;
+            chain.push(current);
+            current = next;
+        }
+        let mut target = current.connect_hop(host, port, auth).await?;
+        chain.push(current);
+        target.jumps = chain;
+        Ok(target)
+    }
+
+    /// Ouvre une session SSH sur `host:port` a travers le canal de CE rebond.
+    async fn connect_hop(&self, host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
+        let channel = self
+            .session
+            .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
+            .await
+            .with_context(|| format!("Le rebond n'a pas pu joindre {host}:{port}"))?;
+        let (handler, verdict, forwards) = Self::handler(host, port);
+        let mut session =
+            match russh::client::connect_stream(Self::config(), channel.into_stream(), handler)
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    if let Some(reason) = verdict.lock().unwrap().take() {
+                        return Err(anyhow!(reason));
+                    }
+                    return Err(e)
+                        .with_context(|| format!("Connexion SSH à {host}:{port} via le rebond"));
+                }
+            };
+        Self::authenticate(&mut session, auth).await?;
+        Ok(Self {
+            session,
+            forwards,
+            jumps: Vec::new(),
+        })
     }
 
     async fn authenticate(

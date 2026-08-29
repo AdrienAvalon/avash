@@ -178,9 +178,21 @@ impl russh::server::Handler for TestSshSession {
             reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
             return Ok(());
         }
+        // Vers une IP loopback : vrai pont TCP (permet un ProxyJump vers un
+        // second sshd). Vers un nom quelconque : echo (tests de tunnels).
+        let is_loopback = host_to_connect == "127.0.0.1" || host_to_connect == "localhost";
         reply.accept().await;
-        let _ = port_to_connect;
-        self.channels.lock().await.insert(channel.id(), channel);
+        if is_loopback {
+            let target = format!("127.0.0.1:{port_to_connect}");
+            tokio::spawn(async move {
+                if let Ok(mut tcp) = tokio::net::TcpStream::connect(&target).await {
+                    let mut stream = channel.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                }
+            });
+        } else {
+            self.channels.lock().await.insert(channel.id(), channel);
+        }
         Ok(())
     }
 
@@ -1002,4 +1014,69 @@ async fn sftp_download_rapporte_sa_progression() {
     assert_eq!(std::fs::read(&local).unwrap(), b"CONTENU-FICHIER-TEST");
     let _ = std::fs::remove_file(&local);
     sftp.close().await.unwrap();
+}
+
+// ---------- ProxyJump ----------
+
+#[tokio::test]
+async fn proxy_jump_connecte_la_cible_a_travers_un_rebond() {
+    // Deux serveurs : un rebond (jump) et la cible. On se connecte a la cible
+    // UNIQUEMENT via le rebond, comme `ssh -J jump cible`.
+    let jump_port = spawn_test_sshd().await;
+    let target_port = spawn_test_sshd().await;
+    let hop = avash::ssh::Hop {
+        addr: "127.0.0.1".into(),
+        port: jump_port,
+        auth: test_auth(),
+    };
+    let mut session =
+        avash::ssh::AvashSession::connect_via(&[hop], "127.0.0.1", target_port, &test_auth())
+            .await
+            .expect("connexion via rebond");
+    // On atteint bien la cible : elle repond a l'exec.
+    let (out, code) = session.run("echo via-jump").await.unwrap();
+    assert!(
+        out.contains("CMD:echo via-jump"),
+        "réponse de la cible : {out:?}"
+    );
+    assert_eq!(code, 0);
+    session.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn proxy_jump_a_deux_rebonds() {
+    // Chaine de deux rebonds avant la cible.
+    let j1 = spawn_test_sshd().await;
+    let j2 = spawn_test_sshd().await;
+    let target = spawn_test_sshd().await;
+    let hops = vec![
+        avash::ssh::Hop {
+            addr: "127.0.0.1".into(),
+            port: j1,
+            auth: test_auth(),
+        },
+        avash::ssh::Hop {
+            addr: "127.0.0.1".into(),
+            port: j2,
+            auth: test_auth(),
+        },
+    ];
+    let mut session =
+        avash::ssh::AvashSession::connect_via(&hops, "127.0.0.1", target, &test_auth())
+            .await
+            .expect("connexion via 2 rebonds");
+    let (out, _) = session.run("echo deux-rebonds").await.unwrap();
+    assert!(out.contains("CMD:echo deux-rebonds"), "{out:?}");
+    session.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn connect_via_sans_rebond_equivaut_a_connect() {
+    let port = spawn_test_sshd().await;
+    let mut session = avash::ssh::AvashSession::connect_via(&[], "127.0.0.1", port, &test_auth())
+        .await
+        .expect("connexion directe via liste vide");
+    let (out, _) = session.run("echo direct").await.unwrap();
+    assert!(out.contains("CMD:echo direct"), "{out:?}");
+    session.disconnect().await.unwrap();
 }

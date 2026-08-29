@@ -216,6 +216,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_proxy_jump_decoupe_une_chaine() {
+        let v = split_proxy_jump("bastion, deploy@10.0.0.1:2222");
+        assert_eq!(v.len(), 2);
+        assert_eq!(
+            v[0],
+            HopSpec {
+                user: None,
+                host: "bastion".into(),
+                port: None
+            }
+        );
+        assert_eq!(
+            v[1],
+            HopSpec {
+                user: Some("deploy".into()),
+                host: "10.0.0.1".into(),
+                port: Some(2222)
+            }
+        );
+    }
+
+    #[test]
+    fn split_proxy_jump_gere_none_et_vide() {
+        assert!(split_proxy_jump("none").is_empty());
+        assert!(split_proxy_jump("").is_empty());
+        assert!(split_proxy_jump("  ,  ").is_empty());
+    }
+
+    #[test]
     fn parses_basic_config() {
         let cfg = r"
 # commentaire
@@ -255,6 +284,41 @@ Host db bastion
 ///
 /// ⚠️ Aucun mot de passe n'est enregistre — ce fichier est en clair. Pour se
 /// passer de saisie, la voie propre est de deployer une cle.
+/// Un maillon d'une chaine `ProxyJump`, tel qu'ecrit dans `~/.ssh/config`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HopSpec {
+    pub user: Option<String>,
+    pub host: String,
+    pub port: Option<u16>,
+}
+
+/// Decoupe une valeur `ProxyJump` (`a,b`, `user@host:port`, un alias…) en
+/// maillons, dans l'ordre. Ne resout rien : la resolution (alias -> hote)
+/// se fait ensuite avec la config.
+#[must_use]
+pub fn split_proxy_jump(spec: &str) -> Vec<HopSpec> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("none"))
+        .map(|token| {
+            let (user, rest) = match token.split_once('@') {
+                Some((u, r)) => (Some(u.to_string()), r),
+                None => (None, token),
+            };
+            // `host:port` — on ne coupe que si la partie apres `:` est un port
+            // (evite de casser une adresse IPv6 nue, rare en ProxyJump).
+            let (host, port) = match rest.rsplit_once(':') {
+                Some((h, p)) if !h.is_empty() && p.parse::<u16>().is_ok() => {
+                    (h.to_string(), p.parse::<u16>().ok())
+                }
+                _ => (rest.to_string(), None),
+            };
+            HopSpec { user, host, port }
+        })
+        .filter(|h| !h.host.is_empty())
+        .collect()
+}
+
 pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
     use std::io::Write as _;
 
@@ -471,6 +535,9 @@ pub fn render_host_block(host: &SshHost) -> String {
     {
         let _ = writeln!(out, "    IdentityFile {}", v.trim());
     }
+    if let Some(v) = host.proxy_jump.as_deref().filter(|v| !v.trim().is_empty()) {
+        let _ = writeln!(out, "    ProxyJump {}", v.trim());
+    }
     out
 }
 
@@ -500,6 +567,9 @@ fn validate_host(host: &SshHost) -> anyhow::Result<()> {
     }
     if let Some(v) = &host.identity_file {
         validate_config_value("IdentityFile", v)?;
+    }
+    if let Some(v) = &host.proxy_jump {
+        validate_config_value("ProxyJump", v)?;
     }
     Ok(())
 }

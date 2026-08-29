@@ -49,6 +49,8 @@ pub struct Target {
     pub password: Option<String>,
     /// Libelle affiche : l'alias, ou `user@hote` pour une saisie directe.
     pub label: String,
+    /// Chaine de rebonds (`ProxyJump`), resolue depuis la config. Vide = direct.
+    pub jumps: Vec<avash::ssh::Hop>,
 }
 
 /// `Debug` ecrit a la main : un `derive` afficherait le mot de passe en clair
@@ -62,6 +64,7 @@ impl std::fmt::Debug for Target {
             .field("key_path", &self.key_path)
             .field("password", &self.password.as_ref().map(|_| "<masqué>"))
             .field("label", &self.label)
+            .field("jumps", &self.jumps.len())
             .finish()
     }
 }
@@ -79,13 +82,16 @@ impl Target {
         // Mot de passe deja memorise ? Le trousseau evite de le redemander.
         // Une absence n'est pas une erreur : l'interface fera la saisie.
         let password = avash::secrets::load(&avash::secrets::account_id(&user, &addr, port));
+        let key_path = host.identity_file.as_ref().map(std::path::PathBuf::from);
+        let jumps = resolve_jumps(host.proxy_jump.as_deref(), key_path.as_ref());
         Ok(Self {
             port,
             user,
-            key_path: host.identity_file.as_ref().map(std::path::PathBuf::from),
+            key_path,
             password,
             label: host.alias.clone(),
             addr,
+            jumps,
         })
     }
 
@@ -128,6 +134,7 @@ impl Target {
             user,
             key_path,
             password,
+            jumps: Vec::new(),
         })
     }
 
@@ -152,6 +159,62 @@ impl Target {
     }
 }
 
+/// Resout une chaine `ProxyJump` en rebonds concrets.
+///
+/// Chaque maillon est soit un alias de `~/.ssh/config` (on reprend son
+/// hostname/user/port/cle), soit une saisie `user@host:port`. Faute de cle
+/// propre, un rebond reutilise la cle de la cible (cas courant : meme cle sur
+/// le bastion et le serveur). Les rebonds n'ont pas de mot de passe : ils
+/// s'appuient sur une cle (agent a venir).
+fn resolve_jumps(
+    proxy_jump: Option<&str>,
+    fallback_key: Option<&std::path::PathBuf>,
+) -> Vec<avash::ssh::Hop> {
+    let Some(spec) = proxy_jump else {
+        return Vec::new();
+    };
+    let hosts = parse_ssh_config().unwrap_or_default();
+    avash::split_proxy_jump(spec)
+        .into_iter()
+        .map(|hop| {
+            // Un maillon sans user ni port explicite peut etre un alias.
+            let alias = if hop.user.is_none() && hop.port.is_none() {
+                hosts.iter().find(|h| h.alias == hop.host)
+            } else {
+                None
+            };
+            let (addr, port, user, key_path) = match alias {
+                Some(h) => (
+                    h.hostname.clone().unwrap_or_else(|| h.alias.clone()),
+                    h.port.unwrap_or(22),
+                    h.user.clone().unwrap_or_else(avash::ssh::current_username),
+                    h.identity_file
+                        .as_ref()
+                        .map(std::path::PathBuf::from)
+                        .or_else(|| fallback_key.cloned()),
+                ),
+                None => (
+                    hop.host.clone(),
+                    hop.port.unwrap_or(22),
+                    hop.user
+                        .clone()
+                        .unwrap_or_else(avash::ssh::current_username),
+                    fallback_key.cloned(),
+                ),
+            };
+            avash::ssh::Hop {
+                addr,
+                port,
+                auth: avash::ssh::ClientAuth {
+                    user,
+                    key_path,
+                    password: None,
+                },
+            }
+        })
+        .collect()
+}
+
 fn find_host(alias: &str) -> Result<SshHost, String> {
     parse_ssh_config()
         .map_err(|e| e.to_string())?
@@ -170,9 +233,10 @@ pub fn list_hosts() -> Result<Vec<SshHost>, String> {
 #[tauri::command]
 pub async fn run_command(alias: String, command: String) -> Result<String, String> {
     let target = Target::from_alias(&alias)?;
-    let mut session = AvashSession::connect(&target.addr, target.port, &target.auth())
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut session =
+        AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
+            .await
+            .map_err(|e| e.to_string())?;
     let (stdout, code) = session.run(&command).await.map_err(|e| e.to_string())?;
     session.disconnect().await.map_err(|e| e.to_string())?;
     Ok(format!("{stdout}\n[exit {code}]"))
@@ -233,6 +297,25 @@ fn is_superseded(app: &AppHandle, sid: u64, epoch: u64) -> bool {
         .is_some_and(|h| h.epoch != epoch)
 }
 
+/// Sonde le système distant et émet `host-os` (le front affiche son logo).
+/// Un canal exec à part, borné dans le temps ; la sortie du PTY s'accumule
+/// dans son propre canal pendant ce temps, rien n'est perdu.
+async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &mut AvashSession) {
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        session.run(avash::osinfo::PROBE_COMMAND),
+    )
+    .await;
+    if let Ok(Ok((out, _))) = probe {
+        if let Some(os) = avash::osinfo::parse_probe_output(&out) {
+            let _ = app.emit(
+                "host-os",
+                serde_json::json!({ "id": sid, "label": label, "os": os }),
+            );
+        }
+    }
+}
+
 /// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
 #[tauri::command]
 async fn open_on_target(
@@ -247,9 +330,10 @@ async fn open_on_target(
     const COALESCE_MS: u64 = 8;
     const FLUSH_BYTES: usize = 16 * 1024;
 
-    let mut session = AvashSession::connect(&target.addr, target.port, &target.auth())
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut session =
+        AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
+            .await
+            .map_err(|e| e.to_string())?;
     let pty = session
         .open_pty(cols, rows, "xterm-256color")
         .await
@@ -300,22 +384,7 @@ async fn open_on_target(
     let app2 = app.clone();
     let pump_epoch = epoch;
     let _pump = tokio::spawn(async move {
-        // Quel systeme en face ? Un canal exec a part, borne dans le temps :
-        // la liste des hotes affiche son logo. La sortie du PTY s'accumule
-        // dans son canal pendant ce temps, rien n'est perdu.
-        let probe = tokio::time::timeout(
-            std::time::Duration::from_secs(4),
-            session.run(avash::osinfo::PROBE_COMMAND),
-        )
-        .await;
-        if let Ok(Ok((out, _))) = probe {
-            if let Some(os) = avash::osinfo::parse_probe_output(&out) {
-                let _ = app2.emit(
-                    "host-os",
-                    serde_json::json!({ "id": sid, "label": label_for_event, "os": os }),
-                );
-            }
-        }
+        probe_and_emit_os(&app2, sid, label_for_event, &mut session).await;
 
         let mut decoder = Utf8Stream::default();
         let mut buffer = String::new();
@@ -524,9 +593,10 @@ async fn sftp_of(
             .map(|h| h.target.clone())
             .ok_or_else(|| format!("Session {id} inconnue"))?
     };
-    let session = AvashSession::connect(&target.addr, target.port, &target.auth())
-        .await
-        .map_err(|e| e.to_string())?;
+    let session =
+        AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
+            .await
+            .map_err(|e| e.to_string())?;
     let mut fresh = Some(SftpHandle::open(session).await.map_err(|e| e.to_string())?);
 
     // Course : deux commandes SFTP concurrentes sur le meme onglet ont pu, le
@@ -960,6 +1030,7 @@ mod tests {
             key_path: None,
             password: password.map(str::to_string),
             label: "h".into(),
+            jumps: Vec::new(),
         }
     }
 
@@ -1405,6 +1476,7 @@ pub fn host_save(
     port: Option<u16>,
     user: String,
     key_path: Option<String>,
+    proxy_jump: Option<String>,
 ) -> Result<SshHost, String> {
     let host = SshHost {
         alias: alias.trim().to_string(),
@@ -1414,7 +1486,9 @@ pub fn host_save(
         identity_file: key_path
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty()),
-        proxy_jump: None,
+        proxy_jump: proxy_jump
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty()),
         tags: vec![],
     };
     avash::append_host(&host).map_err(|e| format!("{e:#}"))?;
@@ -1516,6 +1590,7 @@ pub fn host_update(
     port: Option<u16>,
     user: Option<String>,
     key_path: Option<String>,
+    proxy_jump: Option<String>,
 ) -> Result<(), String> {
     let host = SshHost {
         alias: alias.trim().to_string(),
@@ -1525,7 +1600,9 @@ pub fn host_update(
         identity_file: key_path
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty()),
-        proxy_jump: None,
+        proxy_jump: proxy_jump
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty()),
         tags: vec![],
     };
     avash::update_host(old_alias.trim(), &host).map_err(|e| format!("{e:#}"))

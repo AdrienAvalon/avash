@@ -231,6 +231,10 @@
     .host .info { min-width: 0; flex: 1; }
     .host .alias { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .host .meta { font-size: 11px; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .host .jumptag {
+      margin-left: 6px; font-size: 11px; color: var(--accent-soft);
+      font-family: var(--mono); vertical-align: middle;
+    }
     .host .tun {
       flex: none; font-size: 10.5px; font-family: var(--mono); font-weight: 600;
       color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent);
@@ -1013,6 +1017,9 @@
         </label>
         <label><span>Chemin de la clé privée <span class="field-hint">(optionnel)</span></span>
           <input id="e-key" placeholder="~/.ssh/id_ed25519" />
+        </label>
+        <label><span>Rebond ProxyJump <span class="field-hint">(optionnel) — bastion(s), ex. <code>jump</code> ou <code>user@bastion:22</code></span></span>
+          <input id="e-jump" placeholder="bastion, deploy@10.0.0.1:2222" />
         </label>
         <p class="modal-error" id="e-error" hidden></p>
         <div class="modal-actions">
