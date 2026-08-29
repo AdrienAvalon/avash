@@ -27,6 +27,10 @@ pub fn current_username() -> String {
 
 pub const PASSWORD_REQUIRED: &str = "[AVASH_PASSWORD_REQUIRED]";
 
+/// Marqueur place en tete du message quand la cle d'hote a CHANGE. L'interface
+/// le reconnait pour proposer d'oublier l'ancienne cle et reessayer.
+pub const HOST_KEY_CHANGED: &str = "[AVASH_HOST_KEY_CHANGED]";
+
 #[derive(Clone)]
 pub struct ClientAuth {
     pub user: String,
@@ -170,12 +174,13 @@ impl russh::client::Handler for AvashAuth {
             // La clé d'hôte a changé : réinstallation du serveur, ou interception.
             // Dans le doute on refuse — c'est à l'utilisateur de trancher.
             Err(russh::keys::Error::KeyChanged { line }) => {
+                let fp = server_public_key.fingerprint(russh::keys::HashAlg::Sha256);
                 *self.verdict.lock().unwrap() = Some(format!(
-                    "LA CLÉ D'HÔTE A CHANGÉ pour {}:{}.\n\n\
+                    "{HOST_KEY_CHANGED} LA CLÉ D'HÔTE A CHANGÉ pour {}:{}.\n\n\
                      Soit le serveur a été réinstallé, soit quelqu'un intercepte \
-                     la connexion. Avash refuse de se connecter.\n\n\
-                     Si tu es certain que le serveur a changé légitimement, \
-                     supprime la ligne {} de ~/.ssh/known_hosts.",
+                     la connexion.\n\n\
+                     Nouvelle empreinte présentée :\n{fp}\n\n\
+                     Ancienne clé : ligne {} de ~/.ssh/known_hosts.",
                     self.host, self.port, line
                 ));
                 Err(russh::Error::UnknownKey)
@@ -654,6 +659,39 @@ pub struct PtyChannel {
     pub in_tx: mpsc::Sender<Vec<u8>>,
     pub resize_tx: mpsc::Sender<(u32, u32)>,
     _pump: tokio::task::JoinHandle<()>,
+}
+
+/// Oublie la (les) cle(s) d'hote memorisee(s) pour `host:port` : retire les
+/// lignes correspondantes de `~/.ssh/known_hosts`. Le prochain contact
+/// re-apprendra la nouvelle cle (TOFU). Rend le nombre de lignes retirees.
+pub fn forget_host_key(host: &str, port: u16) -> Result<usize> {
+    let lines: Vec<usize> = russh::keys::known_hosts::known_host_keys(host, port)
+        .map_err(|e| anyhow!("Lecture de known_hosts : {e}"))?
+        .into_iter()
+        .map(|(line, _key)| line)
+        .collect();
+    if lines.is_empty() {
+        return Ok(0);
+    }
+    let path = dirs::home_dir()
+        .ok_or_else(|| anyhow!("Répertoire personnel introuvable"))?
+        .join(".ssh/known_hosts");
+    let content =
+        std::fs::read_to_string(&path).with_context(|| format!("Lecture de {}", path.display()))?;
+    // known_host_keys numerote les lignes a partir de 1.
+    let to_drop: std::collections::HashSet<usize> = lines.into_iter().collect();
+    let kept: Vec<&str> = content
+        .lines()
+        .enumerate()
+        .filter(|(i, _)| !to_drop.contains(&(i + 1)))
+        .map(|(_, l)| l)
+        .collect();
+    let mut out = kept.join("\n");
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    std::fs::write(&path, out).with_context(|| format!("Écriture de {}", path.display()))?;
+    Ok(to_drop.len())
 }
 
 #[cfg(test)]

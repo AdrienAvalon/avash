@@ -1080,3 +1080,39 @@ async fn connect_via_sans_rebond_equivaut_a_connect() {
     assert!(out.contains("CMD:echo direct"), "{out:?}");
     session.disconnect().await.unwrap();
 }
+
+// ---------- known_hosts : oubli d'une clé ----------
+
+#[tokio::test]
+async fn forget_host_key_retire_la_cle_apprise() {
+    // HOME isolé : on ne touche pas au known_hosts réel.
+    let home = format!("/tmp/avash-kh-{}", std::process::id());
+    std::fs::create_dir_all(format!("{home}/.ssh")).unwrap();
+    std::env::set_var("HOME", &home);
+    let _ = std::fs::remove_file(format!("{home}/.ssh/known_hosts"));
+
+    let port = spawn_test_sshd().await;
+    let auth = avash::ssh::ClientAuth {
+        user: "u".into(),
+        key_path: Some(temp_key_path()),
+        password: None,
+    };
+    std::env::set_var("HOME", &home);
+    // Premier contact : TOFU apprend la clé.
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion + apprentissage TOFU");
+    session.disconnect().await.unwrap();
+
+    // La clé est là, puis on l'oublie.
+    let before = russh::keys::known_hosts::known_host_keys("127.0.0.1", port).unwrap();
+    assert_eq!(before.len(), 1, "clé apprise");
+    let removed = avash::ssh::forget_host_key("127.0.0.1", port).unwrap();
+    assert_eq!(removed, 1);
+    let after = russh::keys::known_hosts::known_host_keys("127.0.0.1", port).unwrap();
+    assert!(after.is_empty(), "clé oubliée");
+
+    // Oublier une clé absente ne casse rien.
+    assert_eq!(avash::ssh::forget_host_key("127.0.0.1", port).unwrap(), 0);
+    let _ = std::fs::remove_dir_all(&home);
+}

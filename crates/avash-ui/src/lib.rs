@@ -40,6 +40,7 @@ pub fn run() {
             commands::host_update,
             commands::password_save,
             commands::password_forget,
+            commands::known_hosts_forget,
             commands::password_known,
             commands::keys_list,
             commands::key_generate,

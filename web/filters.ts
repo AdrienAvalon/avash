@@ -81,6 +81,10 @@ export function parentDir(path: string): string {
 export const PASSWORD_REQUIRED = "[AVASH_PASSWORD_REQUIRED]";
 
 /** L'echec de connexion tient-il seulement a un mot de passe manquant ? */
+export function isHostKeyChanged(errorMessage: string): boolean {
+  return errorMessage.includes("[AVASH_HOST_KEY_CHANGED]");
+}
+
 export function isPasswordRequired(errorMessage: string): boolean {
   return errorMessage.includes(PASSWORD_REQUIRED);
 }

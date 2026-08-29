@@ -1537,6 +1537,13 @@ pub fn password_save(
     avash::secrets::save(&id, &password).map_err(|e| format!("{e:#}"))
 }
 
+/// Oublie la clé d'hôte mémorisée (`known_hosts`) après un changement légitime.
+/// Le prochain contact réapprend la nouvelle clé (TOFU).
+#[tauri::command]
+pub fn known_hosts_forget(addr: String, port: Option<u16>) -> Result<usize, String> {
+    avash::ssh::forget_host_key(addr.trim(), port.unwrap_or(22)).map_err(|e| format!("{e:#}"))
+}
+
 /// Oublie un mot de passe mémorisé.
 #[tauri::command]
 pub fn password_forget(

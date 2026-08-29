@@ -20,6 +20,15 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 **162 tests verts** (117 Rust, 45 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
 
+### Clé d'hôte changée : action guidée (29/08, soir)
+
+Quand la clé d'hôte change, Avash refuse toujours (sécurité), mais propose
+désormais une action : le message porte un marqueur + la **nouvelle empreinte
+SHA256**, et l'interface offre « oublier l'ancienne clé et réessayer » (après
+confirmation). `known_hosts_forget` retire les lignes de `~/.ssh/known_hosts`
+et le prochain contact réapprend (TOFU). Plus besoin d'éditer le fichier à la
+main. Vérifié bout-en-bout.
+
 ### Organisation des hôtes — tags (29/08, soir)
 
 Étiquetage des hôtes via `#Tags: prod, web` dans le bloc `~/.ssh/config`

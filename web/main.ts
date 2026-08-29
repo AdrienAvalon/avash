@@ -13,7 +13,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic, fileIconName } from "./icons";
 import {
-  humanSize, filterHosts, allTags, remoteJoin, parentDir, isPasswordRequired, stripHtml, hostInitials, hostHue, osBadge,
+  humanSize, filterHosts, allTags, remoteJoin, parentDir, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge,
   shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
@@ -543,6 +543,22 @@ async function connectByAlias(s: Session, h: Host) {
       return;
     } catch (e) {
       const msg = String(e);
+      if (isHostKeyChanged(msg)) {
+        const clean = msg.replace("[AVASH_HOST_KEY_CHANGED]", "").trim();
+        const ok = confirm(`${clean}\n\nOublier l'ancienne clé et réessayer ? (à ne faire que si le changement est légitime)`);
+        if (!ok) {
+          markClosed(s, "Connexion annulée : clé d'hôte changée.");
+          return;
+        }
+        try {
+          await invoke("known_hosts_forget", { addr: h.hostname ?? h.alias, port: h.port ?? null });
+          term.write(`\x1b[33m⚠️ Ancienne clé oubliée. Nouvelle tentative…\x1b[0m\r\n`);
+        } catch (fe) {
+          markClosed(s, `Impossible d'oublier l'ancienne clé : ${fe}`);
+          return;
+        }
+        continue; // réessayer : TOFU réapprend la nouvelle clé
+      }
       if (!isPasswordRequired(msg)) {
         markClosed(s, `⚔️ Échec connexion : ${msg}`);
         return;
