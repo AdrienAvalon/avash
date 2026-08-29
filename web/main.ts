@@ -30,10 +30,10 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 // Place ici, il etait purement ignore et xterm.js retombait sur son defaut
 // (courier-new), d'ou un rendu tres laid.
 const THEME = {
-  background: "#12141c",
+  background: "#0d0f16",
   foreground: "#dfe3ee",
   cursor: "#8b7cf6",
-  cursorAccent: "#12141c",
+  cursorAccent: "#0d0f16",
   selectionBackground: "rgba(139, 124, 246, .30)",
   selectionForeground: "#ffffff",
   // Palette ANSI : contrastee sur fond sombre, sans saturation criarde.
