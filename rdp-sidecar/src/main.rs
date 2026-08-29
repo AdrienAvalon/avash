@@ -23,7 +23,7 @@ use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp::graphics::image_processing::PixelFormat;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
@@ -262,7 +262,7 @@ async fn main() -> Result<()> {
     spawn_stdin_reader(tx);
     let mut db = Database::new();
 
-    use ironrdp_tokio::{FramedRead as _, FramedWrite as _};
+    use ironrdp_tokio::FramedWrite as _;
     loop {
         tokio::select! {
             biased;
@@ -306,20 +306,19 @@ async fn run_shot(
     framed: &mut ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
     path: &str,
 ) -> Result<()> {
-    use ironrdp_tokio::{FramedRead as _, FramedWrite as _};
+    use ironrdp_tokio::FramedWrite as _;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        match tokio::time::timeout_at(deadline, framed.read_pdu()).await {
-            Ok(Ok((action, payload))) => {
-                for o in active.process(image, action, &payload)? {
-                    match o {
-                        ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await?,
-                        ActiveStageOutput::Terminate(_) => break,
-                        _ => {}
-                    }
-                }
+    while let Ok(Ok((action, payload))) = tokio::time::timeout_at(deadline, framed.read_pdu()).await {
+        let mut done = false;
+        for o in active.process(image, action, &payload)? {
+            match o {
+                ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await?,
+                ActiveStageOutput::Terminate(_) => done = true,
+                _ => {}
             }
-            _ => break,
+        }
+        if done {
+            break;
         }
     }
     let buf: image::ImageBuffer<image::Rgba<u8>, _> =

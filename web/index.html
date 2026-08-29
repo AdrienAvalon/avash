@@ -340,6 +340,8 @@
        bord (les lignes ne tombent jamais juste) ne se voit pas. */
     .terminal-zone > #terminal { flex: 1; position: relative; min-width: 0; background: var(--term-bg); }
     .xterm-container { display: block; border-radius: 6px; }
+    .rdp-container { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; }
+    .rdp-container canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; outline: none; }
     /* Ne PAS forcer la hauteur de .xterm-screen : xterm la calcule d'apres
        les lignes ; la forcer a 100 % laissait une bande noire en dessous. */
     .xterm { height: 100%; }
@@ -786,6 +788,10 @@
         <h2>Connexion directe</h2>
         <p class="modal-hint">Sans passer par <code>~/.ssh/config</code>.</p>
 
+        <div class="auth-switch" style="margin-bottom:2px">
+          <label class="radio"><input type="radio" name="proto" value="ssh" checked /> SSH</label>
+          <label class="radio"><input type="radio" name="proto" value="rdp" /> RDP <code>bureau</code></label>
+        </div>
         <label>Adresse ou IP
           <input id="m-addr" name="addr" placeholder="192.168.1.10" required />
         </label>

@@ -263,7 +263,7 @@ procédure complète (build, vérification, signature, faux positifs AV).
   `SHA256SUMS` (+ signature GPG). Aucun packer, métadonnées complètes : la
   surface de faux positif antivirus est réduite au minimum contrôlable.
 
-## RDP (en cours — étape 1/4)
+## RDP (embarqué, fonctionnel — MVP)
 
 Le bureau distant RDP arrive via **IronRDP** (client RDP pur Rust). Contrainte
 technique : IronRDP épingle des pré-versions cryptographiques incompatibles
@@ -279,7 +279,20 @@ streamera le bureau dans la fenêtre.
   rectangles) sur stdout et reçoit les entrées (souris/clavier) sur stdin.
   Validé contre le serveur de test : 6 frames encadrées reçues + le serveur
   logue exactement les mouvements/clics/touches envoyés.
-- Étapes suivantes : bundling sidecar (Tauri), onglet RDP avec canvas + entrées.
+- **Étape 3 (faite, VALIDÉE)** : intégration Tauri. `avash-ui` lance le
+  sidecar (commande `rdp_open`), relaie le framebuffer au front via un
+  `Channel` (RGBA base64), et lui transmet souris/clavier (`rdp_input`).
+  Onglet RDP avec un `<canvas>` qui rend le bureau. Lancement via le dialogue
+  « Connexion directe » → protocole **RDP**. Validé bout-en-bout : le bureau
+  du serveur de test s'affiche DANS la fenêtre Avash, la souris/le clavier
+  arrivent au serveur.
+- **MVP** : NLA/CredSSP, TLS, souris (move/clic/molette), clavier (table
+  scancode des touches courantes). Pas encore : curseur distant dessiné,
+  presse-papiers, audio, redimensionnement dynamique, multi-écran.
+- **Distribution** : le binaire sidecar doit être bâti (`cd rdp-sidecar &&
+  cargo build --release`) et placé à côté de l'app (ou via `AVASH_RDP_BIN`).
+  Le bundler Tauri devra l'embarquer (externalBin) — étape de packaging à
+  finaliser lors d'une release.
 
 ## Feuille de route
 - v0.1 (ce soir/aujourd'hui) : CLI + parseur + connexion russh → **GUI dès webkit installé**

@@ -1240,6 +1240,18 @@ function manualReadForm(): ManualTarget {
 async function manualSubmit(ev: Event) {
   ev.preventDefault();
   const submit = $("m-submit") as HTMLButtonElement;
+  const proto = (document.querySelector('input[name="proto"]:checked') as HTMLInputElement | null)?.value ?? "ssh";
+  if (proto === "rdp") {
+    // Bureau distant : on passe par le sidecar, pas de sauvegarde ~/.ssh.
+    const addr = ($("m-addr") as HTMLInputElement).value.trim();
+    const user = ($("m-user") as HTMLInputElement).value.trim();
+    const password = ($("m-password") as HTMLInputElement).value;
+    if (!addr || !user) { manualError().textContent = "Adresse et utilisateur requis."; manualError().hidden = false; return; }
+    const portRaw = ($("m-port") as HTMLInputElement).value.trim();
+    manualClose();
+    await openRdp({ host: addr, port: portRaw ? Number(portRaw) : 3389, user, password, width: 1280, height: 800 });
+    return;
+  }
   const target = manualReadForm();
   manualError().hidden = true;
   submit.disabled = true;
@@ -2413,3 +2425,144 @@ async function checkForUpdates() {
   }
 }
 $("app-version").addEventListener("click", checkForUpdates);
+
+// ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
+
+import { Channel } from "@tauri-apps/api/core";
+
+type RdpMsg =
+  | { kind: "connected"; w: number; h: number }
+  | { kind: "frame"; x: number; y: number; w: number; h: number; data: string }
+  | { kind: "error"; message: string }
+  | { kind: "closed" };
+
+type RdpTarget = { host: string; port: number | null; user: string; password: string; width: number; height: number };
+
+const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement }>();
+
+/** Décode une frame base64 en octets bruts (RGBA). */
+function b64bytes(b64: string): Uint8ClampedArray {
+  const bin = atob(b64);
+  const out = new Uint8ClampedArray(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function openRdp(t: RdpTarget) {
+  const id = state.nextId++;
+  // Onglet
+  const tabs = $("tabs");
+  tabs.querySelector(".no-session")?.remove();
+  const tab = document.createElement("div");
+  tab.className = "tab active";
+  tab.innerHTML = `<span class="state connecting"></span><span class="label"></span><span class="close"></span>`;
+  tab.querySelector(".label")!.textContent = `🖥 ${t.user}@${t.host}`;
+  tab.querySelector(".close")!.innerHTML = ic("x");
+  tabs.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+  tabs.appendChild(tab);
+
+  // Canvas dans la zone terminal
+  $("terminal-empty").style.display = "none";
+  const wrap = document.createElement("div");
+  wrap.className = "rdp-container";
+  const canvas = document.createElement("canvas");
+  canvas.width = t.width;
+  canvas.height = t.height;
+  canvas.tabIndex = 0;
+  wrap.appendChild(canvas);
+  $("terminal").appendChild(wrap);
+  const ctx = canvas.getContext("2d")!;
+  rdpSessions.set(id, { canvas, tab });
+  state.active = id;
+
+  tab.addEventListener("click", () => focusRdp(id));
+  tab.querySelector(".close")!.addEventListener("click", (e) => { e.stopPropagation(); closeRdp(id); });
+
+  // Souris → sidecar. Coordonnées ramenées à la taille du bureau.
+  const send = (bytes: number[]) => invoke("rdp_input", { id, bytes }).catch(() => {});
+  const pos = (e: MouseEvent): [number, number] => {
+    const r = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(t.width - 1, Math.round(((e.clientX - r.left) / r.width) * t.width)));
+    const y = Math.max(0, Math.min(t.height - 1, Math.round(((e.clientY - r.top) / r.height) * t.height)));
+    return [x, y];
+  };
+  const le16 = (n: number) => [n & 0xff, (n >> 8) & 0xff];
+  canvas.addEventListener("mousemove", (e) => { const [x, y] = pos(e); send([1, ...le16(x), ...le16(y)]); });
+  canvas.addEventListener("mousedown", (e) => { e.preventDefault(); canvas.focus(); const [x, y] = pos(e); send([2, e.button, 1, ...le16(x), ...le16(y)]); });
+  canvas.addEventListener("mouseup", (e) => { const [x, y] = pos(e); send([2, e.button, 0, ...le16(x), ...le16(y)]); });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); const d = e.deltaY > 0 ? -120 : 120; send([3, ...le16(d & 0xffff), 0, 0, 0, 0]); });
+  canvas.addEventListener("keydown", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 1]); });
+  canvas.addEventListener("keyup", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 0]); });
+
+  // Canal de réception du framebuffer.
+  const chan = new Channel<RdpMsg>();
+  chan.onmessage = (msg) => {
+    const s = rdpSessions.get(id);
+    if (!s) return;
+    if (msg.kind === "connected") {
+      canvas.width = msg.w; canvas.height = msg.h;
+      tab.querySelector(".state")!.className = "state live";
+    } else if (msg.kind === "frame") {
+      const img = ctx.createImageData(msg.w, msg.h);
+      img.data.set(b64bytes(msg.data));
+      ctx.putImageData(img, msg.x, msg.y);
+    } else if (msg.kind === "error") {
+      tab.querySelector(".state")!.className = "state closed";
+      alert(`RDP : ${msg.message}`);
+    } else if (msg.kind === "closed") {
+      tab.querySelector(".state")!.className = "state closed";
+      tab.classList.add("dead");
+    }
+  };
+  focusRdp(id);
+  try {
+    await invoke("rdp_open", {
+      id, host: t.host, port: t.port, user: t.user, password: t.password,
+      width: t.width, height: t.height, channel: chan,
+    });
+  } catch (e) {
+    tab.querySelector(".state")!.className = "state closed";
+    alert(`Connexion RDP impossible : ${e}`);
+  }
+}
+
+function focusRdp(id: number) {
+  state.active = id;
+  for (const [sid, s] of rdpSessions) {
+    s.tab.classList.toggle("active", sid === id);
+    (s.canvas.parentElement as HTMLElement).style.display = sid === id ? "flex" : "none";
+    if (sid === id) s.canvas.focus();
+  }
+  // Masquer les terminaux PTY.
+  state.sessions.forEach((s) => { (s.term.element?.parentElement as HTMLElement).style.display = "none"; s.tab.classList.remove("active"); });
+}
+
+function closeRdp(id: number) {
+  const s = rdpSessions.get(id);
+  if (!s) return;
+  invoke("rdp_close", { id }).catch(() => {});
+  s.canvas.parentElement?.remove();
+  s.tab.remove();
+  rdpSessions.delete(id);
+  if (state.active === id) {
+    state.active = null;
+    if (state.sessions.size === 0 && rdpSessions.size === 0) $("terminal-empty").style.display = "flex";
+  }
+}
+
+/** Table minimale code clavier → scancode PC (set 1). Suffisant pour saisir. */
+function rdpScancode(code: string): number | null {
+  const map: Record<string, number> = {
+    Escape: 0x01, Digit1: 0x02, Digit2: 0x03, Digit3: 0x04, Digit4: 0x05, Digit5: 0x06,
+    Digit6: 0x07, Digit7: 0x08, Digit8: 0x09, Digit9: 0x0a, Digit0: 0x0b, Minus: 0x0c, Equal: 0x0d,
+    Backspace: 0x0e, Tab: 0x0f, KeyQ: 0x10, KeyW: 0x11, KeyE: 0x12, KeyR: 0x13, KeyT: 0x14,
+    KeyY: 0x15, KeyU: 0x16, KeyI: 0x17, KeyO: 0x18, KeyP: 0x19, BracketLeft: 0x1a, BracketRight: 0x1b,
+    Enter: 0x1c, ControlLeft: 0x1d, KeyA: 0x1e, KeyS: 0x1f, KeyD: 0x20, KeyF: 0x21, KeyG: 0x22,
+    KeyH: 0x23, KeyJ: 0x24, KeyK: 0x25, KeyL: 0x26, Semicolon: 0x27, Quote: 0x28, Backquote: 0x29,
+    ShiftLeft: 0x2a, Backslash: 0x2b, KeyZ: 0x2c, KeyX: 0x2d, KeyC: 0x2e, KeyV: 0x2f, KeyB: 0x30,
+    KeyN: 0x31, KeyM: 0x32, Comma: 0x33, Period: 0x34, Slash: 0x35, ShiftRight: 0x36,
+    AltLeft: 0x38, Space: 0x39, CapsLock: 0x3a,
+  };
+  return map[code] ?? null;
+}

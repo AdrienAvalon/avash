@@ -1,6 +1,7 @@
 //! Avash GUI — coquille Tauri 2. Sessions PTY multi-onglets côté Rust.
 
 pub mod commands;
+pub mod rdp;
 
 pub use commands::*;
 
@@ -19,6 +20,7 @@ pub fn run() {
         .manage(commands::TunnelStore {
             inner: Mutex::new(HashMap::new()),
         })
+        .manage(rdp::RdpStore::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_hosts,
             commands::run_command,
@@ -53,6 +55,9 @@ pub fn run() {
             commands::tunnel_start,
             commands::tunnel_stop,
             commands::tunnel_status,
+            rdp::rdp_open,
+            rdp::rdp_input,
+            rdp::rdp_close,
             commands::open_sessions,
             commands::snippet_list,
             commands::snippet_vars,
