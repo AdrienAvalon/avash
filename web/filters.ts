@@ -37,12 +37,20 @@ export function matchHost(h: Host, query: string): boolean {
   return (
     h.alias.toLowerCase().includes(q) ||
     (h.hostname ?? "").toLowerCase().includes(q) ||
-    (h.user ?? "").toLowerCase().includes(q)
+    (h.user ?? "").toLowerCase().includes(q) ||
+    h.tags.some((t) => t.toLowerCase().includes(q))
   );
 }
 
-export function filterHosts(hosts: Host[], query: string): Host[] {
-  return hosts.filter((h) => matchHost(h, query));
+/** Tous les tags presents, dedupliques, tries. */
+export function allTags(hosts: Host[]): string[] {
+  const set = new Set<string>();
+  for (const h of hosts) for (const t of h.tags) set.add(t);
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+export function filterHosts(hosts: Host[], query: string, tag: string | null = null): Host[] {
+  return hosts.filter((h) => matchHost(h, query) && (!tag || h.tags.includes(tag)));
 }
 
 /**

@@ -293,3 +293,20 @@ describe("snippetPreview", () => {
     expect(snippetPreview("x".repeat(80)).endsWith("…")).toBe(true);
   });
 });
+
+import { allTags } from "./filters";
+
+describe("tags", () => {
+  const th = (alias: string, tags: string[]): Host => host({ alias, tags });
+  it("allTags dédupliqué et trié", () => {
+    expect(allTags([th("a", ["prod", "web"]), th("b", ["web", "db"])])).toEqual(["db", "prod", "web"]);
+  });
+  it("filterHosts filtre par tag", () => {
+    const hosts = [th("a", ["prod"]), th("b", ["dev"]), th("c", ["prod", "web"])];
+    expect(filterHosts(hosts, "", "prod").map((h) => h.alias)).toEqual(["a", "c"]);
+    expect(filterHosts(hosts, "", null).length).toBe(3);
+  });
+  it("matchHost trouve par tag via la recherche", () => {
+    expect(matchHost(th("srv", ["staging"]), "stag")).toBe(true);
+  });
+});

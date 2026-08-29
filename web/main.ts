@@ -13,7 +13,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic, fileIconName } from "./icons";
 import {
-  humanSize, filterHosts, remoteJoin, parentDir, isPasswordRequired, stripHtml, hostInitials, hostHue, osBadge,
+  humanSize, filterHosts, allTags, remoteJoin, parentDir, isPasswordRequired, stripHtml, hostInitials, hostHue, osBadge,
   shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
@@ -67,6 +67,8 @@ const state = {
   sessions: new Map<number, Session>(),
   /** Hote surligne par un simple clic (sans connexion). */
   pickedAlias: null as string | null,
+  /** Filtre par tag actif (null = tous). */
+  tagFilter: null as string | null,
 };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -200,10 +202,38 @@ function hostSessionState(alias: string): "" | "live" | "connecting" {
   return st;
 }
 
+/** Barre de filtres par tag, sous l'en-tete « Hôtes ». */
+function renderTagBar() {
+  const bar = $("tag-bar");
+  const tags = allTags(state.hosts);
+  if (tags.length === 0) { bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.innerHTML = "";
+  for (const t of tags) {
+    const c = document.createElement("span");
+    c.className = "tag-pill" + (t === state.tagFilter ? " on" : "");
+    c.textContent = t;
+    c.addEventListener("click", () => {
+      state.tagFilter = state.tagFilter === t ? null : t;
+      renderHosts();
+    });
+    bar.appendChild(c);
+  }
+  if (state.tagFilter) {
+    const clear = document.createElement("span");
+    clear.className = "tag-pill clear";
+    clear.textContent = "✕";
+    clear.title = "Effacer le filtre";
+    clear.addEventListener("click", () => { state.tagFilter = null; renderHosts(); });
+    bar.appendChild(clear);
+  }
+}
+
 function renderHosts() {
   const list = $("host-list");
   list.innerHTML = "";
-  const shown = filterHosts(state.hosts, state.filter);
+  const shown = filterHosts(state.hosts, state.filter, state.tagFilter);
+  renderTagBar();
   for (const h of shown) {
     const el = document.createElement("div");
     const selected = state.active !== null && state.sessions.get(state.active)?.alias === h.alias;
@@ -226,6 +256,23 @@ function renderHosts() {
     }
     el.querySelector(".alias")!.textContent = h.alias;
     el.querySelector(".meta")!.textContent = target;
+    if (h.tags.length > 0) {
+      const chips = document.createElement("span");
+      chips.className = "host-tags";
+      for (const t of h.tags.slice(0, 3)) {
+        const c = document.createElement("span");
+        c.className = "host-tag" + (t === state.tagFilter ? " on" : "");
+        c.textContent = t;
+        c.title = `Filtrer par « ${t} »`;
+        c.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          state.tagFilter = state.tagFilter === t ? null : t;
+          renderHosts();
+        });
+        chips.appendChild(c);
+      }
+      el.querySelector(".info")!.appendChild(chips);
+    }
     // La pastille dit quelque chose de vrai : une session est ouverte ici.
     const dot = el.querySelector(".dot") as HTMLElement;
     dot.className = "dot " + hostSessionState(h.alias);
@@ -1216,6 +1263,7 @@ async function manualSubmit(ev: Event) {
         user: target.user,
         keyPath: target.key_path,
         proxyJump: null,
+        tags: null,
       });
       await loadHosts();
     }
@@ -1661,6 +1709,7 @@ async function openEditHost(alias: string) {
     ($("e-user") as HTMLInputElement).value = h.user ?? "";
     ($("e-key") as HTMLInputElement).value = h.identity_file ?? "";
     ($("e-jump") as HTMLInputElement).value = h.proxy_jump ?? "";
+    ($("e-tags") as HTMLInputElement).value = h.tags.join(", ");
     $("edit-modal").classList.add("open");
     setTimeout(() => ($("e-alias") as HTMLInputElement).focus(), 30);
   } catch (e) {
@@ -1696,6 +1745,7 @@ $("edit-form").addEventListener("submit", async (e) => {
       user: val("e-user") || null,
       keyPath: val("e-key") || null,
       proxyJump: val("e-jump") || null,
+      tags: val("e-tags") || null,
     });
     closeEditHost();
     await loadHosts();

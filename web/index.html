@@ -200,6 +200,22 @@
       text-transform: uppercase; color: var(--text-faint);
       display: flex; justify-content: space-between;
     }
+    .tag-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 12px 8px; }
+    .tag-pill {
+      font-size: 10.5px; padding: 2px 8px; border-radius: 20px; cursor: pointer;
+      background: var(--card); border: 1px solid var(--border-soft); color: var(--text-dim);
+      transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+    }
+    .tag-pill:hover { color: var(--text); border-color: var(--accent-line); }
+    .tag-pill.on { background: var(--accent-tint); border-color: var(--accent-line); color: var(--accent-soft); }
+    .tag-pill.clear { color: var(--text-faint); }
+    .host-tags { display: inline-flex; gap: 4px; margin-top: 3px; flex-wrap: wrap; }
+    .host-tag {
+      font-size: 9.5px; padding: 0 5px; border-radius: 4px; cursor: pointer;
+      background: var(--border-soft); color: var(--text-dim); line-height: 15px;
+    }
+    .host-tag:hover { color: var(--text); }
+    .host-tag.on { background: var(--accent-tint); color: var(--accent-soft); }
     .host-list { flex: 1; overflow-y: auto; padding: 2px 8px 8px; }
     .host {
       position: relative; padding: 7px 10px 7px 10px; border-radius: var(--r-md);
@@ -675,6 +691,7 @@
         <kbd>Ctrl K</kbd>
       </div>
       <div class="section-title"><span>Hôtes</span><span id="host-count">—</span></div>
+      <div class="tag-bar" id="tag-bar" hidden></div>
       <div id="host-list" class="host-list"></div>
       <div class="side-actions">
         <button id="manual-btn" class="manual-btn" type="button" data-icon="plus">Connexion directe</button>
@@ -1020,6 +1037,9 @@
         </label>
         <label><span>Rebond ProxyJump <span class="field-hint">(optionnel) — bastion(s), ex. <code>jump</code> ou <code>user@bastion:22</code></span></span>
           <input id="e-jump" placeholder="bastion, deploy@10.0.0.1:2222" />
+        </label>
+        <label><span>Tags <span class="field-hint">(optionnel) — séparés par des virgules</span></span>
+          <input id="e-tags" placeholder="prod, web" />
         </label>
         <p class="modal-error" id="e-error" hidden></p>
         <div class="modal-actions">

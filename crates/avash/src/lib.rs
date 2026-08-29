@@ -147,7 +147,25 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
 
     for raw in content.lines() {
         let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() {
+            continue;
+        }
+        // Convention Avash : un commentaire `#Tags: a, b` DANS un bloc Host
+        // etiquette l'hote. Reste un commentaire pour OpenSSH (ignore).
+        if let Some(rest) = line.strip_prefix('#') {
+            if let Some(list) = rest
+                .trim_start()
+                .strip_prefix("Tags:")
+                .or_else(|| rest.trim_start().strip_prefix("tags:"))
+            {
+                if let Some(h) = current.as_mut() {
+                    h.tags = list
+                        .split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty())
+                        .collect();
+                }
+            }
             continue;
         }
         let (key, value) = match line.split_once(char::is_whitespace) {
@@ -214,6 +232,24 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tags_lus_et_reecrits() {
+        let cfg = "Host prod\n  HostName 10.0.0.1\n  #Tags: prod, web\n";
+        let h = &parse_config_str(cfg)[0];
+        assert_eq!(h.tags, vec!["prod", "web"]);
+        // Round-trip : render puis relit les memes tags.
+        let rendered = render_host_block(h);
+        assert!(rendered.contains("#Tags: prod, web"), "{rendered}");
+        assert_eq!(parse_config_str(&rendered)[0].tags, vec!["prod", "web"]);
+    }
+
+    #[test]
+    fn tags_hors_bloc_host_ignores() {
+        // Un #Tags avant tout Host ne s'attache a rien.
+        let h = parse_config_str("#Tags: orphelin\nHost a\n  HostName x\n");
+        assert!(h[0].tags.is_empty());
+    }
 
     #[test]
     fn split_proxy_jump_decoupe_une_chaine() {
@@ -537,6 +573,15 @@ pub fn render_host_block(host: &SshHost) -> String {
     }
     if let Some(v) = host.proxy_jump.as_deref().filter(|v| !v.trim().is_empty()) {
         let _ = writeln!(out, "    ProxyJump {}", v.trim());
+    }
+    let clean: Vec<&str> = host
+        .tags
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !clean.is_empty() {
+        let _ = writeln!(out, "    #Tags: {}", clean.join(", "));
     }
     out
 }

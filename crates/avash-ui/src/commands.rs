@@ -1482,6 +1482,7 @@ pub fn host_save(
     user: String,
     key_path: Option<String>,
     proxy_jump: Option<String>,
+    tags: Option<String>,
 ) -> Result<SshHost, String> {
     let host = SshHost {
         alias: alias.trim().to_string(),
@@ -1494,7 +1495,12 @@ pub fn host_save(
         proxy_jump: proxy_jump
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty()),
-        tags: vec![],
+        tags: tags
+            .unwrap_or_default()
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect(),
     };
     avash::append_host(&host).map_err(|e| format!("{e:#}"))?;
     Ok(host)
@@ -1588,6 +1594,7 @@ pub fn host_get(alias: String) -> Result<SshHost, String> {
 /// Modifie un hôte enregistré. Si l'alias change, le mot de passe mémorisé
 /// est déplacé vers le nouvel identifiant.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn host_update(
     old_alias: String,
     alias: String,
@@ -1596,6 +1603,7 @@ pub fn host_update(
     user: Option<String>,
     key_path: Option<String>,
     proxy_jump: Option<String>,
+    tags: Option<String>,
 ) -> Result<(), String> {
     let host = SshHost {
         alias: alias.trim().to_string(),
@@ -1608,7 +1616,12 @@ pub fn host_update(
         proxy_jump: proxy_jump
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty()),
-        tags: vec![],
+        tags: tags
+            .unwrap_or_default()
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect(),
     };
     avash::update_host(old_alias.trim(), &host).map_err(|e| format!("{e:#}"))
 }
