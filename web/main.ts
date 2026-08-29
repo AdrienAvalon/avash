@@ -545,6 +545,12 @@ function closeSession(id: number) {
     if (first.done) {
       state.active = null;
       $("terminal-empty").style.display = "flex";
+      // Le panneau SFTP appartient a une session : sans session, il n'a plus
+      // rien a montrer. On le ferme en meme temps que la derniere connexion.
+      if (sftp.open) {
+        sftp.open = false;
+        $("sftp-panel").classList.remove("open");
+      }
       sftpSyncButton();
     } else {
       focusSession(first.value);
