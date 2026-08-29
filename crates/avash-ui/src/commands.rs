@@ -61,11 +61,16 @@ impl Target {
     fn from_alias(alias: &str) -> Result<Self, String> {
         let host = find_host(alias)?;
         let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
+        let port = host.port.unwrap_or(22);
+        let user = host.user.clone().unwrap_or_else(whoami::username);
+        // Mot de passe deja memorise ? Le trousseau evite de le redemander.
+        // Une absence n'est pas une erreur : l'interface fera la saisie.
+        let password = avash::secrets::load(&avash::secrets::account_id(&user, &addr, port));
         Ok(Self {
-            port: host.port.unwrap_or(22),
-            user: host.user.clone().unwrap_or_else(whoami::username),
+            port,
+            user,
             key_path: host.identity_file.as_ref().map(std::path::PathBuf::from),
-            password: None,
+            password,
             label: host.alias.clone(),
             addr,
         })
@@ -312,17 +317,34 @@ async fn open_on_target(
 }
 
 /// Ouvre une session sur un hote declare dans `~/.ssh/config`.
+///
+/// `password` sert au second essai : un hote sans `IdentityFile` n'a aucun
+/// moyen de s'authentifier, l'interface redemande alors la saisie.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn pty_open(
     app: AppHandle,
     state: tauri::State<'_, SessionStore>,
     id: u64,
     alias: String,
+    password: Option<String>,
     cols: u32,
     rows: u32,
 ) -> Result<String, String> {
-    let target = Target::from_alias(&alias)?;
+    let mut target = Target::from_alias(&alias)?;
+    target.password = password.filter(|p| !p.is_empty());
     open_on_target(app, &state, id, target, cols, rows).await
+}
+
+/// L'hote a-t-il de quoi s'authentifier sans demander de saisie ?
+///
+/// Permet a l'interface de reclamer le mot de passe AVANT de tenter une
+/// connexion vouee a l'echec, plutot qu'apres. `from_alias` ayant deja
+/// consulte le trousseau, un mot de passe memorise compte comme suffisant.
+#[tauri::command]
+pub fn host_needs_password(alias: String) -> Result<bool, String> {
+    let t = Target::from_alias(&alias)?;
+    Ok(t.key_path.is_none() && t.password.is_none())
 }
 
 /// Ouvre une session sur une adresse saisie a la main, sans `~/.ssh/config`.
@@ -880,4 +902,36 @@ pub fn host_save(
     };
     avash::append_host(&host).map_err(|e| format!("{e:#}"))?;
     Ok(host)
+}
+
+// ---------- Mots de passe memorises ----------
+
+/// Mémorise un mot de passe dans le trousseau du système.
+///
+/// Jamais dans `~/.ssh/config` : ce fichier est en clair. Le trousseau
+/// (KWallet, GNOME Keyring, Credential Manager, Trousseau macOS) gère le
+/// chiffrement, le déverrouillage et la révocation.
+#[tauri::command]
+pub fn password_save(
+    addr: String,
+    port: Option<u16>,
+    user: String,
+    password: String,
+) -> Result<(), String> {
+    let id = avash::secrets::account_id(user.trim(), addr.trim(), port.unwrap_or(22));
+    avash::secrets::save(&id, &password).map_err(|e| format!("{e:#}"))
+}
+
+/// Oublie un mot de passe mémorisé.
+#[tauri::command]
+pub fn password_forget(addr: String, port: Option<u16>, user: String) -> Result<(), String> {
+    let id = avash::secrets::account_id(user.trim(), addr.trim(), port.unwrap_or(22));
+    avash::secrets::forget(&id).map_err(|e| format!("{e:#}"))
+}
+
+/// Un mot de passe est-il déjà mémorisé pour cet hôte ?
+#[tauri::command]
+pub fn password_known(addr: String, port: Option<u16>, user: String) -> bool {
+    let id = avash::secrets::account_id(user.trim(), addr.trim(), port.unwrap_or(22));
+    avash::secrets::load(&id).is_some()
 }

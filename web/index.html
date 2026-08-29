@@ -463,5 +463,24 @@
         </div>
       </div>
     </div>
+
+    <div class="modal-backdrop" id="pass-modal">
+      <form class="modal" id="pass-form" autocomplete="off">
+        <h2>Mot de passe</h2>
+        <p class="modal-hint" id="pass-target">—</p>
+        <label>Mot de passe
+          <input id="pass-input" type="password" required autocomplete="current-password" />
+        </label>
+        <label class="check">
+          <input type="checkbox" id="pass-remember" />
+          <span>Mémoriser dans le trousseau du système</span>
+        </label>
+        <p class="modal-error" id="pass-error" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="pass-cancel">Annuler</button>
+          <button type="submit" class="btn-primary" id="pass-submit">Se connecter</button>
+        </div>
+      </form>
+    </div>
 </body>
 </html>

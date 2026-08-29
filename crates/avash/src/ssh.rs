@@ -7,6 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+/// Marqueur place en tete du message quand seule l'absence de mot de passe
+/// explique l'echec. L'interface le reconnait pour proposer une saisie.
+pub const PASSWORD_REQUIRED: &str = "[AVASH_PASSWORD_REQUIRED]";
+
 pub struct ClientAuth {
     pub user: String,
     /// Chemin de la clé privée (OpenSSH). Support agent à venir.
@@ -144,6 +148,15 @@ impl AvashSession {
             {
                 return Ok(());
             }
+        }
+        // Marqueur reconnu par l'interface : elle demande alors le mot de
+        // passe et retente, plutot que d'afficher un echec sans recours.
+        if auth.password.is_none() {
+            return Err(anyhow!(
+                "{PASSWORD_REQUIRED} Aucune méthode d'authentification n'a abouti pour « {} ». \
+                 Un mot de passe est nécessaire.",
+                auth.user
+            ));
         }
         Err(anyhow!("Authentification échouée pour {}", auth.user))
     }

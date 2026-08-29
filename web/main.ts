@@ -228,20 +228,74 @@ function warnIfDeaf(term: Terminal) {
   );
 }
 
+/** Marqueur pose par le backend quand seul le mot de passe manque. */
+const PASSWORD_REQUIRED = "[AVASH_PASSWORD_REQUIRED]";
+
 /** Ouvre une session sur un hote declare dans ~/.ssh/config. */
 async function openSession(h: Host) {
   await ensureFontLoaded();
+  const label = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
+
+  // Un hote sans IdentityFile n'a aucun moyen de s'authentifier : autant
+  // demander le mot de passe AVANT, plutot que d'echouer puis redemander.
+  let password: string | null = null;
+  let rememberAsked = false;
+  try {
+    // `host_needs_password` tient compte du trousseau : si un mot de passe
+    // y est deja memorise, on ne redemande rien.
+    if (await invoke<boolean>("host_needs_password", { alias: h.alias })) {
+      const rep = await askPassword(label);
+      if (!rep) return; // annulation : ne pas ouvrir d'onglet mort
+      password = rep.password;
+      rememberAsked = rep.remember;
+    }
+  } catch {
+    /* on tentera sans, le backend dira ce qui manque */
+  }
+
   const { id, term } = newSessionShell(h.alias);
   warnIfDeaf(term);
-  const target = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
-  term.write(`\x1b[90mConnexion à ${target}…\x1b[0m\r\n`);
-  try {
-    await invoke("pty_open", { id, alias: h.alias, cols: term.cols, rows: term.rows });
-    setSessionState(id, "live");
-  } catch (e) {
-    setSessionState(id, "closed");
-    term.write(`\x1b[31m⚔️ Échec connexion : ${e}\x1b[0m\r\n`);
+  term.write(`\x1b[90mConnexion à ${label}…\x1b[0m\r\n`);
+
+  for (let essai = 0; essai < 3; essai++) {
+    try {
+      await invoke("pty_open", { id, alias: h.alias, password, cols: term.cols, rows: term.rows });
+      setSessionState(id, "live");
+      // On ne memorise qu'apres une connexion REUSSIE : enregistrer un mot
+      // de passe refuse le ferait redemander a chaque fois sans jamais
+      // marcher, et l'utilisateur ne saurait pas d'ou vient l'echec.
+      if (password && rememberAsked) {
+        await invoke("password_save", {
+          addr: h.hostname ?? h.alias,
+          port: h.port,
+          user: h.user ?? null,
+          password,
+        }).catch((e) => term.write(`\r\n\x1b[33m⚠️ Mémorisation impossible : ${e}\x1b[0m\r\n`));
+      }
+      return;
+    } catch (e) {
+      const msg = String(e);
+      if (!msg.includes(PASSWORD_REQUIRED)) {
+        setSessionState(id, "closed");
+        term.write(`\x1b[31m⚔️ Échec connexion : ${msg}\x1b[0m\r\n`);
+        return;
+      }
+      // Mot de passe manquant ou refuse : on redemande, jusqu'a 3 fois.
+      const rep = await askPassword(
+        label,
+        essai === 0 ? undefined : "Mot de passe refusé, nouvelle tentative.",
+      );
+      if (!rep) {
+        setSessionState(id, "closed");
+        term.write(`\x1b[90mConnexion annulée.\x1b[0m\r\n`);
+        return;
+      }
+      password = rep.password;
+      rememberAsked = rep.remember;
+    }
   }
+  setSessionState(id, "closed");
+  term.write(`\x1b[31m⚔️ Trois tentatives échouées.\x1b[0m\r\n`);
 }
 
 /**
@@ -804,3 +858,55 @@ window.addEventListener("keydown", (e) => {
 $("empty-connect").addEventListener("click", manualOpen);
 $("empty-keys").addEventListener("click", keysOpen);
 manualSyncSaveRow();
+
+
+// ---------- Demande de mot de passe ----------
+
+const passModal = () => $("pass-modal");
+let passResolve: ((v: { password: string; remember: boolean } | null) => void) | null = null;
+
+/**
+ * Demande un mot de passe et rend la reponse.
+ *
+ * Rend `null` si l'utilisateur annule — l'appelant doit alors renoncer
+ * proprement plutot que de tenter une connexion sans identifiant.
+ */
+function askPassword(target: string, erreur?: string): Promise<{ password: string; remember: boolean } | null> {
+  $("pass-target").textContent = target;
+  ($("pass-input") as HTMLInputElement).value = "";
+  ($("pass-remember") as HTMLInputElement).checked = false;
+  const err = $("pass-error");
+  if (erreur) {
+    err.textContent = erreur;
+    err.hidden = false;
+  } else {
+    err.hidden = true;
+  }
+  passModal().classList.add("open");
+  setTimeout(() => ($("pass-input") as HTMLInputElement).focus(), 30);
+  return new Promise((resolve) => {
+    passResolve = resolve;
+  });
+}
+
+function passClose(value: { password: string; remember: boolean } | null) {
+  passModal().classList.remove("open");
+  const r = passResolve;
+  passResolve = null;
+  r?.(value);
+}
+
+$("pass-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  passClose({
+    password: ($("pass-input") as HTMLInputElement).value,
+    remember: ($("pass-remember") as HTMLInputElement).checked,
+  });
+});
+$("pass-cancel").addEventListener("click", () => passClose(null));
+passModal().addEventListener("click", (e) => {
+  if (e.target === passModal()) passClose(null);
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && passModal().classList.contains("open")) passClose(null);
+});

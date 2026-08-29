@@ -17,6 +17,7 @@ pub fn run() {
             commands::list_hosts,
             commands::run_command,
             commands::pty_open,
+            commands::host_needs_password,
             commands::pty_open_manual,
             commands::pty_write,
             commands::pty_resize,
@@ -25,6 +26,9 @@ pub fn run() {
             commands::sftp_download,
             commands::sftp_upload,
             commands::host_save,
+            commands::password_save,
+            commands::password_forget,
+            commands::password_known,
             commands::keys_list,
             commands::key_generate,
             commands::key_deploy
