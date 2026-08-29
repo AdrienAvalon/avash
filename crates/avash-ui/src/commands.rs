@@ -122,6 +122,18 @@ impl Target {
         })
     }
 
+    /// Applique un mot de passe saisi, sans effacer celui du trousseau.
+    ///
+    /// Regression : `target.password = saisie` ecrasait le mot de passe
+    /// memorise par `None` quand l'interface n'en envoyait pas (cas normal
+    /// d'un hote deja connu). L'authentification echouait alors, et
+    /// l'utilisateur devait retaper un mot de passe pourtant enregistre.
+    fn override_password(&mut self, typed: Option<String>) {
+        if let Some(p) = typed.filter(|p| !p.is_empty()) {
+            self.password = Some(p);
+        }
+    }
+
     fn auth(&self) -> avash::ssh::ClientAuth {
         avash::ssh::ClientAuth {
             user: self.user.clone(),
@@ -339,7 +351,7 @@ pub async fn pty_open(
     rows: u32,
 ) -> Result<String, String> {
     let mut target = Target::from_alias(&alias)?;
-    target.password = password.filter(|p| !p.is_empty());
+    target.override_password(password);
     open_on_target(app, &state, id, target, cols, rows).await
 }
 
@@ -628,9 +640,7 @@ pub async fn tunnel_start(
         .find(|d| d.id == id)
         .ok_or_else(|| format!("Tunnel inconnu : {id}"))?;
     let mut target = Target::from_alias(&def.alias)?;
-    if let Some(p) = password.filter(|p| !p.is_empty()) {
-        target.password = Some(p);
-    }
+    target.override_password(password);
     // Un tunnel deja ouvert (ou mort) sous cet id est remplace : c'est le
     // geste « relancer » de l'interface.
     let previous = tunnels.inner.lock().unwrap().remove(&id);
@@ -677,6 +687,40 @@ pub fn tunnel_status(tunnels: tauri::State<'_, TunnelStore>) -> Vec<TunnelStatus
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn target_with(password: Option<&str>) -> Target {
+        Target {
+            addr: "h".into(),
+            port: 22,
+            user: "u".into(),
+            key_path: None,
+            password: password.map(str::to_string),
+            label: "h".into(),
+        }
+    }
+
+    #[test]
+    fn override_password_garde_le_mot_de_passe_du_trousseau_sans_saisie() {
+        let mut t = target_with(Some("du-trousseau"));
+        t.override_password(None);
+        assert_eq!(t.password.as_deref(), Some("du-trousseau"));
+        t.override_password(Some(String::new()));
+        assert_eq!(
+            t.password.as_deref(),
+            Some("du-trousseau"),
+            "saisie vide = pas de saisie"
+        );
+    }
+
+    #[test]
+    fn override_password_prefere_la_saisie_quand_il_y_en_a_une() {
+        let mut t = target_with(Some("ancien"));
+        t.override_password(Some("nouveau".into()));
+        assert_eq!(t.password.as_deref(), Some("nouveau"));
+        let mut t = target_with(None);
+        t.override_password(Some("saisi".into()));
+        assert_eq!(t.password.as_deref(), Some("saisi"));
+    }
 
     #[test]
     fn parse_kind_reconnait_les_trois_types_et_refuse_le_reste() {

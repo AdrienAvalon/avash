@@ -17,8 +17,20 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 
 ## État (29/08 — tunnels SSH)
 
-**123 tests verts** (95 Rust, 28 TypeScript) · clippy strict · `cargo audit`
+**125 tests verts** (97 Rust, 28 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
+
+### Reconnexion et mot de passe mémorisé (29/08, après-midi)
+
+- **Bug corrigé** : un mot de passe coché « mémoriser » était bien écrit dans
+  le trousseau, mais `pty_open` l'écrasait ensuite par la saisie vide du
+  front (`target.password = None`) → il fallait le retaper à chaque fois.
+  Trouvé en vérifiant d'abord que le trousseau relit bien l'entrée
+  (`examples/keyring_persist.rs`, d'un processus à l'autre) avant de
+  soupçonner le code.
+- **Session terminée** (exit, coupure) : **Entrée** reconnecte dans le même
+  onglet, **Ctrl+W** le ferme. Vaut aussi pour une connexion échouée. Vérifié
+  dans l'application réelle contre le `sshd` local.
 
 ### Tunnels SSH (nouveau)
 

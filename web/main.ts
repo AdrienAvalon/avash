@@ -21,6 +21,10 @@ type Session = {
   fit: FitAddon;
   tab: HTMLElement;
   search: SearchAddon;
+  /** Session terminee cote serveur : le clavier ne part plus au shell. */
+  closed: boolean;
+  /** Rouvre la meme cible dans ce meme onglet (Entree apres deconnexion). */
+  reconnect: (() => Promise<void>) | null;
 };
 
 /** Taille de police partagée par tous les terminaux (Ctrl +/−). */
@@ -275,13 +279,19 @@ function newSessionShell(label: string) {
   });
 
   term.onData((data) => {
+    // Session terminee : Entree relance la connexion, le reste est ignore
+    // (l'ecrire au backend ne ferait qu'afficher « Session inconnue »).
+    if (s.closed) {
+      if (data === "\r" && s.reconnect) s.reconnect();
+      return;
+    }
     invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${e}\r\n`));
   });
   term.onResize(({ cols, rows }) => {
     invoke("pty_resize", { id, cols, rows }).catch(() => {});
   });
 
-  const s: Session = { id, alias: label, term, fit, tab, search };
+  const s: Session = { id, alias: label, term, fit, tab, search, closed: false, reconnect: null };
   state.sessions.set(id, s);
   state.active = id;
   focusTerminal(s);
@@ -305,6 +315,20 @@ function warnIfDeaf(term: Terminal) {
 /** Ouvre une session sur un hote declare dans ~/.ssh/config. */
 async function openSession(h: Host) {
   await ensureFontLoaded();
+  const { session } = newSessionShell(h.alias);
+  warnIfDeaf(session.term);
+  session.reconnect = () => connectByAlias(session, h);
+  await connectByAlias(session, h);
+}
+
+/**
+ * Connecte (ou reconnecte) un onglet existant a un hote de `~/.ssh/config`.
+ * Le meme id est reutilise : le backend remplace l'ancienne session.
+ */
+async function connectByAlias(s: Session, h: Host) {
+  const { id, term } = s;
+  s.closed = false;
+  setSessionState(id, "connecting");
   const label = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
 
   // Un hote sans IdentityFile n'a aucun moyen de s'authentifier : autant
@@ -324,8 +348,6 @@ async function openSession(h: Host) {
     /* on tentera sans, le backend dira ce qui manque */
   }
 
-  const { id, term } = newSessionShell(h.alias);
-  warnIfDeaf(term);
   term.write(`\x1b[90mConnexion à ${label}…\x1b[0m\r\n`);
 
   for (let essai = 0; essai < 3; essai++) {
@@ -347,8 +369,7 @@ async function openSession(h: Host) {
     } catch (e) {
       const msg = String(e);
       if (!isPasswordRequired(msg)) {
-        setSessionState(id, "closed");
-        term.write(`\x1b[31m⚔️ Échec connexion : ${msg}\x1b[0m\r\n`);
+        markClosed(s, `⚔️ Échec connexion : ${msg}`);
         return;
       }
       // Mot de passe manquant ou refuse : on redemande, jusqu'a 3 fois.
@@ -357,16 +378,28 @@ async function openSession(h: Host) {
         essai === 0 ? undefined : "Mot de passe refusé, nouvelle tentative.",
       );
       if (!rep) {
-        setSessionState(id, "closed");
-        term.write(`\x1b[90mConnexion annulée.\x1b[0m\r\n`);
+        markClosed(s, "Connexion annulée.");
         return;
       }
       password = rep.password;
       rememberAsked = rep.remember;
     }
   }
-  setSessionState(id, "closed");
-  term.write(`\x1b[31m⚔️ Trois tentatives échouées.\x1b[0m\r\n`);
+  markClosed(s, "⚔️ Trois tentatives échouées.");
+}
+
+/**
+ * Marque un onglet termine et explique quoi faire : sans cette ligne,
+ * l'utilisateur ne sait pas si ca charge encore ni comment relancer.
+ */
+function markClosed(s: Session, why: string) {
+  s.closed = true;
+  setSessionState(s.id, "closed");
+  s.term.write(
+    `\r\n\x1b[31m${why}\x1b[0m\r\n` +
+      `\x1b[90m── \x1b[0m\x1b[1mEntrée\x1b[0m\x1b[90m : se reconnecter · \x1b[0m` +
+      `\x1b[1mCtrl+W\x1b[0m\x1b[90m : fermer l'onglet ──\x1b[0m\r\n`,
+  );
 }
 
 /**
@@ -381,22 +414,40 @@ async function openManualSession(t: ManualTarget) {
   const { id, term, session } = newSessionShell(`${t.user}@${t.addr}`);
   warnIfDeaf(term);
   try {
-    const label = await invoke<string>("pty_open_manual", {
-      id,
-      addr: t.addr,
-      port: t.port,
-      user: t.user,
-      password: t.password,
-      keyPath: t.key_path,
-      cols: term.cols,
-      rows: term.rows,
-    });
-    session.tab.querySelector(".label")!.textContent = label;
-    setSessionState(id, "live");
+    await connectManual(session, t);
   } catch (e) {
     closeSession(id);
     throw e;
   }
+  // La cible (mot de passe compris) reste en memoire le temps de l'onglet :
+  // la reconnexion ne redemande rien. Un echec s'affiche alors dans le
+  // terminal, l'onglet n'a plus de formulaire a qui remonter.
+  session.reconnect = async () => {
+    try {
+      await connectManual(session, t);
+    } catch (e) {
+      markClosed(session, `⚔️ Échec connexion : ${e}`);
+    }
+  };
+}
+
+async function connectManual(s: Session, t: ManualTarget) {
+  const { id, term } = s;
+  s.closed = false;
+  setSessionState(id, "connecting");
+  term.write(`\x1b[90mConnexion à ${t.user}@${t.addr}…\x1b[0m\r\n`);
+  const label = await invoke<string>("pty_open_manual", {
+    id,
+    addr: t.addr,
+    port: t.port,
+    user: t.user,
+    password: t.password,
+    keyPath: t.key_path,
+    cols: term.cols,
+    rows: term.rows,
+  });
+  s.tab.querySelector(".label")!.textContent = label;
+  setSessionState(id, "live");
 }
 
 function focusTerminal(s: Session) {
@@ -449,12 +500,10 @@ async function listenPty() {
     });
     await listen<{ id: number }>("pty-closed", (ev) => {
       const s = state.sessions.get(ev.payload.id);
-      if (!s) return;
-      setSessionState(ev.payload.id, "closed");
-      s.term.write(
-        `\r\n\x1b[90m── session terminée ── \x1b[0m` +
-          `\x1b[90mCtrl+W pour fermer l'onglet.\x1b[0m\r\n`,
-      );
+      // Un evenement d'une session deja remplacee (reconnexion) ne doit pas
+      // marquer la nouvelle comme morte.
+      if (!s || s.closed) return;
+      markClosed(s, "── session terminée ──");
     });
   } catch (e) {
     // Un echec ici rend TOUS les terminaux muets : la sortie du serveur
