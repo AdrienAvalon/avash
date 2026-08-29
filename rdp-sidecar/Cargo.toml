@@ -22,3 +22,10 @@ x509-cert = "0.2"
 tokio-tungstenite = "0.24"
 futures-util = "0.3.34"
 rand = "0.10.2"
+
+# Chemin chaud CPU-bound (décodage graphique) : LTO + une seule unité de
+# codegen pour l'inlining inter-crates ; strip pour un binaire plus compact.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

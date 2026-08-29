@@ -236,6 +236,8 @@ async fn connect(
     let tcp = TcpStream::connect((a.host.as_str(), a.port))
         .await
         .with_context(|| format!("connexion TCP à {}:{}", a.host, a.port))?;
+    // Nagle OFF : les entrées et les petits rectangles d'écran partent sans délai.
+    tcp.set_nodelay(true).ok();
     let client_addr = tcp.local_addr()?;
     let mut framed = ironrdp_tokio::TokioFramed::new(tcp);
     // Canal Display Control (DVC) : permet le redimensionnement natif du
@@ -307,6 +309,7 @@ async fn main() -> Result<()> {
     out.flush().await?;
 
     let (tcp, _) = listener.accept().await.context("acceptation WebSocket")?;
+    tcp.set_nodelay(true).ok();
     let ws = tokio_tungstenite::accept_async(tcp)
         .await
         .context("handshake WebSocket")?;
