@@ -1779,6 +1779,7 @@ $("e-cancel").addEventListener("click", closeEditHost);
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if ($("edit-modal").classList.contains("open")) closeEditHost();
+  if ($("rdp-edit-modal").classList.contains("open")) closeEditRdp();
   if ($("tunnels-modal").classList.contains("open")) tunnelsClose();
 });
 
@@ -2745,12 +2746,83 @@ $("rdp-context").addEventListener("click", async (e) => {
   const h = rdpHostsList.find((x) => x.id === id);
   if (!act || !h) return;
   if (act === "connect") connectRdpSaved(h);
+  else if (act === "edit") openEditRdp(h);
   else if (act === "forget") {
     await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user }).catch(() => {});
   } else if (act === "delete") {
     if (!confirm(`Supprimer le bureau RDP « ${h.name} » ?\n\nSon mot de passe mémorisé sera aussi oublié.`)) return;
     await invoke("rdp_host_delete", { id: h.id }).catch((err) => alert(`Suppression impossible : ${err}`));
     await loadHosts();
+  }
+});
+
+/** Ouvre la modale d'édition d'un bureau RDP enregistré, pré-remplie. */
+function openEditRdp(h: RdpHostT) {
+  $("re-error").hidden = true;
+  const f = $("rdp-edit-form") as HTMLFormElement;
+  f.dataset.oldHost = h.host;
+  f.dataset.oldPort = String(h.port);
+  f.dataset.oldUser = h.user;
+  ($("re-id") as HTMLInputElement).value = h.id;
+  ($("re-name") as HTMLInputElement).value = h.name;
+  ($("re-addr") as HTMLInputElement).value = h.host;
+  ($("re-port") as HTMLInputElement).value = String(h.port);
+  ($("re-user") as HTMLInputElement).value = h.user;
+  ($("re-password") as HTMLInputElement).value = "";
+  $("rdp-edit-modal").classList.add("open");
+  setTimeout(() => ($("re-name") as HTMLInputElement).focus(), 30);
+}
+
+function closeEditRdp() {
+  $("rdp-edit-modal").classList.remove("open");
+}
+
+$("re-cancel").addEventListener("click", closeEditRdp);
+$("rdp-edit-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const val = (id: string) => ($(id) as HTMLInputElement).value.trim();
+  const err = $("re-error");
+  const submit = $("re-submit") as HTMLButtonElement;
+  const f = $("rdp-edit-form") as HTMLFormElement;
+  const name = val("re-name");
+  const host = val("re-addr");
+  const user = val("re-user");
+  const portRaw = val("re-port");
+  const port = portRaw ? Number(portRaw) : 3389;
+  const pw = ($("re-password") as HTMLInputElement).value;
+  if (!name || !host || !user) {
+    err.textContent = "Nom, adresse et utilisateur requis.";
+    err.hidden = false;
+    return;
+  }
+  submit.disabled = true;
+  try {
+    await invoke("rdp_host_save", { id: val("re-id"), name, host, port, user, width: 0, height: 0 });
+    // Le compte du trousseau dépend de host/port/user : si l'un change, on
+    // migre (ou remplace) le mot de passe mémorisé vers le nouveau compte.
+    const oldHost = f.dataset.oldHost ?? host;
+    const oldPort = Number(f.dataset.oldPort ?? String(port));
+    const oldUser = f.dataset.oldUser ?? user;
+    const accountChanged = oldHost !== host || oldPort !== port || oldUser !== user;
+    if (pw) {
+      await invoke("rdp_password_save", { host, port, user, password: pw }).catch(() => {});
+      if (accountChanged) {
+        await invoke("rdp_password_forget", { host: oldHost, port: oldPort, user: oldUser }).catch(() => {});
+      }
+    } else if (accountChanged) {
+      const old = await invoke<string | null>("rdp_password_load", { host: oldHost, port: oldPort, user: oldUser }).catch(() => null);
+      if (old) {
+        await invoke("rdp_password_save", { host, port, user, password: old }).catch(() => {});
+        await invoke("rdp_password_forget", { host: oldHost, port: oldPort, user: oldUser }).catch(() => {});
+      }
+    }
+    closeEditRdp();
+    await loadHosts();
+  } catch (ex) {
+    err.textContent = String(ex);
+    err.hidden = false;
+  } finally {
+    submit.disabled = false;
   }
 });
 

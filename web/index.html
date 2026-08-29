@@ -967,6 +967,7 @@
 
     <div class="ctx-menu" id="rdp-context">
       <div class="ctx-item" data-act="connect">Se connecter</div>
+      <div class="ctx-item" data-act="edit">Modifier…</div>
       <div class="ctx-item" data-act="forget">Oublier le mot de passe</div>
       <div class="ctx-sep"></div>
       <div class="ctx-item danger" data-act="delete">Supprimer</div>
@@ -1120,6 +1121,32 @@
         <div class="modal-actions">
           <button type="button" class="btn-ghost" id="e-cancel">Annuler</button>
           <button type="submit" class="btn-primary" id="e-submit">Enregistrer</button>
+        </div>
+      </form>
+    </div>
+    <div class="modal-backdrop" id="rdp-edit-modal">
+      <form class="modal" id="rdp-edit-form" autocomplete="off">
+        <h2>Modifier le bureau RDP</h2>
+        <input type="hidden" id="re-id" />
+        <label>Nom
+          <input id="re-name" required />
+        </label>
+        <label>Adresse ou IP
+          <input id="re-addr" required />
+        </label>
+        <label>Port
+          <input id="re-port" type="number" min="1" max="65535" placeholder="3389" />
+        </label>
+        <label>Utilisateur
+          <input id="re-user" required />
+        </label>
+        <label><span>Mot de passe <span class="field-hint">(laisser vide pour ne pas changer)</span></span>
+          <input id="re-password" type="password" />
+        </label>
+        <p class="modal-error" id="re-error" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="re-cancel">Annuler</button>
+          <button type="submit" class="btn-primary" id="re-submit">Enregistrer</button>
         </div>
       </form>
     </div></body>
