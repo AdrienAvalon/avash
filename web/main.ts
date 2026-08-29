@@ -2544,7 +2544,9 @@ async function openRdp(t: RdpTarget) {
   canvas.addEventListener("mousemove", (e) => { const [x, y] = pos(e); send([1, ...le16(x), ...le16(y)]); });
   canvas.addEventListener("mousedown", (e) => { e.preventDefault(); canvas.focus(); const [x, y] = pos(e); send([2, e.button, 1, ...le16(x), ...le16(y)]); });
   canvas.addEventListener("mouseup", (e) => { const [x, y] = pos(e); send([2, e.button, 0, ...le16(x), ...le16(y)]); });
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  // Clic droit : uniquement pour le bureau distant. On empêche le menu du
+  // navigateur ET la remontée vers #terminal (qui ouvrirait le menu d'Avash).
+  canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); });
   canvas.addEventListener("wheel", (e) => { e.preventDefault(); const d = e.deltaY > 0 ? -120 : 120; send([3, ...le16(d & 0xffff), 0, 0, 0, 0]); });
   canvas.addEventListener("keydown", (e) => {
     if (e.code === "F11") { e.preventDefault(); return; } // géré globalement (plein écran)
