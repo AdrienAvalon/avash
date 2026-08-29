@@ -17,8 +17,19 @@ Gestionnaire graphique de connexions : PuTTY/MobaXterm en mieux — **beau, simp
 
 ## État (29/08 — tunnels SSH)
 
-**143 tests verts** (105 Rust, 38 TypeScript) · clippy strict · `cargo audit`
+**144 tests verts** (106 Rust, 38 TypeScript) · clippy strict · `cargo audit`
 sans vulnérabilité non justifiée · démarrage 0,17 s.
+
+### Ajustements UX (29/08, après-midi)
+
+- **Bouton *Fichiers*** dans la barre d'onglets : ouvre/ferme le panneau SFTP
+  à la demande (état reflété, désactivé sans session ; Ctrl+B garde son rôle).
+- **Simple clic = sélection** (hôtes et fichiers, surlignés), **double-clic =
+  action** (se connecter / ouvrir un dossier / télécharger). Plus de connexion
+  ni de navigation par mégarde.
+- **SFTP : plus d'erreur à l'ouverture.** Le dossier de départ `.` est résolu
+  en chemin absolu (`sftp_realpath` → `canonicalize`) avant d'être listé —
+  certains serveurs refusent `read_dir(".")`. La barre affiche le vrai chemin.
 
 ### SFTP complet (29/08, midi)
 

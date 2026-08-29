@@ -344,6 +344,25 @@ impl russh_sftp::server::Handler for TestSftpSession {
         }
     }
 
+    fn realpath(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<russh_sftp::protocol::Name, Self::Error>> + Send {
+        async move {
+            // "." → home absolu, comme un vrai serveur.
+            let abs = if path == "." {
+                "/home/testuser".to_string()
+            } else {
+                path
+            };
+            Ok(russh_sftp::protocol::Name {
+                id,
+                files: vec![File::dummy(abs)],
+            })
+        }
+    }
+
     fn mkdir(
         &mut self,
         id: u32,
@@ -949,6 +968,17 @@ async fn sftp_mkdir_rename_remove_atteignent_le_serveur() {
             "{expected} absent de {ops:?}"
         );
     }
+    sftp.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn sftp_realpath_resout_le_point_en_chemin_absolu() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    assert_eq!(sftp.realpath(".").await, "/home/testuser");
+    // Un chemin deja absolu revient tel quel.
+    assert_eq!(sftp.realpath("/srv").await, "/srv");
     sftp.close().await.unwrap();
 }
 

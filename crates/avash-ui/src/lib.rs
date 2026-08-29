@@ -27,6 +27,7 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_close,
+            commands::sftp_realpath,
             commands::sftp_list,
             commands::sftp_download,
             commands::sftp_upload,

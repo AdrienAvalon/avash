@@ -63,6 +63,8 @@ const state = {
   nextId: 1,
   active: null as number | null,
   sessions: new Map<number, Session>(),
+  /** Hote surligne par un simple clic (sans connexion). */
+  pickedAlias: null as string | null,
 };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -164,7 +166,14 @@ function renderHosts() {
     // La pastille dit quelque chose de vrai : une session est ouverte ici.
     const dot = el.querySelector(".dot") as HTMLElement;
     dot.className = "dot " + hostSessionState(h.alias);
+    if (h.alias === state.pickedAlias) el.classList.add("picked");
     if (!os) el.title = "Double-clic : connexion — clic droit : options";
+    // Simple clic : on surligne (retour visuel). Double clic : on connecte.
+    el.addEventListener("click", () => {
+      state.pickedAlias = h.alias;
+      for (const n of list.querySelectorAll(".host.picked")) n.classList.remove("picked");
+      el.classList.add("picked");
+    });
     el.addEventListener("dblclick", () => openSession(h));
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -211,6 +220,7 @@ function setSessionState(id: number, st: SessionState) {
     st === "connecting" ? "Connexion en cours…" : st === "live" ? "Connectée" : "Session terminée";
   s.tab.classList.toggle("dead", st === "closed");
   renderHosts();
+  sftpSyncButton();
 }
 
 /** Cree l'onglet et le terminal. La connexion elle-meme est faite par l'appelant. */
@@ -517,7 +527,9 @@ function focusSession(id: number) {
     (s.term.element?.parentElement as HTMLElement).style.display = active ? "block" : "none";
     if (active) focusTerminal(s);
   });
-  if (sftp.open) sftpNavigate(state.sessions.get(id)?.sftpPath || ".");
+  const cur = state.sessions.get(id);
+  sftpSyncButton();
+  if (sftp.open && cur) sftpOpenAt(cur, cur.sftpPath);
 }
 
 function closeSession(id: number) {
@@ -533,6 +545,7 @@ function closeSession(id: number) {
     if (first.done) {
       state.active = null;
       $("terminal-empty").style.display = "flex";
+      sftpSyncButton();
     } else {
       focusSession(first.value);
     }
@@ -699,7 +712,7 @@ async function sftpNavigate(path: string) {
       const up = document.createElement("div");
       up.className = "sftp-entry dir up";
       up.innerHTML = `<span class="ic">↰</span><span class="nm">..</span><span class="sz"></span>`;
-      up.addEventListener("click", () => sftpNavigate(parentDir(path)));
+      up.addEventListener("dblclick", () => sftpNavigate(parentDir(path)));
       list.appendChild(up);
     }
     for (const e of entries) {
@@ -710,9 +723,14 @@ async function sftpNavigate(path: string) {
       el.querySelector(".nm")!.textContent = e.name;
       el.querySelector(".sz")!.textContent = e.is_dir ? shortDate(e.modified) : humanSize(e.size);
       el.title = e.is_dir
-        ? `${e.name} — modifié ${shortDate(e.modified) || "?"}`
-        : `${e.name} — ${humanSize(e.size)}, modifié ${shortDate(e.modified) || "?"} — clic : télécharger`;
+        ? `${e.name} — modifié ${shortDate(e.modified) || "?"} — double-clic : ouvrir`
+        : `${e.name} — ${humanSize(e.size)}, modifié ${shortDate(e.modified) || "?"} — double-clic : télécharger`;
+      // Simple clic : selection. Double clic : ouvrir (dossier) / telecharger.
       el.addEventListener("click", () => {
+        for (const n of list.querySelectorAll(".sftp-entry.sel")) n.classList.remove("sel");
+        el.classList.add("sel");
+      });
+      el.addEventListener("dblclick", () => {
         if (e.is_dir) sftpNavigate(remoteJoin(path, e.name));
         else sftpDownload(remoteJoin(path, e.name), e.name);
       });
@@ -734,13 +752,35 @@ function sftpRefresh() {
   if (s) sftpNavigate(s.sftpPath || ".");
 }
 
-function sftpToggle() {
+function sftpToggle(force?: boolean) {
   const s = sftpSession();
   if (!s) return;
-  sftp.open = !sftp.open;
+  sftp.open = force ?? !sftp.open;
   $("sftp-panel").classList.toggle("open", sftp.open);
-  // "." = cwd du serveur au login (home en general)
-  if (sftp.open) sftpNavigate(s.sftpPath || ".");
+  $("sftp-toggle").classList.toggle("active", sftp.open);
+  if (sftp.open) sftpOpenAt(s, s.sftpPath);
+}
+
+/** Reflete l'etat du bouton SFTP selon l'onglet courant. */
+function sftpSyncButton() {
+  const has = sftpSession() !== null;
+  ($("sftp-toggle") as HTMLButtonElement).disabled = !has;
+  $("sftp-toggle").classList.toggle("active", has && sftp.open);
+}
+
+/**
+ * Ouvre le panneau sur un dossier de depart : on resout d'abord "." en
+ * chemin absolu (certains serveurs refusent read_dir(".")), puis on liste.
+ */
+async function sftpOpenAt(s: Session, path: string) {
+  const start = path && path !== "." ? path : "";
+  if (start) { sftpNavigate(start); return; }
+  try {
+    const home = await invoke<string>("sftp_realpath", { id: s.id, path: "." });
+    if (sftpSession() === s) sftpNavigate(home || ".");
+  } catch {
+    sftpNavigate(".");
+  }
 }
 // Le panneau prend sa place par une transition : le terminal ne recoit pas
 // d'evenement resize et resterait coupe a droite. On l'ajuste a la fin.
@@ -906,6 +946,7 @@ $("sftp-list").addEventListener("contextmenu", (e) => {
 
 // ----- Barre du panneau -----
 
+$("sftp-toggle").addEventListener("click", () => sftpToggle());
 $("sftp-refresh-btn").addEventListener("click", sftpRefresh);
 $("sftp-up").addEventListener("click", () => {
   const s = sftpSession();

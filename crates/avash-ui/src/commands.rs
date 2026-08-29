@@ -525,6 +525,19 @@ fn local_target(remote: &str, local: Option<String>) -> Result<String, String> {
         .into_owned())
 }
 
+/// Résout un chemin distant en absolu (`.` → home). Certains serveurs SFTP
+/// refusent `read_dir(".")` : on canonicalise d'abord, et le front affiche
+/// alors un vrai chemin dans sa barre plutôt qu'un `.` opaque.
+#[tauri::command]
+pub async fn sftp_realpath(
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+    path: String,
+) -> Result<String, String> {
+    let sftp = sftp_of(&state, id).await?;
+    Ok(sftp.realpath(&path).await)
+}
+
 /// Liste un répertoire distant via SFTP.
 #[tauri::command]
 pub async fn sftp_list(

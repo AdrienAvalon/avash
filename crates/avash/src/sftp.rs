@@ -144,6 +144,16 @@ impl SftpHandle {
         Ok(done)
     }
 
+    /// Chemin absolu correspondant a `path` (`.` → home au login).
+    /// En cas d'echec, rend `path` inchange : mieux vaut tenter la liste que
+    /// bloquer l'ouverture du panneau.
+    pub async fn realpath(&self, path: &str) -> String {
+        self.sftp
+            .canonicalize(path)
+            .await
+            .unwrap_or_else(|_| path.to_string())
+    }
+
     pub async fn mkdir(&self, path: &str) -> Result<()> {
         self.sftp
             .create_dir(path)
