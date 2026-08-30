@@ -72,7 +72,27 @@ const state = {
   pickedAlias: null as string | null,
   /** Filtre par tag actif (null = tous). */
   tagFilter: null as string | null,
+  /** Dossiers connus (registre + dérivés des hôtes), triés. */
+  folders: [] as string[],
 };
+
+/** Dossiers repliés (persisté par machine). */
+const collapsedFolders = new Set<string>(
+  (() => {
+    try {
+      return JSON.parse(localStorage.getItem("avash.folders.collapsed") ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  })(),
+);
+function saveCollapsed() {
+  try {
+    localStorage.setItem("avash.folders.collapsed", JSON.stringify([...collapsedFolders]));
+  } catch {
+    /* stockage indispo */
+  }
+}
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -232,95 +252,229 @@ function renderTagBar() {
   }
 }
 
+// ---------- Arbre des hôtes (dossiers unifiés SSH + RDP) ----------
+
+type TreeItem = { kind: "ssh"; ssh: Host } | { kind: "rdp"; rdp: RdpHostT };
+type TreeNode = { name: string; path: string; children: Map<string, TreeNode>; items: TreeItem[] };
+
+function newNode(name: string, path: string): TreeNode {
+  return { name, path, children: new Map(), items: [] };
+}
+
+/** Descend (en créant au besoin) jusqu'au nœud du chemin donné. */
+function ensureFolder(root: TreeNode, path: string): TreeNode {
+  let node = root;
+  let acc = "";
+  for (const seg of (path || "").split("/").filter(Boolean)) {
+    acc = acc ? `${acc}/${seg}` : seg;
+    let child = node.children.get(seg);
+    if (!child) {
+      child = newNode(seg, acc);
+      node.children.set(seg, child);
+    }
+    node = child;
+  }
+  return node;
+}
+
+/** Construit l'arbre à partir du registre de dossiers + des hôtes SSH et RDP. */
+function buildTree(): TreeNode {
+  const root = newNode("", "");
+  for (const f of state.folders) ensureFolder(root, f);
+  for (const h of state.hosts) ensureFolder(root, h.folder ?? "").items.push({ kind: "ssh", ssh: h });
+  for (const h of rdpHostsList) ensureFolder(root, h.folder ?? "").items.push({ kind: "rdp", rdp: h });
+  return root;
+}
+
+function nodeCount(node: TreeNode): number {
+  let n = node.items.length;
+  for (const c of node.children.values()) n += nodeCount(c);
+  return n;
+}
+
+/** Une ligne d'hôte SSH (avatar, logo distro, tags, état), déplaçable. */
+function sshHostElement(h: Host): HTMLElement {
+  const el = document.createElement("div");
+  const selected = state.active !== null && state.sessions.get(state.active)?.alias === h.alias;
+  el.className = "host" + (selected ? " selected" : "");
+  el.style.setProperty("--hue", hostHue(h.alias));
+  const target = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
+  el.innerHTML = `<span class="avatar"><span class="ini"></span><span class="dot"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
+  const os = osByHost.get(h.alias);
+  const ini = el.querySelector(".ini") as HTMLElement;
+  if (os) {
+    const b = osBadge(os);
+    ini.textContent = b.glyph;
+    ini.className = "ini logo";
+    el.style.setProperty("--hue", b.color);
+    el.title = `${os.pretty} — double-clic : connexion, clic droit : options`;
+  } else {
+    ini.textContent = hostInitials(h.alias);
+  }
+  el.querySelector(".alias")!.textContent = h.alias;
+  el.querySelector(".meta")!.textContent = target;
+  if (h.tags.length > 0) {
+    const chips = document.createElement("span");
+    chips.className = "host-tags";
+    for (const t of h.tags.slice(0, 3)) {
+      const c = document.createElement("span");
+      c.className = "host-tag" + (t === state.tagFilter ? " on" : "");
+      c.textContent = t;
+      c.title = `Filtrer par « ${t} »`;
+      c.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        state.tagFilter = state.tagFilter === t ? null : t;
+        renderHosts();
+      });
+      chips.appendChild(c);
+    }
+    el.querySelector(".info")!.appendChild(chips);
+  }
+  const dot = el.querySelector(".dot") as HTMLElement;
+  dot.className = "dot " + hostSessionState(h.alias);
+  if (h.alias === state.pickedAlias) el.classList.add("picked");
+  if (!os) el.title = "Double-clic : connexion — clic droit : options";
+  el.addEventListener("click", () => {
+    state.pickedAlias = h.alias;
+    for (const n of $("host-list").querySelectorAll(".host.picked")) n.classList.remove("picked");
+    el.classList.add("picked");
+  });
+  el.addEventListener("dblclick", () => openSession(h));
+  el.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openHostMenu(h, e as MouseEvent);
+  });
+  makeHostDraggable(el, "ssh", h.alias);
+  return el;
+}
+
+/** Une ligne de bureau RDP enregistré, déplaçable. */
+function rdpHostElement(h: RdpHostT): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "host";
+  el.innerHTML = `<span class="avatar rdp"><span class="ini logo"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
+  (el.querySelector(".ini") as HTMLElement).innerHTML = ic("monitor");
+  el.querySelector(".alias")!.textContent = h.name;
+  el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
+  el.title = "Double-clic : connexion RDP — clic droit : options";
+  el.addEventListener("dblclick", () => connectRdpSaved(h));
+  el.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openRdpMenu(h, e as MouseEvent);
+  });
+  makeHostDraggable(el, "rdp", h.id);
+  return el;
+}
+
+function makeHostDraggable(el: HTMLElement, kind: "ssh" | "rdp", id: string) {
+  el.draggable = true;
+  el.addEventListener("dragstart", (e) => {
+    el.classList.add("dragging");
+    e.dataTransfer?.setData("text/avash-host", JSON.stringify({ kind, id }));
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  });
+  el.addEventListener("dragend", () => el.classList.remove("dragging"));
+}
+
+/** Déplace un hôte (SSH ou RDP) dans un dossier, puis recharge. */
+async function moveHostTo(kind: string, id: string, folder: string) {
+  try {
+    if (kind === "ssh") await invoke("host_set_folder", { alias: id, folder });
+    else await invoke("rdp_host_set_folder", { id, folder });
+    await loadHosts();
+  } catch (e) {
+    alert(`Déplacement impossible : ${e}`);
+  }
+}
+
+/** Rend un élément « cible de dépôt » pour ranger un hôte dans `folder`. */
+function setupFolderDrop(el: HTMLElement, folder: string, hover = true) {
+  el.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer?.types.includes("text/avash-host")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (hover) el.classList.add("drop-hover");
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("drop-hover"));
+  el.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.remove("drop-hover");
+    const raw = e.dataTransfer?.getData("text/avash-host");
+    if (!raw) return;
+    try {
+      const { kind, id } = JSON.parse(raw) as { kind: string; id: string };
+      void moveHostTo(kind, id, folder);
+    } catch {
+      /* charge utile invalide */
+    }
+  });
+}
+
+/** En-tête de dossier (chevron, icône, nom, compteur) — repliable, cible de dépôt. */
+function folderRow(node: TreeNode, depth: number): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "folder-row";
+  row.style.setProperty("--depth", String(depth));
+  const collapsed = collapsedFolders.has(node.path);
+  row.innerHTML = `<span class="chev">${collapsed ? "▸" : "▾"}</span><span class="fic">${ic("folder")}</span><span class="fname"></span><span class="fcount"></span>`;
+  row.querySelector(".fname")!.textContent = node.name;
+  row.querySelector(".fcount")!.textContent = String(nodeCount(node));
+  row.title = `${node.path} — clic : plier/déplier, clic droit : options, déposer un hôte pour le ranger`;
+  row.addEventListener("click", () => {
+    if (collapsedFolders.has(node.path)) collapsedFolders.delete(node.path);
+    else collapsedFolders.add(node.path);
+    saveCollapsed();
+    renderHosts();
+  });
+  row.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openFolderMenu(node.path, e as MouseEvent);
+  });
+  setupFolderDrop(row, node.path);
+  return row;
+}
+
+function itemName(it: TreeItem): string {
+  return it.kind === "ssh" ? it.ssh.alias : it.rdp.name;
+}
+
+/** Rend récursivement un nœud : sous-dossiers (triés) puis hôtes. */
+function renderNode(node: TreeNode, container: HTMLElement, depth: number) {
+  const subs = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name));
+  for (const sub of subs) {
+    container.appendChild(folderRow(sub, depth));
+    if (!collapsedFolders.has(sub.path)) renderNode(sub, container, depth + 1);
+  }
+  const items = [...node.items].sort((a, b) => itemName(a).localeCompare(itemName(b)));
+  for (const it of items) {
+    const el = it.kind === "ssh" ? sshHostElement(it.ssh) : rdpHostElement(it.rdp);
+    el.style.setProperty("--depth", String(depth));
+    container.appendChild(el);
+  }
+}
+
 function renderHosts() {
   const list = $("host-list");
   list.innerHTML = "";
-  const shown = filterHosts(state.hosts, state.filter, state.tagFilter);
   renderTagBar();
-  for (const h of shown) {
-    const el = document.createElement("div");
-    const selected = state.active !== null && state.sessions.get(state.active)?.alias === h.alias;
-    el.className = "host" + (selected ? " selected" : "");
-    el.style.setProperty("--hue", hostHue(h.alias));
-    const target = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
-    el.innerHTML = `<span class="avatar"><span class="ini"></span><span class="dot"></span></span><span class="info">
-      <div class="alias"></div><div class="meta"></div></span>`;
-    const os = osByHost.get(h.alias);
-    const ini = el.querySelector(".ini") as HTMLElement;
-    if (os) {
-      // Logo de la distribution (glyphe Nerd Font), couleur de marque.
-      const b = osBadge(os);
-      ini.textContent = b.glyph;
-      ini.className = "ini logo";
-      el.style.setProperty("--hue", b.color);
-      el.title = `${os.pretty} — double-clic : connexion, clic droit : options`;
-    } else {
-      ini.textContent = hostInitials(h.alias);
-    }
-    el.querySelector(".alias")!.textContent = h.alias;
-    el.querySelector(".meta")!.textContent = target;
-    if (h.tags.length > 0) {
-      const chips = document.createElement("span");
-      chips.className = "host-tags";
-      for (const t of h.tags.slice(0, 3)) {
-        const c = document.createElement("span");
-        c.className = "host-tag" + (t === state.tagFilter ? " on" : "");
-        c.textContent = t;
-        c.title = `Filtrer par « ${t} »`;
-        c.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          state.tagFilter = state.tagFilter === t ? null : t;
-          renderHosts();
-        });
-        chips.appendChild(c);
-      }
-      el.querySelector(".info")!.appendChild(chips);
-    }
-    // La pastille dit quelque chose de vrai : une session est ouverte ici.
-    const dot = el.querySelector(".dot") as HTMLElement;
-    dot.className = "dot " + hostSessionState(h.alias);
-    if (h.alias === state.pickedAlias) el.classList.add("picked");
-    if (!os) el.title = "Double-clic : connexion — clic droit : options";
-    // Simple clic : on surligne (retour visuel). Double clic : on connecte.
-    el.addEventListener("click", () => {
-      state.pickedAlias = h.alias;
-      for (const n of list.querySelectorAll(".host.picked")) n.classList.remove("picked");
-      el.classList.add("picked");
-    });
-    el.addEventListener("dblclick", () => openSession(h));
-    el.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      openHostMenu(h, e as MouseEvent);
-    });
-    list.appendChild(el);
-  }
-  $("host-count").textContent = String(shown.length);
-
-  // Bureaux RDP enregistrés (filtrés par la recherche aussi).
   const q = state.filter.trim().toLowerCase();
-  const rdpShown = rdpHostsList.filter((h) => !q || h.name.toLowerCase().includes(q) || h.host.toLowerCase().includes(q) || h.user.toLowerCase().includes(q));
-  if (rdpShown.length > 0) {
-    const title = document.createElement("div");
-    title.className = "section-title";
-    title.innerHTML = `<span>Bureaux RDP</span><span>${rdpShown.length}</span>`;
-    list.appendChild(title);
-    for (const h of rdpShown) {
-      const el = document.createElement("div");
-      el.className = "host";
-      el.innerHTML = `<span class="avatar rdp"><span class="ini logo"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
-      (el.querySelector(".ini") as HTMLElement).innerHTML = ic("monitor");
-      el.querySelector(".alias")!.textContent = h.name;
-      el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
-      el.title = "Double-clic : connexion RDP — clic droit : options";
-      el.addEventListener("dblclick", () => connectRdpSaved(h));
-      el.addEventListener("contextmenu", (e) => { e.preventDefault(); openRdpMenu(h, e as MouseEvent); });
-      list.appendChild(el);
-    }
+  const filtering = q !== "" || state.tagFilter !== null;
+  const sshShown = filterHosts(state.hosts, state.filter, state.tagFilter);
+  const rdpShown = rdpHostsList.filter(
+    (h) => !q || h.name.toLowerCase().includes(q) || h.host.toLowerCase().includes(q) || h.user.toLowerCase().includes(q),
+  );
+  $("host-count").textContent = String(sshShown.length + rdpShown.length);
+
+  if (filtering) {
+    // Recherche/filtre : liste plate, sans dossiers (on cherche, on ne range pas).
+    for (const h of sshShown) list.appendChild(sshHostElement(h));
+    for (const h of rdpShown) list.appendChild(rdpHostElement(h));
+  } else {
+    renderNode(buildTree(), list, 0);
   }
 
-  // Aucun hote declare : conseiller « double-clic sur un hote » n'aide
-  // personne. On oriente vers la seule voie disponible.
-  if (state.hosts.length === 0) {
+  if (state.hosts.length === 0 && rdpHostsList.length === 0) {
     const empty = document.createElement("div");
     empty.className = "host-empty";
     empty.innerHTML =
@@ -328,7 +482,7 @@ function renderHosts() {
       `<p class="sub">Utilise <strong>Connexion directe</strong> ci-dessous, ` +
       `ou crée une clé puis installe-la sur un serveur.</p>`;
     list.appendChild(empty);
-  } else if (shown.length === 0) {
+  } else if (filtering && sshShown.length + rdpShown.length === 0) {
     const empty = document.createElement("div");
     empty.className = "host-empty";
     empty.innerHTML = `<p>Aucun hôte ne correspond à « ${stripHtml(state.filter)} ».</p>`;
@@ -781,6 +935,7 @@ async function loadHosts() {
     console.warn("Config SSH illisible :", e);
   }
   rdpHostsList = await invoke<RdpHostT[]>("rdp_hosts").catch(() => []);
+  state.folders = await invoke<string[]>("folders_list").catch(() => []);
   renderHosts();
   refreshEmptyHint();
 }
@@ -1740,6 +1895,8 @@ $("host-context").addEventListener("click", async (e) => {
     openSession(h);
   } else if (act === "edit") {
     await openEditHost(alias);
+  } else if (act === "move") {
+    openMoveModal("ssh", alias);
   } else if (act === "tunnels") {
     await tunnelsOpen(alias);
   } else if (act === "delete") {
@@ -1783,6 +1940,7 @@ async function openEditHost(alias: string) {
     ($("e-key") as HTMLInputElement).value = h.identity_file ?? "";
     ($("e-jump") as HTMLInputElement).value = h.proxy_jump ?? "";
     ($("e-tags") as HTMLInputElement).value = h.tags.join(", ");
+    ($("edit-form") as HTMLFormElement).dataset.folder = h.folder ?? "";
     $("edit-modal").classList.add("open");
     setTimeout(() => ($("e-alias") as HTMLInputElement).focus(), 30);
   } catch (e) {
@@ -1797,6 +1955,7 @@ window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if ($("edit-modal").classList.contains("open")) closeEditHost();
   if ($("rdp-edit-modal").classList.contains("open")) closeEditRdp();
+  if ($("move-modal").classList.contains("open")) closeMoveModal();
   if ($("tunnels-modal").classList.contains("open")) tunnelsClose();
 });
 
@@ -1817,6 +1976,7 @@ $("edit-form").addEventListener("submit", async (e) => {
       keyPath: val("e-key") || null,
       proxyJump: val("e-jump") || null,
       tags: val("e-tags") || null,
+      folder: ($("edit-form") as HTMLFormElement).dataset.folder ?? null,
     });
     closeEditHost();
     await loadHosts();
@@ -2490,7 +2650,7 @@ $("app-version").addEventListener("click", checkForUpdates);
 
 type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number };
 
-type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number };
+type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string };
 let rdpHostsList: RdpHostT[] = [];
 const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
 
@@ -2771,6 +2931,7 @@ $("rdp-context").addEventListener("click", async (e) => {
   if (!act || !h) return;
   if (act === "connect") connectRdpSaved(h);
   else if (act === "edit") openEditRdp(h);
+  else if (act === "move") openMoveModal("rdp", h.id);
   else if (act === "forget") {
     await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user }).catch(() => {});
   } else if (act === "delete") {
@@ -2793,6 +2954,7 @@ function openEditRdp(h: RdpHostT) {
   ($("re-port") as HTMLInputElement).value = String(h.port);
   ($("re-user") as HTMLInputElement).value = h.user;
   ($("re-password") as HTMLInputElement).value = "";
+  ($("rdp-edit-form") as HTMLFormElement).dataset.folder = h.folder ?? "";
   $("rdp-edit-modal").classList.add("open");
   setTimeout(() => ($("re-name") as HTMLInputElement).focus(), 30);
 }
@@ -2821,7 +2983,7 @@ $("rdp-edit-form").addEventListener("submit", async (e) => {
   }
   submit.disabled = true;
   try {
-    await invoke("rdp_host_save", { id: val("re-id"), name, host, port, user, width: 0, height: 0 });
+    await invoke("rdp_host_save", { id: val("re-id"), name, host, port, user, width: 0, height: 0, folder: ($("rdp-edit-form") as HTMLFormElement).dataset.folder ?? null });
     // Le compte du trousseau dépend de host/port/user : si l'un change, on
     // migre (ou remplace) le mot de passe mémorisé vers le nouveau compte.
     const oldHost = f.dataset.oldHost ?? host;
@@ -2969,3 +3131,118 @@ function initPanels() {
   });
 }
 initPanels();
+
+
+// ---------- Gestion des dossiers (création, menu, déplacement) ----------
+
+/** Ensemble des dossiers connus (registre + dérivés des hôtes), triés. */
+function allFolders(): string[] {
+  const set = new Set<string>(state.folders);
+  const add = (f: string) => {
+    let acc = "";
+    for (const seg of (f || "").split("/").filter(Boolean)) {
+      acc = acc ? `${acc}/${seg}` : seg;
+      set.add(acc);
+    }
+  };
+  for (const h of state.hosts) add(h.folder ?? "");
+  for (const h of rdpHostsList) add(h.folder ?? "");
+  return [...set].filter(Boolean).sort();
+}
+
+async function createFolder(parent: string) {
+  const name = prompt(parent ? `Nouveau sous-dossier dans \u00ab ${parent} \u00bb :` : "Nom du nouveau dossier :");
+  if (!name || !name.trim()) return;
+  const path = parent ? `${parent}/${name.trim()}` : name.trim();
+  try {
+    await invoke("folder_create", { path });
+    collapsedFolders.delete(parent);
+    saveCollapsed();
+    await loadHosts();
+  } catch (e) {
+    alert(`Cr\u00e9ation impossible : ${e}`);
+  }
+}
+
+$("new-folder-btn").addEventListener("click", () => void createFolder(""));
+
+function openFolderMenu(path: string, e: MouseEvent) {
+  const m = $("folder-context");
+  m.dataset.path = path;
+  m.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
+  m.style.top = `${Math.min(e.clientY, window.innerHeight - 160)}px`;
+  m.classList.add("open");
+}
+window.addEventListener("click", () => $("folder-context").classList.remove("open"));
+$("folder-context").addEventListener("click", async (e) => {
+  const act = (e.target as HTMLElement).closest("[data-act]")?.getAttribute("data-act");
+  const path = $("folder-context").dataset.path ?? "";
+  $("folder-context").classList.remove("open");
+  if (!act || !path) return;
+  if (act === "new") {
+    await createFolder(path);
+  } else if (act === "rename") {
+    const leaf = path.split("/").pop() ?? path;
+    const name = prompt(`Renommer le dossier \u00ab ${leaf} \u00bb :`, leaf);
+    if (!name || !name.trim() || name.trim() === leaf) return;
+    const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    const to = parent ? `${parent}/${name.trim()}` : name.trim();
+    try {
+      await invoke("folder_rename", { from: path, to });
+      await loadHosts();
+    } catch (ex) {
+      alert(`Renommage impossible : ${ex}`);
+    }
+  } else if (act === "delete") {
+    if (!confirm(`Supprimer le dossier \u00ab ${path} \u00bb ?\n\nLes h\u00f4tes qu'il contient (et ses sous-dossiers) reviennent \u00e0 la racine ; ils ne sont pas supprim\u00e9s.`)) return;
+    try {
+      await invoke("folder_delete", { path });
+      await loadHosts();
+    } catch (ex) {
+      alert(`Suppression impossible : ${ex}`);
+    }
+  }
+});
+
+let moveTarget: { kind: string; id: string } | null = null;
+function openMoveModal(kind: string, id: string) {
+  moveTarget = { kind, id };
+  $("move-error").hidden = true;
+  ($("move-new") as HTMLInputElement).value = "";
+  const listEl = $("move-list");
+  listEl.innerHTML = "";
+  const addRow = (label: string, folder: string) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "move-row";
+    row.textContent = label;
+    row.addEventListener("click", () => void doMove(folder));
+    listEl.appendChild(row);
+  };
+  addRow("\u2196 Racine", "");
+  for (const f of allFolders()) addRow(f, f);
+  $("move-modal").classList.add("open");
+}
+function closeMoveModal() {
+  $("move-modal").classList.remove("open");
+  moveTarget = null;
+}
+async function doMove(folder: string) {
+  if (!moveTarget) return;
+  await moveHostTo(moveTarget.kind, moveTarget.id, folder);
+  closeMoveModal();
+}
+$("move-cancel").addEventListener("click", closeMoveModal);
+$("move-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = ($("move-new") as HTMLInputElement).value.trim();
+  if (!f) {
+    $("move-error").textContent = "Saisis un nom de dossier.";
+    $("move-error").hidden = false;
+    return;
+  }
+  void doMove(f);
+});
+
+// Racine : d\u00e9poser un h\u00f4te sur la zone vide de la liste le remet \u00e0 la racine.
+setupFolderDrop($("host-list"), "", false);

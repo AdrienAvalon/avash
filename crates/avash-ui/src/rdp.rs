@@ -140,13 +140,32 @@ pub fn rdp_host_save(
     user: String,
     width: u16,
     height: u16,
+    folder: Option<String>,
 ) -> Result<RdpHost, String> {
     let mut h = RdpHost::new(&name, &host, port, &user, width, height);
     if let Some(id) = id.filter(|i| !i.is_empty()) {
         h.id = id;
     }
+    h.folder = avash::folders::normalize(&folder.unwrap_or_default());
     rdphost::upsert_host_in(&rdphost::hosts_path(), h.clone()).map_err(|e| e.to_string())?;
     Ok(h)
+}
+
+/// Range un bureau RDP dans un dossier (déplacement).
+#[tauri::command]
+pub fn rdp_host_set_folder(id: String, folder: String) -> Result<(), String> {
+    let mut all = rdphost::load_hosts().map_err(|e| e.to_string())?;
+    let norm = avash::folders::normalize(&folder);
+    let h = all
+        .iter_mut()
+        .find(|h| h.id == id)
+        .ok_or("Bureau RDP introuvable.")?;
+    h.folder.clone_from(&norm);
+    rdphost::save_hosts_to(&rdphost::hosts_path(), &all).map_err(|e| e.to_string())?;
+    if !norm.is_empty() {
+        avash::folders::create(&norm).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Supprime une connexion enregistree et oublie son mot de passe.

@@ -8,6 +8,7 @@ export type Host = {
   identity_file: string | null;
   proxy_jump: string | null;
   tags: string[];
+  folder: string;
 };
 
 /** Taille lisible : 1024 -> "1.0 Ko". */

@@ -3,7 +3,7 @@ import { humanSize, matchHost, filterHosts, remoteJoin, type Host } from "./filt
 
 const host = (o: Partial<Host>): Host => ({
   alias: "srv", hostname: null, user: null, port: null,
-  identity_file: null, proxy_jump: null, tags: [], ...o,
+  identity_file: null, proxy_jump: null, tags: [], folder: "", ...o,
 });
 
 describe("humanSize", () => {

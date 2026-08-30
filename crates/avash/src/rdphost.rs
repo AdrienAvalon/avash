@@ -19,6 +19,9 @@ pub struct RdpHost {
     pub user: String,
     pub width: u16,
     pub height: u16,
+    /// Dossier de rangement Avash (ex. « prod/web »), vide = racine.
+    #[serde(default)]
+    pub folder: String,
 }
 
 impl RdpHost {
@@ -42,6 +45,7 @@ impl RdpHost {
             user,
             width,
             height,
+            folder: String::new(),
         }
     }
 

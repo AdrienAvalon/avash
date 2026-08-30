@@ -3,6 +3,7 @@
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub mod folders;
 pub mod keys;
 pub mod osinfo;
 pub mod rdphost;
@@ -25,6 +26,9 @@ pub struct SshHost {
     pub proxy_jump: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Dossier de rangement Avash (ex. « prod/web »), vide = racine.
+    #[serde(default)]
+    pub folder: String,
 }
 
 #[must_use]
@@ -165,6 +169,14 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
                         .map(|t| t.trim().to_string())
                         .filter(|t| !t.is_empty())
                         .collect();
+                }
+            } else if let Some(path) = rest
+                .trim_start()
+                .strip_prefix("Folder:")
+                .or_else(|| rest.trim_start().strip_prefix("folder:"))
+            {
+                if let Some(h) = current.as_mut() {
+                    h.folder = path.trim().trim_matches('/').to_string();
                 }
             }
             continue;
@@ -550,6 +562,87 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
 }
 
 /// Rend un bloc `Host` au format OpenSSH.
+/// Vrai si la ligne est un commentaire `#Folder:` d'Avash.
+fn is_folder_comment(line: &str) -> bool {
+    line.trim_start().strip_prefix('#').is_some_and(|r| {
+        let r = r.trim_start();
+        r.strip_prefix("Folder:")
+            .or_else(|| r.strip_prefix("folder:"))
+            .is_some()
+    })
+}
+
+/// Émet un bloc accumulé ; pour le bloc cible, retire l'ancienne ligne
+/// `#Folder:` et insère la nouvelle après la dernière directive (avant les
+/// éventuelles lignes vides de fin de bloc). Le reste est préservé tel quel.
+fn flush_folder_block(out: &mut String, block: &mut Vec<String>, is_target: bool, folder: &str) {
+    if is_target {
+        block.retain(|l| !is_folder_comment(l));
+        if !folder.is_empty() {
+            let last = block.iter().rposition(|l| !l.trim().is_empty());
+            let pos = last.map_or(block.len(), |i| i + 1);
+            block.insert(pos, format!("    #Folder: {folder}"));
+        }
+    }
+    for l in block.drain(..) {
+        out.push_str(&l);
+        out.push('\n');
+    }
+}
+
+/// Range un hôte dans un dossier (commentaire `#Folder:`), en **place** :
+/// seule la ligne `#Folder:` du bloc est ajoutée/remplacée/retirée, toutes les
+/// autres directives sont préservées (contrairement à `update_host`).
+///
+/// # Errors
+/// Si le fichier est illisible/inscriptible, ou l'alias introuvable.
+pub fn set_host_folder(alias: &str, folder: &str) -> anyhow::Result<()> {
+    set_host_folder_at(&ssh_config_path(), alias, folder)
+}
+
+/// Comme [`set_host_folder`], sur un chemin explicite (testable).
+///
+/// # Errors
+/// Si le fichier est illisible/inscriptible, ou l'alias introuvable.
+pub fn set_host_folder_at(path: &std::path::Path, alias: &str, folder: &str) -> anyhow::Result<()> {
+    let alias = alias.trim();
+    let folder = folder.trim().trim_matches('/');
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("Lecture de {} : {e}", path.display()))?;
+
+    let mut out = String::with_capacity(content.len() + 32);
+    let mut block: Vec<String> = Vec::new();
+    let mut in_target = false;
+    let mut found = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let (key, value) = trimmed
+            .split_once(char::is_whitespace)
+            .map_or((trimmed, ""), |(k, v)| (k, v.trim()));
+        let key_lower = key.to_lowercase();
+        if key_lower == "host" || key_lower == "match" {
+            flush_folder_block(&mut out, &mut block, in_target, folder);
+            in_target = key_lower == "host" && value.split_whitespace().eq(std::iter::once(alias));
+            if in_target {
+                found = true;
+            }
+        }
+        block.push(line.to_string());
+    }
+    flush_folder_block(&mut out, &mut block, in_target, folder);
+
+    if !found {
+        return Err(anyhow::anyhow!(
+            "Hôte « {alias} » introuvable dans {}.",
+            path.display()
+        ));
+    }
+    std::fs::write(path, out)
+        .map_err(|e| anyhow::anyhow!("Écriture de {} : {e}", path.display()))?;
+    Ok(())
+}
+
 #[must_use]
 pub fn render_host_block(host: &SshHost) -> String {
     use std::fmt::Write as _;
@@ -583,6 +676,10 @@ pub fn render_host_block(host: &SshHost) -> String {
         .collect();
     if !clean.is_empty() {
         let _ = writeln!(out, "    #Tags: {}", clean.join(", "));
+    }
+    let folder = host.folder.trim().trim_matches('/');
+    if !folder.is_empty() {
+        let _ = writeln!(out, "    #Folder: {folder}");
     }
     out
 }
@@ -646,6 +743,44 @@ fn validate_alias(alias: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod save_tests {
     use super::*;
+
+    #[test]
+    fn set_host_folder_preserve_les_autres_directives() {
+        let dir = std::env::temp_dir().join(format!("avash-sf-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config");
+        std::fs::write(
+            &path,
+            "Host prod
+    HostName 10.0.0.1
+    ForwardAgent yes
+
+Host autre
+    HostName 10.0.0.2
+",
+        )
+        .unwrap();
+        // Ranger « prod » dans prod/web : la directive custom reste, le folder est posé.
+        set_host_folder_at(&path, "prod", "prod/web").unwrap();
+        let t = std::fs::read_to_string(&path).unwrap();
+        assert!(t.contains("ForwardAgent yes"), "directive perdue : {t}");
+        assert!(t.contains("#Folder: prod/web"), "folder absent : {t}");
+        // Le bloc « autre » n'est pas touché.
+        assert!(
+            !t.contains(
+                "Host autre
+    HostName 10.0.0.2
+    #Folder"
+            ),
+            "{t}"
+        );
+        // Re-déplacer remplace (pas de doublon), et vider retire la ligne.
+        set_host_folder_at(&path, "prod", "").unwrap();
+        let t2 = std::fs::read_to_string(&path).unwrap();
+        assert!(!t2.contains("#Folder"), "folder non retiré : {t2}");
+        assert!(t2.contains("ForwardAgent yes"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn host(alias: &str) -> SshHost {
         SshHost {
