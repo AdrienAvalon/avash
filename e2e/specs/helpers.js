@@ -23,3 +23,14 @@ export async function openCtx(row) {
     el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }));
   }, row);
 }
+
+// Démarre un serveur RDP de test dédié (identifiants test/test) sur `port`.
+// Chaque spec RDP a le sien : aucun couplage entre specs.
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
+export function startRdpServer(port) {
+  return spawn("./target/release/test-rdp-server",
+    ["--bind-addr", `127.0.0.1:${port}`, "--cert", "cert.pem", "--key", "key.pem",
+     "--user", "test", "--pass", "test", "--sec", "hybrid"],
+    { cwd: resolve("../test-rdp-server"), stdio: "ignore" });
+}

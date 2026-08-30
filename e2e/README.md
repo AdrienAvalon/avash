@@ -33,15 +33,24 @@ une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) 
 effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 (`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`.
 
-## Couverture
+## Couverture (17 scénarios)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
-| `smoke.spec.js`   | démarrage, barre latérale, accueil |
-| `hosts.spec.js`   | rendu des hôtes semés, dossier `prod`, sélection (`.picked`) |
-| `folders.spec.js` | cycle de vie complet : créer, sous-dossier, renommer, **supprimer** (modale de confirmation maison), **annulation respectée** |
-| `modals.spec.js`  | « Connexion directe » ne se ferme pas au clic dehors, se ferme à Échap ; palette Ctrl+K |
-| `rdp.spec.js`     | **connexion RDP réelle** au serveur de test → handshake CredSSP + canvas (`.state.live`) |
+| `smoke.spec.js`       | démarrage, barre latérale, accueil |
+| `hosts.spec.js`       | rendu des hôtes semés, dossier `prod`, sélection (`.picked`) |
+| `hosts-move.spec.js`  | déplacer un hôte dans un dossier via « Déplacer vers… » |
+| `folders.spec.js`     | cycle de vie complet : créer, sous-dossier, renommer, **supprimer** (modale maison), **annulation respectée** |
+| `snippets.spec.js`    | snippet : créer, lister, **supprimer** (askConfirm) |
+| `tunnels.spec.js`     | tunnel local : créer, lister, **supprimer** (askConfirm) |
+| `modals.spec.js`      | « Connexion directe » ne se ferme pas au clic dehors, se ferme à Échap ; palette Ctrl+K |
+| `ssh.spec.js`         | **connexion SSH réelle** (sshd local, auth par clé) → session live |
+| `rdp.spec.js`         | **connexion RDP réelle** (serveur dédié) → handshake CredSSP + canvas (`.state.live`) |
+| `rdp-reconnect.spec.js` | **overlay de reconnexion** quand le serveur RDP coupe |
+
+Serveurs locaux : chaque spec RDP démarre son propre serveur de test (aucun couplage) ;
+un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spec`.
+En CI (`E2E_NO_RDP=1`), les specs à serveur local (ssh, rdp, rdp-reconnect) sont retirées.
 
 ## Astuces WebKitGTK
 

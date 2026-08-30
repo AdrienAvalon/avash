@@ -1,9 +1,13 @@
-// Connexion RDP réelle contre le serveur de test (démarré par wdio.conf onPrepare,
-// identifiants test/test sur 127.0.0.1:33899). Valide toute la chaîne : formulaire
-// → sidecar → WebSocket → rendu du canvas.
+// Connexion RDP réelle contre un serveur de test DÉDIÉ (test/test sur 33899).
+// Valide toute la chaîne : formulaire → sidecar → WebSocket → rendu du canvas.
+import { startRdpServer } from "./helpers.js";
 const RDP_PORT = 33899;
+let srv;
 
 describe("RDP — connexion réelle au serveur de test", () => {
+  before(() => { srv = startRdpServer(RDP_PORT); });
+  after(() => { if (srv) srv.kill(); });
+
   it("se connecte et affiche le bureau (canvas rendu)", async () => {
     await $("#manual-btn").click();
     await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
@@ -18,15 +22,11 @@ describe("RDP — connexion réelle au serveur de test", () => {
     await $("#m-password").setValue("test");
     await $("#m-submit").click();
 
-    // Le canvas RDP existe.
     await $(".rdp-container canvas").waitForExist({ timeout: 20000, timeoutMsg: "aucun canvas RDP" });
-    // Signal FIABLE d'une vraie connexion : l'onglet passe à .state.live seulement
-    // après réception du message « connecté » du sidecar (handshake CredSSP réussi).
-    await browser.waitUntil(
-      async () => (await $$(".state.live")).length > 0,
-      { timeout: 20000, timeoutMsg: "jamais connecté (handshake RDP échoué ?)" },
-    );
-    // Et surtout : aucun overlay d'échec.
+    // Signal fiable d'une vraie connexion : l'onglet passe à .state.live seulement
+    // après le message « connecté » du sidecar (handshake CredSSP réussi).
+    await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
+      { timeout: 20000, timeoutMsg: "jamais connecté (handshake RDP échoué ?)" });
     expect(await $(".rdp-closed").isExisting()).toBe(false);
   });
 });

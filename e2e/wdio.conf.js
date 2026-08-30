@@ -1,54 +1,76 @@
-// Harnais E2E : pilote la VRAIE app compilée (WebKitGTK) via tauri-driver.
-// Seul niveau qui attrape les bugs du runtime réel (ex. window.prompt() inopérant
-// sous WebKitGTK) et les flux utilisateur complets.
+// Harnais E2E : pilote la VRAIE application compilée (WebKitGTK) via tauri-driver
+// + WebdriverIO. Seul niveau qui attrape les bugs du runtime réel (ex. confirm() /
+// prompt() inopérants sous WebKitGTK) et les flux utilisateur complets.
 //
 // Bac à sable : HOME + XDG_CONFIG_HOME temporaires, pré-remplis d'une config SSH
-// de test (hôtes déterministes) — aucun effet sur la vraie config de l'utilisateur.
-// Un serveur RDP de test local est démarré pour les scénarios RDP.
-import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+// de test — aucun effet sur la vraie config. Deux serveurs locaux sont démarrés
+// pour les scénarios de bout en bout : un serveur RDP de test et un sshd dédié
+// (non-root, clé, port 2223) auquel l'app se connecte réellement.
+import { spawn, execSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
+import { join } from "node:path";
 
 let tauriDriver;
-let rdpServer;
+let sshd;
 const sandbox = mkdtempSync(join(tmpdir(), "avash-e2e-"));
+const sshDir = join(sandbox, "sshtest");
 export const RDP_PORT = 33899;
+export const SSH_PORT = 2223;
+// Serveurs locaux (RDP + sshd) désactivés en CI : le sshd non-root et les certs
+// de test ne s'y prêtent pas. Les specs qui en dépendent sont retirées de la liste.
+const LOCAL_SERVERS = !process.env.E2E_NO_RDP;
 
 function seedSandbox() {
-  // Config SSH de test : deux hôtes, dont un déjà rangé dans un dossier.
   const ssh = join(sandbox, ".ssh");
   mkdirSync(ssh, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    join(ssh, "config"),
-    [
-      "Host web-1",
-      "    HostName 10.0.0.1",
-      "    User deploy",
-      "    #Folder: prod",
-      "",
-      "Host db-1",
-      "    HostName 10.0.0.2",
-      "    User admin",
-      "",
-    ].join("\n"),
-    { mode: 0o600 },
-  );
+  const lines = [
+    "Host web-1", "    HostName 10.0.0.1", "    User deploy", "    #Folder: prod", "",
+    "Host db-1", "    HostName 10.0.0.2", "    User admin", "",
+  ];
+  if (LOCAL_SERVERS) {
+    // Hôte réellement joignable, servi par le sshd local ci-dessous.
+    lines.push(
+      "Host test-ssh", "    HostName 127.0.0.1", `    Port ${SSH_PORT}`,
+      `    User ${userInfo().username}`, `    IdentityFile ${join(ssh, "test_client")}`, "");
+  }
+  writeFileSync(join(ssh, "config"), lines.join("\n"), { mode: 0o600 });
+}
+
+function startSshd() {
+  mkdirSync(sshDir, { recursive: true, mode: 0o700 });
+  const ssh = join(sandbox, ".ssh");
+  const host = join(sshDir, "hostkey");
+  const client = join(ssh, "test_client");
+  const authKeys = join(sshDir, "authorized_keys");
+  const cfg = join(sshDir, "sshd_config");
+  execSync(`ssh-keygen -t ed25519 -f "${host}" -N "" -q`);
+  execSync(`ssh-keygen -t ed25519 -f "${client}" -N "" -q`);
+  execSync(`cp "${client}.pub" "${authKeys}"`);
+  chmodSync(authKeys, 0o600); chmodSync(host, 0o600);
+  writeFileSync(cfg, [
+    `Port ${SSH_PORT}`, "ListenAddress 127.0.0.1", `HostKey ${host}`,
+    `PidFile ${join(sshDir, "sshd.pid")}`, `AuthorizedKeysFile ${authKeys}`,
+    "UsePAM no", "PasswordAuthentication no", "PubkeyAuthentication yes",
+    "StrictModes no", "Subsystem sftp internal-sftp", "",
+  ].join("\n"));
+  const sshdBin = execSync("command -v sshd || echo /usr/bin/sshd").toString().trim();
+  // -D : reste au premier plan pour qu'on tienne le processus et qu'on le tue à la fin.
+  return spawn(sshdBin, ["-D", "-f", cfg, "-E", join(sshDir, "sshd.log")], { stdio: "ignore" });
 }
 
 export const config = {
   runner: "local",
-  // En CI (E2E_NO_RDP=1) on saute le scénario RDP : il exige des certs de test
-  // (non versionnés) et un handshake CredSSP peu adapté au headless.
-  specs: process.env.E2E_NO_RDP
-    ? ["./specs/!(rdp).spec.js"]
-    : ["./specs/**/*.spec.js"],
+  specs: LOCAL_SERVERS
+    ? ["./specs/**/*.spec.js"]
+    : [ // CI : uniquement les flux sans serveur local
+        "./specs/smoke.spec.js", "./specs/hosts.spec.js", "./specs/folders.spec.js",
+        "./specs/modals.spec.js", "./specs/hosts-move.spec.js",
+        "./specs/snippets.spec.js", "./specs/tunnels.spec.js",
+      ],
   maxInstances: 1,
   capabilities: [
-    {
-      "tauri:options": { application: "../target/release/avash-ui" },
-      "wdio:maxInstances": 1,
-    },
+    { "tauri:options": { application: "../target/release/avash-ui" }, "wdio:maxInstances": 1 },
   ],
   logLevel: "error",
   framework: "mocha",
@@ -58,17 +80,10 @@ export const config = {
   path: "/",
   mochaOpts: { ui: "bdd", timeout: 60000 },
   onPrepare: () => {
-    seedSandbox();
-    if (!process.env.E2E_NO_RDP) {
-      // Serveur RDP de test (mêmes identifiants que les specs : test/test).
-      const srvDir = resolve("../test-rdp-server");
-      rdpServer = spawn(
-        "./target/release/test-rdp-server",
-        ["--bind-addr", `127.0.0.1:${RDP_PORT}`, "--cert", "cert.pem", "--key", "key.pem",
-         "--user", "test", "--pass", "test", "--sec", "hybrid"],
-        { cwd: srvDir, stdio: "ignore" },
-      );
-    }
+    seedSandbox(); // crée ~/.ssh + config (référence la clé cliente)
+    if (LOCAL_SERVERS) sshd = startSshd(); // génère cette clé dans ~/.ssh, démarre le sshd
+    // Les serveurs RDP de test sont démarrés PAR CHAQUE spec RDP (serveur dédié,
+    // cf. rdp.spec/rdp-reconnect.spec) : pas de serveur partagé à coupler.
     tauriDriver = spawn("tauri-driver", [], {
       stdio: [null, process.stdout, process.stderr],
       env: { ...process.env, HOME: sandbox, XDG_CONFIG_HOME: join(sandbox, ".config") },
@@ -76,6 +91,6 @@ export const config = {
   },
   onComplete: () => {
     if (tauriDriver) tauriDriver.kill();
-    if (rdpServer) rdpServer.kill();
+    if (sshd) sshd.kill();
   },
 };
