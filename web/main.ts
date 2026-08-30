@@ -494,6 +494,17 @@ function newSessionShell(label: string) {
   const s: Session = { id, alias: label, term, fit, tab, search, closed: false, reconnect: null, sftpPath: "" };
   state.sessions.set(id, s);
   state.active = id;
+  // N'afficher que ce terminal, et masquer tout bureau RDP : son conteneur est
+  // absolu (inset:0) et déborderait dans la marge du terminal + son indicateur
+  // passerait au-dessus. (Le clic d'onglet passe par focusSession qui fait pareil.)
+  state.sessions.forEach((other, sid) => {
+    (other.term.element?.parentElement as HTMLElement).style.display = sid === id ? "block" : "none";
+  });
+  for (const r of rdpSessions.values()) {
+    (r.canvas.parentElement as HTMLElement).style.display = "none";
+    r.tab.classList.remove("active");
+  }
+  $("terminal-empty").style.display = "none";
   focusTerminal(s);
   return { id, term, session: s };
 }
