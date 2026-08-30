@@ -25,6 +25,9 @@
   },
   "bundle": {
     "active": true,
+    "externalBin": [
+      "binaries/avash-rdp"
+    ],
     "targets": [
       "appimage",
       "nsis"

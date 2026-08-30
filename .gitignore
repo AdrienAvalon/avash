@@ -7,3 +7,4 @@ dist-release/
 rdp-sidecar/target/
 test-rdp-server/target/
 test-rdp-server/*.pem
+crates/avash-ui/binaries/

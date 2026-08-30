@@ -32,8 +32,15 @@ Un seul point d'entrée, qui **valide puis construit** :
 ./scripts/release.sh --sign-gpg <KEYID>   # + signature GPG (Linux recommandé)
 ```
 
-- `check.sh` est exécuté d'abord : format, clippy strict, 162 tests, `cargo
-  audit`. On ne publie pas du code non validé.
+- `check.sh` est exécuté d'abord : format, clippy strict, tests (93 Rust + 51
+  front), `cargo audit`. On ne publie pas du code non validé.
+- Le **sidecar RDP** (`avash-rdp`, projet séparé hors workspace) est construit
+  et déposé dans `crates/avash-ui/binaries/avash-rdp-<triple>` ; Tauri l'embarque
+  via `externalBin` **à côté de l'exe** dans l'AppImage (le RDP marche donc dans
+  le binaire distribué).
+- `NO_STRIP=1` est passé au bundler : le `strip` embarqué par `linuxdeploy` ne
+  gère pas la section `.relr.dyn` des bibliothèques système récentes (glibc/Arch
+  moderne) et ferait échouer le build sinon.
 - Les artefacts atterrissent dans `dist-release/` avec un fichier
   `SHA256SUMS` (et `SHA256SUMS.asc` si signé).
 
