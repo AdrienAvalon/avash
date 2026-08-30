@@ -48,24 +48,14 @@ boîtes de dialogue, cadence adaptative RDP, arborescence de dossiers.
 
 *Priorité haute. Rien de neuf tant que ces points ne sont pas réglés.*
 
-### 1.1 Réparer la mise à jour automatique
+### 1.1 Réparer la mise à jour automatique — **fait**
 
-Deux défauts distincts, découverts l'un après l'autre :
-
-1. l'endpoint visait un dépôt inexistant (`vela-kern/avash`) — **corrigé**, il
-   pointe sur le dépôt réel ;
-2. **rien n'était publié à cette adresse** : les releases ne contenaient ni
-   manifeste `latest.json`, ni artefacts signés. L'endpoint renvoyait donc 404 et
-   « vérifier les mises à jour » échouait à chaque fois — l'application annonçait
-   une fonction inopérante.
-
-Le workflow produit désormais les signatures et le manifeste. Il reste à
-**déposer la clé de signature en secret du dépôt** (`TAURI_SIGNING_PRIVATE_KEY`
-et son mot de passe) : sans elle, Tauri n'émet aucun fichier `.sig` et la mise à
-jour refuse ce qu'elle télécharge. La clé privée appartient au mainteneur et ne
-transite pas par l'outillage de développement.
-
-*Fini quand* : une version installée détecte la suivante, la télécharge et redémarre.
+Trois causes distinctes, découvertes l'une après l'autre : l'adresse consultée
+visait un dépôt inexistant, aucun manifeste `latest.json` n'était publié, et le
+bundler ne signait rien faute de `bundle.createUpdaterArtifacts`. Les trois sont
+corrigées, la clé de signature est déposée en secret du dépôt, et la chaîne a été
+**éprouvée en conditions réelles** : une version installée détecte la suivante,
+la télécharge et redémarre.
 
 ### 1.2 Construire réellement pour Windows — **construit, pas encore éprouvé**
 
