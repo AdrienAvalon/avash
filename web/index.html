@@ -477,6 +477,9 @@
     .btn-primary:disabled { opacity: .55; cursor: progress; }
     .btn-ghost { background: transparent; color: var(--text-dim); }
     .btn-ghost:hover { color: var(--text); background: var(--card-hover); border-color: var(--border); }
+    .btn-danger { background: var(--err); color: #fff; border-color: transparent; }
+    .btn-danger:hover { filter: brightness(1.08); }
+    .confirm-msg { white-space: pre-line; color: var(--text-dim); line-height: 1.5; margin: 2px 0; }
     .btn-mini {
       flex: 1; padding: 6px 0; border-radius: 7px; border: 1px solid var(--border-soft);
       background: var(--card); font-size: 12px; color: var(--text);
@@ -1140,6 +1143,16 @@
           <button type="submit" class="btn-primary" id="ask-submit">OK</button>
         </div>
       </form>
+    </div>
+    <div class="modal-backdrop" id="confirm-modal">
+      <div class="modal" id="confirm-box">
+        <h2 id="confirm-title">—</h2>
+        <p class="confirm-msg" id="confirm-message"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="confirm-cancel">Annuler</button>
+          <button type="button" class="btn-primary" id="confirm-ok">Confirmer</button>
+        </div>
+      </div>
     </div>
     <div class="modal-backdrop" id="edit-modal">
       <form class="modal" id="edit-form" autocomplete="off">

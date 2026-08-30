@@ -722,7 +722,7 @@ async function connectByAlias(s: Session, h: Host) {
       const msg = String(e);
       if (isHostKeyChanged(msg)) {
         const clean = msg.replace("[AVASH_HOST_KEY_CHANGED]", "").trim();
-        const ok = confirm(`${clean}\n\nOublier l'ancienne clé et réessayer ? (à ne faire que si le changement est légitime)`);
+        const ok = await askConfirm(`${clean}\n\nOublier l'ancienne clé et réessayer ? (à ne faire que si le changement est légitime)`);
         if (!ok) {
           markClosed(s, "Connexion annulée : clé d'hôte changée.");
           return;
@@ -1211,7 +1211,7 @@ async function sftpDelete(entry: SftpEntry, dir: string) {
   const s = sftpSession();
   if (!s) return;
   const what = entry.is_dir ? `le dossier « ${entry.name} » (doit être vide)` : `« ${entry.name} »`;
-  if (!confirm(`Supprimer ${what} sur le serveur ?\n\nCette action est définitive.`)) return;
+  if (!(await askConfirm(`Supprimer ${what} sur le serveur ?\n\nCette action est définitive.`))) return;
   try {
     await invoke("sftp_remove", { id: s.id, path: remoteJoin(dir, entry.name), isDir: entry.is_dir });
     void sftpNavigate(dir);
@@ -1359,6 +1359,41 @@ $("ask-form").addEventListener("submit", (e) => {
 $("ask-cancel").addEventListener("click", () => askClose(null));
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && $("ask-modal").classList.contains("open")) askClose(null);
+});
+
+// Confirmation maison. La fonction native du navigateur est INOPÉRANTE sous
+// WebKitGTK/WRY : elle ne bloque plus et renvoie une Promise (toujours vraie),
+// si bien que le test « si l'utilisateur refuse » ne s'arrêtait jamais et que
+// les suppressions passaient sans confirmation. Cette modale, elle, attend
+// vraiment le choix de l'utilisateur (comme askText remplace prompt).
+// Convention : la 1re ligne du texte est le titre, le reste le détail.
+let confirmResolve: ((v: boolean) => void) | null = null;
+function askConfirm(text: string, opts: { ok?: string; danger?: boolean } = {}): Promise<boolean> {
+  const [title, ...rest] = text.split("\n\n");
+  $("confirm-title").textContent = title;
+  const msg = $("confirm-message");
+  msg.textContent = rest.join("\n\n");
+  msg.hidden = rest.length === 0;
+  const okBtn = $("confirm-ok") as HTMLButtonElement;
+  okBtn.textContent = opts.ok ?? "Confirmer";
+  // Rouge par défaut : la plupart des confirmations gardent une action destructive.
+  okBtn.classList.toggle("btn-danger", opts.danger !== false);
+  $("confirm-modal").classList.add("open");
+  setTimeout(() => okBtn.focus(), 30);
+  return new Promise((resolve) => { confirmResolve = resolve; });
+}
+function confirmClose(v: boolean) {
+  $("confirm-modal").classList.remove("open");
+  const r = confirmResolve;
+  confirmResolve = null;
+  r?.(v);
+}
+$("confirm-ok").addEventListener("click", () => confirmClose(true));
+$("confirm-cancel").addEventListener("click", () => confirmClose(false));
+window.addEventListener("keydown", (e) => {
+  if (!$("confirm-modal").classList.contains("open")) return;
+  if (e.key === "Escape") confirmClose(false);
+  else if (e.key === "Enter") confirmClose(true);
 });
 
 hydrateIcons();
@@ -1906,7 +1941,7 @@ $("host-context").addEventListener("click", async (e) => {
   } else if (act === "tunnels") {
     await tunnelsOpen(alias);
   } else if (act === "delete") {
-    const ok = confirm(
+    const ok = await askConfirm(
       `Supprimer l'hôte « ${alias} » de ~/.ssh/config ?\n\n` +
         `Son mot de passe mémorisé sera aussi oublié. Cette action est définitive.`,
     );
@@ -2172,7 +2207,7 @@ async function tunnelStart(d: TunnelDef) {
 }
 
 async function tunnelDelete(d: TunnelDef) {
-  const ok = confirm(`Supprimer le tunnel « ${d.name || describeTunnel(d)} » ?` +
+  const ok = await askConfirm(`Supprimer le tunnel « ${d.name || describeTunnel(d)} » ?` +
     (tunnels.status.get(d.id)?.alive ? "\n\nIl est actif : il sera coupé." : ""));
   if (!ok) return;
   try {
@@ -2415,7 +2450,7 @@ function snippetEdit(sn: Snippet) {
 }
 
 async function snippetDelete(sn: Snippet) {
-  if (!confirm(`Supprimer le snippet « ${sn.name} » ?`)) return;
+  if (!(await askConfirm(`Supprimer le snippet « ${sn.name} » ?`))) return;
   try {
     await invoke("snippet_delete", { id: sn.id });
     await snippetsRefresh();
@@ -2634,13 +2669,14 @@ async function checkForUpdates() {
       return;
     }
     ver.textContent = prev;
-    const ok = confirm(
+    const ok = await askConfirm(
       `Version ${update.version} disponible (actuelle : ${update.currentVersion}).\n\n` +
         `${update.body ?? ""}\n\nTélécharger et installer maintenant ?`,
+      { danger: false, ok: "Installer" },
     );
     if (!ok) return;
     await update.downloadAndInstall();
-    if (confirm("Mise à jour installée. Redémarrer Avash maintenant ?")) await relaunch();
+    if (await askConfirm("Mise à jour installée. Redémarrer Avash maintenant ?", { danger: false, ok: "Redémarrer" })) await relaunch();
   } catch (e) {
     // Endpoint injoignable / pas encore configuré / hors ligne : on le dit
     // sans dramatiser.
@@ -2982,7 +3018,7 @@ $("rdp-context").addEventListener("click", async (e) => {
   else if (act === "forget") {
     await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user }).catch(() => {});
   } else if (act === "delete") {
-    if (!confirm(`Supprimer le bureau RDP « ${h.name} » ?\n\nSon mot de passe mémorisé sera aussi oublié.`)) return;
+    if (!(await askConfirm(`Supprimer le bureau RDP « ${h.name} » ?\n\nSon mot de passe mémorisé sera aussi oublié.`))) return;
     await invoke("rdp_host_delete", { id: h.id }).catch((err) => alert(`Suppression impossible : ${err}`));
     await loadHosts();
   }
@@ -3232,7 +3268,7 @@ $("folder-context").addEventListener("click", async (e) => {
       alert(`Renommage impossible : ${ex}`);
     }
   } else if (act === "delete") {
-    if (!confirm(`Supprimer le dossier \u00ab ${path} \u00bb ?\n\nLes h\u00f4tes qu'il contient (et ses sous-dossiers) reviennent \u00e0 la racine ; ils ne sont pas supprim\u00e9s.`)) return;
+    if (!(await askConfirm(`Supprimer le dossier \u00ab ${path} \u00bb ?\n\nLes h\u00f4tes qu'il contient (et ses sous-dossiers) reviennent \u00e0 la racine ; ils ne sont pas supprim\u00e9s.`))) return;
     try {
       await invoke("folder_delete", { path });
       await loadHosts();

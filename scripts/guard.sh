@@ -22,6 +22,10 @@ forbid "HARNESS TEMPORAIRE|À RETIRER|=== HARNESS" "harnais de test oublié"
 forbid "\bdebugger\b" "instruction debugger"
 forbid "127\.0\.0\.1:3389[0-9]" "auto-connexion vers un serveur de test"
 
+# Dialogues natifs bloquants : INOPÉRANTS sous WebKitGTK/WRY (confirm renvoie une
+# Promise toujours vraie, prompt renvoie null). Utiliser askConfirm()/askText().
+forbid "(^|[^.a-zA-Z])(confirm|prompt)\(" "dialogue natif confirm()/prompt() (utiliser askConfirm/askText)"
+
 if [ "$fail" -ne 0 ]; then
   echo "✗ garde front : reste(s) de mise au point détecté(s)." >&2
   exit 1
