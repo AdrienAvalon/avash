@@ -425,3 +425,51 @@ describe("rdpMousePos", () => {
     expect(rdpMousePos(9999, 9999, rect, 800, 600)).toEqual([799, 599]);
   });
 });
+
+describe("rdpScancode — clavier complet", () => {
+  it("le pavé numérique est transmis", () => {
+    // Sans ces codes, le pavé numérique est inerte dans le bureau distant.
+    expect(rdpScancode("Numpad0")).toBe(0x52);
+    expect(rdpScancode("Numpad5")).toBe(0x4c);
+    expect(rdpScancode("Numpad9")).toBe(0x49);
+    expect(rdpScancode("NumpadAdd")).toBe(0x4e);
+    expect(rdpScancode("NumpadSubtract")).toBe(0x4a);
+    expect(rdpScancode("NumpadMultiply")).toBe(0x37);
+    expect(rdpScancode("NumpadDecimal")).toBe(0x53);
+    expect(rdpScancode("NumLock")).toBe(0x45);
+  });
+
+  it("AltGr est transmis (touche étendue)", () => {
+    // Sur un clavier français, l'antislash s'obtient par AltGr+8 : sans AltGr,
+    // le caractère est impossible à saisir dans le bureau distant.
+    expect(rdpScancode("AltRight")).toBe(0xe038);
+  });
+
+  it("les touches étendues portent le préfixe 0xE0", () => {
+    expect(rdpScancode("ArrowUp")).toBe(0xe048);
+    expect(rdpScancode("ArrowDown")).toBe(0xe050);
+    expect(rdpScancode("ArrowLeft")).toBe(0xe04b);
+    expect(rdpScancode("ArrowRight")).toBe(0xe04d);
+    expect(rdpScancode("Delete")).toBe(0xe053);
+    expect(rdpScancode("Home")).toBe(0xe047);
+    expect(rdpScancode("NumpadEnter")).toBe(0xe01c);
+    expect(rdpScancode("NumpadDivide")).toBe(0xe035);
+    expect(rdpScancode("ControlRight")).toBe(0xe01d);
+  });
+
+  it("les touches de fonction sont transmises", () => {
+    expect(rdpScancode("F1")).toBe(0x3b);
+    expect(rdpScancode("F10")).toBe(0x44);
+    expect(rdpScancode("F11")).toBe(0x57);
+    expect(rdpScancode("F12")).toBe(0x58);
+  });
+
+  it("la touche à gauche de Maj des claviers européens est transmise", () => {
+    // Sur AZERTY, c'est « < / > » : absente de la table, elle ne passait pas.
+    expect(rdpScancode("IntlBackslash")).toBe(0x56);
+  });
+
+  it("une touche inconnue ne produit rien", () => {
+    expect(rdpScancode("ToucheImaginaire")).toBeNull();
+  });
+});

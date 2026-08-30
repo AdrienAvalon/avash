@@ -7,6 +7,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- **Clavier incomplet en RDP.** La table des scancodes s'arrêtait au verrou
+  majuscule : le **pavé numérique**, les touches de fonction, les flèches et les
+  touches étendues n'étaient pas transmis. **AltGr** manquait également, ce qui
+  rendait inaccessibles tous les caractères de troisième niveau d'un clavier
+  français — dont l'antislash (AltGr+8). La touche à gauche de Maj des claviers
+  européens (« < > ») manquait aussi.
+- **Une fenêtre console s'ouvrait à chaque connexion RDP sous Windows.** Le
+  processus RDP est désormais lancé sans console (CREATE_NO_WINDOW).
+
 ## [0.2.1] - 2026-08-30
 
 Première version réellement distribuée sur les deux plateformes.

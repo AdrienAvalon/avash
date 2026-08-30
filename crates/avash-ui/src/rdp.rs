@@ -64,22 +64,33 @@ pub async fn rdp_open(
     height: u16,
 ) -> Result<RdpConn, String> {
     use std::process::Stdio;
-    let mut child = tokio::process::Command::new(sidecar_path())
-        .args([
-            "--host",
-            &host,
-            "--port",
-            &port.unwrap_or(3389).to_string(),
-            "-u",
-            &user,
-            "--width",
-            &width.to_string(),
-            "--height",
-            &height.to_string(),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut cmd = tokio::process::Command::new(sidecar_path());
+    cmd.args([
+        "--host",
+        &host,
+        "--port",
+        &port.unwrap_or(3389).to_string(),
+        "-u",
+        &user,
+        "--width",
+        &width.to_string(),
+        "--height",
+        &height.to_string(),
+    ])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+
+    // Sous Windows, lancer un programme console ouvre une fenêtre noire à chaque
+    // connexion RDP. CREATE_NO_WINDOW l'en empêche : le sidecar reste invisible,
+    // ses flux restant redirigés vers nous.
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Lancement du sidecar RDP impossible : {e}"))?;
 
