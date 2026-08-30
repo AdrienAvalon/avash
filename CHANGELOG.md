@@ -7,6 +7,20 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.2.5] - 2026-08-30
+
+### Corrigé
+
+- **La mise à jour automatique peut enfin fonctionner.** Trois conditions
+  manquaient, découvertes l'une après l'autre : l'adresse consultée visait un
+  dépôt inexistant, aucun manifeste `latest.json` n'était publié, et le
+  bundler ne produisait aucune signature faute de l'option
+  `createUpdaterArtifacts`. Les trois sont réunies : les binaires publiés sont
+  signés et accompagnés de leur manifeste.
+
+*(La 0.2.4 n'a jamais été publiée : sa publication s'est arrêtée d'elle-même,
+faute de signatures — exactement ce que la garde devait empêcher.)*
+
 ## [0.2.4] - 2026-08-30
 
 ### Corrigé
@@ -152,9 +166,10 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.2.4...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.2.5...HEAD
 [0.2.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.0
 [0.2.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.1
 [0.2.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.2
 [0.2.3]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.3
 [0.2.4]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.4
+[0.2.5]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.5
