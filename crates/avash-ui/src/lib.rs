@@ -17,6 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(commands::SessionStore {
             inner: Mutex::new(HashMap::new()),
+            annules: Mutex::new(std::collections::HashSet::new()),
         })
         .manage(commands::TunnelStore {
             inner: Mutex::new(HashMap::new()),

@@ -15,8 +15,22 @@ static SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::Sender;
 
+/// Message d'annulation volontaire : le front le reconnaît pour ne pas
+/// présenter une fermeture d'onglet comme un échec de connexion.
+pub const CONNEXION_ANNULEE: &str = "[AVASH_ANNULE]";
+
 pub struct SessionStore {
     pub inner: Mutex<HashMap<u64, SessionHandle>>,
+    /// Onglets fermés AVANT que leur session ne soit enregistrée.
+    ///
+    /// Une connexion SSH (résolution, rebonds, authentification) peut durer
+    /// plusieurs secondes. Fermer l'onglet pendant ce temps appelait `pty_close`
+    /// sur un identifiant que le magasin ne connaissait pas encore : la
+    /// connexion aboutissait ensuite dans le vide, restait ouverte jusqu'à
+    /// l'arrêt de l'application, et `open_sessions` la listait toujours — un
+    /// snippet « toutes les sessions » partait donc sur un serveur dont
+    /// l'utilisateur avait fermé l'onglet.
+    pub annules: Mutex<std::collections::HashSet<u64>>,
 }
 
 pub struct SessionHandle {
@@ -359,6 +373,12 @@ async fn open_on_target(
     // meme id. Lacher le SessionHandle ferme ses canaux et termine ce pump.
     let label = target.label.clone();
     let label_for_event = label.clone();
+    // L'onglet a-t-il été fermé pendant que l'on se connectait ? Si oui, on
+    // n'enregistre rien : lâcher `input`/`resize` ferme les canaux, le pump
+    // s'arrête et la session SSH se referme d'elle-même.
+    if state.annules.lock().unwrap().remove(&id) {
+        return Err(CONNEXION_ANNULEE.to_owned());
+    }
     let epoch = SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
     let evicted = state.inner.lock().unwrap().insert(
         id,
@@ -553,6 +573,12 @@ pub async fn pty_resize(
 #[tauri::command]
 pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result<(), String> {
     let handle = state.inner.lock().unwrap().remove(&id);
+    if handle.is_none() {
+        // Rien à fermer : soit l'onglet était déjà clos, soit sa connexion est
+        // encore en cours. On note l'annulation pour qu'`open_on_target` la voie
+        // en arrivant, plutôt que d'abandonner une session vivante.
+        state.annules.lock().unwrap().insert(id);
+    }
     if let Some(h) = handle {
         // into_inner() echoue si le mutex a ete empoisonne par un panic
         // ailleurs. Fermer un onglet ne doit jamais planter pour autant :

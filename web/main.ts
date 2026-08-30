@@ -580,6 +580,15 @@ function newSessionShell(label: string) {
   // d'interruption) part au shell distant.
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
+    // Raccourcis de l'application : xterm les écrivait DANS le PTY avant que
+    // nos écouteurs ne s'en saisissent. Ctrl+B est le préfixe de tmux et Ctrl+K
+    // le kill-line de readline : chaque frappe agissait donc deux fois, à
+    // distance et localement. On les retient ici pour que seul l'effet local
+    // subsiste.
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (k === "b" || k === "k") return false;
+    }
     const mod = e.ctrlKey && e.shiftKey;
     if (mod && e.code === "KeyC") {
       const sel = term.getSelection();
@@ -738,7 +747,10 @@ async function connectByAlias(s: Session, h: Host) {
         continue; // réessayer : TOFU réapprend la nouvelle clé
       }
       if (!isPasswordRequired(msg)) {
-        markClosed(s, `⚔️ Échec connexion : ${msg}`);
+        // Fermeture volontaire pendant la connexion : rien à signaler, l'onglet
+        // n'existe plus. Le back le marque explicitement.
+        if (msg.includes("[AVASH_ANNULE]")) return;
+        markClosed(s, `⚠️ Échec de la connexion : ${msg}`);
         return;
       }
       // Mot de passe manquant ou refuse : on redemande, jusqu'a 3 fois.
@@ -754,7 +766,7 @@ async function connectByAlias(s: Session, h: Host) {
       rememberAsked = rep.remember;
     }
   }
-  markClosed(s, "⚔️ Trois tentatives échouées.");
+  markClosed(s, "⚠️ Trois tentatives ont échoué.");
 }
 
 /**
@@ -795,7 +807,8 @@ async function openManualSession(t: ManualTarget) {
     try {
       await connectManual(session, t);
     } catch (e) {
-      markClosed(session, `⚔️ Échec connexion : ${e}`);
+      if (String(e).includes("[AVASH_ANNULE]")) return;
+      markClosed(session, `⚠️ Échec de la connexion : ${e}`);
     }
   };
 }
@@ -939,34 +952,88 @@ const paletteInput = $("palette-input") as HTMLInputElement;
 function paletteOpen() {
   paletteEl.classList.add("open");
   paletteInput.value = "";
+  paletteIndex = 0;
   renderPalette();
   paletteInput.focus();
 }
 function paletteClose() { paletteEl.classList.remove("open"); }
+/** Une entrée de la palette : SSH ou bureau RDP, avec son action d'ouverture. */
+type EntreePalette = { nom: string; detail: string; icone: string; ouvrir: () => void };
+
+/** Ligne sélectionnée dans la palette (index dans la liste affichée). */
+let paletteIndex = 0;
+let paletteEntrees: EntreePalette[] = [];
+
 function renderPalette() {
   const q = paletteInput.value.toLowerCase();
   const res = $("palette-results");
   res.innerHTML = "";
-  const matches = filterHosts(state.hosts, q);
-  if (matches.length === 0) {
+
+  // Les deux protocoles, comme dans la barre latérale : un bureau RDP était
+  // jusqu'ici introuvable à la palette, alors qu'elle promet « un nom d'hôte ».
+  paletteEntrees = [
+    ...filterHosts(state.hosts, q).map((h) => ({
+      nom: h.alias,
+      detail: `${h.user ?? "?"}@${h.hostname ?? h.alias}`,
+      icone: "terminal",
+      ouvrir: () => void openSession(h),
+    })),
+    ...rdpHostsList
+      .filter((h) => !q || h.name.toLowerCase().includes(q) || h.host.toLowerCase().includes(q))
+      .map((h) => ({
+        nom: h.name,
+        detail: `${h.user}@${h.host}:${h.port}`,
+        icone: "monitor",
+        ouvrir: () => void connectRdpSaved(h),
+      })),
+  ];
+
+  if (paletteEntrees.length === 0) {
     res.innerHTML = `<div class="empty">Aucun hôte pour « ${stripHtml(q)} »</div>`;
     return;
   }
-  for (const h of matches) {
+  paletteIndex = Math.min(paletteIndex, paletteEntrees.length - 1);
+  paletteEntrees.forEach((e, i) => {
     const item = document.createElement("div");
-    item.className = "item";
-    item.innerHTML = `<span class="pico">${ic("terminal")}</span><span class="name"></span><span class="sub"></span>`;
-    item.querySelector(".name")!.textContent = h.alias;
-    item.querySelector(".sub")!.textContent = `${h.user ?? "?"}@${h.hostname ?? h.alias}`;
-    item.addEventListener("click", () => { paletteClose(); void openSession(h); });
+    item.className = "item" + (i === paletteIndex ? " hl" : "");
+    item.id = `palette-item-${i}`;
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(i === paletteIndex));
+    item.innerHTML = `<span class="pico">${ic(e.icone)}</span><span class="name"></span><span class="sub"></span>`;
+    item.querySelector(".name")!.textContent = e.nom;
+    item.querySelector(".sub")!.textContent = e.detail;
+    item.addEventListener("click", () => { paletteClose(); e.ouvrir(); });
     res.appendChild(item);
-  }
+  });
+  paletteInput.setAttribute("aria-activedescendant", `palette-item-${paletteIndex}`);
 }
-paletteInput.addEventListener("input", renderPalette);
-paletteInput.addEventListener("keydown", (e) => { if (e.key === "Escape") paletteClose(); });
+paletteInput.addEventListener("input", () => { paletteIndex = 0; renderPalette(); });
+
+// Une palette de commandes qui exige la souris perd sa raison d'être : les
+// flèches déplacent la sélection, Entrée ouvre la session.
+paletteInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { paletteClose(); return; }
+  if (paletteEntrees.length === 0) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const pas = e.key === "ArrowDown" ? 1 : -1;
+    paletteIndex = (paletteIndex + pas + paletteEntrees.length) % paletteEntrees.length;
+    renderPalette();
+    $(`palette-item-${paletteIndex}`).scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const choisie = paletteEntrees[paletteIndex];
+    paletteClose();
+    choisie?.ouvrir();
+  }
+});
 paletteEl.addEventListener("click", (e) => { if (e.target === paletteEl) paletteClose(); });
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    // Ne pas s'ouvrir par-dessus une boîte de dialogue : la palette prenait le
+    // focus à la demande de mot de passe, et la frappe suivante — le mot de
+    // passe — partait en clair dans son champ de recherche.
+    if (document.querySelector(".modal-backdrop.open")) return;
     e.preventDefault();
     paletteOpen();
   }
@@ -1359,7 +1426,9 @@ $("ask-form").addEventListener("submit", (e) => {
 });
 $("ask-cancel").addEventListener("click", () => askClose(null));
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && $("ask-modal").classList.contains("open")) askClose(null);
+  if (e.key !== "Escape" || !$("ask-modal").classList.contains("open")) return;
+  e.stopImmediatePropagation(); // voir la note du gestionnaire de confirmation
+  askClose(null);
 });
 
 // Confirmation maison. La fonction native du navigateur est INOPÉRANTE sous
@@ -1393,8 +1462,14 @@ $("confirm-ok").addEventListener("click", () => confirmClose(true));
 $("confirm-cancel").addEventListener("click", () => confirmClose(false));
 window.addEventListener("keydown", (e) => {
   if (!$("confirm-modal").classList.contains("open")) return;
-  if (e.key === "Escape") confirmClose(false);
-  else if (e.key === "Enter") confirmClose(true);
+  if (e.key !== "Escape" && e.key !== "Enter") return;
+  // La touche s'arrête ici. Sans cela, le gestionnaire d'Échap déclaré plus bas
+  // s'exécutait aussi — et comme cette boîte venait de se refermer, il fermait
+  // la fenêtre du dessous : renoncer à une suppression faisait disparaître la
+  // fenêtre Tunnels ou Snippets d'où l'on venait.
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  confirmClose(e.key === "Enter");
 });
 
 hydrateIcons();
@@ -1507,8 +1582,23 @@ function focusablesIn(box: HTMLElement): HTMLElement[] {
 }
 
 /** La boîte de dialogue actuellement ouverte, s'il y en a une. */
+/// Boîtes qui s'ouvrent systématiquement par-dessus une autre.
+const MODALES_AU_DESSUS = ["confirm-modal", "ask-modal", "pass-modal"] as const;
+
 function openDialogBox(): HTMLElement | null {
-  const back = document.querySelector<HTMLElement>(".modal-backdrop.open, .palette-backdrop.open");
+  // Ces trois-là priment : `querySelector` rendait la PREMIÈRE du document, or
+  // « tunnels » et « snippets » y précèdent « confirmation ». Le piège de focus
+  // enfermait donc Tab dans le formulaire resté derrière la confirmation.
+  for (const id of MODALES_AU_DESSUS) {
+    const el = document.getElementById(id);
+    if (el?.classList.contains("open")) {
+      return el.querySelector<HTMLElement>('[role="dialog"]') ?? el;
+    }
+  }
+  const ouvertes = [
+    ...document.querySelectorAll<HTMLElement>(".modal-backdrop.open, .palette-backdrop.open"),
+  ];
+  const back = ouvertes.at(-1) ?? null;
   return back ? (back.querySelector<HTMLElement>('[role="dialog"]') ?? back) : null;
 }
 
@@ -1980,7 +2070,10 @@ $("pass-form").addEventListener("submit", (e) => {
 });
 $("pass-cancel").addEventListener("click", () => passClose(null));
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && passModal().classList.contains("open")) passClose(null);
+  if (e.key === "Escape" && passModal().classList.contains("open")) {
+    e.stopImmediatePropagation(); // voir la note du gestionnaire de confirmation
+    passClose(null);
+  }
 });
 
 
@@ -2079,12 +2172,28 @@ ctxMenu().addEventListener("click", (e) => {
 function closeAllContextMenus() {
   for (const id of ["host-context", "rdp-context", "folder-context"]) $(id).classList.remove("open");
 }
+/**
+ * Positionne un menu contextuel en le gardant dans la fenêtre.
+ *
+ * Le menu des hôtes SSH — le plus haut des cinq, sept entrées — posait
+ * brutalement les coordonnées du clic : un clic droit sur le dernier hôte d'une
+ * liste descendant jusqu'en bas rendait « Supprimer l'hôte » inatteignable.
+ * On mesure la taille réelle plutôt que de la supposer.
+ */
+function placerMenu(menu: HTMLElement, e: MouseEvent): void {
+  menu.style.visibility = "hidden";
+  menu.classList.add("open");
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(e.clientX, window.innerWidth - width - 8))}px`;
+  menu.style.top = `${Math.max(4, Math.min(e.clientY, window.innerHeight - height - 8))}px`;
+  menu.style.visibility = "";
+}
+
 function openHostMenu(h: Host, e: MouseEvent) {
   closeAllContextMenus();
   const m = $("host-context");
   m.dataset.alias = h.alias;
-  m.style.left = `${e.clientX}px`;
-  m.style.top = `${e.clientY}px`;
+  placerMenu(m, e);
   m.classList.add("open");
 }
 function hideHostMenu() { $("host-context").classList.remove("open"); }
@@ -2160,11 +2269,17 @@ function closeEditHost() { $("edit-modal").classList.remove("open"); }
 $("e-cancel").addEventListener("click", closeEditHost);
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if ($("edit-modal").classList.contains("open")) closeEditHost();
-  if ($("rdp-edit-modal").classList.contains("open")) closeEditRdp();
-  if ($("move-modal").classList.contains("open")) closeMoveModal();
-  if ($("tunnels-modal").classList.contains("open")) tunnelsClose();
-  if (snippetsModal().classList.contains("open")) snippetsClose();
+  // Une boîte ouverte PAR-DESSUS (confirmation, saisie, mot de passe) a déjà
+  // traité la touche : sans cette garde, renoncer à une suppression fermait
+  // aussi la fenêtre Tunnels ou Snippets d'où l'on venait — l'utilisateur qui
+  // annule était puni deux fois.
+  if (MODALES_AU_DESSUS.some((id) => $(id).classList.contains("open"))) return;
+  // Un seul `return` par branche : elles s'enchaînaient toutes.
+  if ($("edit-modal").classList.contains("open")) { closeEditHost(); return; }
+  if ($("rdp-edit-modal").classList.contains("open")) { closeEditRdp(); return; }
+  if ($("move-modal").classList.contains("open")) { closeMoveModal(); return; }
+  if ($("tunnels-modal").classList.contains("open")) { tunnelsClose(); return; }
+  if (snippetsModal().classList.contains("open")) { snippetsClose(); return; }
 });
 
 $("edit-form").addEventListener("submit", async (e) => {

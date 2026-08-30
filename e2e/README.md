@@ -33,7 +33,7 @@ une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) 
 effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 (`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`.
 
-## Couverture (24 scénarios)
+## Couverture (27 scénarios)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
