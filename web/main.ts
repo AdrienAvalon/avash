@@ -1406,6 +1406,79 @@ void loadHosts();
 // Prechargement : au moment du clic, la police est deja prete.
 void ensureFontLoaded();
 
+// ---------- Accessibilité des boîtes de dialogue ----------
+// Les modales s'ouvrent en posant la classe « open », depuis une quarantaine
+// d'endroits. Plutôt que d'instrumenter chaque appel, on observe la classe :
+//  - à l'ouverture, on mémorise l'élément qui avait le focus ;
+//  - à la fermeture, on le lui rend (sinon le focus retombe sur le <body> et la
+//    navigation au clavier repart du début de la page) ;
+//  - tant qu'une modale est ouverte, Tab et Maj+Tab bouclent à l'intérieur : la
+//    page derrière est masquée visuellement mais reste sinon atteignable.
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
+  ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Éléments réellement atteignables (on écarte ceux que le CSS masque). */
+function focusablesIn(box: HTMLElement): HTMLElement[] {
+  return [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) => el.offsetParent !== null || el === document.activeElement,
+  );
+}
+
+/** La boîte de dialogue actuellement ouverte, s'il y en a une. */
+function openDialogBox(): HTMLElement | null {
+  const back = document.querySelector<HTMLElement>(".modal-backdrop.open, .palette-backdrop.open");
+  return back ? (back.querySelector<HTMLElement>('[role="dialog"]') ?? back) : null;
+}
+
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key !== "Tab") return;
+    const box = openDialogBox();
+    if (!box) return;
+    const items = focusablesIn(box);
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const cur = document.activeElement as HTMLElement | null;
+    const inside = cur ? box.contains(cur) : false;
+    if (e.shiftKey && (cur === first || !inside)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (cur === last || !inside)) {
+      e.preventDefault();
+      first.focus();
+    }
+  },
+  true, // en capture : on passe avant les raccourcis des champs
+);
+
+// Le déclencheur ne peut pas être lu au moment de l'ouverture : le code qui
+// ouvre une modale y place aussitôt le focus (champ de saisie), et l'observateur
+// ci-dessous ne s'exécute qu'ensuite (microtâche). On garde donc en permanence
+// le dernier élément focalisé HORS dialogue : c'est lui, le déclencheur.
+let lastOutsideFocus: HTMLElement | null = null;
+window.addEventListener("focusin", (e) => {
+  const el = e.target as HTMLElement | null;
+  if (el && !el.closest(".modal-backdrop, .palette-backdrop")) lastOutsideFocus = el;
+});
+
+for (const back of document.querySelectorAll<HTMLElement>(".modal-backdrop, .palette-backdrop")) {
+  let opener: HTMLElement | null = null;
+  new MutationObserver(() => {
+    const isOpen = back.classList.contains("open");
+    if (isOpen) {
+      opener ??= lastOutsideFocus;
+    } else if (opener) {
+      // Le focus était dans la modale qui vient de se fermer : on le rend au
+      // déclencheur, s'il est encore dans le document.
+      if (opener.isConnected) opener.focus();
+      opener = null;
+    }
+  }).observe(back, { attributes: true, attributeFilter: ["class"] });
+}
+
 // Version affichee (barre laterale + pied) : lue depuis l'app, jamais ecrite en
 // dur — sinon elle derive a chaque release.
 void getVersion()

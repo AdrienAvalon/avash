@@ -33,7 +33,7 @@ une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) 
 effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 (`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`.
 
-## Couverture (18 scénarios)
+## Couverture (22 scénarios)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -43,6 +43,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 | `folders.spec.js`     | cycle de vie complet : créer, sous-dossier, renommer, **supprimer** (modale maison), **annulation respectée** |
 | `snippets.spec.js`    | snippet : créer, lister, **supprimer** (askConfirm) |
 | `tunnels.spec.js`     | tunnel local : créer, lister, **supprimer** (askConfirm) |
+| `a11y.spec.js`        | **accessibilité** : role=dialog + titre accessible, piège de focus (Tab ne fuit pas), focus rendu au déclencheur, noms accessibles des boutons icône |
 | `modals.spec.js`      | « Connexion directe » ne se ferme pas au clic dehors, se ferme à Échap ; palette Ctrl+K |
 | `ssh.spec.js`         | **connexion SSH réelle** (sshd local, auth par clé) → session live |
 | `sftp.spec.js`        | **panneau SFTP** sur la session SSH → listing du répertoire distant |

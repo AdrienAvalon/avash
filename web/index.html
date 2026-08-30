@@ -782,23 +782,23 @@
   <div class="titlebar" data-tauri-drag-region>
     <div class="tb-title" data-tauri-drag-region><svg class="tb-mascot"><use href="#avash-mark"/></svg><span id="tb-name">Avash</span></div>
     <div class="tb-controls">
-      <button class="tb-btn" id="win-min" title="Réduire" type="button"></button>
-      <button class="tb-btn" id="win-max" title="Agrandir" type="button"></button>
-      <button class="tb-btn tb-close" id="win-close" title="Fermer" type="button"></button>
+      <button class="tb-btn" id="win-min" title="Réduire" type="button" aria-label="Réduire"></button>
+      <button class="tb-btn" id="win-max" title="Agrandir" type="button" aria-label="Agrandir"></button>
+      <button class="tb-btn tb-close" id="win-close" title="Fermer" type="button" aria-label="Fermer"></button>
     </div>
   </div>
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
         <span class="mascot"><svg class="mark"><use href="#avash-mark"/></svg></span> Avash <span class="ver" id="app-version" title="Vérifier les mises à jour">…</span>
-        <button id="theme-toggle" class="theme-toggle" type="button" title="Thème"></button>
+        <button id="theme-toggle" class="theme-toggle" type="button" title="Thème" aria-label="Thème"></button>
       </div>
       <div class="search-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <input id="search" class="search" placeholder="Filtrer les hôtes…" autocomplete="off" />
         <kbd>Ctrl K</kbd>
       </div>
-      <div class="section-title"><span>Hôtes</span><span class="st-right"><button id="new-folder-btn" class="mini-btn" type="button" title="Nouveau dossier">+ dossier</button><span id="host-count">—</span></span></div>
+      <div class="section-title"><span>Hôtes</span><span class="st-right"><button id="new-folder-btn" class="mini-btn" type="button" title="Nouveau dossier" aria-label="Nouveau dossier">+ dossier</button><span id="host-count">—</span></span></div>
       <div class="tag-bar" id="tag-bar" hidden></div>
       <div id="host-list" class="host-list"></div>
       <div class="side-actions">
@@ -813,11 +813,11 @@
 
     <section class="main">
       <div class="tabbar">
-        <button class="tabbar-btn tb-icon" id="side-toggle" type="button" title="Réduire/afficher la barre latérale (Ctrl+.)">
+        <button class="tabbar-btn tb-icon" id="side-toggle" type="button" title="Réduire/afficher la barre latérale (Ctrl+.)" aria-label="Réduire/afficher la barre latérale (Ctrl+.)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
         </button>
         <div class="tabs" id="tabs"><span class="no-session">Aucune session</span></div>
-        <button class="tabbar-btn" id="sftp-toggle" type="button" title="Fichiers distants (SFTP) — Ctrl+B" disabled>
+        <button class="tabbar-btn" id="sftp-toggle" type="button" title="Fichiers distants (SFTP) — Ctrl+B" disabled aria-label="Fichiers distants (SFTP)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           <span>Fichiers</span>
         </button>
@@ -842,9 +842,9 @@
         <div id="terminal"></div>
         <div class="term-search" id="term-search">
           <input id="term-search-input" placeholder="Rechercher…" spellcheck="false" />
-          <button id="term-search-prev" title="Précédent (Maj+Entrée)" data-icon="arrowUp"></button>
-          <button id="term-search-next" title="Suivant (Entrée)" data-icon="arrowDown"></button>
-          <button id="term-search-close" title="Fermer (Échap)" data-icon="x"></button>
+          <button id="term-search-prev" title="Précédent (Maj+Entrée)" data-icon="arrowUp" aria-label="Précédent (Maj+Entrée)"></button>
+          <button id="term-search-next" title="Suivant (Entrée)" data-icon="arrowDown" aria-label="Suivant (Entrée)"></button>
+          <button id="term-search-close" title="Fermer (Échap)" data-icon="x" aria-label="Fermer (Échap)"></button>
         </div>
         <div class="ctx-menu" id="term-context">
           <div class="ctx-item" data-act="copy">Copier<span class="ctx-key">Ctrl+Maj+C</span></div>
@@ -857,9 +857,9 @@
         <aside class="sftp-panel" id="sftp-panel">
           <div class="sftp-resize" id="sftp-resize"></div>
           <div class="sftp-head">
-            <button class="sftp-ib" id="sftp-up" title="Dossier parent" type="button" data-icon="arrowUp"></button>
+            <button class="sftp-ib" id="sftp-up" title="Dossier parent" type="button" data-icon="arrowUp" aria-label="Dossier parent"></button>
             <input class="sftp-path" id="sftp-path" spellcheck="false" autocomplete="off" title="Chemin distant — Entrée pour y aller" />
-            <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" type="button" data-icon="refresh"></button>
+            <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" type="button" data-icon="refresh" aria-label="Rafraîchir"></button>
           </div>
           <div class="sftp-list" id="sftp-list"></div>
           <div class="sftp-drop" id="sftp-drop"><span>⬆︎</span>Déposer pour envoyer ici</div>
@@ -894,8 +894,8 @@
   <script type="module" src="/main.ts"></script>
 
     <div class="modal-backdrop" id="manual-modal">
-      <form class="modal" id="manual-form" autocomplete="off">
-        <h2>Connexion directe</h2>
+      <form class="modal" id="manual-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="manual-modal-title">
+        <h2 id="manual-modal-title">Connexion directe</h2>
         <p class="modal-hint">Sans passer par <code>~/.ssh/config</code>.</p>
 
         <div class="auth-switch" style="margin-bottom:2px">
@@ -954,8 +954,8 @@
     </div>
 
     <div class="modal-backdrop" id="keys-modal">
-      <div class="modal modal-wide">
-        <h2>Clés SSH</h2>
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="keys-modal-title">
+        <h2 id="keys-modal-title">Clés SSH</h2>
         <p class="modal-hint">Dans <code>~/.ssh</code>. Une clé évite de retaper son mot de passe.</p>
 
         <div class="key-list" id="key-list"></div>
@@ -1006,8 +1006,8 @@
     </div>
 
     <div class="modal-backdrop" id="pass-modal">
-      <form class="modal" id="pass-form" autocomplete="off">
-        <h2>Mot de passe</h2>
+      <form class="modal" id="pass-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="pass-modal-title">
+        <h2 id="pass-modal-title">Mot de passe</h2>
         <p class="modal-hint" id="pass-target">—</p>
         <label>Mot de passe
           <input id="pass-input" type="password" required autocomplete="current-password" />
@@ -1042,8 +1042,8 @@
       <div class="ctx-item danger" data-act="delete">Supprimer l'hôte</div>
     </div>
     <div class="modal-backdrop" id="tunnels-modal">
-      <div class="modal modal-wide">
-        <h2>Tunnels SSH</h2>
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="tunnels-modal-title">
+        <h2 id="tunnels-modal-title">Tunnels SSH</h2>
         <p class="modal-hint">Un tunnel vit sur sa propre connexion : fermer un onglet ne le coupe pas.</p>
 
         <div class="tunnel-list" id="tunnel-list"></div>
@@ -1089,8 +1089,8 @@
       </div>
     </div>
     <div class="modal-backdrop" id="snippets-modal">
-      <div class="modal modal-wide">
-        <h2>Snippets</h2>
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="snippets-modal-title">
+        <h2 id="snippets-modal-title">Snippets</h2>
         <p class="modal-hint">Des commandes prêtes à envoyer dans le terminal. Variables <code>{{nom}}</code> demandées à l'envoi ; envoi possible sur plusieurs sessions.</p>
         <div class="snippet-list" id="snippet-list"></div>
         <details class="key-block" id="snippet-block">
@@ -1121,7 +1121,7 @@
       </div>
     </div>
     <div class="modal-backdrop" id="send-modal">
-      <form class="modal" id="send-form" autocomplete="off">
+      <form class="modal" id="send-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="send-title">
         <h2 id="send-title">Envoyer</h2>
         <pre class="send-preview" id="send-preview"></pre>
         <div id="send-vars"></div>
@@ -1141,7 +1141,7 @@
       </form>
     </div>
     <div class="modal-backdrop" id="ask-modal">
-      <form class="modal" id="ask-form" autocomplete="off">
+      <form class="modal" id="ask-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="ask-title">
         <h2 id="ask-title">—</h2>
         <label><span id="ask-label">Nom</span>
           <input id="ask-input" required spellcheck="false" />
@@ -1154,7 +1154,7 @@
       </form>
     </div>
     <div class="modal-backdrop" id="confirm-modal">
-      <div class="modal" id="confirm-box">
+      <div class="modal" id="confirm-box" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <h2 id="confirm-title">—</h2>
         <p class="confirm-msg" id="confirm-message"></p>
         <div class="modal-actions">
@@ -1164,8 +1164,8 @@
       </div>
     </div>
     <div class="modal-backdrop" id="edit-modal">
-      <form class="modal" id="edit-form" autocomplete="off">
-        <h2>Modifier l'hôte</h2>
+      <form class="modal" id="edit-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
+        <h2 id="edit-modal-title">Modifier l'hôte</h2>
         <input type="hidden" id="e-old" />
         <label>Nom (alias)
           <input id="e-alias" required />
@@ -1196,8 +1196,8 @@
       </form>
     </div>
     <div class="modal-backdrop" id="rdp-edit-modal">
-      <form class="modal" id="rdp-edit-form" autocomplete="off">
-        <h2>Modifier le bureau RDP</h2>
+      <form class="modal" id="rdp-edit-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="rdp-edit-modal-title">
+        <h2 id="rdp-edit-modal-title">Modifier le bureau RDP</h2>
         <input type="hidden" id="re-id" />
         <label>Nom
           <input id="re-name" required />
@@ -1228,8 +1228,8 @@
       <div class="ctx-item danger" data-act="delete">Supprimer le dossier</div>
     </div>
     <div class="modal-backdrop" id="move-modal">
-      <form class="modal" id="move-form" autocomplete="off">
-        <h2>Déplacer vers un dossier</h2>
+      <form class="modal" id="move-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="move-modal-title">
+        <h2 id="move-modal-title">Déplacer vers un dossier</h2>
         <div class="move-list" id="move-list"></div>
         <label><span>Nouveau dossier <span class="field-hint">(ex. <code>prod/web</code>)</span></span>
           <input id="move-new" placeholder="prod/web" />
