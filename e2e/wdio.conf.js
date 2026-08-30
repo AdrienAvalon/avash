@@ -38,7 +38,11 @@ function seedSandbox() {
 
 export const config = {
   runner: "local",
-  specs: ["./specs/**/*.spec.js"],
+  // En CI (E2E_NO_RDP=1) on saute le scénario RDP : il exige des certs de test
+  // (non versionnés) et un handshake CredSSP peu adapté au headless.
+  specs: process.env.E2E_NO_RDP
+    ? ["./specs/!(rdp).spec.js"]
+    : ["./specs/**/*.spec.js"],
   maxInstances: 1,
   capabilities: [
     {
@@ -55,14 +59,16 @@ export const config = {
   mochaOpts: { ui: "bdd", timeout: 60000 },
   onPrepare: () => {
     seedSandbox();
-    // Serveur RDP de test (mêmes identifiants que les specs : test/test).
-    const srvDir = resolve("../test-rdp-server");
-    rdpServer = spawn(
-      "./target/release/test-rdp-server",
-      ["--bind-addr", `127.0.0.1:${RDP_PORT}`, "--cert", "cert.pem", "--key", "key.pem",
-       "--user", "test", "--pass", "test", "--sec", "hybrid"],
-      { cwd: srvDir, stdio: "ignore" },
-    );
+    if (!process.env.E2E_NO_RDP) {
+      // Serveur RDP de test (mêmes identifiants que les specs : test/test).
+      const srvDir = resolve("../test-rdp-server");
+      rdpServer = spawn(
+        "./target/release/test-rdp-server",
+        ["--bind-addr", `127.0.0.1:${RDP_PORT}`, "--cert", "cert.pem", "--key", "key.pem",
+         "--user", "test", "--pass", "test", "--sec", "hybrid"],
+        { cwd: srvDir, stdio: "ignore" },
+      );
+    }
     tauriDriver = spawn("tauri-driver", [], {
       stdio: [null, process.stdout, process.stderr],
       env: { ...process.env, HOME: sandbox, XDG_CONFIG_HOME: join(sandbox, ".config") },
