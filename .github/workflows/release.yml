@@ -78,11 +78,15 @@ jobs:
       # utilise un chemin relatif (../../web) qui ne se résout correctement que
       # depuis ce répertoire. NO_STRIP : linuxdeploy échoue à dépouiller les
       # binaires récents (.relr.dyn).
+      # TAURI_SIGNING_PRIVATE_KEY : sans elle, Tauri ne produit aucun fichier .sig
+      # et la mise à jour automatique ne peut pas vérifier ce qu'elle télécharge.
       - name: Bundles Tauri
         working-directory: crates/avash-ui
         run: cargo tauri build
         env:
           NO_STRIP: "1"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       # Version portable Windows : l'application et son processus RDP côte à côte,
       # sans installation ni écriture dans la base de registre. Utile sur un poste
@@ -118,7 +122,9 @@ jobs:
           name: avash-${{ matrix.nom }}
           path: |
             target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.AppImage.sig
             target/release/bundle/nsis/*.exe
+            target/release/bundle/nsis/*.exe.sig
             portable/*.zip
           if-no-files-found: warn
 
@@ -129,6 +135,36 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { path: artefacts }
+      # Manifeste interrogé par l'application (plugin updater de Tauri). Sans ce
+      # fichier, l'endpoint renvoie 404 et « vérifier les mises à jour » échoue.
+      - name: Manifeste de mise à jour (latest.json)
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          sig() { find artefacts -name "$1" -print -quit | xargs -r cat; }
+          python3 - "$version" "$base" "$(sig '*.AppImage.sig')" "$(sig '*-setup.exe.sig')" <<'PY' > latest.json
+          import json, sys, datetime
+          version, base, sig_linux, sig_win = sys.argv[1:5]
+          plateformes = {}
+          if sig_linux:
+              plateformes["linux-x86_64"] = {
+                  "signature": sig_linux,
+                  "url": f"{base}/Avash_{version}_amd64.AppImage",
+              }
+          if sig_win:
+              plateformes["windows-x86_64"] = {
+                  "signature": sig_win,
+                  "url": f"{base}/Avash_{version}_x64-setup.exe",
+              }
+          json.dump({
+              "version": version,
+              "notes": f"avash {version} — voir le journal des modifications.",
+              "pub_date": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
+              "platforms": plateformes,
+          }, sys.stdout, ensure_ascii=False, indent=2)
+          PY
+          cat latest.json
+
       - name: Empreintes SHA256
         run: |
           find artefacts -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.zip' \) -print0 \
@@ -154,5 +190,7 @@ jobs:
             artefacts/**/*.AppImage
             artefacts/**/*.exe
             artefacts/**/*.zip
+            artefacts/**/*.sig
+            latest.json
             SHA256SUMS
           generate_release_notes: true

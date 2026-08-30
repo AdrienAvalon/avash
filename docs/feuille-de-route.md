@@ -50,13 +50,22 @@ boîtes de dialogue, cadence adaptative RDP, arborescence de dossiers.
 
 ### 1.1 Réparer la mise à jour automatique
 
-L'endpoint pointait vers un dépôt inexistant (`vela-kern/avash`) : la vérification
-ne pouvait pas aboutir. **Corrigé** — il vise désormais
-`github.com/AdrienAvalon/avash`. Reste à **vérifier en conditions réelles** :
-publier une 0.2.1 et confirmer qu'une 0.2.0 installée la détecte, la télécharge
-et redémarre. Tant que ce n'est pas fait, la fonctionnalité est présumée, pas prouvée.
+Deux défauts distincts, découverts l'un après l'autre :
 
-*Fini quand* : une version installée détecte et applique la suivante.
+1. l'endpoint visait un dépôt inexistant (`vela-kern/avash`) — **corrigé**, il
+   pointe sur le dépôt réel ;
+2. **rien n'était publié à cette adresse** : les releases ne contenaient ni
+   manifeste `latest.json`, ni artefacts signés. L'endpoint renvoyait donc 404 et
+   « vérifier les mises à jour » échouait à chaque fois — l'application annonçait
+   une fonction inopérante.
+
+Le workflow produit désormais les signatures et le manifeste. Il reste à
+**déposer la clé de signature en secret du dépôt** (`TAURI_SIGNING_PRIVATE_KEY`
+et son mot de passe) : sans elle, Tauri n'émet aucun fichier `.sig` et la mise à
+jour refuse ce qu'elle télécharge. La clé privée appartient au mainteneur et ne
+transite pas par l'outillage de développement.
+
+*Fini quand* : une version installée détecte la suivante, la télécharge et redémarre.
 
 ### 1.2 Construire réellement pour Windows — **construit, pas encore éprouvé**
 
