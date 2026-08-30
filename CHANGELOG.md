@@ -26,6 +26,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Ajouté
 
+- **Attestation de provenance** des binaires publiés (Sigstore, via GitHub) :
+  chacun peut prouver qu'un fichier téléchargé provient bien de ce dépôt, de ce
+  commit et de notre chaîne d'intégration — vérifiable avec
+  `gh attestation verify`. Cela ne remplace pas une signature Authenticode :
+  l'avertissement de Windows subsiste.
 - **Version portable pour Windows** : une archive à décompresser, sans
   installation ni écriture dans la base de registre.
 - Garde-fou d'intégration continue : la compilation Windows du cœur est vérifiée

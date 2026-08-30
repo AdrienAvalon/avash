@@ -64,9 +64,22 @@ Deux formes au choix :
 
 Windows affiche un avertissement au lancement de l'installeur : **avash n'est pas
 signé numériquement**. C'est le comportement normal pour un logiciel sans
-certificat de signature de code — cliquer sur « Informations complémentaires »
-puis « Exécuter quand même ». Les empreintes SHA256 publiées avec chaque version
-permettent de vérifier que le fichier n'a pas été altéré.
+certificat de signature de code (Authenticode) — cliquer sur « Informations
+complémentaires » puis « Exécuter quand même ».
+
+Deux moyens de vérifier qu'un fichier téléchargé est bien le nôtre :
+
+```bash
+# 1. Empreinte : compare avec le fichier SHA256SUMS publié avec la version
+sha256sum Avash_0.2.0_x64-setup.exe
+
+# 2. Provenance : preuve cryptographique que le binaire vient de ce dépôt,
+#    de ce commit, produit par notre chaîne d'intégration continue
+gh attestation verify Avash_0.2.0_x64-setup.exe --repo AdrienAvalon/avash
+```
+
+La seconde vérification est plus forte que la première : elle ne dit pas
+seulement que le fichier est intact, mais **d'où il vient**.
 
 ### Compiler depuis les sources
 

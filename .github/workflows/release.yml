@@ -10,7 +10,9 @@ on:
   workflow_dispatch: # permet un essai manuel sans créer de tag
 
 permissions:
-  contents: write # nécessaire pour créer la release et y joindre les binaires
+  contents: write     # créer la release et y joindre les binaires
+  id-token: write     # jeton OIDC : prouve à Sigstore que la signature vient de ce workflow
+  attestations: write # enregistrer l'attestation de provenance
 
 jobs:
   build:
@@ -132,6 +134,20 @@ jobs:
           find artefacts -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.zip' \) -print0 \
             | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
+      # Attestation de provenance : preuve cryptographique (Sigstore) que ces
+      # binaires ont bien été produits par ce dépôt, à ce commit, par ce
+      # workflow — et non substitués en chemin. À vérifier côté utilisateur avec
+      #   gh attestation verify <fichier> --repo AdrienAvalon/avash
+      # Ce n'est PAS une signature Authenticode : elle ne lève pas
+      # l'avertissement de Windows, qui exige un certificat d'autorité.
+      - name: Attester la provenance des binaires
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artefacts/**/*.AppImage
+            artefacts/**/*.exe
+            artefacts/**/*.zip
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
