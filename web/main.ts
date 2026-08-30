@@ -3337,8 +3337,3 @@ $("move-form").addEventListener("submit", (e) => {
 // Racine : d\u00e9poser un h\u00f4te sur la zone vide de la liste le remet \u00e0 la racine.
 setupFolderDrop($("host-list"), "", false);
 
-// === HARNESS TEMPORAIRE (surcouche RDP fermée — À RETIRER) ===
-void (async () => {
-  await new Promise((r) => setTimeout(r, 3000));
-  await openRdp({ host: "127.0.0.1", port: 33892, user: "test", password: "test" });
-})();
