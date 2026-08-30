@@ -1,9 +1,9 @@
 [package]
 name = "avash-rdp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Avash — sidecar client RDP (IronRDP), isolé de russh"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [[bin]]
 name = "avash-rdp"

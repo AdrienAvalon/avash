@@ -5,10 +5,10 @@ exclude = ["rdp-sidecar", "test-rdp-server"]
 
 # Metadonnees communes : un seul endroit a modifier pour une release.
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-license = "MIT"
-repository = "https://github.com/vela-kern/avash"
+license = "AGPL-3.0-or-later"
+authors = ["Adrien Cros <adrien.cros@outlook.com>"]
 
 # Un seul cargo build --release pour tout le workspace : les dependances
 # communes (russh, tokio, serde) ne sont compilees qu'une fois, et le

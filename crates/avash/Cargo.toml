@@ -1,9 +1,9 @@
 [package]
 name = "avash"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Avash — native SSH/RDP connection manager. Light, fast, secure, multi-platform."
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

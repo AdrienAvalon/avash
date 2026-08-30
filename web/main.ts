@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate } from "@tauri-apps/plugin-updater";
@@ -1404,6 +1405,17 @@ void setupWindowControls();
 void loadHosts();
 // Prechargement : au moment du clic, la police est deja prete.
 void ensureFontLoaded();
+
+// Version affichee (barre laterale + pied) : lue depuis l'app, jamais ecrite en
+// dur — sinon elle derive a chaque release.
+void getVersion()
+  .then((v) => {
+    $("app-version").textContent = `v${v}`;
+    $("footer-version").textContent = `avash v${v}`;
+  })
+  .catch(() => {
+    $("app-version").textContent = "v?";
+  });
 
 // ---------- Connexion directe (sans ~/.ssh/config) ----------
 
