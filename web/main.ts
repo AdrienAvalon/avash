@@ -2827,7 +2827,7 @@ $("app-version").addEventListener("click", checkForUpdates);
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
 
-type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string };
+type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string };
 
 type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string };
 let rdpHostsList: RdpHostT[] = [];
@@ -2868,7 +2868,10 @@ async function openRdp(t: RdpTarget) {
   const tab = document.createElement("div");
   tab.className = "tab active";
   tab.innerHTML = `<span class="state connecting"></span><span class="label"></span><span class="close"></span>`;
-  tab.querySelector(".label")!.textContent = `🖥 ${t.user}@${t.host}`;
+  // Même règle que les onglets SSH : le nom de l'hôte enregistré, et à défaut
+  // « utilisateur@adresse » pour une connexion directe. Les deux protocoles se
+  // lisent ainsi de la même façon dans la barre d'onglets.
+  tab.querySelector(".label")!.textContent = t.name ?? `${t.user}@${t.host}`;
   tab.querySelector(".close")!.innerHTML = ic("x");
   tabs.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
   tabs.appendChild(tab);
@@ -3140,7 +3143,7 @@ async function connectRdpSaved(h: RdpHostT) {
       await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw }).catch(() => {});
     }
   }
-  await openRdp({ host: h.host, port: h.port, user: h.user, password: pw ?? "", hostId: h.id });
+  await openRdp({ host: h.host, port: h.port, user: h.user, password: pw ?? "", hostId: h.id, name: h.name });
 }
 
 function openRdpMenu(h: RdpHostT, e: MouseEvent) {

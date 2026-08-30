@@ -7,6 +7,27 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.2.7] - 2026-08-31
+
+### Corrigé
+
+- **Le redimensionnement de la fenêtre ralentissait fortement l'application**
+  sous Linux, sans qu'aucune session soit ouverte. Profilé : WebKitGTK compose
+  ses couches sur le processeur graphique et **réalloue ses tampons vidéo à
+  chaque image du geste** — 42 % du temps passait dans le noyau
+  (`ttm_bo_alloc_resource`, `ttm_bo_evict`, `drm_gem_handle_delete`). Le
+  compositing accéléré est désormais désactivé au démarrage sous Linux : la part
+  noyau tombe à 19 %, le geste redevient fluide, et le débit RDP est inchangé
+  (10 images/s contre 9, dans le bruit). Réglage surchargeable par la variable
+  d'environnement `WEBKIT_DISABLE_COMPOSITING_MODE`.
+
+### Modifié
+
+- **Les onglets RDP portent le même intitulé que les onglets SSH** : le nom du
+  bureau enregistré, et « utilisateur@adresse » pour une connexion directe.
+  Auparavant ils affichaient toujours « utilisateur@adresse » précédé d'une
+  icône, ce qui rendait les deux protocoles inutilement dissemblables.
+
 ## [0.2.6] - 2026-08-30
 
 ### Corrigé
@@ -177,7 +198,7 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.2.6...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.2.7...HEAD
 [0.2.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.0
 [0.2.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.1
 [0.2.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.2
@@ -185,3 +206,4 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
 [0.2.4]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.4
 [0.2.5]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.5
 [0.2.6]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.6
+[0.2.7]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.7
