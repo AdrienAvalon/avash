@@ -125,9 +125,15 @@ jobs:
       - name: tauri-driver
         run: cargo install tauri-driver --locked
 
+      # Même contrainte que dans le job « build » : avash-ui déclare le sidecar
+      # RDP en ressource embarquée, son binaire doit exister avant compilation.
       - name: Construire l'app (le binaire embarque le front)
         run: |
           (cd web && npm ci && npx vite build)
+          cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+          mkdir -p crates/avash-ui/binaries
+          cp rdp-sidecar/target/release/avash-rdp \
+             crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
           cargo build --release -p avash-ui
 
       - name: E2E — dépendances
