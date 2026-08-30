@@ -1430,6 +1430,24 @@ for (const type of ["keydown", "keyup"] as const) {
   window.addEventListener(type, (e) => { locksBits = readLocks(e); locksKnown = true; }, true);
 }
 
+/**
+ * État des verrous à transmettre au bureau distant, ou `null` si inconnu.
+ *
+ * On interroge d'abord le système : une session s'ouvre le plus souvent à la
+ * souris, sans qu'aucune touche n'ait été frappée — le navigateur serait alors
+ * muet. Les événements clavier servent de secours (et de source la plus fraîche
+ * pendant la frappe).
+ */
+async function currentLocks(): Promise<number | null> {
+  const duSysteme = await invoke<number | null>("keyboard_locks").catch(() => null);
+  if (duSysteme !== null && duSysteme !== undefined) {
+    locksBits = duSysteme;
+    locksKnown = true;
+    return duSysteme;
+  }
+  return locksKnown ? locksBits : null;
+}
+
 // ---------- Accessibilité des boîtes de dialogue ----------
 // Les modales s'ouvrent en posant la classe « open », depuis une quarantaine
 // d'endroits. Plutôt que d'instrumenter chaque appel, on observe la classe :
@@ -2721,15 +2739,31 @@ async function setupWindowControls() {
   $("win-min").innerHTML = ic("winMin");
   $("win-close").innerHTML = ic("winClose");
   const maxBtn = $("win-max");
+  // On ne réécrit le bouton que si l'état a réellement changé : réinjecter le
+  // même SVG force une réanalyse HTML pour rien.
+  let maxAffiche: boolean | null = null;
   const paintMax = async () => {
-    maxBtn.innerHTML = ic((await win.isMaximized()) ? "winRestore" : "winMax");
+    const maximisee = await win.isMaximized();
+    if (maximisee === maxAffiche) return;
+    maxAffiche = maximisee;
+    maxBtn.innerHTML = ic(maximisee ? "winRestore" : "winMax");
   };
   await paintMax();
   $("win-min").addEventListener("click", () => win.minimize());
   maxBtn.addEventListener("click", async () => { await win.toggleMaximize(); await paintMax(); });
   $("win-close").addEventListener("click", () => win.close());
   // L'état maximisé change aussi via double-clic système / raccourci.
-  void win.onResized(() => { void paintMax(); });
+  //
+  // onResized se déclenche à CHAQUE image pendant qu'on tire la fenêtre. Y
+  // enchaîner un aller-retour IPC (isMaximized) saturait le pont avec le
+  // backend et figeait l'interface au bout de quelques secondes de glissé —
+  // sans même qu'une session soit ouverte. L'état maximisé ne peut changer
+  // qu'au terme du geste : on attend que le redimensionnement se pose.
+  let repeindreMax: number | undefined;
+  void win.onResized(() => {
+    window.clearTimeout(repeindreMax);
+    repeindreMax = window.setTimeout(() => void paintMax(), 150);
+  });
   // Fenêtre en arrière-plan : geler les animations (CPU au repos ~0).
   void win.onFocusChanged(({ payload: focused }) => {
     document.body.classList.toggle("win-blur", !focused);
@@ -2921,7 +2955,7 @@ async function openRdp(t: RdpTarget) {
   // Focus du bureau distant = l'utilisateur va sans doute coller : on lui pousse
   // le presse-papiers local à jour (fiabilise le collage local->distant).
   canvas.addEventListener("focus", () => {
-    if (locksKnown) send([10, locksBits]);
+    void currentLocks().then((l) => { if (l !== null) send([10, l]); });
     void pushLocalClipboard(true);
   });
 
@@ -3008,7 +3042,7 @@ async function openRdp(t: RdpTarget) {
         if (snap) ctx.drawImage(snap, 0, 0, rdpW, rdpH);
         tab.querySelector(".state")!.className = "state live";
         // Aligner les verrous du bureau distant sur ceux du poste.
-        if (locksKnown) send([10, locksBits]);
+        void currentLocks().then((l) => { if (l !== null) send([10, l]); });
         // Renégociation terminée : si la fenêtre a encore bougé entre-temps, on
         // applique la taille finale (une seule fois, évite les cascades).
         resizeInFlight = false;

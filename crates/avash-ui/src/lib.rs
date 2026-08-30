@@ -26,6 +26,7 @@ pub fn run() {
             commands::list_hosts,
             commands::run_command,
             commands::open_external,
+            commands::keyboard_locks,
             commands::pty_open,
             commands::host_needs_password,
             commands::pty_open_manual,

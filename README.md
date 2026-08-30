@@ -7,7 +7,7 @@
 **Gestionnaire graphique de connexions SSH et RDP — natif, rapide, sécurisé.**
 
 [![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.3-8b7cf6.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.4-8b7cf6.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-223%20verts-brightgreen.svg)](#qualité)
 
 </div>
@@ -49,8 +49,8 @@ vingtaine de mégaoctets et démarre en une fraction de seconde.
 ### Linux (AppImage)
 
 ```bash
-chmod +x Avash_0.2.3_amd64.AppImage
-./Avash_0.2.3_amd64.AppImage
+chmod +x Avash_0.2.4_amd64.AppImage
+./Avash_0.2.4_amd64.AppImage
 ```
 
 ### Windows
@@ -71,11 +71,11 @@ Deux moyens de vérifier qu'un fichier téléchargé est bien le nôtre :
 
 ```bash
 # 1. Empreinte : compare avec le fichier SHA256SUMS publié avec la version
-sha256sum Avash_0.2.3_x64-setup.exe
+sha256sum Avash_0.2.4_x64-setup.exe
 
 # 2. Provenance : preuve cryptographique que le binaire vient de ce dépôt,
 #    de ce commit, produit par notre chaîne d'intégration continue
-gh attestation verify Avash_0.2.3_x64-setup.exe --repo AdrienAvalon/avash
+gh attestation verify Avash_0.2.4_x64-setup.exe --repo AdrienAvalon/avash
 ```
 
 La seconde vérification est plus forte que la première : elle ne dit pas
