@@ -607,6 +607,7 @@ pub fn set_host_folder(alias: &str, folder: &str) -> anyhow::Result<()> {
 pub fn set_host_folder_at(path: &std::path::Path, alias: &str, folder: &str) -> anyhow::Result<()> {
     let alias = alias.trim();
     let folder = folder.trim().trim_matches('/');
+    validate_config_value("Folder", folder)?;
     let content = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("Lecture de {} : {e}", path.display()))?;
 
@@ -714,6 +715,10 @@ fn validate_host(host: &SshHost) -> anyhow::Result<()> {
     if let Some(v) = &host.proxy_jump {
         validate_config_value("ProxyJump", v)?;
     }
+    for t in &host.tags {
+        validate_config_value("Tags", t)?;
+    }
+    validate_config_value("Folder", &host.folder)?;
     Ok(())
 }
 
@@ -779,6 +784,20 @@ Host autre
         let t2 = std::fs::read_to_string(&path).unwrap();
         assert!(!t2.contains("#Folder"), "folder non retiré : {t2}");
         assert!(t2.contains("ForwardAgent yes"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_host_folder_refuse_une_injection_par_saut_de_ligne() {
+        let dir = std::env::temp_dir().join(format!("avash-inj-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config");
+        std::fs::write(&path, "Host prod\n    HostName 10.0.0.1\n").unwrap();
+        // Un dossier contenant un saut de ligne tenterait d'injecter une directive.
+        let r = set_host_folder_at(&path, "prod", "web\n    ProxyCommand nc evil 22");
+        assert!(r.is_err(), "l'injection aurait dû être refusée");
+        let t = std::fs::read_to_string(&path).unwrap();
+        assert!(!t.contains("ProxyCommand"), "directive injectée : {t}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

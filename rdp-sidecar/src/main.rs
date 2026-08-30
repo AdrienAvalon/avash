@@ -46,6 +46,7 @@ use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_tokio::single_sequence_step;
 use ironrdp_tokio::FramedWrite as _;
+use std::io::BufRead as _;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -120,7 +121,11 @@ impl CliprdrBackend for ClipBackend {
     fn on_format_data_response(&mut self, resp: FormatDataResponse<'_>) {
         if !resp.is_error() {
             if let Ok(text) = resp.to_unicode_string() {
-                let _ = self.tx.send(ClipReq::RemoteText(text));
+                // Plafond anti-abus : un serveur ne sature pas la mémoire via un
+                // presse-papiers géant (le texte normal reste très en dessous).
+                if text.len() <= 8 * 1024 * 1024 {
+                    let _ = self.tx.send(ClipReq::RemoteText(text));
+                }
             }
         }
     }
@@ -160,13 +165,28 @@ impl Pa {
     }
 }
 
+/// Mot de passe : depuis `-p/--password` s'il est fourni (utile pour `--shot`),
+/// sinon lu sur la première ligne de stdin (le parent le transmet ainsi pour
+/// ne pas l'exposer dans /proc/<pid>/cmdline).
+fn read_password(a: &Pa) -> Result<String> {
+    if let Some(p) = a.opt("-p").or_else(|| a.opt("--password")) {
+        return Ok(p);
+    }
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .context("lecture du mot de passe sur stdin")?;
+    Ok(line.trim_end_matches(['\n', '\r']).to_string())
+}
+
 fn parse_args() -> Result<Args> {
     let a = Pa(std::env::args().skip(1).collect());
     Ok(Args {
         host: a.opt("--host").context("argument requis : --host")?,
         port: a.opt("--port").and_then(|s| s.parse().ok()).unwrap_or(3389),
         user: a.req2("-u", "--username")?,
-        pass: a.req2("-p", "--password")?,
+        pass: read_password(&a)?,
         domain: a.opt("--domain"),
         width: a
             .opt("--width")

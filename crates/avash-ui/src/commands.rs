@@ -1655,71 +1655,26 @@ pub fn folder_create(path: String) -> Result<Vec<String>, String> {
 /// racine, puis le dossier et ses descendants sont retirés du registre.
 #[tauri::command]
 pub fn folder_delete(path: String) -> Result<Vec<String>, String> {
-    let norm = avash::folders::normalize(&path);
-    if norm.is_empty() {
-        return Err("Dossier invalide.".into());
-    }
-    let prefix = format!("{norm}/");
-    if let Ok(hosts) = avash::parse_ssh_config() {
-        for h in hosts {
-            if h.folder == norm || h.folder.starts_with(&prefix) {
-                avash::set_host_folder(&h.alias, "").map_err(|e| format!("{e:#}"))?;
-            }
-        }
-    }
-    if let Ok(mut rdps) = avash::rdphost::load_hosts() {
-        let mut changed = false;
-        for r in &mut rdps {
-            if r.folder == norm || r.folder.starts_with(&prefix) {
-                r.folder = String::new();
-                changed = true;
-            }
-        }
-        if changed {
-            avash::rdphost::save_hosts_to(&avash::rdphost::hosts_path(), &rdps)
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    avash::folders::remove_in(&avash::folders::folders_path(), &norm).map_err(|e| format!("{e:#}"))
+    avash::folders::delete_core(
+        &avash::ssh_config_path(),
+        &avash::rdphost::hosts_path(),
+        &avash::folders::folders_path(),
+        &path,
+    )
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// Renomme un dossier et remappe ses hôtes (et sous-dossiers).
 #[tauri::command]
 pub fn folder_rename(from: String, to: String) -> Result<Vec<String>, String> {
-    let from = avash::folders::normalize(&from);
-    let to = avash::folders::normalize(&to);
-    if from.is_empty() || to.is_empty() {
-        return Err("Dossier invalide.".into());
-    }
-    let prefix = format!("{from}/");
-    if let Ok(hosts) = avash::parse_ssh_config() {
-        for h in hosts {
-            if h.folder == from {
-                avash::set_host_folder(&h.alias, &to).map_err(|e| format!("{e:#}"))?;
-            } else if let Some(rest) = h.folder.strip_prefix(&prefix) {
-                avash::set_host_folder(&h.alias, &format!("{to}/{rest}"))
-                    .map_err(|e| format!("{e:#}"))?;
-            }
-        }
-    }
-    if let Ok(mut rdps) = avash::rdphost::load_hosts() {
-        let mut changed = false;
-        for r in &mut rdps {
-            if r.folder == from {
-                r.folder.clone_from(&to);
-                changed = true;
-            } else if let Some(rest) = r.folder.strip_prefix(&prefix) {
-                r.folder = format!("{to}/{rest}");
-                changed = true;
-            }
-        }
-        if changed {
-            avash::rdphost::save_hosts_to(&avash::rdphost::hosts_path(), &rdps)
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    avash::folders::rename_in(&avash::folders::folders_path(), &from, &to)
-        .map_err(|e| format!("{e:#}"))
+    avash::folders::rename_core(
+        &avash::ssh_config_path(),
+        &avash::rdphost::hosts_path(),
+        &avash::folders::folders_path(),
+        &from,
+        &to,
+    )
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// Range un hôte SSH dans un dossier (déplacement). Le dossier cible est

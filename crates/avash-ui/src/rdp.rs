@@ -68,18 +68,26 @@ pub async fn rdp_open(
             &port.unwrap_or(3389).to_string(),
             "-u",
             &user,
-            "-p",
-            &password,
             "--width",
             &width.to_string(),
             "--height",
             &height.to_string(),
         ])
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Lancement du sidecar RDP impossible : {e}"))?;
+
+    // Mot de passe transmis par stdin plutôt qu'en argument : évite sa fuite via
+    // /proc/<pid>/cmdline, lisible par les autres utilisateurs locaux.
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt as _;
+        stdin
+            .write_all(format!("{password}\n").as_bytes())
+            .await
+            .map_err(|e| format!("Envoi du mot de passe au sidecar : {e}"))?;
+    }
 
     let stdout = child.stdout.take().ok_or("stdout sidecar indisponible")?;
     let mut stderr = child.stderr.take().ok_or("stderr sidecar indisponible")?;

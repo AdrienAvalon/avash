@@ -1686,15 +1686,26 @@ window.addEventListener("keydown", (e) => {
 // ---------- Raccourcis d'onglets ----------
 
 /** Liste ordonnee des identifiants de session, pour naviguer par position. */
-function sessionIds(): number[] {
-  return [...state.sessions.keys()];
+/** Tous les onglets (SSH + RDP) dans l'ordre du DOM. */
+function orderedTabs(): { kind: "ssh" | "rdp"; id: number }[] {
+  const byEl = new Map<HTMLElement, { kind: "ssh" | "rdp"; id: number }>();
+  for (const [id, sess] of state.sessions) byEl.set(sess.tab, { kind: "ssh", id });
+  for (const [id, sess] of rdpSessions) byEl.set(sess.tab, { kind: "rdp", id });
+  const out: { kind: "ssh" | "rdp"; id: number }[] = [];
+  for (const el of $("tabs").querySelectorAll<HTMLElement>(".tab")) {
+    const t = byEl.get(el);
+    if (t) out.push(t);
+  }
+  return out;
 }
-
-function cycleSession(step: number) {
-  const ids = sessionIds();
-  if (ids.length < 2) return;
-  const i = ids.indexOf(state.active ?? ids[0]);
-  focusSession(ids[(i + step + ids.length) % ids.length]);
+function focusTab(t: { kind: "ssh" | "rdp"; id: number }) {
+  if (t.kind === "ssh") focusSession(t.id);
+  else focusRdp(t.id);
+}
+function closeActiveTab() {
+  if (state.active === null) return;
+  if (rdpSessions.has(state.active)) closeRdp(state.active);
+  else closeSession(state.active);
 }
 
 window.addEventListener("keydown", (e) => {
@@ -1706,21 +1717,24 @@ window.addEventListener("keydown", (e) => {
 
   if (e.key.toLowerCase() === "w" && state.active !== null) {
     e.preventDefault();
-    closeSession(state.active);
+    closeActiveTab();
     return;
   }
+  const tabs = orderedTabs();
   if (e.key === "Tab") {
+    if (tabs.length < 2) return;
     e.preventDefault();
-    cycleSession(e.shiftKey ? -1 : 1);
+    const i = tabs.findIndex((t) => t.id === state.active);
+    const step = e.shiftKey ? -1 : 1;
+    focusTab(tabs[(Math.max(0, i) + step + tabs.length) % tabs.length]);
     return;
   }
-  // Ctrl+1..9 : acces direct a un onglet par sa position.
+  // Ctrl+1..9 : acces direct a un onglet (SSH ou RDP) par sa position.
   if (/^[1-9]$/.test(e.key)) {
-    const ids = sessionIds();
     const idx = Number(e.key) - 1;
-    if (idx < ids.length) {
+    if (idx < tabs.length) {
       e.preventDefault();
-      focusSession(ids[idx]);
+      focusTab(tabs[idx]);
     }
   }
 });
@@ -1873,7 +1887,11 @@ ctxMenu().addEventListener("click", (e) => {
 
 // ---------- Menu contextuel d'un hôte ----------
 
+function closeAllContextMenus() {
+  for (const id of ["host-context", "rdp-context", "folder-context"]) $(id).classList.remove("open");
+}
 function openHostMenu(h: Host, e: MouseEvent) {
+  closeAllContextMenus();
   const m = $("host-context");
   m.dataset.alias = h.alias;
   m.style.left = `${e.clientX}px`;
@@ -1957,6 +1975,7 @@ window.addEventListener("keydown", (e) => {
   if ($("rdp-edit-modal").classList.contains("open")) closeEditRdp();
   if ($("move-modal").classList.contains("open")) closeMoveModal();
   if ($("tunnels-modal").classList.contains("open")) tunnelsClose();
+  if (snippetsModal().classList.contains("open")) snippetsClose();
 });
 
 $("edit-form").addEventListener("submit", async (e) => {
@@ -2745,7 +2764,14 @@ async function openRdp(t: RdpTarget) {
     return [x, y];
   };
   const le16 = (n: number) => [n & 0xff, (n >> 8) & 0xff];
-  canvas.addEventListener("mousemove", (e) => { const [x, y] = pos(e); send([1, ...le16(x), ...le16(y)]); });
+  // Mouvements souris throttlés au rAF : un seul paquet par frame d'affichage.
+  let moveX = 0, moveY = 0, movePending = false;
+  canvas.addEventListener("mousemove", (e) => {
+    [moveX, moveY] = pos(e);
+    if (movePending) return;
+    movePending = true;
+    requestAnimationFrame(() => { movePending = false; send([1, ...le16(moveX), ...le16(moveY)]); });
+  });
   canvas.addEventListener("mousedown", (e) => { e.preventDefault(); canvas.focus(); const [x, y] = pos(e); send([2, e.button, 1, ...le16(x), ...le16(y)]); });
   canvas.addEventListener("mouseup", (e) => { const [x, y] = pos(e); send([2, e.button, 0, ...le16(x), ...le16(y)]); });
   // Clic droit : uniquement pour le bureau distant. On empêche le menu du
@@ -2805,10 +2831,14 @@ async function openRdp(t: RdpTarget) {
       const dv = new DataView(buf);
       const kind = dv.getUint8(0);
       if (kind === 2) {
-        const x = dv.getUint16(1, true), y = dv.getUint16(3, true);
-        const fw = dv.getUint16(5, true), fh = dv.getUint16(7, true);
-        ctx.putImageData(new ImageData(new Uint8ClampedArray(buf, 9, fw * fh * 4), fw, fh), x, y);
-        // ACK de rendu → le sidecar cadence l'envoi suivant (anti-lag).
+        try {
+          const x = dv.getUint16(1, true), y = dv.getUint16(3, true);
+          const fw = dv.getUint16(5, true), fh = dv.getUint16(7, true);
+          ctx.putImageData(new ImageData(new Uint8ClampedArray(buf, 9, fw * fh * 4), fw, fh), x, y);
+        } catch (err) {
+          console.warn("frame RDP invalide", err);
+        }
+        // ACK de rendu (même si la frame était invalide, pour ne pas figer le flux).
         if (ws.readyState === WebSocket.OPEN) ws.send(RDP_ACK);
       } else if (kind === 7) {
         const fps = dv.getUint16(1, true);
@@ -2916,6 +2946,7 @@ async function connectRdpSaved(h: RdpHostT) {
 }
 
 function openRdpMenu(h: RdpHostT, e: MouseEvent) {
+  closeAllContextMenus();
   const m = $("rdp-context");
   m.dataset.id = h.id;
   m.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
@@ -3151,7 +3182,11 @@ function allFolders(): string[] {
 }
 
 async function createFolder(parent: string) {
-  const name = prompt(parent ? `Nouveau sous-dossier dans \u00ab ${parent} \u00bb :` : "Nom du nouveau dossier :");
+  const name = await askText(
+    parent ? "Nouveau sous-dossier" : "Nouveau dossier",
+    parent ? `Dans \u00ab ${parent} \u00bb` : "Nom du dossier",
+    "",
+  );
   if (!name || !name.trim()) return;
   const path = parent ? `${parent}/${name.trim()}` : name.trim();
   try {
@@ -3167,6 +3202,7 @@ async function createFolder(parent: string) {
 $("new-folder-btn").addEventListener("click", () => void createFolder(""));
 
 function openFolderMenu(path: string, e: MouseEvent) {
+  closeAllContextMenus();
   const m = $("folder-context");
   m.dataset.path = path;
   m.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
@@ -3183,7 +3219,7 @@ $("folder-context").addEventListener("click", async (e) => {
     await createFolder(path);
   } else if (act === "rename") {
     const leaf = path.split("/").pop() ?? path;
-    const name = prompt(`Renommer le dossier \u00ab ${leaf} \u00bb :`, leaf);
+    const name = await askText("Renommer le dossier", `Nouveau nom de \u00ab ${leaf} \u00bb`, leaf);
     if (!name || !name.trim() || name.trim() === leaf) return;
     const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
     const to = parent ? `${parent}/${name.trim()}` : name.trim();
@@ -3222,6 +3258,7 @@ function openMoveModal(kind: string, id: string) {
   addRow("\u2196 Racine", "");
   for (const f of allFolders()) addRow(f, f);
   $("move-modal").classList.add("open");
+  setTimeout(() => ($("move-new") as HTMLInputElement).focus(), 30);
 }
 function closeMoveModal() {
   $("move-modal").classList.remove("open");

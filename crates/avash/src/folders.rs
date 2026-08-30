@@ -31,7 +31,7 @@ pub fn folders_path() -> PathBuf {
 pub fn normalize(path: &str) -> String {
     path.split('/')
         .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && *s != "." && *s != ".." && !s.contains(['\n', '\r', '\0']))
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -166,6 +166,101 @@ pub fn rename_in(file: &Path, from: &str, to: &str) -> Result<Vec<String>> {
     Ok(all)
 }
 
+/// Nouveau dossier d'un hôte lors d'un renommage `from`→`to`. `None` = inchangé.
+#[must_use]
+pub fn remap(current: &str, from: &str, to: &str) -> Option<String> {
+    if current == from {
+        Some(to.to_string())
+    } else {
+        current
+            .strip_prefix(&format!("{from}/"))
+            .map(|rest| format!("{to}/{rest}"))
+    }
+}
+
+/// Vrai si `current` est le dossier `path` ou un de ses sous-dossiers.
+#[must_use]
+pub fn is_under(current: &str, path: &str) -> bool {
+    current == path || current.starts_with(&format!("{path}/"))
+}
+
+fn read_optional(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(c) => Ok(Some(c)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow::anyhow!("Lecture de {} : {e}", path.display())),
+    }
+}
+
+/// Applique un remap aux dossiers des hôtes RDP d'un fichier donné.
+fn remap_rdp(rdp: &Path, f: impl Fn(&str) -> Option<String>) -> Result<()> {
+    let Ok(mut hosts) = crate::rdphost::load_hosts_from(rdp) else {
+        return Ok(()); // fichier absent/illisible : rien à remapper
+    };
+    let mut changed = false;
+    for h in &mut hosts {
+        if let Some(nf) = f(&h.folder) {
+            h.folder = nf;
+            changed = true;
+        }
+    }
+    if changed {
+        crate::rdphost::save_hosts_to(rdp, &hosts)?;
+    }
+    Ok(())
+}
+
+/// Renomme un dossier et remappe les hôtes SSH + RDP (chemins explicites, testable).
+///
+/// Les blocs `Host` à alias multiples (non modifiables) sont ignorés sans faire
+/// échouer l'opération. Renvoie la liste des dossiers restante.
+///
+/// # Errors
+/// Si un fichier existant est illisible/inscriptible, ou la cible est vide.
+pub fn rename_core(
+    ssh: &Path,
+    rdp: &Path,
+    reg: &Path,
+    from: &str,
+    to: &str,
+) -> Result<Vec<String>> {
+    let from = normalize(from);
+    let to = normalize(to);
+    if from.is_empty() || to.is_empty() {
+        anyhow::bail!("Dossier invalide.");
+    }
+    if let Some(content) = read_optional(ssh)? {
+        for host in crate::parse_config_str(&content) {
+            if let Some(nf) = remap(&host.folder, &from, &to) {
+                let _ = crate::set_host_folder_at(ssh, &host.alias, &nf);
+            }
+        }
+    }
+    remap_rdp(rdp, |f| remap(f, &from, &to))?;
+    rename_in(reg, &from, &to)
+}
+
+/// Supprime un dossier : ses hôtes (et ceux des sous-dossiers) reviennent à la
+/// racine, puis le dossier et ses descendants quittent le registre.
+///
+/// # Errors
+/// idem [`rename_core`].
+pub fn delete_core(ssh: &Path, rdp: &Path, reg: &Path, path: &str) -> Result<Vec<String>> {
+    let norm = normalize(path);
+    if norm.is_empty() {
+        anyhow::bail!("Dossier invalide.");
+    }
+    if let Some(content) = read_optional(ssh)? {
+        for host in crate::parse_config_str(&content) {
+            if is_under(&host.folder, &norm) {
+                let _ = crate::set_host_folder_at(ssh, &host.alias, "");
+            }
+        }
+    }
+    remap_rdp(rdp, |f| is_under(f, &norm).then(String::new))?;
+    remove_in(reg, &norm)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +304,97 @@ mod tests {
     fn normalize_nettoie() {
         assert_eq!(normalize(" /a// b /c/ "), "a/b/c");
         assert_eq!(normalize("///"), "");
+    }
+
+    #[test]
+    fn normalize_rejette_dot_dot_absolu_et_sauts_de_ligne() {
+        assert_eq!(normalize("../a"), "a");
+        assert_eq!(normalize("a/../b"), "a/b");
+        assert_eq!(normalize("/etc/passwd"), "etc/passwd");
+        assert_eq!(normalize("a/./b"), "a/b");
+        // Un segment contenant un saut de ligne (tentative d'injection) est retiré.
+        assert_eq!(normalize("prod\nProxyCommand x"), "");
+        assert_eq!(normalize("ok/bad\nx/end"), "ok/end");
+    }
+
+    fn scratch() -> PathBuf {
+        let d = std::env::temp_dir().join(format!("avash-core-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn rename_core_remappe_ssh_et_rdp_et_ignore_multi_alias() {
+        let d = scratch();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        std::fs::write(
+            &ssh,
+            "Host a\n    HostName 1\n    #Folder: prod\n\nHost b\n    HostName 2\n    #Folder: prod/web\n\nHost c\n    HostName 3\n\nHost x y\n    HostName 4\n    #Folder: prod\n",
+        )
+        .unwrap();
+        let mut r = crate::rdphost::RdpHost::new("AD", "10.0.0.1", 3389, "u", 0, 0);
+        r.folder = "prod".into();
+        crate::rdphost::save_hosts_to(&rdp, &[r]).unwrap();
+        create_in(&reg, "prod/web").unwrap();
+
+        let regs = rename_core(&ssh, &rdp, &reg, "prod", "production").unwrap();
+
+        let hosts = crate::parse_config_str(&std::fs::read_to_string(&ssh).unwrap());
+        let f = |al: &str| {
+            hosts
+                .iter()
+                .find(|h| h.alias == al)
+                .map(|h| h.folder.clone())
+        };
+        assert_eq!(f("a").as_deref(), Some("production"));
+        assert_eq!(f("b").as_deref(), Some("production/web"));
+        assert_eq!(f("c").as_deref(), Some("")); // hors sous-arbre : inchangé
+        assert_eq!(
+            crate::rdphost::load_hosts_from(&rdp).unwrap()[0].folder,
+            "production"
+        );
+        assert!(
+            regs.contains(&"production".to_string())
+                && regs.contains(&"production/web".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn delete_core_ramene_a_la_racine() {
+        let d = scratch();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        std::fs::write(
+            &ssh,
+            "Host a\n    HostName 1\n    #Folder: prod\n\nHost b\n    HostName 2\n    #Folder: prod/web\n\nHost c\n    HostName 3\n    #Folder: autre\n",
+        )
+        .unwrap();
+        let mut r = crate::rdphost::RdpHost::new("AD", "10.0.0.1", 3389, "u", 0, 0);
+        r.folder = "prod/web".into();
+        crate::rdphost::save_hosts_to(&rdp, &[r]).unwrap();
+        create_in(&reg, "prod/web").unwrap();
+        create_in(&reg, "autre").unwrap();
+
+        let regs = delete_core(&ssh, &rdp, &reg, "prod").unwrap();
+
+        let hosts = crate::parse_config_str(&std::fs::read_to_string(&ssh).unwrap());
+        let f = |al: &str| hosts.iter().find(|h| h.alias == al).unwrap().folder.clone();
+        assert_eq!(f("a"), "");
+        assert_eq!(f("b"), "");
+        assert_eq!(f("c"), "autre"); // hors du dossier supprimé : intact
+        assert_eq!(crate::rdphost::load_hosts_from(&rdp).unwrap()[0].folder, "");
+        assert!(!regs.iter().any(|p| p.starts_with("prod")));
+        assert!(regs.contains(&"autre".to_string()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cores_survivent_a_l_absence_de_fichiers() {
+        let d = scratch();
+        // Ni ssh ni rdp n'existent : l'opération ne doit pas échouer.
+        let (ssh, rdp, reg) = (d.join("nope"), d.join("nope.yaml"), d.join("folders.yaml"));
+        create_in(&reg, "prod").unwrap();
+        assert!(delete_core(&ssh, &rdp, &reg, "prod").is_ok());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
