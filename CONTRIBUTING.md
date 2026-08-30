@@ -23,7 +23,7 @@ place l'environnement, lancer les tests et proposer des changements.
 ## Installation
 
 ```bash
-git clone <url-du-depot> avash
+git clone https://github.com/AdrienAvalon/avash.git avash
 cd avash
 
 # Dépendances du front

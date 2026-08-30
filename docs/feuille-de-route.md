@@ -6,6 +6,8 @@ intentions : chaque objectif est vérifiable.
 
 Dernière révision : 30 août 2026 (version 0.2.0).
 
+Dépôts : [GitHub](https://github.com/AdrienAvalon/avash) (public) · GitLab interne (privé).
+
 ---
 
 ## Le cap
@@ -30,7 +32,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 30/08/2026 |
 |---|---|
-| Tests | 139 Rust · 61 front · 23 bout en bout |
+| Tests | 139 Rust · 61 front · 24 bout en bout |
 | Binaire Linux | 18,3 Mo (`codegen-units=1`, LTO fin) |
 | Paquet front | 577 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) — Windows configuré mais **jamais construit** |
@@ -48,10 +50,11 @@ boîtes de dialogue, cadence adaptative RDP, arborescence de dossiers.
 
 ### 1.1 Réparer la mise à jour automatique
 
-`tauri.conf.json` pointe vers `github.com/vela-kern/avash`, **un dépôt qui n'existe
-pas** : la vérification de mise à jour échoue nécessairement. À corriger dès que
-l'URL réelle est connue, puis à vérifier en conditions réelles (publier une 0.2.1
-et confirmer que la 0.2.0 la détecte, la télécharge et redémarre).
+L'endpoint pointait vers un dépôt inexistant (`vela-kern/avash`) : la vérification
+ne pouvait pas aboutir. **Corrigé** — il vise désormais
+`github.com/AdrienAvalon/avash`. Reste à **vérifier en conditions réelles** :
+publier une 0.2.1 et confirmer qu'une 0.2.0 installée la détecte, la télécharge
+et redémarre. Tant que ce n'est pas fait, la fonctionnalité est présumée, pas prouvée.
 
 *Fini quand* : une version installée détecte et applique la suivante.
 
@@ -64,13 +67,12 @@ l'installeur testé sur une vraie machine — le sidecar RDP, le trousseau
 
 *Fini quand* : un installeur Windows se lance, ouvre une session SSH et un bureau RDP.
 
-### 1.3 Isoler l'état entre les fichiers de test
+### 1.3 Isoler l'état entre les fichiers de test — **fait**
 
-Les scénarios bout en bout partagent le même bac à sable : un fichier qui déplace
-un hôte influence les suivants. Cela n'a pas encore provoqué d'échec réel, mais la
-suite est sensible à l'ordre — un piège classique qui se paie plus tard.
-
-*Fini quand* : chaque fichier de spécifications part d'un état propre.
+Les scénarios partageaient un seul bac à sable : un fichier qui créait un dossier
+ou déplaçait un hôte faussait les suivants. Corrigé — le bac à sable est remis à
+son état semé avant chaque fichier, et un garde-fou (`isolation.spec.js`) le
+vérifie. Il a été vu échouer avant correction, conformément à la règle.
 
 ---
 
@@ -150,7 +152,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 1 | 3 |
-| Scénarios bout en bout | 23 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 24 | en hausse à chaque fonctionnalité |
 | Couverture des tests | non mesurée | mesurée, puis en hausse |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |

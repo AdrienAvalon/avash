@@ -62,7 +62,7 @@ Prérequis : Rust stable, Node.js 22+, et les dépendances système de Tauri.
 sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
     libayatana-appindicator3-dev librsvg2-dev patchelf
 
-git clone <url-du-depot> avash && cd avash
+git clone https://github.com/AdrienAvalon/avash.git avash && cd avash
 (cd web && npm install && npx vite build)   # le binaire embarque le front
 cargo build --release -p avash-ui
 ./target/release/avash-ui

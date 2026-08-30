@@ -33,7 +33,7 @@
       "nsis"
     ],
     "publisher": "Adrien Cros",
-    "homepage": "https://github.com/vela-kern/avash",
+    "homepage": "https://github.com/AdrienAvalon/avash",
     "category": "Utility",
     "copyright": "Copyright © 2026 Adrien Cros. MIT.",
     "licenseFile": "../../LICENSE",
@@ -61,7 +61,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5M0RGQ0EyRUE1RjFFMzkKUldRNUhsL3Fvdnc5K2RCTHVLZklWLzYrazR5VDNoL1Q1UVBUWEVlMW9lTWVtMTBSWWVJemZ6VEEK",
       "endpoints": [
-        "https://github.com/vela-kern/avash/releases/latest/download/latest.json"
+        "https://github.com/AdrienAvalon/avash/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

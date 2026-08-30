@@ -80,3 +80,6 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
 - Mots de passe stockés uniquement dans le trousseau du système ; mot de passe
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
+
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.0
