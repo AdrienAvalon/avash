@@ -86,6 +86,7 @@ fn save_to(path: &Path, folders: &[String]) -> Result<()> {
     let tmp = path.with_extension("yaml.tmp");
     std::fs::write(&tmp, yaml).with_context(|| format!("Écriture de {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("Renommage vers {}", path.display()))?;
+    crate::restreindre_au_proprietaire(path);
     Ok(())
 }
 
@@ -267,6 +268,23 @@ mod tests {
 
     fn tmp() -> PathBuf {
         std::env::temp_dir().join(format!("avash-folders-{}.yaml", rand::random::<u64>()))
+    }
+
+    /// Le registre décrit l'infrastructure (dossiers, donc organisation des
+    /// hôtes) : il ne doit pas être lisible par les autres comptes de la
+    /// machine. Il héritait auparavant de l'umask, souvent 0644.
+    #[cfg(unix)]
+    #[test]
+    fn le_registre_n_est_lisible_que_par_son_proprietaire() {
+        use std::os::unix::fs::PermissionsExt;
+        let _h = crate::testutil::temp_home();
+        create("prod/web").unwrap();
+        let droits = std::fs::metadata(folders_path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(droits, 0o600, "droits du registre : {droits:o}");
     }
 
     #[test]

@@ -80,6 +80,14 @@ jobs:
       - name: Rust — tests
         run: cargo test --workspace --all-targets
 
+      # Absent jusqu'ici du CI, et le sidecar RDP n'était audité nulle part
+      # alors qu'il est compilé et livré dans le bundle.
+      - name: Rust — audit des dépendances
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --ignore RUSTSEC-2023-0071
+          cargo audit --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
+
       - name: Rust — build release
         run: cargo build --release -p avash-ui
 

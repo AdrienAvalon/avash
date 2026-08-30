@@ -148,6 +148,7 @@ pub fn save_snippets_to(path: &Path, snippets: &[Snippet]) -> Result<()> {
     let tmp = path.with_extension("yaml.tmp");
     std::fs::write(&tmp, serde_yaml::to_string(snippets)?)?;
     std::fs::rename(&tmp, path)?;
+    crate::restreindre_au_proprietaire(path);
     Ok(())
 }
 

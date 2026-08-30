@@ -404,6 +404,7 @@ pub fn save_defs_to(path: &Path, defs: &[TunnelDef]) -> Result<()> {
     let tmp = path.with_extension("yaml.tmp");
     std::fs::write(&tmp, serde_yaml::to_string(defs)?)?;
     std::fs::rename(&tmp, path)?;
+    crate::restreindre_au_proprietaire(path);
     Ok(())
 }
 

@@ -100,6 +100,7 @@ pub fn save_hosts_to(path: &Path, hosts: &[RdpHost]) -> Result<()> {
     let tmp = path.with_extension("yaml.tmp");
     std::fs::write(&tmp, serde_yaml::to_string(hosts)?)?;
     std::fs::rename(&tmp, path)?;
+    crate::restreindre_au_proprietaire(path);
     Ok(())
 }
 

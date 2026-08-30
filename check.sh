@@ -41,6 +41,10 @@ if cargo audit --version >/dev/null 2>&1; then
   # « unmaintained » : ils viennent tous de la pile GTK que Tauri embarque,
   # hors de notre controle.
   run "audit securite"     "$ROOT" cargo audit --ignore RUSTSEC-2023-0071
+  # Le sidecar RDP est hors du workspace (conflit de versions pre-publication
+  # entre IronRDP et russh) mais il est COMPILE ET LIVRE : son Cargo.lock doit
+  # etre audite lui aussi, sans quoi ses dependances ne sont jamais regardees.
+  run "audit sidecar RDP"  "$ROOT" cargo audit --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
 else
   printf '  \033[33m~\033[0m %s\n' "audit securite (cargo-audit absent)"
 fi

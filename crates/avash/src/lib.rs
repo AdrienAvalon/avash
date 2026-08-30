@@ -700,6 +700,27 @@ pub fn render_host_block(host: &SshHost) -> String {
 /// pourraient contenir un `\n` suivi d'une directive arbitraire — dont
 /// `ProxyCommand`, qu'OpenSSH executerait a la connexion (exec de commande).
 /// Seul l'alias etait protege ; ce trou concernait les trois autres champs.
+/// Restreint un fichier de configuration à son seul propriétaire.
+///
+/// Ces fichiers ne contiennent pas de mot de passe — ceux-ci vivent dans le
+/// trousseau — mais bien l'inventaire de l'infrastructure : bureaux RDP,
+/// tunnels, dossiers, snippets, donc utilisateurs, hôtes internes, ports et
+/// commandes d'administration. Ils héritaient de l'umask (souvent lisible par
+/// tous), alors que `~/.ssh/config` est déjà resserré depuis longtemps. Sans
+/// effet sous Windows, où les droits viennent des ACL du profil.
+pub fn restreindre_au_proprietaire(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 fn validate_config_value(label: &str, value: &str) -> anyhow::Result<()> {
     if value.contains(['\n', '\r', '\0']) {
         return Err(anyhow::anyhow!(

@@ -1644,7 +1644,31 @@ pub fn host_update(
             .collect(),
         folder: avash::folders::normalize(&folder.unwrap_or_default()),
     };
-    avash::update_host(old_alias.trim(), &host).map_err(|e| format!("{e:#}"))
+    // Identifiant du trousseau AVANT modification : il dérive de user@addr:port,
+    // pas de l'alias. Changer l'adresse ou l'utilisateur d'un hôte laissait donc
+    // le secret sous l'ancien identifiant — redemandé à chaque connexion, sans
+    // explication, l'ancienne entrée restant orpheline dans le trousseau.
+    let ancien = Target::from_alias(old_alias.trim())
+        .ok()
+        .map(|t| avash::secrets::account_id(&t.user, &t.addr, t.port));
+
+    avash::update_host(old_alias.trim(), &host).map_err(|e| format!("{e:#}"))?;
+
+    // Après le succès seulement : on déplace le secret vers le nouvel identifiant.
+    if let Some(ancien) = ancien {
+        if let Some(nouveau) = Target::from_alias(host.alias.trim())
+            .ok()
+            .map(|t| avash::secrets::account_id(&t.user, &t.addr, t.port))
+        {
+            if nouveau != ancien {
+                if let Some(secret) = avash::secrets::load(&ancien) {
+                    let _ = avash::secrets::save(&nouveau, &secret);
+                    let _ = avash::secrets::forget(&ancien);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------- Dossiers de rangement (arbre unifié SSH + RDP) ----------
