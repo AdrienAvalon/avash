@@ -7,7 +7,7 @@
 //!
 //! Messages WebSocket (binaires, auto-délimités) :
 //!   sidecar -> app : [1]=CONNECTED w:u16 h:u16 · [2]=FRAME x,y,w,h:u16 + RGBA · [3]=ERROR utf8
-//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16 · [4]KEY sc:u16,down · [5]RESIZE w,h · [6]ACK · [8]CLIPBOARD utf8 · [9]REFRESH
+//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16 · [4]KEY sc:u16,down · [5]RESIZE w,h · [6]ACK · [8]CLIPBOARD utf8 · [9]REFRESH · [10]LOCKS bits:u8
 //!
 //! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png]
 
@@ -277,6 +277,22 @@ fn mouse_button(n: u8) -> ironrdp::input::MouseButton {
         4 => X2,
         _ => Left,
     }
+}
+
+/// Aligne les verrous clavier du bureau distant sur ceux du poste.
+///
+/// Sans cet événement, la session distante démarre avec ses propres verrous :
+/// le pavé numérique paraît inactif alors qu'il est allumé côté utilisateur,
+/// qui doit appuyer sur Verr.Num pour « resynchroniser » les deux.
+///
+/// Bits du message [10] : 1 = numérique, 2 = majuscules, 4 = défilement.
+fn lock_sync_event(bits: u8) -> ironrdp::pdu::input::fast_path::FastPathInputEvent {
+    ironrdp::input::synchronize_event(
+        bits & 0b100 != 0, // défilement
+        bits & 0b001 != 0, // numérique
+        bits & 0b010 != 0, // majuscules
+        false,             // kana : claviers japonais, non géré
+    )
 }
 
 /// Décode un message d'entrée binaire en opérations IronRDP.
@@ -549,7 +565,14 @@ async fn main() -> Result<()> {
                         dirty = None;
                     }
                     Some(Ok(Message::Binary(b))) => {
-                        let events = db.apply(input_ops(&b));
+                        // [10] ne décrit pas une frappe mais l'état des verrous :
+                        // il produit son événement directement, sans passer par
+                        // la base d'état des touches.
+                        let events: Vec<_> = if b.first() == Some(&10) && b.len() >= 2 {
+                            vec![lock_sync_event(b[1])]
+                        } else {
+                            db.apply(input_ops(&b)).into_vec()
+                        };
                         for o in active.process_fastpath_input(&mut image, &events)? {
                             if let ActiveStageOutput::ResponseFrame(f) = o {
                                 framed.write_all(&f).await.context("écriture entrée")?;

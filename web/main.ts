@@ -1406,6 +1406,30 @@ void loadHosts();
 // Prechargement : au moment du clic, la police est deja prete.
 void ensureFontLoaded();
 
+// ---------- Verrous clavier (Num / Maj / Défilement) ----------
+// Un bureau RDP démarre avec ses propres verrous : si le pavé numérique est
+// allumé sur le poste mais éteint dans la session distante, l'utilisateur doit
+// appuyer sur Verr.Num pour les réaligner. On suit donc l'état local en
+// permanence, pour pouvoir l'imposer au distant dès la connexion.
+//
+// Le navigateur ne révèle cet état que sur un événement clavier : on l'écoute
+// dans toute l'application (en capture), pas seulement sur le canvas RDP — ainsi
+// l'état est le plus souvent déjà connu au moment où une session s'ouvre.
+let locksBits = 0;
+let locksKnown = false;
+
+/** Bits attendus par le message [10] : 1 = numérique, 2 = majuscules, 4 = défilement. */
+function readLocks(e: KeyboardEvent): number {
+  return (
+    (e.getModifierState("NumLock") ? 1 : 0) |
+    (e.getModifierState("CapsLock") ? 2 : 0) |
+    (e.getModifierState("ScrollLock") ? 4 : 0)
+  );
+}
+for (const type of ["keydown", "keyup"] as const) {
+  window.addEventListener(type, (e) => { locksBits = readLocks(e); locksKnown = true; }, true);
+}
+
 // ---------- Accessibilité des boîtes de dialogue ----------
 // Les modales s'ouvrent en posant la classe « open », depuis une quarantaine
 // d'endroits. Plutôt que d'instrumenter chaque appel, on observe la classe :
@@ -2876,14 +2900,30 @@ async function openRdp(t: RdpTarget) {
   // navigateur ET la remontée vers #terminal (qui ouvrirait le menu d'Avash).
   canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); });
   canvas.addEventListener("wheel", (e) => { e.preventDefault(); const d = e.deltaY > 0 ? -120 : 120; send([3, ...le16(d & 0xffff), 0, 0, 0, 0]); });
+  // Les verrous peuvent changer pendant que le bureau n'a pas le focus (ou avant
+  // même la connexion) : on renvoie l'état dès qu'il diverge de ce qu'on a
+  // transmis, juste avant la touche pour que le distant l'interprète bien.
+  let locksSent: number | null = null;
+  const syncLocks = () => {
+    if (!locksKnown || locksSent === locksBits) return;
+    locksSent = locksBits;
+    send([10, locksBits]);
+  };
   canvas.addEventListener("keydown", (e) => {
     if (e.code === "F11") { e.preventDefault(); return; } // géré globalement (plein écran)
-    e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 1]);
+    e.preventDefault();
+    locksBits = readLocks(e);
+    locksKnown = true;
+    syncLocks();
+    const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 1]);
   });
   canvas.addEventListener("keyup", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 0]); });
   // Focus du bureau distant = l'utilisateur va sans doute coller : on lui pousse
   // le presse-papiers local à jour (fiabilise le collage local->distant).
-  canvas.addEventListener("focus", () => void pushLocalClipboard(true));
+  canvas.addEventListener("focus", () => {
+    if (locksKnown) send([10, locksBits]);
+    void pushLocalClipboard(true);
+  });
 
   // Redimensionnement NATIF du bureau distant : quand la zone Avash change, on
   // demande au serveur de re-rendre à la nouvelle taille (Display Control DVC).
@@ -2967,6 +3007,8 @@ async function openRdp(t: RdpTarget) {
         canvas.height = rdpH;
         if (snap) ctx.drawImage(snap, 0, 0, rdpW, rdpH);
         tab.querySelector(".state")!.className = "state live";
+        // Aligner les verrous du bureau distant sur ceux du poste.
+        if (locksKnown) send([10, locksBits]);
         // Renégociation terminée : si la fenêtre a encore bougé entre-temps, on
         // applique la taille finale (une seule fois, évite les cascades).
         resizeInFlight = false;
