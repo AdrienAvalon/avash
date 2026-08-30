@@ -33,7 +33,7 @@ une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) 
 effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 (`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`.
 
-## Couverture (23 scénarios)
+## Couverture (24 scénarios)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -44,6 +44,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 | `snippets.spec.js`    | snippet : créer, lister, **supprimer** (askConfirm) |
 | `tunnels.spec.js`     | tunnel local : créer, lister, **supprimer** (askConfirm) |
 | `a11y.spec.js`        | **accessibilité** : role=dialog + titre accessible, piège de focus (Tab ne fuit pas), focus rendu au déclencheur, noms accessibles des boutons icône |
+| `isolation.spec.js`   | **garde-fou d'isolation** : chaque fichier part de l'état semé, sans reste des autres scénarios |
 | `modals.spec.js`      | « Connexion directe » ne se ferme pas au clic dehors, se ferme à Échap ; palette Ctrl+K |
 | `ssh.spec.js`         | **connexion SSH réelle** (sshd local, auth par clé) → session live |
 | `sftp.spec.js`        | **panneau SFTP** sur la session SSH → listing du répertoire distant |
@@ -51,6 +52,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 | `rdp-clipboard.spec.js` | **presse-papiers RDP** (distant → poste) : pilote le sidecar sur son WebSocket, sans toucher au presse-papiers du système |
 | `rdp-reconnect.spec.js` | **overlay de reconnexion** quand le serveur RDP coupe |
 
+Chaque fichier de tests repart de l'état semé (`beforeSession` remet le bac à sable à zéro).
 Serveurs locaux : chaque spec RDP démarre son propre serveur de test (aucun couplage) ;
 un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spec`.
 En CI (`E2E_NO_RDP=1`), les specs à serveur local (ssh, rdp, rdp-reconnect) sont retirées.

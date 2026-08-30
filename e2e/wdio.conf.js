@@ -7,13 +7,17 @@
 // pour les scénarios de bout en bout : un serveur RDP de test et un sshd dédié
 // (non-root, clé, port 2223) auquel l'app se connecte réellement.
 import { spawn, execSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
 let tauriDriver;
 let sshd;
-const sandbox = mkdtempSync(join(tmpdir(), "avash-e2e-"));
+// Le lanceur crée le bac à sable et le publie dans l'environnement : les
+// processus de travail, forkés ensuite, retrouvent le MÊME chemin — sans quoi
+// chacun en créerait un différent et ne pourrait pas remettre à zéro celui que
+// l'application utilise réellement.
+const sandbox = process.env.AVASH_E2E_SANDBOX ?? mkdtempSync(join(tmpdir(), "avash-e2e-"));
 const sshDir = join(sandbox, "sshtest");
 export const RDP_PORT = 33899;
 export const SSH_PORT = 2223;
@@ -35,6 +39,11 @@ function seedSandbox() {
       `    User ${userInfo().username}`, `    IdentityFile ${join(ssh, "test_client")}`, "");
   }
   writeFileSync(join(ssh, "config"), lines.join("\n"), { mode: 0o600 });
+
+  // État applicatif (dossiers, bureaux RDP, snippets, tunnels) : on le supprime
+  // pour que chaque fichier de tests reparte du même point. Le dossier .ssh est
+  // conservé : il porte la clé cliente du sshd, générée une seule fois.
+  rmSync(join(sandbox, ".config", "avash"), { recursive: true, force: true });
 }
 
 function startSshd() {
@@ -80,6 +89,7 @@ export const config = {
   path: "/",
   mochaOpts: { ui: "bdd", timeout: 60000 },
   onPrepare: () => {
+    process.env.AVASH_E2E_SANDBOX = sandbox; // hérité par les workers
     seedSandbox(); // crée ~/.ssh + config (référence la clé cliente)
     if (LOCAL_SERVERS) sshd = startSshd(); // génère cette clé dans ~/.ssh, démarre le sshd
     // Les serveurs RDP de test sont démarrés PAR CHAQUE spec RDP (serveur dédié,
@@ -88,6 +98,12 @@ export const config = {
       stdio: [null, process.stdout, process.stderr],
       env: { ...process.env, HOME: sandbox, XDG_CONFIG_HOME: join(sandbox, ".config") },
     });
+  },
+  // Avant CHAQUE fichier de spécifications : on remet le bac à sable dans son
+  // état semé. L'application démarre ensuite et lit un état déterministe, quel
+  // que soit ce qu'ont fait les fichiers précédents (spécification isolation).
+  beforeSession: () => {
+    seedSandbox();
   },
   onComplete: () => {
     if (tauriDriver) tauriDriver.kill();
