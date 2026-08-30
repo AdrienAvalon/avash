@@ -447,10 +447,18 @@ function renderHosts() {
   const list = $("host-list");
   list.innerHTML = "";
   renderTagBar();
+  // `innerHTML = ""` met scrollHeight à 0, le navigateur borne scrollTop à 0 et
+  // le réajout ne le restaure pas : la liste sautait au sommet à chaque
+  // événement sans rapport (arrivée d'un logo d'OS, changement d'état d'une
+  // session), pendant qu'on faisait défiler.
+  const defilement = list.scrollTop;
   const q = state.filter.trim().toLowerCase();
   const filtering = q !== "" || state.tagFilter !== null;
   const sshShown = filterHosts(state.hosts, state.filter, state.tagFilter);
-  const rdpShown = rdpHostsList.filter(
+  // Un bureau RDP ne porte pas de tag : filtrer par tag doit donc les écarter
+  // tous. Ils restaient affichés, et le compteur les comptait — le filtre avait
+  // l'air cassé alors qu'il faisait son travail sur la moitié de la liste.
+  const rdpShown = state.tagFilter !== null ? [] : rdpHostsList.filter(
     (h) => !q || h.name.toLowerCase().includes(q) || h.host.toLowerCase().includes(q) || h.user.toLowerCase().includes(q),
   );
   $("host-count").textContent = String(sshShown.length + rdpShown.length);
@@ -474,9 +482,13 @@ function renderHosts() {
   } else if (filtering && sshShown.length + rdpShown.length === 0) {
     const empty = document.createElement("div");
     empty.className = "host-empty";
-    empty.innerHTML = `<p>Aucun hôte ne correspond à « ${stripHtml(state.filter)} ».</p>`;
+    // Filtrer par tag seul affichait « Aucun hôte ne correspond à «  » » : le
+    // critère cité doit être celui qui filtre réellement.
+    const critere = q !== "" ? state.filter : `tag ${state.tagFilter ?? ""}`;
+    empty.innerHTML = `<p>Aucun hôte ne correspond à « ${stripHtml(critere)} ».</p>`;
     list.appendChild(empty);
   }
+  list.scrollTop = defilement;
 }
 
 
@@ -850,6 +862,7 @@ function focusSession(id: number) {
   for (const r of rdpSessions.values()) {
     (r.canvas.parentElement as HTMLElement).style.display = "none";
     r.tab.classList.remove("active");
+    marquerVisibilite(r, false);
   }
   $("terminal-empty").style.display = "none";
   const cur = state.sessions.get(id);
@@ -1469,9 +1482,13 @@ function askConfirm(text: string, opts: { ok?: string; danger?: boolean } = {}):
   const okBtn = $("confirm-ok") as HTMLButtonElement;
   okBtn.textContent = opts.ok ?? "Confirmer";
   // Rouge par défaut : la plupart des confirmations gardent une action destructive.
-  okBtn.classList.toggle("btn-danger", opts.danger !== false);
+  const dangereux = opts.danger !== false;
+  okBtn.classList.toggle("btn-danger", dangereux);
   $("confirm-modal").classList.add("open");
-  setTimeout(() => okBtn.focus(), 30);
+  // Une confirmation destructive ne pré-focalise pas son bouton rouge : Entrée
+  // par réflexe, ou restée enfoncée depuis l'action précédente, supprimait un
+  // hôte de ~/.ssh/config avant qu'on ait lu la phrase d'avertissement.
+  setTimeout(() => (dangereux ? ($("confirm-cancel") as HTMLButtonElement) : okBtn).focus(), 30);
   return new Promise((resolve) => { confirmResolve = resolve; });
 }
 function confirmClose(v: boolean) {
@@ -1491,7 +1508,9 @@ window.addEventListener("keydown", (e) => {
   // fenêtre Tunnels ou Snippets d'où l'on venait.
   e.stopImmediatePropagation();
   e.preventDefault();
-  confirmClose(e.key === "Enter");
+  // Entrée suit le bouton focalisé au lieu de valider d'office : sur une
+  // confirmation destructive, le focus est sur « Annuler ».
+  confirmClose(e.key === "Enter" && document.activeElement === $("confirm-ok"));
 });
 
 hydrateIcons();
@@ -1765,17 +1784,41 @@ async function manualSubmit(ev: Event) {
     const portRaw = ($("m-port") as HTMLInputElement).value.trim();
     const rport2 = portRaw ? Number(portRaw) : 3389;
     const rport = rport2;
-    if (($("m-rdp-save") as HTMLInputElement).checked) {
-      try {
+    const enregistrer = ($("m-rdp-save") as HTMLInputElement).checked;
+    const memoriser = ($("m-rdp-remember") as HTMLInputElement).checked;
+    const nomRdp = ($("m-rdp-name") as HTMLInputElement).value.trim();
+    // Le volet SSH refuse un alias vide avant d'enregistrer ; le volet RDP
+    // acceptait n'importe quoi et posait dans la barre latérale une ligne sans
+    // libellé, que même sa suppression ne savait plus nommer.
+    if (enregistrer && !nomRdp) {
+      manualError().textContent = "Donne un nom à ce bureau pour l'enregistrer.";
+      manualError().hidden = false;
+      return;
+    }
+    submit.disabled = true;
+    const libelleRdp = submit.textContent;
+    submit.textContent = "Connexion…";
+    try {
+      if (enregistrer) {
         await invoke("rdp_host_save", {
-          id: null, name: ($("m-rdp-name") as HTMLInputElement).value.trim(),
+          id: null, name: nomRdp,
           host: addr, port: rport, user, width: 0, height: 0,
         });
-        if (($("m-rdp-remember") as HTMLInputElement).checked && password) {
-          await invoke("rdp_password_save", { host: addr, port: rport, user, password }).catch(() => {});
-        }
-        await loadHosts();
-      } catch (e) { manualError().textContent = e instanceof Error ? e.message : String(e); manualError().hidden = false; return; }
+      }
+      // « Mémoriser le mot de passe » était imbriqué dans « Enregistrer la
+      // connexion » : cochée seule, la case ne faisait rien et le mot de passe
+      // était redemandé à la connexion suivante, sans le moindre message.
+      if (memoriser && password) {
+        await invoke("rdp_password_save", { host: addr, port: rport, user, password });
+      }
+      if (enregistrer || memoriser) await loadHosts();
+    } catch (e) {
+      manualError().textContent = e instanceof Error ? e.message : String(e);
+      manualError().hidden = false;
+      return;
+    } finally {
+      submit.disabled = false;
+      submit.textContent = libelleRdp;
     }
     manualClose();
     await openRdp({ host: addr, port: rport, user, password });
@@ -3261,12 +3304,23 @@ async function openRdp(t: RdpTarget) {
   focusRdp(id);
 }
 
+/** Dit au sidecar si son bureau est visible. Message [11], 1 = en pause.
+ *
+ *  Un onglet masqué continuait d'accuser réception de chaque trame : le sidecar
+ *  y voyait la voie libre et poussait sans relâche des images entières — 8 Mo
+ *  par trame en 1080p — vers un canvas invisible. Deux bureaux ouverts
+ *  doublaient donc le travail utile sans rien afficher de plus. */
+function marquerVisibilite(s: { ws: WebSocket | null }, visible: boolean): void {
+  if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([11, visible ? 0 : 1]));
+}
+
 function focusRdp(id: number) {
   state.active = id;
   for (const [sid, s] of rdpSessions) {
     const active = sid === id;
     s.tab.classList.toggle("active", active);
     (s.canvas.parentElement as HTMLElement).style.display = active ? "flex" : "none";
+    marquerVisibilite(s, active);
     if (active) {
       s.canvas.focus();
       // La session inactive n'a pas suivi les redimensionnements de la fenêtre

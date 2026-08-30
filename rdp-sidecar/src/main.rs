@@ -573,6 +573,12 @@ async fn main() -> Result<()> {
     // latence ajoutée) ; lent → on fusionne, jamais de file qui s'accumule.
     let mut dirty: Option<InclusiveRectangle> = None;
     let mut awaiting_ack = false;
+    // Onglet masqué : le canvas n'est pas à l'écran, mais l'accusé de rendu
+    // partait quand même — le serveur voyait la voie libre en permanence et le
+    // sidecar continuait à décoder et à pousser des trames pleines (8 Mo en
+    // 1080p) que personne ne regardait. En pause, on accumule le rectangle sale
+    // sans rien émettre ; le retour au premier plan demande un REFRESH.
+    let mut en_pause = false;
     let mut last_send = Instant::now();
     // Métriques (fenêtre ~1 s) : fps, débit, latence de bout en bout.
     let (mut stat_frames, mut stat_bytes): (u32, u64) = (0, 0);
@@ -586,7 +592,7 @@ async fn main() -> Result<()> {
     #[allow(clippy::items_after_statements)]
     macro_rules! flush_dirty {
         () => {
-            if !awaiting_ack {
+            if !awaiting_ack && !en_pause {
                 if let Some(r) = dirty.take() {
                     let msg = frame_msg(&image, &r);
                     stat_bytes += msg.len() as u64;
@@ -646,6 +652,13 @@ async fn main() -> Result<()> {
                             let _ = clip_tx.send(ClipReq::Advertise);
                         }
                     }
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&11) && b.len() >= 2 => {
+                        // PAUSE : 1 = l'onglet est passé à l'arrière-plan.
+                        en_pause = b[1] != 0;
+                        if !en_pause {
+                            flush_dirty!();
+                        }
+                    }
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&9) => {
                         // REFRESH : l'onglet a été réaffiché et son canvas peut être
                         // vide ; on renvoie l'image entière, hors cadencement.
@@ -662,6 +675,10 @@ async fn main() -> Result<()> {
                         awaiting_ack = true;
                         last_send = Instant::now();
                         dirty = None;
+                        // Un REFRESH ne s'obtient qu'en revenant au premier plan :
+                        // il lève la pause. Le flux ne peut donc pas rester gelé
+                        // si l'interface oubliait de la lever explicitement.
+                        en_pause = false;
                     }
                     Some(Ok(Message::Binary(b))) => {
                         // [10] ne décrit pas une frappe mais l'état des verrous :

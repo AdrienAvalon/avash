@@ -383,6 +383,14 @@ impl AvashSession {
         Arc::new(russh::client::Config {
             keepalive_interval: Some(std::time::Duration::from_secs(30)),
             keepalive_max: 3,
+            // russh laisse l'algorithme de Nagle actif par défaut
+            // (`nodelay: false`, client/mod.rs:2287). Sur une session
+            // interactive c'est exactement le mauvais choix : un petit segment
+            // — une frappe — est retenu tant que le précédent n'est pas
+            // acquitté, ce qui ajoute jusqu'à un aller-retour d'accusé retardé
+            // à l'écho du shell. OpenSSH pose TCP_NODELAY sans condition pour
+            // cette raison. Sans effet en réseau local, très sensible au-delà.
+            nodelay: true,
             ..Default::default()
         })
     }

@@ -72,10 +72,15 @@ export const config = {
   runner: "local",
   specs: LOCAL_SERVERS
     ? ["./specs/**/*.spec.js"]
-    : [ // CI : uniquement les flux sans serveur local
+    : [ // CI : uniquement les flux sans serveur local. Cette liste est
+        // énumérative par nécessité — elle avait pris du retard sur specs/, et
+        // quatre scénarios pourtant sans serveur (accessibilité, clavier,
+        // isolation du bac à sable, réglages) ne tournaient plus qu'en local.
         "./specs/smoke.spec.js", "./specs/hosts.spec.js", "./specs/folders.spec.js",
         "./specs/modals.spec.js", "./specs/hosts-move.spec.js",
         "./specs/snippets.spec.js", "./specs/tunnels.spec.js",
+        "./specs/a11y.spec.js", "./specs/clavier.spec.js",
+        "./specs/isolation.spec.js", "./specs/prefs.spec.js",
       ],
   maxInstances: 1,
   capabilities: [
