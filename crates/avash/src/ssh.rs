@@ -252,6 +252,61 @@ pub struct AvashSession {
     jumps: Vec<AvashSession>,
 }
 
+/// Tube nommé exposé par l'agent d'OpenSSH pour Windows (service `ssh-agent`).
+#[cfg(windows)]
+const OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+
+// L'agent SSH n'a pas le même transport selon la plateforme : socket Unix
+// désigné par SSH_AUTH_SOCK sur Unix, tube nommé OpenSSH ou Pageant (PuTTY)
+// sous Windows. Les deux fonctions ci-dessous portent donc toute la logique,
+// génériques sur le transport ; seules les fonctions de connexion, côté
+// appelant, sont spécifiques à la plateforme.
+
+/// L'agent détient-il au moins une identité utilisable ?
+async fn agent_porte_une_identite<S>(agent: &mut russh::keys::agent::client::AgentClient<S>) -> bool
+where
+    S: russh::keys::agent::client::AgentStream + Send + Unpin,
+{
+    agent
+        .request_identities()
+        .await
+        .is_ok_and(|ids| !ids.is_empty())
+}
+
+/// Présente chaque identité de l'agent à la session, jusqu'à ce que l'une soit
+/// acceptée. L'agent signe le défi : la clé privée ne quitte jamais l'agent.
+async fn agent_authentifie<S>(
+    session: &mut russh::client::Handle<AvashAuth>,
+    user: &str,
+    agent: &mut russh::keys::agent::client::AgentClient<S>,
+) -> bool
+where
+    // AgentStream implique AsyncRead + AsyncWrite ; avec Send + Unpin, russh
+    // fournit alors automatiquement le signataire attendu par la session.
+    S: russh::keys::agent::client::AgentStream + Send + Unpin,
+{
+    let Ok(identities) = agent.request_identities().await else {
+        return false;
+    };
+    for id in identities {
+        // On ne gere que les cles publiques ; les certificats plus tard.
+        let russh::keys::agent::AgentIdentity::PublicKey { key, .. } = id else {
+            continue;
+        };
+        let hash = matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. })
+            .then_some(russh::keys::HashAlg::Sha256);
+        if let Ok(res) = session
+            .authenticate_publickey_with(user, key, hash, agent)
+            .await
+        {
+            if res.success() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl AvashSession {
     /// Config russh commune (keepalive : detecte une coupure NAT au lieu de
     /// laisser une session zombie).
@@ -413,13 +468,25 @@ impl AvashSession {
     /// ne PAS reclamer de mot de passe quand l'agent peut authentifier.
     pub async fn agent_has_identities() -> bool {
         use russh::keys::agent::client::AgentClient;
-        let Ok(mut agent) = AgentClient::connect_env().await else {
-            return false;
-        };
-        agent
-            .request_identities()
-            .await
-            .is_ok_and(|ids| !ids.is_empty())
+        #[cfg(unix)]
+        {
+            let Ok(mut agent) = AgentClient::connect_env().await else {
+                return false;
+            };
+            agent_porte_une_identite(&mut agent).await
+        }
+        #[cfg(windows)]
+        {
+            if let Ok(mut agent) = AgentClient::connect_named_pipe(OPENSSH_AGENT_PIPE).await {
+                if agent_porte_une_identite(&mut agent).await {
+                    return true;
+                }
+            }
+            let Ok(mut agent) = AgentClient::connect_pageant().await else {
+                return false;
+            };
+            agent_porte_une_identite(&mut agent).await
+        }
     }
 
     /// Tente l'authentification via l'agent SSH. `Ok(true)` si une cle de
@@ -429,30 +496,25 @@ impl AvashSession {
         user: &str,
     ) -> Result<bool> {
         use russh::keys::agent::client::AgentClient;
-        let Ok(mut agent) = AgentClient::connect_env().await else {
-            return Ok(false);
-        };
-        let Ok(identities) = agent.request_identities().await else {
-            return Ok(false);
-        };
-        for id in identities {
-            // On ne gere que les cles publiques ; les certificats plus tard.
-            let russh::keys::agent::AgentIdentity::PublicKey { key, .. } = id else {
-                continue;
+        #[cfg(unix)]
+        {
+            let Ok(mut agent) = AgentClient::connect_env().await else {
+                return Ok(false);
             };
-            let hash = matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. })
-                .then_some(russh::keys::HashAlg::Sha256);
-            // L'agent signe le defi ; on ne detient jamais la cle privee.
-            if let Ok(res) = session
-                .authenticate_publickey_with(user, key, hash, &mut agent)
-                .await
-            {
-                if res.success() {
+            Ok(agent_authentifie(session, user, &mut agent).await)
+        }
+        #[cfg(windows)]
+        {
+            if let Ok(mut agent) = AgentClient::connect_named_pipe(OPENSSH_AGENT_PIPE).await {
+                if agent_authentifie(session, user, &mut agent).await {
                     return Ok(true);
                 }
             }
+            let Ok(mut agent) = AgentClient::connect_pageant().await else {
+                return Ok(false);
+            };
+            Ok(agent_authentifie(session, user, &mut agent).await)
         }
-        Ok(false)
     }
 
     /// Exécution one-shot : stdout + exit code.

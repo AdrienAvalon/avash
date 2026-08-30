@@ -83,6 +83,21 @@ jobs:
       - name: Rust — build release
         run: cargo build --release -p avash-ui
 
+  # Le cœur (crate avash) doit compiler sous Windows. Ce job est le garde-fou de
+  # la promesse « multi-plateforme » : il a été ajouté après la découverte que
+  # l'authentification par agent SSH utilisait une API Unix seulement, ce qui
+  # rendait toute compilation Windows impossible — invisible sur une machine
+  # Linux. Compilation seule (pas de bundle Tauri) : rapide et suffisant.
+  windows-coeur:
+    name: Cœur — compilation Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (crate avash)
+        run: cargo check -p avash --all-targets
+
   e2e:
     name: E2E (app réelle, headless)
     runs-on: ubuntu-latest

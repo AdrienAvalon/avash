@@ -7,6 +7,25 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- **avash ne compilait pas sous Windows.** L'authentification par agent SSH
+  utilisait `AgentClient::connect_env()`, une API disponible uniquement sur Unix
+  (elle lit `SSH_AUTH_SOCK`). La compilation Windows échouait donc, ce qui est
+  resté invisible tant qu'aucun build Windows n'avait été réellement exercé.
+  Le transport de l'agent est désormais choisi selon la plateforme : socket Unix,
+  ou tube nommé OpenSSH puis Pageant (PuTTY) sous Windows.
+- Compilation depuis un clone neuf : le binaire du sidecar RDP, déclaré en
+  ressource embarquée, doit exister avant toute compilation d'`avash-ui`. Les
+  instructions du README et de CONTRIBUTING étaient inapplicables telles quelles.
+- Intégration continue : le sidecar est construit avant les étapes Rust, et le
+  bundle Tauri s'exécute depuis le bon répertoire.
+
+### Ajouté
+
+- Garde-fou d'intégration continue : la compilation Windows du cœur est vérifiée
+  à chaque poussée.
+
 ## [0.2.0] - 2026-08-30
 
 Première version publique. Avash devient un gestionnaire de connexions
