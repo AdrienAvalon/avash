@@ -46,6 +46,8 @@ else
 fi
 
 step "Front (avash-web)"
+run "garde"              "$ROOT" ./scripts/guard.sh
+run "lint"               "$WEB" npx eslint main.ts filters.ts
 run "typage"             "$WEB" npx tsc --noEmit
 run "tests"              "$WEB" npx vitest run
 run "build"              "$WEB" npx vite build

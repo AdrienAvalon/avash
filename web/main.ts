@@ -641,7 +641,7 @@ function newSessionShell(label: string) {
     // Session terminee : Entree relance la connexion, le reste est ignore
     // (l'ecrire au backend ne ferait qu'afficher « Session inconnue »).
     if (s.closed) {
-      if (data === "\r" && s.reconnect) s.reconnect();
+      if (data === "\r" && s.reconnect) void s.reconnect();
       return;
     }
     invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${e}\r\n`));
@@ -864,7 +864,7 @@ function focusSession(id: number) {
   $("terminal-empty").style.display = "none";
   const cur = state.sessions.get(id);
   sftpSyncButton();
-  if (sftp.open && cur) sftpOpenAt(cur, cur.sftpPath);
+  if (sftp.open && cur) void sftpOpenAt(cur, cur.sftpPath);
   renderHosts(); // met à jour le surlignage « sélectionné »
 }
 
@@ -897,7 +897,7 @@ function closeSession(id: number) {
 
 // Écoute du flux PTY côté Rust → xterm
 type PtyPayload = { id: number; data: string };
-listenPty();
+void listenPty();
 async function listenPty() {
   try {
     await listen<PtyPayload>("pty-output", (ev) => {
@@ -982,7 +982,7 @@ function renderPalette() {
     item.innerHTML = `<span class="pico">${ic("terminal")}</span><span class="name"></span><span class="sub"></span>`;
     item.querySelector(".name")!.textContent = h.alias;
     item.querySelector(".sub")!.textContent = `${h.user ?? "?"}@${h.hostname ?? h.alias}`;
-    item.addEventListener("click", () => { paletteClose(); openSession(h); });
+    item.addEventListener("click", () => { paletteClose(); void openSession(h); });
     res.appendChild(item);
   }
 }
@@ -1076,8 +1076,8 @@ async function sftpNavigate(path: string) {
         el.classList.add("sel");
       });
       el.addEventListener("dblclick", () => {
-        if (e.is_dir) sftpNavigate(remoteJoin(path, e.name));
-        else sftpDownload(remoteJoin(path, e.name), e.name);
+        if (e.is_dir) void sftpNavigate(remoteJoin(path, e.name));
+        else void sftpDownload(remoteJoin(path, e.name), e.name);
       });
       el.addEventListener("contextmenu", (ev) => {
         ev.preventDefault();
@@ -1094,7 +1094,7 @@ async function sftpNavigate(path: string) {
 
 function sftpRefresh() {
   const s = sftpSession();
-  if (s) sftpNavigate(s.sftpPath || ".");
+  if (s) void sftpNavigate(s.sftpPath || ".");
 }
 
 function sftpToggle(force?: boolean) {
@@ -1103,7 +1103,7 @@ function sftpToggle(force?: boolean) {
   sftp.open = force ?? !sftp.open;
   $("sftp-panel").classList.toggle("open", sftp.open);
   $("sftp-toggle").classList.toggle("active", sftp.open);
-  if (sftp.open) sftpOpenAt(s, s.sftpPath);
+  if (sftp.open) void sftpOpenAt(s, s.sftpPath);
 }
 
 /** Reflete l'etat du bouton SFTP selon l'onglet courant. */
@@ -1119,12 +1119,12 @@ function sftpSyncButton() {
  */
 async function sftpOpenAt(s: Session, path: string) {
   const start = path && path !== "." ? path : "";
-  if (start) { sftpNavigate(start); return; }
+  if (start) { void sftpNavigate(start); return; }
   try {
     const home = await invoke<string>("sftp_realpath", { id: s.id, path: "." });
-    if (sftpSession() === s) sftpNavigate(home || ".");
+    if (sftpSession() === s) void sftpNavigate(home || ".");
   } catch {
-    sftpNavigate(".");
+    void sftpNavigate(".");
   }
 }
 // Le panneau prend sa place par une transition : le terminal ne recoit pas
@@ -1182,12 +1182,12 @@ async function sftpUploadPaths(paths: string[]) {
   }
   if (errors.length === 0) sftpStatus(`✅ ${ok} fichier${ok > 1 ? "s" : ""} envoyé${ok > 1 ? "s" : ""}`, "ok");
   else sftpStatus(`⚠️ ${errors.join(" · ")}`, "err");
-  if (sftpSession() === s) sftpNavigate(dir);
+  if (sftpSession() === s) void sftpNavigate(dir);
 }
 
 async function sftpPickAndUpload() {
   if (!sftpSession()) return;
-  let picked: string[] | string | null = null;
+  let picked: string[] | string | null;
   try {
     picked = await openDialog({ multiple: true, directory: false, title: "Fichiers à envoyer" });
   } catch (e) {
@@ -1209,7 +1209,7 @@ async function sftpMkdir(dir: string) {
   }
   try {
     await invoke("sftp_mkdir", { id: s.id, path: remoteJoin(dir, name) });
-    sftpNavigate(dir);
+    void sftpNavigate(dir);
   } catch (e) {
     sftpStatus(`⚠️ ${e}`, "err");
   }
@@ -1226,7 +1226,7 @@ async function sftpRename(entry: SftpEntry, dir: string) {
   }
   try {
     await invoke("sftp_rename", { id: s.id, from: remoteJoin(dir, entry.name), to: remoteJoin(dir, name) });
-    sftpNavigate(dir);
+    void sftpNavigate(dir);
   } catch (e) {
     sftpStatus(`⚠️ ${e}`, "err");
   }
@@ -1239,7 +1239,7 @@ async function sftpDelete(entry: SftpEntry, dir: string) {
   if (!confirm(`Supprimer ${what} sur le serveur ?\n\nCette action est définitive.`)) return;
   try {
     await invoke("sftp_remove", { id: s.id, path: remoteJoin(dir, entry.name), isDir: entry.is_dir });
-    sftpNavigate(dir);
+    void sftpNavigate(dir);
   } catch (e) {
     sftpStatus(`⚠️ ${e}`, "err");
   }
@@ -1265,7 +1265,7 @@ function sftpHideMenu() { $("sftp-context").classList.remove("open"); }
 window.addEventListener("click", sftpHideMenu);
 window.addEventListener("blur", sftpHideMenu);
 
-$("sftp-context").addEventListener("click", async (e) => {
+$("sftp-context").addEventListener("click", (e) => {
   const act = (e.target as HTMLElement).closest("[data-act]")?.getAttribute("data-act");
   const ctx = sftp.ctx;
   sftpHideMenu();
@@ -1274,16 +1274,16 @@ $("sftp-context").addEventListener("click", async (e) => {
   if (!s) return;
   const { entry, path } = ctx;
   const full = entry ? remoteJoin(path, entry.name) : path;
-  if (act === "download" && entry && !entry.is_dir) sftpDownload(full, entry.name);
+  if (act === "download" && entry && !entry.is_dir) void sftpDownload(full, entry.name);
   else if (act === "cd") {
     const target = entry?.is_dir ? full : path;
     invoke("pty_write", { id: s.id, data: `cd ${shellQuote(target)}\r` }).catch(() => {});
     s.term.focus();
   } else if (act === "copy") {
     navigator.clipboard.writeText(full).then(() => sftpStatus(`Chemin copié : ${full}`, "ok"), () => {});
-  } else if (act === "rename" && entry) sftpRename(entry, path);
-  else if (act === "mkdir") sftpMkdir(path);
-  else if (act === "delete" && entry) sftpDelete(entry, path);
+  } else if (act === "rename" && entry) void sftpRename(entry, path);
+  else if (act === "mkdir") void sftpMkdir(path);
+  else if (act === "delete" && entry) void sftpDelete(entry, path);
 });
 
 $("sftp-list").addEventListener("contextmenu", (e) => {
@@ -1299,18 +1299,18 @@ $("sftp-toggle").addEventListener("click", () => sftpToggle());
 $("sftp-refresh-btn").addEventListener("click", sftpRefresh);
 $("sftp-up").addEventListener("click", () => {
   const s = sftpSession();
-  if (s && s.sftpPath !== "/") sftpNavigate(parentDir(s.sftpPath || "."));
+  if (s && s.sftpPath !== "/") void sftpNavigate(parentDir(s.sftpPath || "."));
 });
 $("sftp-up-btn").addEventListener("click", sftpPickAndUpload);
 $("sftp-mkdir-btn").addEventListener("click", () => {
   const s = sftpSession();
-  if (s) sftpMkdir(s.sftpPath || ".");
+  if (s) void sftpMkdir(s.sftpPath || ".");
 });
 $("sftp-path").addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
     const v = ($("sftp-path") as HTMLInputElement).value.trim();
-    if (v) sftpNavigate(v);
+    if (v) void sftpNavigate(v);
   } else if (e.key === "Escape") {
     ($("sftp-path") as HTMLInputElement).value = sftpSession()?.sftpPath ?? "";
     ($("sftp-path") as HTMLInputElement).blur();
@@ -1347,7 +1347,7 @@ getCurrentWebview()
       panel.classList.remove("dragging");
     } else if (t === "drop") {
       panel.classList.remove("dragging");
-      sftpUploadPaths(ev.payload.paths);
+      void sftpUploadPaths(ev.payload.paths);
     }
   })
   .catch(() => { /* hors Tauri (tests) : pas de glisser-deposer */ });
@@ -1389,11 +1389,11 @@ window.addEventListener("keydown", (e) => {
 hydrateIcons();
 $("theme-toggle").addEventListener("click", cycleTheme);
 applyTheme();
-setupWindowControls();
+void setupWindowControls();
 
-loadHosts();
+void loadHosts();
 // Prechargement : au moment du clic, la police est deja prete.
-ensureFontLoaded();
+void ensureFontLoaded();
 
 // ---------- Connexion directe (sans ~/.ssh/config) ----------
 
@@ -1487,7 +1487,7 @@ async function manualSubmit(ev: Event) {
           await invoke("rdp_password_save", { host: addr, port: rport, user, password }).catch(() => {});
         }
         await loadHosts();
-      } catch (e) { manualError().textContent = String(e); manualError().hidden = false; return; }
+      } catch (e) { manualError().textContent = e instanceof Error ? e.message : String(e); manualError().hidden = false; return; }
     }
     manualClose();
     await openRdp({ host: addr, port: rport, user, password });
@@ -1503,7 +1503,7 @@ async function manualSubmit(ev: Event) {
       // pris, fichier illisible), l'utilisateur le voit dans le formulaire
       // plutot que de decouvrir plus tard que rien n'a ete sauve.
       const alias = ($("m-alias") as HTMLInputElement).value.trim();
-      if (!alias) throw "Donne un nom à l'hôte pour l'enregistrer.";
+      if (!alias) throw new Error("Donne un nom à l'hôte pour l'enregistrer.");
       await invoke("host_save", {
         alias,
         addr: target.addr,
@@ -1520,7 +1520,7 @@ async function manualSubmit(ev: Event) {
   } catch (e) {
     // Le backend renvoie un message deja redige pour l'utilisateur
     // (cle introuvable, cle d'hote modifiee, identifiants manquants).
-    manualError().textContent = String(e);
+    manualError().textContent = e instanceof Error ? e.message : String(e);
     manualError().hidden = false;
   } finally {
     submit.disabled = false;
@@ -1581,7 +1581,7 @@ async function keysRefresh() {
   const select = $("d-key") as HTMLSelectElement;
   list.innerHTML = "";
   select.innerHTML = "";
-  let keys: KeyEntry[] = [];
+  let keys: KeyEntry[];
   try {
     keys = await invoke<KeyEntry[]>("keys_list");
   } catch (e) {
@@ -1923,7 +1923,7 @@ $("host-context").addEventListener("click", async (e) => {
   const h = state.hosts.find((x) => x.alias === alias);
   if (!h) return;
   if (act === "connect") {
-    openSession(h);
+    void openSession(h);
   } else if (act === "edit") {
     await openEditHost(alias);
   } else if (act === "move") {
@@ -2343,10 +2343,10 @@ $("tunnel-form").addEventListener("submit", async (e) => {
 // Badges de la barre laterale : un rafraichissement initial, puis toutes les
 // 5 s UNIQUEMENT s'il existe des tunnels a surveiller (sinon c'est un
 // aller-retour IPC gaspille en continu au repos).
-tunnelsRefresh();
+void tunnelsRefresh();
 window.setInterval(() => {
   if (tunnels.defs.length === 0) return;
-  if (!tunnelsModal().classList.contains("open")) tunnelsRefresh();
+  if (!tunnelsModal().classList.contains("open")) void tunnelsRefresh();
 }, 5000);
 
 // ---------- Snippets ----------
@@ -2610,9 +2610,9 @@ async function setupWindowControls() {
   maxBtn.addEventListener("click", async () => { await win.toggleMaximize(); await paintMax(); });
   $("win-close").addEventListener("click", () => win.close());
   // L'état maximisé change aussi via double-clic système / raccourci.
-  win.onResized(() => { void paintMax(); });
+  void win.onResized(() => { void paintMax(); });
   // Fenêtre en arrière-plan : geler les animations (CPU au repos ~0).
-  win.onFocusChanged(({ payload: focused }) => {
+  void win.onFocusChanged(({ payload: focused }) => {
     document.body.classList.toggle("win-blur", !focused);
   });
 
@@ -2692,7 +2692,7 @@ const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
 let lastClipText = "";
 async function pushLocalClipboard(force = false): Promise<void> {
   if (state.active === null || !rdpSessions.has(state.active)) return;
-  let text = "";
+  let text: string;
   try {
     text = (await clipReadText()) ?? "";
   } catch {
@@ -3013,7 +3013,7 @@ $("rdp-context").addEventListener("click", async (e) => {
   $("rdp-context").classList.remove("open");
   const h = rdpHostsList.find((x) => x.id === id);
   if (!act || !h) return;
-  if (act === "connect") connectRdpSaved(h);
+  if (act === "connect") void connectRdpSaved(h);
   else if (act === "edit") openEditRdp(h);
   else if (act === "move") openMoveModal("rdp", h.id);
   else if (act === "forget") {
