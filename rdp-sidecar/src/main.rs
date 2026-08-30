@@ -279,6 +279,85 @@ fn mouse_button(n: u8) -> ironrdp::input::MouseButton {
     }
 }
 
+/// Verdict d'un certificat de serveur RDP, au regard des empreintes mémorisées.
+#[derive(Debug, PartialEq, Eq)]
+pub enum VerdictCert {
+    /// Rien de mémorisé pour cet hôte : premier contact.
+    PremierContact,
+    /// L'empreinte présentée correspond à celle mémorisée.
+    Connu,
+    /// Une empreinte est mémorisée, mais ce n'est pas celle-ci.
+    Change { attendue: String },
+}
+
+/// Compare l'empreinte présentée à celle mémorisée pour cet hôte.
+///
+/// Même modèle que le `known_hosts` de SSH. Sans cela, `ironrdp_tls::upgrade`
+/// accepte **n'importe quel** certificat (il installe `NoCertificateVerification`)
+/// et l'on enchaîne sur CredSSP/NLA — c'est-à-dire qu'on livre les identifiants
+/// à qui se présente. L'asymétrie avec le volet SSH était totale.
+#[must_use]
+pub fn juger_certificat(memorisee: Option<&str>, presentee: &str) -> VerdictCert {
+    match memorisee {
+        None => VerdictCert::PremierContact,
+        Some(m) if m == presentee => VerdictCert::Connu,
+        Some(m) => VerdictCert::Change {
+            attendue: m.to_owned(),
+        },
+    }
+}
+
+/// Empreinte SHA-256 de la clé publique du serveur, en hexadécimal minuscule.
+///
+/// On épingle la clé plutôt que le certificat entier : une simple reconduction
+/// du certificat, à clé inchangée, ne doit pas déclencher de fausse alerte.
+fn empreinte(der: &[u8]) -> String {
+    use sha2::Digest as _;
+    let condense = sha2::Sha256::digest(der);
+    condense.iter().fold(String::new(), |mut acc, o| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{o:02x}");
+        acc
+    })
+}
+
+/// Fichier des empreintes mémorisées, à côté du reste de la configuration.
+fn chemin_empreintes() -> std::path::PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("avash")
+        .join("rdp_known_hosts")
+}
+
+/// Empreinte mémorisée pour `hote:port`, s'il y en a une.
+fn empreinte_memorisee(cle: &str) -> Option<String> {
+    let contenu = std::fs::read_to_string(chemin_empreintes()).ok()?;
+    contenu.lines().find_map(|l| {
+        let (h, e) = l.split_once(' ')?;
+        (h == cle).then(|| e.trim().to_owned())
+    })
+}
+
+/// Mémorise l'empreinte d'un hôte au premier contact.
+fn memoriser_empreinte(cle: &str, emp: &str) -> Result<()> {
+    let chemin = chemin_empreintes();
+    if let Some(parent) = chemin.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut contenu = std::fs::read_to_string(&chemin).unwrap_or_default();
+    if !contenu.is_empty() && !contenu.ends_with('\n') {
+        contenu.push('\n');
+    }
+    contenu.push_str(&format!("{cle} {emp}\n"));
+    std::fs::write(&chemin, contenu)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&chemin, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 /// Aligne les verrous clavier du bureau distant sur ceux du poste.
 ///
 /// Sans cet événement, la session distante démarre avec ses propres verrous :
@@ -387,6 +466,26 @@ async fn connect(
         .await
         .context("passage TLS")?;
     let pubkey = server_public_key(&cert)?;
+
+    // TOFU sur le certificat, AVANT CredSSP : c'est CredSSP qui transmet les
+    // identifiants. Vérifier après reviendrait à les avoir déjà livrés.
+    let cle = format!("{}:{}", a.host, a.port);
+    let presentee = empreinte(&pubkey);
+    match juger_certificat(empreinte_memorisee(&cle).as_deref(), &presentee) {
+        VerdictCert::Connu => {}
+        VerdictCert::PremierContact => memoriser_empreinte(&cle, &presentee)
+            .context("mémorisation de l'empreinte du serveur RDP")?,
+        VerdictCert::Change { attendue } => {
+            anyhow::bail!(
+                "Le certificat de {cle} a changé.\n\nSoit le serveur a été \
+                 réinstallé, soit quelqu'un intercepte la connexion.\n\n\
+                 Empreinte présentée : {presentee}\nEmpreinte attendue  : {attendue}\n\n\
+                 Si le changement est légitime, retirez la ligne « {cle} » de \
+                 rdp_known_hosts."
+            );
+        }
+    }
+
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
     let mut framed = ironrdp_tokio::TokioFramed::new(upgraded_stream);
     let mut net = ironrdp_tokio::reqwest::ReqwestNetworkClient::new();
@@ -726,4 +825,31 @@ async fn run_shot(
     buf.save(path)?;
     eprintln!("capture : {path}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests_certificat {
+    use super::{juger_certificat, VerdictCert};
+
+    #[test]
+    fn rien_de_memorise_donne_un_premier_contact() {
+        assert_eq!(juger_certificat(None, "aa"), VerdictCert::PremierContact);
+    }
+
+    #[test]
+    fn la_meme_empreinte_est_reconnue() {
+        assert_eq!(juger_certificat(Some("aa"), "aa"), VerdictCert::Connu);
+    }
+
+    /// Le cœur du correctif : sans lui, `ironrdp_tls::upgrade` acceptait
+    /// n'importe quel certificat, puis CredSSP livrait les identifiants.
+    #[test]
+    fn une_empreinte_differente_est_un_changement() {
+        assert_eq!(
+            juger_certificat(Some("aa"), "bb"),
+            VerdictCert::Change {
+                attendue: "aa".into()
+            }
+        );
+    }
 }

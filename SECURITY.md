@@ -83,6 +83,22 @@ avec la distinction que fait OpenSSH (voir `check_server_key` dans
 - **`known_hosts` illisible, ou certificat d'hôte non validable** : refus par
   défaut (mieux vaut refuser qu'accepter à l'aveugle).
 
+### Vérification du serveur RDP (TOFU)
+
+La bibliothèque RDP accepte par construction n'importe quel certificat TLS : il
+n'existe pas d'autorité de certification dans ce contexte. Avash applique donc
+au RDP le même modèle qu'au SSH — l'empreinte SHA-256 de la **clé publique** du
+serveur est mémorisée au premier contact dans `~/.config/avash/rdp_known_hosts`,
+et toute clé différente fait **refuser la connexion**, avec les deux empreintes
+affichées.
+
+La vérification a lieu **avant CredSSP/NLA**, c'est-à-dire avant que le moindre
+identifiant ne soit transmis. On épingle la clé plutôt que le certificat entier :
+une reconduction de certificat à clé inchangée ne déclenche pas de fausse alerte.
+
+Si le changement est légitime (serveur réinstallé), retirer la ligne
+correspondante de `rdp_known_hosts`.
+
 ### Protection contre l'injection dans `~/.ssh/config`
 
 Avash écrit et relit `~/.ssh/config`. Avant toute écriture, les champs d'un
