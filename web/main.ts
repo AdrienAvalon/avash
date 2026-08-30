@@ -2711,7 +2711,7 @@ async function pushLocalClipboard(force = false): Promise<void> {
   }
 }
 window.addEventListener("focus", () => void pushLocalClipboard());
-const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; hostId?: string }>();
+const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; hostId?: string; syncSize?: () => void }>();
 
 async function openRdp(t: RdpTarget) {
   const id = state.nextId++;
@@ -2825,6 +2825,7 @@ async function openRdp(t: RdpTarget) {
   });
   ro.observe($("terminal"));
   rdpSessions.get(id)!.ro = ro;
+  rdpSessions.get(id)!.syncSize = sendResize;
 
   // Bureau reçu via WebSocket local BINAIRE (ArrayBuffer natif : ni base64 ni
   // JSON — débit maximal, même en 3440×1440).
@@ -2919,6 +2920,9 @@ function focusRdp(id: number) {
     (s.canvas.parentElement as HTMLElement).style.display = active ? "flex" : "none";
     if (active) {
       s.canvas.focus();
+      // La session inactive n'a pas suivi les redimensionnements de la fenêtre
+      // (seule l'active se resize) : on rattrape sa taille en devenant active.
+      s.syncSize?.();
       // Un canvas caché peut avoir perdu son contenu (backing-store WebKitGTK) :
       // on demande au sidecar de renvoyer l'image entière. Message [9].
       if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([9]));
