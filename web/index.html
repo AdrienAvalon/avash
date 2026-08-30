@@ -475,6 +475,25 @@
     .btn-ghost:hover { color: var(--text); background: var(--card-hover); border-color: var(--border); }
     .btn-danger { background: var(--err); color: #fff; border-color: transparent; }
     .btn-danger:hover { filter: brightness(1.08); }
+    /* Notifications : remplacent alert(), inopérant sous WebKitGTK et hors
+       charte. Empilées en bas à droite, elles n'interrompent rien et laissent
+       lire l'erreur sans perdre le contexte. */
+    .toasts {
+      position: fixed; right: 16px; bottom: 16px; z-index: 90;
+      display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+      pointer-events: none; max-width: min(420px, calc(100vw - 32px));
+    }
+    .toast {
+      pointer-events: auto; cursor: pointer;
+      background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      border-radius: 8px; padding: 10px 14px; box-shadow: 0 8px 30px rgba(0,0,0,.4);
+      font-size: 13.5px; line-height: 1.45; color: var(--text);
+      animation: pop .16s var(--ease); word-break: break-word;
+    }
+    .toast.erreur  { border-left-color: var(--err); }
+    .toast.succes  { border-left-color: var(--ok, #3ecf8e); }
+    .toast .titre  { font-weight: 600; display: block; margin-bottom: 2px; }
+    .toast .fermer { color: var(--text-dim); font-size: 11px; margin-top: 4px; display: block; }
     .confirm-msg { white-space: pre-line; color: var(--text-dim); line-height: 1.5; margin: 2px 0; }
     .btn-mini {
       flex: 1; padding: 6px 0; border-radius: 7px; border: 1px solid var(--border-soft);
@@ -778,6 +797,8 @@
       <circle cx="12" cy="17.2" r="0.85" fill="#12233f"/>
     </symbol>
   </svg>
+  <!-- Notifications (voir notify() dans main.ts) -->
+  <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
   <div class="resize-handles" id="resize-handles"></div>
   <div class="titlebar" data-tauri-drag-region>
     <div class="tb-title" data-tauri-drag-region><svg class="tb-mascot"><use href="#avash-mark"/></svg><span id="tb-name">Avash</span></div>

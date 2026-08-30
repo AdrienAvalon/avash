@@ -94,45 +94,92 @@ pub async fn rdp_open(
         .spawn()
         .map_err(|e| format!("Lancement du sidecar RDP impossible : {e}"))?;
 
-    // Mot de passe transmis par stdin plutôt qu'en argument : évite sa fuite via
-    // /proc/<pid>/cmdline, lisible par les autres utilisateurs locaux.
-    if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt as _;
-        stdin
-            .write_all(format!("{password}\n").as_bytes())
-            .await
-            .map_err(|e| format!("Envoi du mot de passe au sidecar : {e}"))?;
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    // Enregistré AVANT tout point de sortie. La connexion RDP (TLS + NLA) peut
+    // durer plusieurs secondes ; si l'utilisateur ferme l'onglet pendant ce
+    // temps, `rdp_close` doit trouver l'enfant pour le tuer. Enregistré à la fin
+    // comme auparavant, le sidecar survivait à la fermeture — session
+    // authentifiée ouverte, socket en écoute, invisible de l'interface.
+    if let Some(mut old) = state.inner.lock().unwrap().insert(id, child) {
+        let _ = old.start_kill();
     }
 
-    let stdout = child.stdout.take().ok_or("stdout sidecar indisponible")?;
-    let mut stderr = child.stderr.take().ok_or("stderr sidecar indisponible")?;
+    // À partir d'ici, toute sortie en erreur doit emporter l'enfant enregistré.
+    let (Some(mut stdin), Some(stdout), Some(mut stderr)) = (stdin, stdout, stderr) else {
+        return Err(tuer(
+            &state,
+            id,
+            "Flux du sidecar RDP indisponibles.".into(),
+        ));
+    };
+
+    // Mot de passe transmis par stdin plutôt qu'en argument : évite sa fuite via
+    // /proc/<pid>/cmdline, lisible par les autres utilisateurs locaux.
+    {
+        use tokio::io::AsyncWriteExt as _;
+        if let Err(e) = stdin.write_all(format!("{password}\n").as_bytes()).await {
+            return Err(tuer(
+                &state,
+                id,
+                format!("Envoi du mot de passe au sidecar : {e}"),
+            ));
+        }
+    }
 
     // Le sidecar imprime « PORT TOKEN » quand son WebSocket est prêt. S'il
     // échoue avant (auth, TLS, NLA…), on remonte son diagnostic (stderr).
     let mut lines = BufReader::new(stdout).lines();
-    let first = lines.next_line().await.map_err(|e| e.to_string())?;
+    let first = match lines.next_line().await {
+        Ok(l) => l,
+        Err(e) => return Err(tuer(&state, id, e.to_string())),
+    };
     let Some(line) = first else {
         let mut diag = String::new();
         let _ = stderr.read_to_string(&mut diag).await;
         let msg = diag.trim().lines().last().unwrap_or("").to_string();
-        return Err(if msg.is_empty() {
-            "Le sidecar RDP s'est arrêté sans se connecter.".into()
-        } else {
-            msg
-        });
+        return Err(tuer(
+            &state,
+            id,
+            if msg.is_empty() {
+                "Le sidecar RDP s'est arrêté sans se connecter.".into()
+            } else {
+                msg
+            },
+        ));
     };
     let mut it = line.split_whitespace();
-    let port: u16 = it
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or("port WebSocket illisible")?;
-    let token = it.next().ok_or("jeton WebSocket manquant")?.to_string();
+    let Some(port) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
+        return Err(tuer(&state, id, "Port WebSocket illisible.".into()));
+    };
+    let Some(token) = it.next().map(str::to_owned) else {
+        return Err(tuer(&state, id, "Jeton WebSocket manquant.".into()));
+    };
 
-    // Garde l'enfant pour pouvoir le tuer à la fermeture de l'onglet.
-    if let Some(mut old) = state.inner.lock().unwrap().insert(id, child) {
-        let _ = old.start_kill();
+    // L'utilisateur a-t-il fermé l'onglet pendant la connexion ? `rdp_close` a
+    // alors retiré et tué notre enfant : on ne prétend pas avoir ouvert une
+    // session, et le front n'affiche pas d'erreur trompeuse.
+    if !state.inner.lock().unwrap().contains_key(&id) {
+        return Err(CONNEXION_ANNULEE.into());
     }
     Ok(RdpConn { port, token })
+}
+
+/// Message d'annulation volontaire : le front le reconnaît pour ne pas
+/// présenter une fermeture d'onglet comme un échec de connexion.
+pub const CONNEXION_ANNULEE: &str = "[AVASH_RDP_ANNULE]";
+
+/// Tue le sidecar enregistré sous `id` et rend le message d'erreur tel quel.
+///
+/// Sans cela, chaque sortie en erreur après le `spawn` abandonnait un processus
+/// vivant : `tokio::process::Command` ne tue pas l'enfant à la libération.
+fn tuer(state: &tauri::State<'_, RdpStore>, id: u64, msg: String) -> String {
+    if let Some(mut child) = state.inner.lock().unwrap().remove(&id) {
+        let _ = child.start_kill();
+    }
+    msg
 }
 
 #[tauri::command]

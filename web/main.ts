@@ -371,7 +371,7 @@ async function moveHostTo(kind: string, id: string, folder: string) {
     else await invoke("rdp_host_set_folder", { id, folder });
     await loadHosts();
   } catch (e) {
-    alert(`Déplacement impossible : ${e}`);
+    notifyErreur(`Déplacement impossible : ${e}`);
   }
 }
 
@@ -1441,6 +1441,52 @@ async function currentLocks(): Promise<number | null> {
   return choisirVerrous(duSysteme ?? null, verrousDesEvenements);
 }
 
+// ---------- Notifications ----------
+//
+// Remplace `notifyErreur()`, qui sous WebKitGTK/WRY ne bloque pas et n'affiche pas
+// nécessairement quoi que ce soit — la même famille de piège que `confirm()`
+// et `prompt()`. Un bandeau n'interrompt rien : l'utilisateur lit l'erreur
+// sans perdre ce qu'il était en train de faire, et peut la faire disparaître.
+
+/** Nature du message : change la couleur du liseré et l'insistance annoncée. */
+type NatureAvis = "info" | "erreur" | "succes";
+
+/**
+ * Affiche un bandeau temporaire en bas à droite.
+ *
+ * Les erreurs restent plus longtemps et sont annoncées de façon assertive aux
+ * lecteurs d'écran : ce sont elles qu'il ne faut pas manquer.
+ */
+/** Raccourci : tous les anciens `alert()` signalaient un échec. */
+function notifyErreur(message: string): void {
+  notify(message, "erreur");
+}
+
+function notify(message: string, nature: NatureAvis = "info"): void {
+  const zone = $("toasts");
+  zone.setAttribute("aria-live", nature === "erreur" ? "assertive" : "polite");
+  const el = document.createElement("div");
+  el.className = `toast ${nature}`;
+  el.setAttribute("role", nature === "erreur" ? "alert" : "status");
+  const titre = document.createElement("span");
+  titre.className = "titre";
+  titre.textContent = nature === "erreur" ? "Échec" : nature === "succes" ? "Fait" : "Information";
+  const corps = document.createElement("span");
+  corps.textContent = message; // textContent : le message peut venir d'un serveur
+  const aide = document.createElement("span");
+  aide.className = "fermer";
+  aide.textContent = "Cliquer pour fermer";
+  el.append(titre, corps, aide);
+
+  const retirer = () => {
+    el.remove();
+    if (zone.children.length === 0) zone.setAttribute("aria-live", "polite");
+  };
+  el.addEventListener("click", retirer);
+  zone.appendChild(el);
+  window.setTimeout(retirer, nature === "erreur" ? 9000 : 4500);
+}
+
 // ---------- Accessibilité des boîtes de dialogue ----------
 // Les modales s'ouvrent en posant la classe « open », depuis une quarantaine
 // d'endroits. Plutôt que d'instrumenter chaque appel, on observe la classe :
@@ -2070,7 +2116,7 @@ $("host-context").addEventListener("click", async (e) => {
       await invoke("host_delete", { alias });
       await loadHosts();
     } catch (err) {
-      alert(`Suppression impossible : ${err}`);
+      notifyErreur(`Suppression impossible : ${err}`);
     }
   } else if (act === "forget") {
     try {
@@ -2105,7 +2151,7 @@ async function openEditHost(alias: string) {
     $("edit-modal").classList.add("open");
     setTimeout(() => ($("e-alias") as HTMLInputElement).focus(), 30);
   } catch (e) {
-    alert(`Impossible de charger l'hôte : ${e}`);
+    notifyErreur(`Impossible de charger l'hôte : ${e}`);
   }
 }
 
@@ -2265,7 +2311,7 @@ async function tunnelToggle(d: TunnelDef) {
     try {
       await invoke("tunnel_stop", { id: d.id });
     } catch (e) {
-      alert(`Arrêt impossible : ${e}`);
+      notifyErreur(`Arrêt impossible : ${e}`);
     }
     await tunnelsRefresh();
     return;
@@ -2333,7 +2379,7 @@ async function tunnelDelete(d: TunnelDef) {
   try {
     await invoke("tunnel_def_delete", { id: d.id });
   } catch (e) {
-    alert(`Suppression impossible : ${e}`);
+    notifyErreur(`Suppression impossible : ${e}`);
   }
   await tunnelsRefresh();
 }
@@ -2575,7 +2621,7 @@ async function snippetDelete(sn: Snippet) {
     await invoke("snippet_delete", { id: sn.id });
     await snippetsRefresh();
   } catch (e) {
-    alert(`Suppression impossible : ${e}`);
+    notifyErreur(`Suppression impossible : ${e}`);
   }
 }
 
@@ -2817,7 +2863,7 @@ async function checkForUpdates() {
     // Endpoint injoignable / pas encore configuré / hors ligne : on le dit
     // sans dramatiser.
     ver.textContent = prev;
-    alert(`Vérification des mises à jour impossible : ${e}`);
+    notifyErreur(`Vérification des mises à jour impossible : ${e}`);
   } finally {
     updateBusy = false;
   }
@@ -2981,9 +3027,15 @@ async function openRdp(t: RdpTarget) {
       id, host: t.host, port: t.port, user: t.user, password: t.password,
       width: rdpW, height: rdpH,
     });
+    // L'onglet a pu être fermé pendant la connexion (TLS + NLA prennent du
+    // temps) : sans cette garde, l'affectation levait une exception, attrapée
+    // plus bas et présentée comme un échec de connexion alors que l'utilisateur
+    // venait simplement de fermer.
+    const session = rdpSessions.get(id);
+    if (!session) { void invoke("rdp_close", { id }).catch(() => {}); return; }
     const ws = new WebSocket(`ws://127.0.0.1:${conn.port}`);
     ws.binaryType = "arraybuffer";
-    rdpSessions.get(id)!.ws = ws;
+    session.ws = ws;
     ws.onopen = () => {
       ws.send(new TextEncoder().encode(conn.token));
       // Annonce initiale du presse-papiers local au bureau distant.
@@ -3044,7 +3096,7 @@ async function openRdp(t: RdpTarget) {
         clipWriteText(text).catch(() => {});
       } else if (kind === 3) {
         tab.querySelector(".state")!.className = "state closed";
-        alert(`RDP : ${new TextDecoder().decode(new Uint8Array(buf, 1))}`);
+        notifyErreur(`RDP : ${new TextDecoder().decode(new Uint8Array(buf, 1))}`);
       }
     };
     ws.onclose = () => {
@@ -3055,8 +3107,12 @@ async function openRdp(t: RdpTarget) {
     };
     ws.onerror = () => { /* onclose suivra */ };
   } catch (e) {
+    // Fermeture volontaire pendant la connexion : le back le signale par un
+    // marqueur. Rien à afficher, l'onglet n'existe déjà plus.
+    if (String(e).includes("[AVASH_RDP_ANNULE]")) return;
+    if (!rdpSessions.has(id)) return;
     tab.querySelector(".state")!.className = "state closed";
-    alert(`Connexion RDP impossible : ${e}`);
+    notify(`Connexion RDP impossible : ${e}`, "erreur");
     showRdpClosed(id); // proposer de réessayer
   }
   focusRdp(id);
@@ -3168,7 +3224,7 @@ $("rdp-context").addEventListener("click", async (e) => {
     await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user }).catch(() => {});
   } else if (act === "delete") {
     if (!(await askConfirm(`Supprimer le bureau RDP « ${h.name} » ?\n\nSon mot de passe mémorisé sera aussi oublié.`))) return;
-    await invoke("rdp_host_delete", { id: h.id }).catch((err) => alert(`Suppression impossible : ${err}`));
+    await invoke("rdp_host_delete", { id: h.id }).catch((err) => notifyErreur(`Suppression impossible : ${err}`));
     await loadHosts();
   }
 });
@@ -3382,7 +3438,7 @@ async function createFolder(parent: string) {
     saveCollapsed();
     await loadHosts();
   } catch (e) {
-    alert(`Cr\u00e9ation impossible : ${e}`);
+    notifyErreur(`Cr\u00e9ation impossible : ${e}`);
   }
 }
 
@@ -3414,7 +3470,7 @@ $("folder-context").addEventListener("click", async (e) => {
       await invoke("folder_rename", { from: path, to });
       await loadHosts();
     } catch (ex) {
-      alert(`Renommage impossible : ${ex}`);
+      notifyErreur(`Renommage impossible : ${ex}`);
     }
   } else if (act === "delete") {
     if (!(await askConfirm(`Supprimer le dossier \u00ab ${path} \u00bb ?\n\nLes h\u00f4tes qu'il contient (et ses sous-dossiers) reviennent \u00e0 la racine ; ils ne sont pas supprim\u00e9s.`))) return;
@@ -3422,7 +3478,7 @@ $("folder-context").addEventListener("click", async (e) => {
       await invoke("folder_delete", { path });
       await loadHosts();
     } catch (ex) {
-      alert(`Suppression impossible : ${ex}`);
+      notifyErreur(`Suppression impossible : ${ex}`);
     }
   }
 });
