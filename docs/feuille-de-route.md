@@ -180,6 +180,12 @@ Apprises en construisant le projet, coûteuses à réapprendre :
 - **Le binaire embarque le front.** Après toute modification de `web/`, faire
   `vite build` *puis* `cargo build --release` — sinon l'application testée conserve
   l'ancienne interface.
+- **Reconstruire la distribution locale à chaque version.** `./check.sh --quick`
+  saute délibérément le build release : le binaire de `target/release/` et
+  l'AppImage de `dist-release/` restent alors ceux d'avant les correctifs. Après
+  toute correction destinée à l'utilisateur, lancer `./scripts/release.sh`
+  (`NO_STRIP=1` sur Arch) — sinon il essaie la version publiée en ligne pendant
+  que sa copie locale est périmée, et les deux ne se comportent pas pareil.
 - **`confirm()` et `prompt()` sont inopérants sous WebKitGTK.** Utiliser
   `askConfirm()` / `askText()`. La garde `scripts/guard.sh` interdit leur retour.
 - **Un nouveau test doit être vu échouer.** Débrancher la fonctionnalité qu'il
