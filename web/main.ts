@@ -70,6 +70,8 @@ const state = {
   sessions: new Map<number, Session>(),
   /** Hote surligne par un simple clic (sans connexion). */
   pickedAlias: null as string | null,
+  /** Bureau RDP surligné par un simple clic (id). */
+  pickedRdp: null as string | null,
   /** Filtre par tag actif (null = tous). */
   tagFilter: null as string | null,
   /** Dossiers connus (registre + dérivés des hôtes), triés. */
@@ -336,6 +338,7 @@ function sshHostElement(h: Host): HTMLElement {
   if (!os) el.title = "Double-clic : connexion — clic droit : options";
   el.addEventListener("click", () => {
     state.pickedAlias = h.alias;
+    state.pickedRdp = null;
     for (const n of $("host-list").querySelectorAll(".host.picked")) n.classList.remove("picked");
     el.classList.add("picked");
   });
@@ -351,12 +354,21 @@ function sshHostElement(h: Host): HTMLElement {
 /** Une ligne de bureau RDP enregistré, déplaçable. */
 function rdpHostElement(h: RdpHostT): HTMLElement {
   const el = document.createElement("div");
-  el.className = "host";
+  const activeRdp = state.active === null ? undefined : rdpSessions.get(state.active);
+  const selected = activeRdp?.hostId === h.id;
+  el.className = "host" + (selected ? " selected" : "");
   el.innerHTML = `<span class="avatar rdp"><span class="ini logo"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
   (el.querySelector(".ini") as HTMLElement).innerHTML = ic("monitor");
   el.querySelector(".alias")!.textContent = h.name;
   el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
   el.title = "Double-clic : connexion RDP — clic droit : options";
+  if (h.id === state.pickedRdp) el.classList.add("picked");
+  el.addEventListener("click", () => {
+    state.pickedRdp = h.id;
+    state.pickedAlias = null;
+    for (const n of $("host-list").querySelectorAll(".host.picked")) n.classList.remove("picked");
+    el.classList.add("picked");
+  });
   el.addEventListener("dblclick", () => connectRdpSaved(h));
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault();
@@ -853,6 +865,7 @@ function focusSession(id: number) {
   const cur = state.sessions.get(id);
   sftpSyncButton();
   if (sftp.open && cur) sftpOpenAt(cur, cur.sftpPath);
+  renderHosts(); // met à jour le surlignage « sélectionné »
 }
 
 function closeSession(id: number) {
@@ -2667,7 +2680,7 @@ $("app-version").addEventListener("click", checkForUpdates);
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
 
-type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number };
+type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string };
 
 type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string };
 let rdpHostsList: RdpHostT[] = [];
@@ -2677,7 +2690,7 @@ const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
 // local et on l'annonce à la session RDP active quand Avash reprend le focus
 // (tu copies ailleurs, tu reviens, tu colles dans le distant). Message [8].
 let lastClipText = "";
-async function pushLocalClipboard(): Promise<void> {
+async function pushLocalClipboard(force = false): Promise<void> {
   if (state.active === null || !rdpSessions.has(state.active)) return;
   let text = "";
   try {
@@ -2685,7 +2698,8 @@ async function pushLocalClipboard(): Promise<void> {
   } catch {
     return; // pas de texte (image/fichier) ou accès refusé
   }
-  if (!text || text === lastClipText) return;
+  if (!text) return;
+  if (!force && text === lastClipText) return; // au switch d'onglet, on renvoie quand même
   lastClipText = text;
   const s = rdpSessions.get(state.active);
   if (s?.ws && s.ws.readyState === WebSocket.OPEN) {
@@ -2697,7 +2711,7 @@ async function pushLocalClipboard(): Promise<void> {
   }
 }
 window.addEventListener("focus", () => void pushLocalClipboard());
-const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver }>();
+const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; hostId?: string }>();
 
 async function openRdp(t: RdpTarget) {
   const id = state.nextId++;
@@ -2738,7 +2752,7 @@ async function openRdp(t: RdpTarget) {
   wrap.appendChild(hud);
   $("terminal").appendChild(wrap);
   const ctx = canvas.getContext("2d")!;
-  rdpSessions.set(id, { canvas, tab, ws: null });
+  rdpSessions.set(id, { canvas, tab, ws: null, hostId: t.hostId });
   state.active = id;
 
   tab.addEventListener("click", () => focusRdp(id));
@@ -2783,6 +2797,9 @@ async function openRdp(t: RdpTarget) {
     e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 1]);
   });
   canvas.addEventListener("keyup", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 0]); });
+  // Focus du bureau distant = l'utilisateur va sans doute coller : on lui pousse
+  // le presse-papiers local à jour (fiabilise le collage local->distant).
+  canvas.addEventListener("focus", () => void pushLocalClipboard(true));
 
   // Redimensionnement NATIF du bureau distant : quand la zone Avash change, on
   // demande au serveur de re-rendre à la nouvelle taille (Display Control DVC).
@@ -2910,6 +2927,11 @@ function focusRdp(id: number) {
   // Masquer les terminaux PTY.
   state.sessions.forEach((s) => { (s.term.element?.parentElement as HTMLElement).style.display = "none"; s.tab.classList.remove("active"); });
   $("terminal-empty").style.display = "none";
+  // Le switch d'onglet ne déclenche pas l'événement focus fenêtre : on renvoie
+  // explicitement le presse-papiers local à la session qui devient active,
+  // sinon le collage local->distant ne marche pas après un changement d'onglet.
+  void pushLocalClipboard(true);
+  renderHosts(); // met à jour le surlignage « sélectionné »
 }
 
 function closeRdp(id: number) {
@@ -2942,7 +2964,7 @@ async function connectRdpSaved(h: RdpHostT) {
       await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw }).catch(() => {});
     }
   }
-  await openRdp({ host: h.host, port: h.port, user: h.user, password: pw ?? "" });
+  await openRdp({ host: h.host, port: h.port, user: h.user, password: pw ?? "", hostId: h.id });
 }
 
 function openRdpMenu(h: RdpHostT, e: MouseEvent) {
