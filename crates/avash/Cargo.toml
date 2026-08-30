@@ -1,6 +1,6 @@
 [package]
 name = "avash"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 description = "Avash — native SSH/RDP connection manager. Light, fast, secure, multi-platform."
 license = "AGPL-3.0-or-later"
