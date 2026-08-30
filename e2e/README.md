@@ -33,7 +33,7 @@ une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) 
 effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 (`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`.
 
-## Couverture (17 scénarios)
+## Couverture (18 scénarios)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -45,6 +45,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 | `tunnels.spec.js`     | tunnel local : créer, lister, **supprimer** (askConfirm) |
 | `modals.spec.js`      | « Connexion directe » ne se ferme pas au clic dehors, se ferme à Échap ; palette Ctrl+K |
 | `ssh.spec.js`         | **connexion SSH réelle** (sshd local, auth par clé) → session live |
+| `sftp.spec.js`        | **panneau SFTP** sur la session SSH → listing du répertoire distant |
 | `rdp.spec.js`         | **connexion RDP réelle** (serveur dédié) → handshake CredSSP + canvas (`.state.live`) |
 | `rdp-reconnect.spec.js` | **overlay de reconnexion** quand le serveur RDP coupe |
 
