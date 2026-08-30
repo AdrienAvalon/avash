@@ -25,6 +25,12 @@ use ironrdp::server::{
     RdpServerDisplay, RdpServerDisplayUpdates, RdpServerInputHandler, ServerEvent, ServerEventSender,
     SoundServerFactory, TlsIdentityCtx, tokio,
 };
+use ironrdp::cliprdr::backend::{CliprdrBackend, CliprdrBackendFactory, ClipboardMessage};
+use ironrdp::cliprdr::pdu::{
+    ClipboardFormat, ClipboardFormatId, ClipboardGeneralCapabilityFlags, FileContentsRequest,
+    FileContentsResponse, FormatDataRequest, FormatDataResponse, LockDataId,
+};
+use ironrdp::core::IntoOwned as _;
 use rand::prelude::*;
 use tracing::{debug, info, warn};
 
@@ -220,6 +226,85 @@ pub struct Inner {
     ev_sender: Option<UnboundedSender<ServerEvent>>,
 }
 
+/// Texte que le « bureau distant » propose dans son presse-papiers. Le test
+/// bout-en-bout vérifie qu'il arrive bien jusqu'au poste local.
+pub const CLIP_TEXT: &str = "avash-cliprdr-test";
+
+/// Presse-papiers du serveur de test : annonce du texte dès que le canal est
+/// prêt, et le sert quand le client le réclame. Texte seul (CF_UNICODETEXT).
+#[derive(Debug)]
+struct ClipBackend {
+    sender: Option<UnboundedSender<ServerEvent>>,
+}
+
+ironrdp::core::impl_as_any!(ClipBackend);
+
+impl ClipBackend {
+    fn send(&self, msg: ClipboardMessage) {
+        if let Some(tx) = &self.sender {
+            let _ = tx.send(ServerEvent::Clipboard(msg));
+        }
+    }
+}
+
+impl CliprdrBackend for ClipBackend {
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn temporary_directory(&self) -> &str {
+        "."
+    }
+    fn client_capabilities(&self) -> ClipboardGeneralCapabilityFlags {
+        ClipboardGeneralCapabilityFlags::empty()
+    }
+    fn on_ready(&mut self) {
+        // Le bureau distant « a copié quelque chose » : on l'annonce au client.
+        self.send(ClipboardMessage::SendInitiateCopy(vec![ClipboardFormat::new(
+            ClipboardFormatId::CF_UNICODETEXT,
+        )]));
+    }
+    fn on_request_format_list(&mut self) {
+        self.send(ClipboardMessage::SendInitiateCopy(vec![ClipboardFormat::new(
+            ClipboardFormatId::CF_UNICODETEXT,
+        )]));
+    }
+    fn on_process_negotiated_capabilities(&mut self, _caps: ClipboardGeneralCapabilityFlags) {}
+    fn on_remote_copy(&mut self, _formats: &[ClipboardFormat]) {}
+    fn on_format_data_request(&mut self, req: FormatDataRequest) {
+        // Le client réclame le texte : on le sert.
+        let resp = if req.format == ClipboardFormatId::CF_UNICODETEXT {
+            FormatDataResponse::new_unicode_string(CLIP_TEXT).into_owned()
+        } else {
+            FormatDataResponse::new_error().into_owned()
+        };
+        self.send(ClipboardMessage::SendFormatData(resp));
+    }
+    fn on_format_data_response(&mut self, _resp: FormatDataResponse<'_>) {}
+    fn on_file_contents_request(&mut self, _req: FileContentsRequest) {}
+    fn on_file_contents_response(&mut self, _resp: FileContentsResponse<'_>) {}
+    fn on_lock(&mut self, _id: LockDataId) {}
+    fn on_unlock(&mut self, _id: LockDataId) {}
+}
+
+#[derive(Debug, Clone)]
+struct ClipFactory {
+    sender: Option<UnboundedSender<ServerEvent>>,
+}
+
+impl ServerEventSender for ClipFactory {
+    fn set_sender(&mut self, sender: UnboundedSender<ServerEvent>) {
+        self.sender = Some(sender);
+    }
+}
+
+impl CliprdrBackendFactory for ClipFactory {
+    fn build_cliprdr_backend(&self) -> Box<dyn CliprdrBackend> {
+        Box::new(ClipBackend {
+            sender: self.sender.clone(),
+        })
+    }
+}
+
+impl CliprdrServerFactory for ClipFactory {}
+
 struct StubSoundServerFactory {
     inner: Arc<Mutex<Inner>>,
 }
@@ -407,7 +492,7 @@ async fn run(
     let mut server = server_builder
         .with_input_handler(handler.clone())
         .with_display_handler(handler.clone())
-        .with_cliprdr_factory(None)
+        .with_cliprdr_factory(Some(Box::new(ClipFactory { sender: None })))
         .with_sound_factory(Some(sound))
         .build();
 

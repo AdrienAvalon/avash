@@ -1,10 +1,23 @@
 // Localise une ligne d'hôte par son alias (SSH) ou une ligne de dossier par son nom.
-export async function findHostRow(alias) {
+// La liste est peuplée de façon asynchrone au démarrage : on patiente au lieu de
+// conclure à l'absence sur la toute première interrogation.
+async function chercheHote(alias) {
   for (const r of await $$("#host-list .host")) {
     const a = await r.$(".alias");
     if ((await a.getProperty("textContent")) === alias) return r;
   }
-  throw new Error(`hôte « ${alias} » introuvable`);
+  return null;
+}
+export async function findHostRow(alias, timeout = 8000) {
+  let trouve = null;
+  await browser.waitUntil(
+    async () => {
+      trouve = await chercheHote(alias);
+      return trouve !== null;
+    },
+    { timeout, timeoutMsg: `hôte « ${alias} » introuvable` },
+  );
+  return trouve;
 }
 export async function findFolderRow(name) {
   for (const r of await $$("#host-list .folder-row")) {
