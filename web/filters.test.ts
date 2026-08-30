@@ -326,7 +326,7 @@ describe("sortSftpEntries", () => {
   });
 });
 
-import { buildFolderTree, folderNodeCount, ensureFolderNode, rdpScancode, le16, rdpMousePos } from "./filters";
+import { buildFolderTree, folderNodeCount, ensureFolderNode, rdpScancode, le16, rdpMousePos , choisirVerrous } from "./filters";
 
 describe("buildFolderTree", () => {
   it("range les éléments à la racine et dans des dossiers imbriqués", () => {
@@ -471,5 +471,27 @@ describe("rdpScancode — clavier complet", () => {
 
   it("une touche inconnue ne produit rien", () => {
     expect(rdpScancode("ToucheImaginaire")).toBeNull();
+  });
+});
+
+describe("choisirVerrous — priorité des sources", () => {
+  it("le système prime sur les événements clavier", () => {
+    // WebKitGTK rapporte NumLock éteint alors qu'il est allumé : laisser les
+    // événements primer éteignait le pavé numérique du bureau distant.
+    expect(choisirVerrous(1, 0)).toBe(1);
+    expect(choisirVerrous(0, 1)).toBe(0);
+  });
+
+  it("les événements servent de secours quand le système ne sait pas", () => {
+    expect(choisirVerrous(null, 5)).toBe(5);
+  });
+
+  it("le système peut légitimement répondre « tout éteint »", () => {
+    // 0 est une réponse, pas une absence de réponse.
+    expect(choisirVerrous(0, 7)).toBe(0);
+  });
+
+  it("aucune source : on n'impose rien au distant", () => {
+    expect(choisirVerrous(null, null)).toBeNull();
   });
 });

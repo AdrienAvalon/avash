@@ -428,3 +428,19 @@ export function rdpMousePos(
   const y = Math.max(0, Math.min(h - 1, Math.round(((clientY - rect.top - offY) / dispH) * h)));
   return [x, y];
 }
+
+/**
+ * Choisit l'état des verrous clavier à imposer au bureau distant.
+ *
+ * Le système est prioritaire quand il sait répondre (diodes du clavier sous
+ * Linux, état des touches sous Windows). Les événements clavier ne sont qu'un
+ * secours : **WebKitGTK ne renseigne pas `getModifierState("NumLock")`** — il
+ * répond toujours faux, verrou allumé ou non (mesuré). Les laisser primer
+ * revenait à éteindre le pavé numérique du distant dès la première frappe.
+ *
+ * `null` signifie « je ne sais pas » : mieux vaut ne rien imposer au distant
+ * que de lui affirmer un état faux.
+ */
+export function choisirVerrous(systeme: number | null, evenements: number | null): number | null {
+  return systeme ?? evenements;
+}

@@ -21,7 +21,7 @@ import {
   sortSftpEntries, shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
-  buildFolderTree, folderNodeCount, rdpScancode, le16, rdpMousePos, type FolderNode,
+  buildFolderTree, folderNodeCount, rdpScancode, le16, rdpMousePos, choisirVerrous, type FolderNode,
 } from "./filters";
 
 // ---------- Systeme distant par hote ----------
@@ -1415,8 +1415,7 @@ void ensureFontLoaded();
 // Le navigateur ne révèle cet état que sur un événement clavier : on l'écoute
 // dans toute l'application (en capture), pas seulement sur le canvas RDP — ainsi
 // l'état est le plus souvent déjà connu au moment où une session s'ouvre.
-let locksBits = 0;
-let locksKnown = false;
+let verrousDesEvenements: number | null = null;
 
 /** Bits attendus par le message [10] : 1 = numérique, 2 = majuscules, 4 = défilement. */
 function readLocks(e: KeyboardEvent): number {
@@ -1427,25 +1426,19 @@ function readLocks(e: KeyboardEvent): number {
   );
 }
 for (const type of ["keydown", "keyup"] as const) {
-  window.addEventListener(type, (e) => { locksBits = readLocks(e); locksKnown = true; }, true);
+  window.addEventListener(type, (e) => { verrousDesEvenements = readLocks(e); }, true);
 }
 
 /**
  * État des verrous à transmettre au bureau distant, ou `null` si inconnu.
  *
- * On interroge d'abord le système : une session s'ouvre le plus souvent à la
- * souris, sans qu'aucune touche n'ait été frappée — le navigateur serait alors
- * muet. Les événements clavier servent de secours (et de source la plus fraîche
- * pendant la frappe).
+ * Le système est interrogé en premier : une session s'ouvre le plus souvent à
+ * la souris, sans qu'aucune touche n'ait été frappée. Les événements clavier ne
+ * sont qu'un secours, jamais prioritaires — voir `choisirVerrous`.
  */
 async function currentLocks(): Promise<number | null> {
   const duSysteme = await invoke<number | null>("keyboard_locks").catch(() => null);
-  if (duSysteme !== null && duSysteme !== undefined) {
-    locksBits = duSysteme;
-    locksKnown = true;
-    return duSysteme;
-  }
-  return locksKnown ? locksBits : null;
+  return choisirVerrous(duSysteme ?? null, verrousDesEvenements);
 }
 
 // ---------- Accessibilité des boîtes de dialogue ----------
@@ -2934,21 +2927,13 @@ async function openRdp(t: RdpTarget) {
   // navigateur ET la remontée vers #terminal (qui ouvrirait le menu d'Avash).
   canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); });
   canvas.addEventListener("wheel", (e) => { e.preventDefault(); const d = e.deltaY > 0 ? -120 : 120; send([3, ...le16(d & 0xffff), 0, 0, 0, 0]); });
-  // Les verrous peuvent changer pendant que le bureau n'a pas le focus (ou avant
-  // même la connexion) : on renvoie l'état dès qu'il diverge de ce qu'on a
-  // transmis, juste avant la touche pour que le distant l'interprète bien.
-  let locksSent: number | null = null;
-  const syncLocks = () => {
-    if (!locksKnown || locksSent === locksBits) return;
-    locksSent = locksBits;
-    send([10, locksBits]);
-  };
   canvas.addEventListener("keydown", (e) => {
     if (e.code === "F11") { e.preventDefault(); return; } // géré globalement (plein écran)
     e.preventDefault();
-    locksBits = readLocks(e);
-    locksKnown = true;
-    syncLocks();
+    // Pas de resynchronisation ici : le navigateur ne sait pas lire ces verrous
+    // sous WebKitGTK, et renvoyer sa valeur éteindrait le pavé numérique du
+    // distant dès la première frappe. Verr.Num est de toute façon transmise
+    // comme n'importe quelle touche : le bureau distant bascule lui-même.
     const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 1]);
   });
   canvas.addEventListener("keyup", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 0]); });
