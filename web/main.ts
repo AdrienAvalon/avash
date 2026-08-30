@@ -2711,7 +2711,7 @@ async function pushLocalClipboard(force = false): Promise<void> {
   }
 }
 window.addEventListener("focus", () => void pushLocalClipboard());
-const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; hostId?: string; syncSize?: () => void }>();
+const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; hostId?: string; syncSize?: () => void; target?: RdpTarget }>();
 
 async function openRdp(t: RdpTarget) {
   const id = state.nextId++;
@@ -2752,7 +2752,7 @@ async function openRdp(t: RdpTarget) {
   wrap.appendChild(hud);
   $("terminal").appendChild(wrap);
   const ctx = canvas.getContext("2d")!;
-  rdpSessions.set(id, { canvas, tab, ws: null, hostId: t.hostId });
+  rdpSessions.set(id, { canvas, tab, ws: null, hostId: t.hostId, target: t });
   state.active = id;
 
   tab.addEventListener("click", () => focusRdp(id));
@@ -2903,11 +2903,13 @@ async function openRdp(t: RdpTarget) {
       const st = tab.querySelector(".state");
       if (st) st.className = "state closed";
       tab.classList.add("dead");
+      showRdpClosed(id);
     };
     ws.onerror = () => { /* onclose suivra */ };
   } catch (e) {
     tab.querySelector(".state")!.className = "state closed";
     alert(`Connexion RDP impossible : ${e}`);
+    showRdpClosed(id); // proposer de réessayer
   }
   focusRdp(id);
 }
@@ -2956,6 +2958,30 @@ function closeRdp(id: number) {
     if (state.sessions.size === 0 && rdpSessions.size === 0) $("terminal-empty").style.display = "flex";
   }
   renderHosts(); // éteint le voyant vert de l'hôte fermé
+}
+
+/** Bureau RDP fermé (serveur/réseau) : propose de reconnecter ou fermer l'onglet
+ *  — équivalent du message « Entrée : reconnecter · Ctrl+W : fermer » du SSH. */
+function showRdpClosed(id: number) {
+  const s = rdpSessions.get(id);
+  if (!s) return; // fermeture volontaire (l'onglet est déjà retiré)
+  const wrap = s.canvas.parentElement as HTMLElement | null;
+  if (!wrap || wrap.querySelector(".rdp-closed")) return;
+  const ov = document.createElement("div");
+  ov.className = "rdp-closed";
+  ov.innerHTML =
+    `<div class="rdp-closed-box"><p>Connexion RDP fermée.</p>` +
+    `<div class="rdp-closed-actions">` +
+    `<button type="button" class="btn-primary" data-act="reconnect">Reconnecter</button>` +
+    `<button type="button" class="btn-ghost" data-act="close">Fermer l'onglet</button>` +
+    `</div></div>`;
+  ov.querySelector('[data-act="reconnect"]')!.addEventListener("click", () => {
+    const t = s.target;
+    closeRdp(id);
+    if (t) void openRdp(t);
+  });
+  ov.querySelector('[data-act="close"]')!.addEventListener("click", () => closeRdp(id));
+  wrap.appendChild(ov);
 }
 
 /** Connexion à un bureau RDP enregistré (mot de passe du trousseau, sinon demandé). */
@@ -3310,3 +3336,9 @@ $("move-form").addEventListener("submit", (e) => {
 
 // Racine : d\u00e9poser un h\u00f4te sur la zone vide de la liste le remet \u00e0 la racine.
 setupFolderDrop($("host-list"), "", false);
+
+// === HARNESS TEMPORAIRE (surcouche RDP fermée — À RETIRER) ===
+void (async () => {
+  await new Promise((r) => setTimeout(r, 3000));
+  await openRdp({ host: "127.0.0.1", port: 33892, user: "test", password: "test" });
+})();

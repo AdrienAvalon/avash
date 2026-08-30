@@ -406,6 +406,13 @@
     body.rdp-full .side-resize { display: none !important; }
     body.rdp-full .app { height: 100vh; }
     .rdp-container canvas { width: 100%; height: 100%; object-fit: contain; outline: none; }
+    .rdp-closed { position: absolute; inset: 0; z-index: 6; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .55); }
+    .rdp-closed-box {
+      background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 12px;
+      padding: 22px 26px; text-align: center; box-shadow: 0 8px 30px rgba(0, 0, 0, .4);
+    }
+    .rdp-closed-box p { margin: 0 0 14px; color: var(--text); font-size: 14px; }
+    .rdp-closed-actions { display: flex; gap: 10px; justify-content: center; }
     .rdp-hud { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
       z-index: 5; pointer-events: auto; cursor: pointer; user-select: none;
       font: 11px/1.35 ui-monospace, "Cascadia Code", monospace;
