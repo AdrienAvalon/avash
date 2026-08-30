@@ -240,7 +240,10 @@
       transition: background var(--t-fast), border-color var(--t-fast);
     }
     .host:hover { background: var(--card-hover); }
-    .host.selected { background: var(--card); border-color: var(--border-soft); }
+    /* « Session ouverte ici » : simple barre d'accent à gauche, PAS une boîte —
+       sinon elle ferait doublon avec le cadre de sélection au clic (.picked). */
+    .host.selected { background: transparent; border-color: transparent; }
+    /* « Sélectionné au clic » : le seul vrai cadre (curseur de sélection). */
     .host.picked { background: var(--card-hover); border-color: var(--accent-line); }
     .host.selected::before {
       content: ""; position: absolute; left: -1px; top: 22%; height: 56%; width: 3px;
