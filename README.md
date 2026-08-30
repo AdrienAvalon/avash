@@ -112,6 +112,7 @@ communique par WebSocket binaire local. Détails dans
 
 ## Documentation
 
+- [docs/feuille-de-route.md](docs/feuille-de-route.md) — le cap, les priorités et les règles de travail
 - [CHANGELOG.md](CHANGELOG.md) — historique des versions
 - [CONTRIBUTING.md](CONTRIBUTING.md) — développer et contribuer
 - [SECURITY.md](SECURITY.md) — signaler une vulnérabilité, modèle de sécurité
