@@ -142,6 +142,14 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           sig() { find artefacts -name "$1" -print -quit | xargs -r cat; }
+          # Sans signature, le manifeste serait vide et la mise à jour échouerait
+          # sans rien dire. On préfère faire échouer la publication, visiblement.
+          if [ -z "$(sig '*.AppImage.sig')" ] && [ -z "$(sig '*-setup.exe.sig')" ]; then
+            echo "::error::Aucune signature trouvée. Le secret TAURI_SIGNING_PRIVATE_KEY" \
+                 "est-il défini sur le dépôt ? Sans lui, la mise à jour automatique" \
+                 "ne peut pas vérifier ce qu'elle télécharge."
+            exit 1
+          fi
           python3 - "$version" "$base" "$(sig '*.AppImage.sig')" "$(sig '*-setup.exe.sig')" <<'PY' > latest.json
           import json, sys, datetime
           version, base, sig_linux, sig_win = sys.argv[1:5]
