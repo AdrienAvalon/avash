@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="navy" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16233f"/>
+      <stop offset="1" stop-color="#0b1526"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4d98a"/>
+      <stop offset="0.5" stop-color="#d9b24a"/>
+      <stop offset="1" stop-color="#b8860b"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b4a6b"/>
+      <stop offset="1" stop-color="#26324b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Bouclier : rim or + liseré + corps navy -->
+  <path d="M84 92 L428 92 L428 246 C428 356 350 430 256 470 C162 430 84 356 84 246 Z"
+        fill="url(#gold)"/>
+  <path d="M100 108 L412 108 L412 244 C412 344 342 410 256 447 C170 410 100 344 100 244 Z"
+        fill="url(#navy)" stroke="#0a1220" stroke-width="3"/>
+  <path d="M112 120 L400 120 L400 242 C400 335 336 396 256 431 C176 396 112 335 112 242 Z"
+        fill="none" stroke="url(#gold)" stroke-width="2.5" opacity="0.55"/>
+
+  <!-- Pistes de circuit derrière les serveurs -->
+  <g stroke="url(#gold)" stroke-width="3" fill="none" opacity="0.85" stroke-linecap="round">
+    <path d="M150 170 H126 V210"/><path d="M150 210 H136"/>
+    <path d="M362 170 H386 V210"/><path d="M362 210 H376"/>
+    <path d="M150 250 H130 V286"/><path d="M362 250 H382 V286"/>
+    <path d="M256 316 V344"/>
+  </g>
+  <g fill="url(#gold)">
+    <circle cx="126" cy="210" r="5"/><circle cx="136" cy="210" r="4"/>
+    <circle cx="386" cy="210" r="5"/><circle cx="376" cy="210" r="4"/>
+    <circle cx="130" cy="286" r="5"/><circle cx="382" cy="286" r="5"/>
+  </g>
+
+  <!-- Trois serveurs empilés -->
+  <g>
+    <g>
+      <rect x="166" y="158" width="180" height="34" rx="7" fill="url(#steel)" stroke="#0a1220" stroke-width="2"/>
+      <rect x="176" y="171" width="70" height="4" rx="2" fill="#8fa4c8"/>
+      <rect x="176" y="179" width="52" height="4" rx="2" fill="#6f83a6"/>
+      <circle cx="322" cy="175" r="5.5" fill="#f4d98a"/>
+      <circle cx="304" cy="175" r="5.5" fill="#5cc8ff"/>
+    </g>
+    <g>
+      <rect x="166" y="200" width="180" height="34" rx="7" fill="url(#steel)" stroke="#0a1220" stroke-width="2"/>
+      <rect x="176" y="213" width="70" height="4" rx="2" fill="#8fa4c8"/>
+      <rect x="176" y="221" width="52" height="4" rx="2" fill="#6f83a6"/>
+      <circle cx="322" cy="217" r="5.5" fill="#5cc8ff"/>
+      <circle cx="304" cy="217" r="5.5" fill="#f4d98a"/>
+    </g>
+    <g>
+      <rect x="166" y="242" width="180" height="34" rx="7" fill="url(#steel)" stroke="#0a1220" stroke-width="2"/>
+      <rect x="176" y="255" width="70" height="4" rx="2" fill="#8fa4c8"/>
+      <rect x="176" y="263" width="52" height="4" rx="2" fill="#6f83a6"/>
+      <circle cx="322" cy="259" r="5.5" fill="#f4d98a"/>
+      <circle cx="304" cy="259" r="5.5" fill="#5cc8ff"/>
+    </g>
+  </g>
+
+  <!-- Cadenas -->
+  <g>
+    <path d="M230 322 V308 a26 26 0 0 1 52 0 V322" fill="none" stroke="url(#gold)" stroke-width="12"/>
+    <rect x="212" y="320" width="88" height="70" rx="12" fill="url(#gold)" stroke="#8a5a06" stroke-width="2"/>
+    <circle cx="256" cy="350" r="10" fill="#0b1526"/>
+    <rect x="251" y="352" width="10" height="20" rx="3" fill="#0b1526"/>
+  </g>
+</svg>

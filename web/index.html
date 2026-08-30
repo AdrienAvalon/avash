@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Avash 😼</title>
+  <title>Avash</title>
   <style>
     /* --- Police embarquee ---
        Avash doit rendre pareil sur Linux et Windows. Aucune police par
@@ -141,7 +141,7 @@
       flex: 1; display: flex; align-items: center; gap: 8px; padding-left: 12px;
       font-size: 12.5px; font-weight: 600; color: var(--text-dim); letter-spacing: .2px;
     }
-    .tb-mascot { font-size: 14px; }
+    .tb-mascot { width: 16px; height: 16px; vertical-align: middle; }
     .tb-controls { display: flex; height: 100%; }
     .tb-btn {
       width: 46px; height: 100%; border: none; background: transparent;
@@ -179,11 +179,10 @@
       font-weight: 700; font-size: 15px; letter-spacing: .1px;
     }
     .brand .mascot {
-      width: 30px; height: 30px; border-radius: 9px; font-size: 17px;
-      display: grid; place-items: center;
-      background: linear-gradient(145deg, var(--accent-tint), rgba(139,124,246,.28));
-      border: 1px solid rgba(139,124,246,.3);
+      width: 30px; height: 30px; display: grid; place-items: center;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,.35));
     }
+    .brand .mascot .mark { width: 27px; height: 27px; display: block; }
     .brand .ver {
       margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .4px;
       color: var(--accent-soft); background: var(--accent-tint);
@@ -445,12 +444,9 @@
         radial-gradient(ellipse 60% 45% at 50% 42%, rgba(139,124,246,.16), transparent 70%),
         var(--bg);
     }
-    .terminal-empty .big {
-      width: 92px; height: 92px; border-radius: 28px; font-size: 48px; line-height: 1;
-      display: grid; place-items: center; margin-bottom: 8px;
-      background: linear-gradient(160deg, rgba(139,124,246,.18), rgba(139,124,246,.04));
-      border: 1px solid rgba(139,124,246,.28);
-      box-shadow: 0 12px 40px var(--accent-glow);
+    .terminal-empty .big-logo {
+      width: 208px; height: auto; margin-bottom: 4px; user-select: none;
+      filter: drop-shadow(0 16px 44px rgba(0,0,0,.5));
       animation: rise .5s var(--ease) both;
     }
     @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.96) } to { opacity: 1; transform: none } }
@@ -769,9 +765,22 @@
     </style>
 </head>
 <body>
+  <!-- Marque avash (écusson : bouclier + serveurs + cadenas), définie une fois et
+       réutilisée via <use>. Le jeu d'icônes de l'app dérive de icons/logo.svg. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="avash-mark" viewBox="0 0 24 24">
+      <path d="M3.4 3.4 H20.6 V12 C20.6 17.3 16.8 20.5 12 22.5 C7.2 20.5 3.4 17.3 3.4 12 Z" fill="#d9b24a"/>
+      <path d="M4.9 5 H19.1 V11.9 C19.1 16.3 15.9 19 12 20.8 C8.1 19 4.9 16.3 4.9 11.9 Z" fill="#12233f"/>
+      <rect x="7.4" y="7.2" width="9.2" height="3.1" rx="1" fill="#3b4a6b"/>
+      <circle cx="14.6" cy="8.75" r="0.7" fill="#f4d98a"/><circle cx="12.7" cy="8.75" r="0.7" fill="#5cc8ff"/>
+      <path d="M10.3 15.2 v-1.1 a1.7 1.7 0 0 1 3.4 0 v1.1" fill="none" stroke="#f4d98a" stroke-width="1.1"/>
+      <rect x="9.1" y="15" width="5.8" height="4.4" rx="1" fill="#f4d98a"/>
+      <circle cx="12" cy="17.2" r="0.85" fill="#12233f"/>
+    </symbol>
+  </svg>
   <div class="resize-handles" id="resize-handles"></div>
   <div class="titlebar" data-tauri-drag-region>
-    <div class="tb-title" data-tauri-drag-region><span class="tb-mascot">😼</span><span id="tb-name">Avash</span></div>
+    <div class="tb-title" data-tauri-drag-region><svg class="tb-mascot"><use href="#avash-mark"/></svg><span id="tb-name">Avash</span></div>
     <div class="tb-controls">
       <button class="tb-btn" id="win-min" title="Réduire" type="button"></button>
       <button class="tb-btn" id="win-max" title="Agrandir" type="button"></button>
@@ -781,7 +790,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <span class="mascot">😼</span> Avash <span class="ver" id="app-version" title="Vérifier les mises à jour">v0.1</span>
+        <span class="mascot"><svg class="mark"><use href="#avash-mark"/></svg></span> Avash <span class="ver" id="app-version" title="Vérifier les mises à jour">v0.1</span>
         <button id="theme-toggle" class="theme-toggle" type="button" title="Thème"></button>
       </div>
       <div class="search-wrap">
@@ -815,7 +824,7 @@
       </div>
       <div class="terminal-zone">
         <div class="terminal-empty" id="terminal-empty">
-          <div class="big">😼</div>
+          <img class="big-logo" src="hero.png" alt="Avash" draggable="false" />
           <div class="title">Prêt quand tu l'es.</div>
           <div class="hint" id="empty-hint">Double-clic sur un hôte pour te connecter</div>
           <div class="empty-actions">
