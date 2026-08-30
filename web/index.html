@@ -240,15 +240,10 @@
       transition: background var(--t-fast), border-color var(--t-fast);
     }
     .host:hover { background: var(--card-hover); }
-    /* « Session ouverte ici » : simple barre d'accent à gauche, PAS une boîte —
-       sinon elle ferait doublon avec le cadre de sélection au clic (.picked). */
-    .host.selected { background: transparent; border-color: transparent; }
-    /* « Sélectionné au clic » : le seul vrai cadre (curseur de sélection). */
+    /* « Sélectionné au clic » : le cadre (curseur de sélection). Les connexions
+       actives sont signalées par le voyant vert de l'avatar (.dot.live), pas par
+       un second cadre — pour ne pas faire doublon. */
     .host.picked { background: var(--card-hover); border-color: var(--accent-line); }
-    .host.selected::before {
-      content: ""; position: absolute; left: -1px; top: 22%; height: 56%; width: 3px;
-      border-radius: 3px; background: var(--accent);
-    }
     .host .avatar {
       position: relative; flex: none; width: 30px; height: 30px; border-radius: 8px;
       display: grid; place-items: center; font-family: var(--mono); font-weight: 700;
@@ -283,7 +278,6 @@
     .host .avatar.rdp .ic-svg { width: 14px; height: 14px; }
     .host .avatar .dot { width: 7px; height: 7px; right: -2px; bottom: -2px; border-width: 1.5px; }
     .host .host-tags { display: none; }
-    .host.selected::before { top: 15%; height: 70%; }
     .folder-row {
       display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
       padding: 4px 8px; border-radius: var(--r-md); margin: 1px 0;

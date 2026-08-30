@@ -297,8 +297,7 @@ function nodeCount(node: TreeNode): number {
 /** Une ligne d'hôte SSH (avatar, logo distro, tags, état), déplaçable. */
 function sshHostElement(h: Host): HTMLElement {
   const el = document.createElement("div");
-  const selected = state.active !== null && state.sessions.get(state.active)?.alias === h.alias;
-  el.className = "host" + (selected ? " selected" : "");
+  el.className = "host";
   el.style.setProperty("--hue", hostHue(h.alias));
   const target = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
   el.innerHTML = `<span class="avatar"><span class="ini"></span><span class="dot"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
@@ -354,11 +353,12 @@ function sshHostElement(h: Host): HTMLElement {
 /** Une ligne de bureau RDP enregistré, déplaçable. */
 function rdpHostElement(h: RdpHostT): HTMLElement {
   const el = document.createElement("div");
-  const activeRdp = state.active === null ? undefined : rdpSessions.get(state.active);
-  const selected = activeRdp?.hostId === h.id;
-  el.className = "host" + (selected ? " selected" : "");
-  el.innerHTML = `<span class="avatar rdp"><span class="ini logo"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
+  el.className = "host";
+  el.innerHTML = `<span class="avatar rdp"><span class="ini logo"></span><span class="dot"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
   (el.querySelector(".ini") as HTMLElement).innerHTML = ic("monitor");
+  // Voyant vert : une session RDP est ouverte pour cet hôte.
+  const live = [...rdpSessions.values()].some((sess) => sess.hostId === h.id);
+  (el.querySelector(".dot") as HTMLElement).className = "dot" + (live ? " live" : "");
   el.querySelector(".alias")!.textContent = h.name;
   el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
   el.title = "Double-clic : connexion RDP — clic droit : options";
@@ -2955,6 +2955,7 @@ function closeRdp(id: number) {
     state.active = null;
     if (state.sessions.size === 0 && rdpSessions.size === 0) $("terminal-empty").style.display = "flex";
   }
+  renderHosts(); // éteint le voyant vert de l'hôte fermé
 }
 
 /** Connexion à un bureau RDP enregistré (mot de passe du trousseau, sinon demandé). */
