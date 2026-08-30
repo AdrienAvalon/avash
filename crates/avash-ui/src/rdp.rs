@@ -52,6 +52,12 @@ fn sidecar_path() -> std::path::PathBuf {
 
 /// Lance le sidecar et renvoie le WebSocket (port + jeton) qu'il annonce.
 #[allow(clippy::too_many_arguments)]
+/// Ouvre un bureau distant.
+///
+/// `password` est le mot de passe saisi à l'instant, s'il y en a un. Vide pour
+/// un bureau enregistré : le secret est alors lu **ici**, côté natif, et ne
+/// traverse jamais l'IPC — comme le fait déjà le volet SSH. Il séjournait
+/// sinon dans le tas de la webview toute la durée de l'onglet.
 #[tauri::command]
 pub async fn rdp_open(
     state: tauri::State<'_, RdpStore>,
@@ -64,6 +70,16 @@ pub async fn rdp_open(
     height: u16,
 ) -> Result<RdpConn, String> {
     use std::process::Stdio;
+    let password = if password.is_empty() {
+        avash::secrets::load(&rdphost::keyring_account(
+            &user,
+            &host,
+            port.unwrap_or(3389),
+        ))
+        .unwrap_or_default()
+    } else {
+        password
+    };
     let mut cmd = tokio::process::Command::new(sidecar_path());
     cmd.args([
         "--host",
@@ -264,8 +280,40 @@ pub fn rdp_password_save(
 
 #[tauri::command]
 #[must_use]
-pub fn rdp_password_load(host: String, port: u16, user: String) -> Option<String> {
-    avash::secrets::load(&rdphost::keyring_account(&user, &host, port))
+/// Un mot de passe est-il mémorisé pour ce bureau ?
+///
+/// Ne renvoie **que** l'existence, jamais le secret : celui-ci reste côté natif
+/// et n'entre pas dans le tas de la webview, où il survivait jusque-là toute la
+/// durée de l'onglet (conservé pour la reconnexion). Le volet SSH procède ainsi
+/// depuis toujours (`password_known`).
+pub fn rdp_password_known(host: String, port: u16, user: String) -> bool {
+    avash::secrets::load(&rdphost::keyring_account(&user, &host, port)).is_some()
+}
+
+/// Déplace le secret d'un compte vers un autre lors d'une modification de bureau.
+///
+/// La migration se faisait côté interface, en relisant le mot de passe pour le
+/// réécrire : le secret traversait l'IPC deux fois de plus, à la seule fin de
+/// changer de clé. Le trousseau est ici manipulé sans que le secret ne quitte
+/// le processus natif.
+#[tauri::command]
+pub fn rdp_password_move(
+    old_host: String,
+    old_port: u16,
+    old_user: String,
+    host: String,
+    port: u16,
+    user: String,
+) -> Result<(), String> {
+    let ancien = rdphost::keyring_account(&old_user, &old_host, old_port);
+    let Some(secret) = avash::secrets::load(&ancien) else {
+        return Ok(()); // rien à déplacer
+    };
+    let nouveau = rdphost::keyring_account(&user, &host, port);
+    avash::secrets::save(&nouveau, &secret).map_err(|e| format!("{e:#}"))?;
+    // L'oubli n'a lieu qu'après une écriture réussie : l'inverse perdrait le
+    // secret si le trousseau refusait la nouvelle entrée.
+    avash::secrets::forget(&ancien).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]

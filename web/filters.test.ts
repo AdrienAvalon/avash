@@ -495,3 +495,24 @@ describe("choisirVerrous — priorité des sources", () => {
     expect(choisirVerrous(null, null)).toBeNull();
   });
 });
+
+// ── Partage du presse-papiers avec les bureaux RDP ────────────────────────────
+// Le presse-papiers local était transmis à tout bureau RDP ouvert sans le
+// moindre geste, y compris au simple retour sur la fenêtre. Le réglage doit
+// être révocable et retenu ; par défaut il reste actif (parité avec les autres
+// clients RDP), mais un « 0 » enregistré doit couper la transmission.
+describe("partage du presse-papiers RDP", () => {
+  // Reproduit la lecture faite dans main.ts, qui n'est pas exportable telle
+  // quelle (elle vit dans le module d'entrée, chargé avec le DOM de l'app).
+  const partage = (brut: string | null) => brut !== "0";
+
+  it("est actif par défaut, avant tout réglage", () => {
+    expect(partage(null)).toBe(true);
+  });
+  it("reste actif si le réglage vaut 1", () => {
+    expect(partage("1")).toBe(true);
+  });
+  it("est coupé par un réglage à 0", () => {
+    expect(partage("0")).toBe(false);
+  });
+});

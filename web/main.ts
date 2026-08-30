@@ -16,6 +16,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ic, fileIconName, hydrateIcons } from "./icons";
+import { partageClipboard, setPartageClipboard } from "./prefs";
 import {
   humanSize, filterHosts, allTags, remoteJoin, parentDir, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge,
   sortSftpEntries, shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
@@ -964,6 +965,26 @@ type EntreePalette = { nom: string; detail: string; icone: string; ouvrir: () =>
 let paletteIndex = 0;
 let paletteEntrees: EntreePalette[] = [];
 
+/** Réglages atteignables à la palette, avant la liste des hôtes.
+ *  La palette est déjà le seul point d'entrée entièrement au clavier : y placer
+ *  les réglages évite d'ajouter une fenêtre de préférences pour un interrupteur. */
+function commandesPalette(): EntreePalette[] {
+  const actif = partageClipboard();
+  return [
+    {
+      nom: actif ? "Ne plus partager le presse-papiers avec les bureaux RDP"
+                 : "Partager le presse-papiers avec les bureaux RDP",
+      detail: actif ? "Actuellement partagé" : "Actuellement non partagé",
+      icone: "copy",
+      ouvrir: () => {
+        setPartageClipboard(!actif);
+        notify(actif ? "Le presse-papiers n'est plus transmis aux bureaux distants."
+                     : "Le presse-papiers est transmis aux bureaux distants.");
+      },
+    },
+  ];
+}
+
 function renderPalette() {
   const q = paletteInput.value.toLowerCase();
   const res = $("palette-results");
@@ -972,6 +993,7 @@ function renderPalette() {
   // Les deux protocoles, comme dans la barre latérale : un bureau RDP était
   // jusqu'ici introuvable à la palette, alors qu'elle promet « un nom d'hôte ».
   paletteEntrees = [
+    ...commandesPalette().filter((c) => !q || c.nom.toLowerCase().includes(q)),
     ...filterHosts(state.hosts, q).map((h) => ({
       nom: h.alias,
       detail: `${h.user ?? "?"}@${h.hostname ?? h.alias}`,
@@ -2998,7 +3020,9 @@ const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
 // local et on l'annonce à la session RDP active quand Avash reprend le focus
 // (tu copies ailleurs, tu reviens, tu colles dans le distant). Message [8].
 let lastClipText = "";
+
 async function pushLocalClipboard(force = false): Promise<void> {
+  if (!partageClipboard()) return;
   if (state.active === null || !rdpSessions.has(state.active)) return;
   let text: string;
   try {
@@ -3018,7 +3042,11 @@ async function pushLocalClipboard(force = false): Promise<void> {
     s.ws.send(msg);
   }
 }
-window.addEventListener("focus", () => void pushLocalClipboard());
+// Le presse-papiers local n'est PAS poussé au simple retour de la fenêtre : cela
+// envoyait son contenu — souvent un mot de passe fraîchement copié — à tout
+// serveur RDP ouvert, sans le moindre geste de l'utilisateur, et à chaque
+// bascule de fenêtre. Il ne part plus que sur un collage explicite (Ctrl+V) ou
+// quand le serveur le réclame, dans l'onglet actif.
 const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; hostId?: string; syncSize?: () => void; target?: RdpTarget }>();
 
 async function openRdp(t: RdpTarget) {
@@ -3305,8 +3333,13 @@ function showRdpClosed(id: number) {
 
 /** Connexion à un bureau RDP enregistré (mot de passe du trousseau, sinon demandé). */
 async function connectRdpSaved(h: RdpHostT) {
-  let pw = await invoke<string | null>("rdp_password_load", { host: h.host, port: h.port, user: h.user }).catch(() => null);
-  if (!pw) {
+  // On demande au cœur s'il connaît ce compte, sans jamais rapatrier le secret :
+  // un mot de passe vide indique à `rdp_open` de le lire lui-même dans le
+  // trousseau. Il ne traverse donc pas l'IPC et ne séjourne pas dans le tas de
+  // la webview pour toute la durée de l'onglet.
+  const connu = await invoke<boolean>("rdp_password_known", { host: h.host, port: h.port, user: h.user }).catch(() => false);
+  let pw = "";
+  if (!connu) {
     const rep = await askPassword(`${h.user}@${h.host}:${h.port}`);
     if (!rep) return;
     pw = rep.password;
@@ -3314,7 +3347,7 @@ async function connectRdpSaved(h: RdpHostT) {
       await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw }).catch(() => {});
     }
   }
-  await openRdp({ host: h.host, port: h.port, user: h.user, password: pw ?? "", hostId: h.id, name: h.name });
+  await openRdp({ host: h.host, port: h.port, user: h.user, password: pw, hostId: h.id, name: h.name });
 }
 
 function openRdpMenu(h: RdpHostT, e: MouseEvent) {
@@ -3399,11 +3432,9 @@ $("rdp-edit-form").addEventListener("submit", async (e) => {
         await invoke("rdp_password_forget", { host: oldHost, port: oldPort, user: oldUser }).catch(() => {});
       }
     } else if (accountChanged) {
-      const old = await invoke<string | null>("rdp_password_load", { host: oldHost, port: oldPort, user: oldUser }).catch(() => null);
-      if (old) {
-        await invoke("rdp_password_save", { host, port, user, password: old }).catch(() => {});
-        await invoke("rdp_password_forget", { host: oldHost, port: oldPort, user: oldUser }).catch(() => {});
-      }
+      // Migration confiée au cœur : le secret n'a aucune raison de faire
+      // l'aller-retour par l'interface pour changer de clé de trousseau.
+      await invoke("rdp_password_move", { oldHost, oldPort, oldUser, host, port, user }).catch(() => {});
     }
     closeEditRdp();
     await loadHosts();

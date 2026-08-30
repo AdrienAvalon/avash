@@ -83,6 +83,26 @@ avec la distinction que fait OpenSSH (voir `check_server_key` dans
 - **`known_hosts` illisible, ou certificat d'hôte non validable** : refus par
   défaut (mieux vaut refuser qu'accepter à l'aveugle).
 
+### Le presse-papiers n'est partagé que sur décision
+
+Partager le presse-papiers avec un bureau distant revient à confier son contenu
+— souvent un mot de passe qu'on vient de copier — à un serveur qui peut le
+réclamer dès qu'on le lui annonce. Avash l'annonçait **au simple retour sur sa
+fenêtre**, donc à chaque bascule d'application, à tout bureau ouvert.
+
+Ce n'est plus le cas : le presse-papiers ne part que depuis la session active,
+sur un geste dans le bureau distant. Et le partage est révocable — `Ctrl+K`,
+« Ne plus partager le presse-papiers avec les bureaux RDP » — le choix étant
+retenu d'un lancement à l'autre.
+
+### Les mots de passe ne traversent pas l'interface
+
+Le mot de passe d'un bureau enregistré est lu par le cœur natif au moment de la
+connexion. L'interface ne le demande pas au trousseau et ne le reçoit jamais :
+elle interroge seulement son existence. Le volet SSH procède ainsi depuis
+toujours ; le volet RDP rapatriait le secret dans la webview, où il séjournait
+toute la durée de l'onglet.
+
 ### Vérification du serveur RDP (TOFU)
 
 La bibliothèque RDP accepte par construction n'importe quel certificat TLS : il
