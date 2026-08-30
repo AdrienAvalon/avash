@@ -7,6 +7,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.2.1] - 2026-08-30
+
+Première version réellement distribuée sur les deux plateformes.
+
 ### Corrigé
 
 - **avash ne compilait pas sous Windows.** L'authentification par agent SSH
@@ -110,5 +114,6 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.2.0...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.2.1...HEAD
 [0.2.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.0
+[0.2.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.1
