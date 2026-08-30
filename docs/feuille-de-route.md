@@ -35,7 +35,7 @@ défaut n'est pas livrée, même terminée.
 | Tests | 139 Rust · 61 front · 24 bout en bout |
 | Binaire Linux | 18,3 Mo (`codegen-units=1`, LTO fin) |
 | Paquet front | 577 Ko en un seul module |
-| Plateformes livrées | Linux (AppImage) — Windows configuré mais **jamais construit** |
+| Plateformes construites | Linux (AppImage) et Windows (NSIS) — Windows pas encore éprouvé sur machine réelle |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
@@ -58,12 +58,24 @@ et redémarre. Tant que ce n'est pas fait, la fonctionnalité est présumée, pa
 
 *Fini quand* : une version installée détecte et applique la suivante.
 
-### 1.2 Construire réellement pour Windows
+### 1.2 Construire réellement pour Windows — **construit, pas encore éprouvé**
 
-La cible NSIS est déclarée depuis le début mais **aucun binaire Windows n'a jamais
-été produit**. Le workflow `release.yml` doit être exercé au moins une fois, et
-l'installeur testé sur une vraie machine — le sidecar RDP, le trousseau
-(Credential Manager) et les chemins de configuration sont les points à risque.
+Le workflow a été exercé : **l'installeur Windows (8,2 Mo) et l'AppImage Linux
+(81 Mo) sont produits**. L'exercice a révélé trois défauts qu'une machine de
+développement Linux masquait :
+
+1. le projet ne compilait pas depuis un clone neuf (binaire du sidecar RDP absent) ;
+2. **avash ne compilait pas du tout sous Windows** — l'authentification par agent
+   utilisait une API Unix (`SSH_AUTH_SOCK`). La promesse « multi-plateforme »
+   était fausse depuis le début ;
+3. le bundle Tauri s'exécutait depuis le mauvais répertoire en release.
+
+Tous corrigés, avec un garde-fou d'intégration continue qui vérifie la
+compilation Windows du cœur à chaque poussée.
+
+**Reste à faire** : lancer l'installeur sur une vraie machine Windows. Les points
+à risque sont le sidecar RDP, le trousseau (Credential Manager) et les chemins de
+configuration. Tant que ce n'est pas fait, Windows est *compilé*, pas *validé*.
 
 *Fini quand* : un installeur Windows se lance, ouvre une session SSH et un bureau RDP.
 
