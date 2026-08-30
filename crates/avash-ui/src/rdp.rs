@@ -26,24 +26,28 @@ fn sidecar_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("AVASH_RDP_BIN") {
         return p.into();
     }
+    // Sous Windows l'exécutable porte une extension : sans elle, le fichier
+    // posé à côté de l'application (avash-rdp.exe) n'était jamais trouvé et
+    // toute connexion RDP échouait.
+    let nom = format!("avash-rdp{}", std::env::consts::EXE_SUFFIX);
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            // À côté de l'exe (installation / bundle).
-            let side = dir.join("avash-rdp");
+            // À côté de l'exe (installation / bundle / version portable).
+            let side = dir.join(&nom);
             if side.exists() {
                 return side;
             }
             // En dev : le sidecar est un projet séparé. Depuis target/release/,
             // remonter jusqu'à la racine du dépôt.
             if let Some(root) = dir.parent().and_then(std::path::Path::parent) {
-                let devside = root.join("rdp-sidecar/target/release/avash-rdp");
+                let devside = root.join("rdp-sidecar/target/release").join(&nom);
                 if devside.exists() {
                     return devside;
                 }
             }
         }
     }
-    "rdp-sidecar/target/release/avash-rdp".into()
+    std::path::PathBuf::from("rdp-sidecar/target/release").join(nom)
 }
 
 /// Lance le sidecar et renvoie le WebSocket (port + jeton) qu'il annonce.

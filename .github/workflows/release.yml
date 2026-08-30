@@ -82,6 +82,34 @@ jobs:
         env:
           NO_STRIP: "1"
 
+      # Version portable Windows : l'application et son processus RDP côte à côte,
+      # sans installation ni écriture dans la base de registre. Utile sur un poste
+      # où l'on ne peut rien installer. Nécessite WebView2, présent d'origine sur
+      # Windows 11 et sur Windows 10 à jour.
+      - name: Version portable (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $dossier = "portable/avash-$env:VERSION-windows-x64"
+          New-Item -ItemType Directory -Force -Path $dossier | Out-Null
+          Copy-Item target/release/avash-ui.exe "$dossier/avash.exe"
+          Copy-Item crates/avash-ui/binaries/avash-rdp-${{ matrix.triple }}.exe `
+                    "$dossier/avash-rdp.exe"
+          Copy-Item LICENSE "$dossier/LICENSE.txt"
+          @"
+          avash — version portable
+
+          Lancer avash.exe. Aucune installation, rien n'est ecrit dans la base de
+          registre. Gardez avash-rdp.exe dans le meme dossier : c'est le processus
+          qui assure les connexions RDP.
+
+          Les mots de passe restent confies au gestionnaire d'identifiants de
+          Windows, jamais ecrits dans ce dossier.
+          "@ | Set-Content "$dossier/LISEZ-MOI.txt"
+          Compress-Archive -Path $dossier -DestinationPath "portable/avash-$env:VERSION-windows-x64.zip"
+        env:
+          VERSION: "0.2.0"
+
       - name: Publier les artefacts
         uses: actions/upload-artifact@v4
         with:
@@ -89,6 +117,7 @@ jobs:
           path: |
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/nsis/*.exe
+            portable/*.zip
           if-no-files-found: warn
 
   publier:
@@ -100,7 +129,7 @@ jobs:
         with: { path: artefacts }
       - name: Empreintes SHA256
         run: |
-          find artefacts -type f \( -name '*.AppImage' -o -name '*.exe' \) -print0 \
+          find artefacts -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.zip' \) -print0 \
             | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
@@ -108,5 +137,6 @@ jobs:
           files: |
             artefacts/**/*.AppImage
             artefacts/**/*.exe
+            artefacts/**/*.zip
             SHA256SUMS
           generate_release_notes: true

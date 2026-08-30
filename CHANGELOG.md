@@ -18,11 +18,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 - Compilation depuis un clone neuf : le binaire du sidecar RDP, déclaré en
   ressource embarquée, doit exister avant toute compilation d'`avash-ui`. Les
   instructions du README et de CONTRIBUTING étaient inapplicables telles quelles.
+- **Le RDP n'aurait pas fonctionné sous Windows** : l'application cherchait son
+  processus RDP sous le nom `avash-rdp`, sans l'extension `.exe` — le fichier
+  posé à côté d'elle n'était donc jamais trouvé.
 - Intégration continue : le sidecar est construit avant les étapes Rust, et le
   bundle Tauri s'exécute depuis le bon répertoire.
 
 ### Ajouté
 
+- **Version portable pour Windows** : une archive à décompresser, sans
+  installation ni écriture dans la base de registre.
 - Garde-fou d'intégration continue : la compilation Windows du cœur est vérifiée
   à chaque poussée.
 

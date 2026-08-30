@@ -53,6 +53,21 @@ chmod +x Avash_0.2.0_amd64.AppImage
 ./Avash_0.2.0_amd64.AppImage
 ```
 
+### Windows
+
+Deux formes au choix :
+
+- **Installeur** (`Avash_x.y.z_x64-setup.exe`) — installation classique.
+- **Version portable** (`avash-x.y.z-windows-x64.zip`) — à décompresser et
+  lancer, sans installation ni écriture dans la base de registre. Garder
+  `avash-rdp.exe` à côté d'`avash.exe` : c'est le processus qui assure le RDP.
+
+Windows affiche un avertissement au lancement de l'installeur : **avash n'est pas
+signé numériquement**. C'est le comportement normal pour un logiciel sans
+certificat de signature de code — cliquer sur « Informations complémentaires »
+puis « Exécuter quand même ». Les empreintes SHA256 publiées avec chaque version
+permettent de vérifier que le fichier n'a pas été altéré.
+
 ### Compiler depuis les sources
 
 Prérequis : Rust stable, Node.js 22+, et les dépendances système de Tauri.
