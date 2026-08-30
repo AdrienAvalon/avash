@@ -60,6 +60,16 @@ jobs:
         working-directory: web
         run: npx vite build
 
+      # avash-ui déclare le sidecar RDP en ressource embarquée (externalBin) : son
+      # binaire doit exister AVANT toute compilation, sinon le script de build de
+      # Tauri échoue. binaries/ est ignoré par git — c'est un artefact.
+      - name: Processus RDP (requis par avash-ui)
+        run: |
+          cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+          mkdir -p crates/avash-ui/binaries
+          cp rdp-sidecar/target/release/avash-rdp \
+             crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
+
       # --- Rust : format et clippy avant les tests, l'echec est instantane ---
       - name: Rust — format
         run: cargo fmt --all --check

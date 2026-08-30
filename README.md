@@ -63,16 +63,23 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
     libayatana-appindicator3-dev librsvg2-dev patchelf
 
 git clone https://github.com/AdrienAvalon/avash.git avash && cd avash
-(cd web && npm install && npx vite build)   # le binaire embarque le front
+
+# 1. Le front : le binaire l'embarque
+(cd web && npm install && npx vite build)
+
+# 2. Le processus RDP : avash-ui le déclare en ressource embarquée, son binaire
+#    doit exister avant la compilation (le dossier binaires/ n'est pas versionné)
+cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+mkdir -p crates/avash-ui/binaries
+cp rdp-sidecar/target/release/avash-rdp \
+   crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
+
+# 3. L'application
 cargo build --release -p avash-ui
 ./target/release/avash-ui
 ```
 
-Pour produire l'AppImage complète (avec le processus RDP embarqué) :
-
-```bash
-./scripts/release.sh
-```
+Le script `./scripts/release.sh` enchaîne ces étapes et produit l'AppImage.
 
 ## Raccourcis
 

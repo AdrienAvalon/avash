@@ -69,9 +69,16 @@ jobs:
           Copy-Item rdp-sidecar/target/release/avash-rdp.exe `
             crates/avash-ui/binaries/avash-rdp-${{ matrix.triple }}.exe
 
-      # NO_STRIP : linuxdeploy échoue à dépouiller les binaires récents (.relr.dyn).
+      - name: Outil Tauri
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # Depuis crates/avash-ui : la commande de pré-build de tauri.conf.json
+      # utilise un chemin relatif (../../web) qui ne se résout correctement que
+      # depuis ce répertoire. NO_STRIP : linuxdeploy échoue à dépouiller les
+      # binaires récents (.relr.dyn).
       - name: Bundles Tauri
-        run: cargo install tauri-cli --version "^2" --locked && cargo tauri build
+        working-directory: crates/avash-ui
+        run: cargo tauri build
         env:
           NO_STRIP: "1"
 

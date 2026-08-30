@@ -48,10 +48,17 @@ cd crates/avash-ui && cargo tauri dev
 ```
 
 Le **sidecar RDP** (`avash-rdp`) est un projet séparé, hors du workspace Cargo
-(voir `docs/architecture.md`). Pour l'utiliser en développement, construis-le :
+(voir `docs/architecture.md`). Son binaire est déclaré en ressource embarquée
+(`externalBin`) : **il doit exister avant toute compilation d'`avash-ui`**, sinon
+le script de build de Tauri s'arrête sur `resource path ... doesn't exist`. Le
+dossier `binaries/` n'est pas versionné — c'est un artefact. À faire une fois,
+puis à refaire quand le sidecar change :
 
 ```bash
-cd rdp-sidecar && cargo build --release
+cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+mkdir -p crates/avash-ui/binaries
+cp rdp-sidecar/target/release/avash-rdp \
+   crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
 ```
 
 ## Lancer les tests
@@ -82,7 +89,7 @@ npm test                # toute la suite
 ```
 
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
-et le détail des 18 scénarios.
+et le détail des 24 scénarios.
 
 ## Style de code
 
