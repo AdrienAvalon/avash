@@ -8,7 +8,7 @@
 
 [![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.2.0-8b7cf6.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-218%20verts-brightgreen.svg)](#qualité)
+[![Tests](https://img.shields.io/badge/tests-223%20verts-brightgreen.svg)](#qualité)
 
 </div>
 
@@ -86,13 +86,13 @@ Pour produire l'AppImage complète (avec le processus RDP embarqué) :
 
 ## Qualité
 
-**218 tests** couvrent le projet, tous exécutés à chaque commit :
+**223 tests** couvrent le projet, tous exécutés à chaque commit :
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
 | Rust (unitaires + intégration) | 139 | cœur SSH, SFTP, tunnels, config, secrets — dont des tests contre un vrai serveur SSH |
 | Front (vitest) | 61 | logique pure : arborescence, filtres, encodage, entrées RDP |
-| Bout en bout (WebdriverIO) | 18 | l'application réelle : connexion SSH et RDP effectives, dossiers, modales, tunnels, snippets |
+| Bout en bout (WebdriverIO) | 23 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité |
 
 S'y ajoutent `clippy` en mode strict, ESLint typé, `cargo audit`, et une garde
 qui interdit les motifs dangereux (voir [CONTRIBUTING.md](CONTRIBUTING.md)).
