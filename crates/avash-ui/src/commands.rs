@@ -893,9 +893,13 @@ pub async fn tunnel_start(
     if let Some(t) = previous {
         t.close().await;
     }
-    let session = AvashSession::connect(&target.addr, target.port, &target.auth())
-        .await
-        .map_err(|e| e.to_string())?;
+    // Par les rebonds, comme tous les autres chemins (open_on_target, run_command,
+    // sftp_of) : un hôte en ProxyJump n'est pas joignable en direct, et l'erreur
+    // renvoyée ne mentionnait même pas le bastion.
+    let session =
+        AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
+            .await
+            .map_err(|e| e.to_string())?;
     let tunnel = Tunnel::open(session, def)
         .await
         .map_err(|e| e.to_string())?;
@@ -1585,12 +1589,19 @@ pub fn open_external(url: String) -> Result<(), String> {
 /// Supprime un hôte de `~/.ssh/config` et oublie son mot de passe mémorisé.
 #[tauri::command]
 pub fn host_delete(alias: String) -> Result<(), String> {
-    // On récupère la cible AVANT de supprimer, pour connaître l'identifiant
-    // du trousseau à oublier.
-    if let Ok(t) = Target::from_alias(&alias) {
-        let _ = avash::secrets::forget(&avash::secrets::account_id(&t.user, &t.addr, t.port));
+    // On résout la cible AVANT de supprimer (après, l'hôte n'existe plus et on
+    // ne saurait plus quel identifiant du trousseau oublier)... mais on n'oublie
+    // le secret qu'APRÈS le succès de la suppression. Dans l'autre ordre, un
+    // hôte déclaré via `Include` — que remove_host ne sait pas retirer — faisait
+    // perdre le mot de passe alors que l'hôte restait en place.
+    let identifiant = Target::from_alias(&alias)
+        .ok()
+        .map(|t| avash::secrets::account_id(&t.user, &t.addr, t.port));
+    avash::remove_host(&alias).map_err(|e| format!("{e:#}"))?;
+    if let Some(id) = identifiant {
+        let _ = avash::secrets::forget(&id);
     }
-    avash::remove_host(&alias).map_err(|e| format!("{e:#}"))
+    Ok(())
 }
 
 /// Renvoie les champs d'un hôte pour pré-remplir le formulaire d'édition.

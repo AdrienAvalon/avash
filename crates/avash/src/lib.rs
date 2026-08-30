@@ -386,13 +386,22 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
     }
 
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    if parse_config_str(&existing)
-        .iter()
-        .any(|h| h.alias.eq_ignore_ascii_case(alias))
-    {
+    // Unicité vérifiée sur la configuration COMPLÈTE, Include résolus : sinon on
+    // ajoutait un second bloc pour un alias déjà déclaré dans un fichier inclus.
+    // OpenSSH retenant la première occurrence, les modifications ultérieures
+    // semblaient sans effet, et deux entrées identiques apparaissaient dans la
+    // liste. On retombe sur le fichier principal si la résolution échoue.
+    let deja_declare = parse_ssh_config().map_or_else(
+        |_| {
+            parse_config_str(&existing)
+                .iter()
+                .any(|h| h.alias.eq_ignore_ascii_case(alias))
+        },
+        |hotes| hotes.iter().any(|h| h.alias.eq_ignore_ascii_case(alias)),
+    );
+    if deja_declare {
         return Err(anyhow::anyhow!(
-            "Un hôte « {alias} » existe déjà dans {}.",
-            path.display()
+            "Un hôte « {alias} » est déjà déclaré dans votre configuration SSH."
         ));
     }
 
@@ -974,12 +983,35 @@ Host autre
         assert_eq!(parse_ssh_config().unwrap().len(), 2);
     }
 
+    /// Un alias déclaré dans un fichier inclus doit être refusé lui aussi.
+    ///
+    /// Sans cela on ajoutait un second bloc pour le même alias : OpenSSH retenant
+    /// la première occurrence, l'hôte semblait ne plus répondre aux
+    /// modifications, et la liste affichait deux entrées identiques.
+    #[test]
+    fn append_host_voit_les_alias_declares_dans_un_include() {
+        let _h = temp_home();
+        let ssh = dirs::home_dir().unwrap().join(".ssh");
+        std::fs::create_dir_all(ssh.join("config.d")).unwrap();
+        std::fs::write(
+            ssh.join("config.d").join("10-prod"),
+            "Host venu-d-un-include\n    HostName 10.0.0.9\n",
+        )
+        .unwrap();
+        std::fs::write(ssh.join("config"), "Include config.d/*\n").unwrap();
+
+        let e = append_host(&host("venu-d-un-include"))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("déjà déclaré"), "{e}");
+    }
+
     #[test]
     fn append_host_refuse_un_alias_deja_present() {
         let _h = temp_home();
         append_host(&host("double")).unwrap();
         let e = append_host(&host("double")).unwrap_err().to_string();
-        assert!(e.contains("existe déjà"), "{e}");
+        assert!(e.contains("déjà déclaré"), "{e}");
         // Insensible a la casse : OpenSSH l'est aussi.
         let mut autre = host("DOUBLE");
         autre.alias = "DOUBLE".into();
