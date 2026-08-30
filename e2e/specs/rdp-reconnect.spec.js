@@ -1,13 +1,14 @@
 // Overlay de reconnexion : on connecte un RDP à un serveur DÉDIÉ (port 33898,
 // isolé du serveur partagé), on le tue, et l'overlay « Reconnecter / Fermer »
 // doit apparaître.
-import { startRdpServer } from "./helpers.js";
+import { startRdpServer, waitForPort } from "./helpers.js";
 const PORT = 33898;
 let srv;
 
 describe("RDP — overlay de reconnexion à la coupure", () => {
-  before(() => {
+  before(async () => {
     srv = startRdpServer(PORT);
+    await waitForPort(PORT);
   });
   after(() => { if (srv) srv.kill(); });
 

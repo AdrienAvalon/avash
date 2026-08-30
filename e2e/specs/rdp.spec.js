@@ -1,11 +1,11 @@
 // Connexion RDP réelle contre un serveur de test DÉDIÉ (test/test sur 33899).
 // Valide toute la chaîne : formulaire → sidecar → WebSocket → rendu du canvas.
-import { startRdpServer } from "./helpers.js";
+import { startRdpServer, waitForPort } from "./helpers.js";
 const RDP_PORT = 33899;
 let srv;
 
 describe("RDP — connexion réelle au serveur de test", () => {
-  before(() => { srv = startRdpServer(RDP_PORT); });
+  before(async () => { srv = startRdpServer(RDP_PORT); await waitForPort(RDP_PORT); });
   after(() => { if (srv) srv.kill(); });
 
   it("se connecte et affiche le bureau (canvas rendu)", async () => {

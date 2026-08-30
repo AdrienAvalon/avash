@@ -34,3 +34,22 @@ export function startRdpServer(port) {
      "--user", "test", "--pass", "test", "--sec", "hybrid"],
     { cwd: resolve("../test-rdp-server"), stdio: "ignore" });
 }
+
+// Attend que `port` accepte des connexions (le serveur RDP met un instant à
+// écouter après spawn ; l'app ne réessaie pas si le connect échoue -> flakiness).
+import { connect } from "node:net";
+export function waitForPort(port, timeout = 8000) {
+  const deadline = Date.now() + timeout;
+  return new Promise((resolve, reject) => {
+    const tryOnce = () => {
+      const sock = connect(port, "127.0.0.1");
+      sock.once("connect", () => { sock.destroy(); resolve(); });
+      sock.once("error", () => {
+        sock.destroy();
+        if (Date.now() > deadline) reject(new Error(`port ${port} pas prêt à temps`));
+        else setTimeout(tryOnce, 120);
+      });
+    };
+    tryOnce();
+  });
+}

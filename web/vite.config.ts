@@ -11,7 +11,5 @@ export default defineConfig({
     // compilation (app locale, pas servie sur réseau).
     reportCompressedSize: false,
   },
-  // Pas de commentaires de licence recopiés dans le bundle minifié.
-  esbuild: { legalComments: "none" },
   server: { port: 5173, strictPort: true },
 });
