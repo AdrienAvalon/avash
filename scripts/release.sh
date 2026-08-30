@@ -45,6 +45,20 @@ if ! cargo tauri --version >/dev/null 2>&1; then
   echo "cargo-tauri absent. Installe-le : cargo install tauri-cli --version '^2.0' --locked" >&2
   exit 1
 fi
+
+# La configuration demande des artefacts de mise à jour : Tauri s'arrête alors
+# s'il ne trouve pas la clé de signature. Elle vit hors du dépôt, chez le
+# mainteneur. Sans elle, on construit quand même — un binaire non signé reste
+# utilisable en local, il ne peut simplement pas servir de mise à jour.
+CLE_MAJ="${AVASH_UPDATER_KEY:-$HOME/.config/avash-release/updater.key}"
+if [ -f "$CLE_MAJ" ]; then
+  TAURI_SIGNING_PRIVATE_KEY="$(cat "$CLE_MAJ")"
+  export TAURI_SIGNING_PRIVATE_KEY
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}"
+  echo "  clé de signature : $CLE_MAJ"
+else
+  echo "  ⚠ clé de signature absente ($CLE_MAJ) : artefacts non signés" >&2
+fi
 # NO_STRIP : le strip embarqué par linuxdeploy ne gère pas .relr.dyn (libs récentes).
 ( cd "$UI" && NO_STRIP=1 cargo tauri build )
 
