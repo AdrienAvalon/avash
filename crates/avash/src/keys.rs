@@ -34,9 +34,56 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
         .with_context(|| format!("Droits {mode:o} sur {}", path.display()))
 }
 
-#[cfg(not(unix))]
+/// Arguments d'`icacls` restreignant un chemin à son seul propriétaire.
+///
+/// Windows n'a pas de bits de permission : l'équivalent est une liste de
+/// contrôle d'accès. `/inheritance:r` coupe l'héritage du dossier parent —
+/// sans quoi la clé reste lisible par tout ce à quoi ce dossier donne accès —
+/// puis `/grant:r` rétablit un droit unique et complet pour l'utilisateur.
+///
+/// Isolé du reste pour être vérifiable par un test sur n'importe quel système.
+#[must_use]
+pub fn icacls_args(path: &str, user: &str) -> Vec<String> {
+    vec![
+        path.to_owned(),
+        "/inheritance:r".to_owned(),
+        format!("/grant:r{user}:F"),
+    ]
+}
+
+/// Sous Windows, on pose une ACL au lieu de bits de permission.
+///
+/// Sans elle, une clé privée hérite des droits de son dossier : sur un poste
+/// partagé elle peut être lisible par d'autres, et OpenSSH pour Windows refuse
+/// purement et simplement une clé dont les droits sont trop larges.
+/// Le `mode` Unix sert d'intention : tout ce qui est plus restrictif que
+/// « lisible par le groupe » devient « propriétaire seul ».
+#[cfg(windows)]
+fn set_mode(path: &Path, mode: u32) -> Result<()> {
+    // 0o077 = bits accordés au groupe et aux autres. S'ils sont nuls, le fichier
+    // est privé et mérite une ACL restreinte.
+    if mode & 0o077 != 0 {
+        return Ok(()); // fichier public (clé .pub) : rien à restreindre
+    }
+    let user = crate::ssh::current_username();
+    let chemin = path.to_string_lossy().to_string();
+    let sortie = std::process::Command::new("icacls")
+        .args(icacls_args(&chemin, &user))
+        .output()
+        .with_context(|| format!("Restriction des droits sur {}", path.display()))?;
+    if !sortie.status.success() {
+        return Err(anyhow!(
+            "Droits non restreints sur {} : {}",
+            path.display(),
+            String::from_utf8_lossy(&sortie.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
-    Ok(()) // Windows gere les ACL differemment.
+    Ok(())
 }
 
 #[cfg(unix)]

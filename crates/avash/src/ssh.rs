@@ -13,6 +13,62 @@ use tokio::sync::mpsc;
 /// explique l'echec. L'interface le reconnait pour proposer une saisie.
 /// Nom de l'utilisateur courant, avec repli.
 ///
+/// Verdict d'une clé d'hôte présentée par un serveur, au regard de `known_hosts`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerdictCle {
+    /// Rien d'enregistré pour cet hôte : premier contact, la clé est à apprendre.
+    PremierContact,
+    /// La clé présentée figure parmi celles enregistrées.
+    Connue,
+    /// Des clés sont enregistrées pour cet hôte, mais aucune ne correspond.
+    Changee { ligne: usize },
+}
+
+/// Compare la clé présentée à celles enregistrées pour cet hôte.
+///
+/// **L'algorithme n'entre volontairement pas en compte**, et c'est tout l'objet
+/// de cette fonction. `check_known_hosts` de russh répond « hôte inconnu »
+/// lorsque l'algorithme diffère :
+///
+/// ```text
+/// match (pubkey.algorithm() == recorded.algorithm(), *pubkey == recorded) {
+///     (true, true) => Ok(true), (true, false) => Err(KeyChanged), _ => Ok(false) }
+/// ```
+///
+/// Un intercepteur n'avait donc qu'à annoncer un autre type de clé pour être
+/// pris pour un premier contact, appris en silence, puis recevoir le mot de
+/// passe. Ici, dès qu'une clé est enregistrée pour l'hôte, **toute clé
+/// différente est un changement**, quel qu'en soit l'algorithme.
+#[must_use]
+pub fn juger_cle_hote(
+    enregistrees: &[(usize, russh::keys::PublicKey)],
+    presentee: &russh::keys::PublicKey,
+) -> VerdictCle {
+    let Some((premiere_ligne, _)) = enregistrees.first() else {
+        return VerdictCle::PremierContact;
+    };
+    if enregistrees.iter().any(|(_, k)| k == presentee) {
+        VerdictCle::Connue
+    } else {
+        VerdictCle::Changee {
+            ligne: *premiere_ligne,
+        }
+    }
+}
+
+/// `~/.ssh/known_hosts` existe-t-il sans être lisible ?
+///
+/// russh renvoie une liste vide dès qu'il n'arrive pas à ouvrir le fichier
+/// (droits retirés, remplacé par un répertoire, erreur d'E/S) — ce que le reste
+/// du code prendrait pour « hôte inconnu », et qui ferait accepter n'importe
+/// quelle clé. On préfère refuser.
+fn known_hosts_illisible() -> bool {
+    let Some(chemin) = dirs::home_dir().map(|h| h.join(".ssh").join("known_hosts")) else {
+        return false; // pas de répertoire personnel : russh le signalera lui-même
+    };
+    chemin.exists() && std::fs::File::open(&chemin).is_err()
+}
+
 /// `whoami::username()` est faillible depuis la version 2 (compte systeme
 /// illisible, environnement minimal). Un client SSH a toujours besoin d'un
 /// nom : on retombe sur $USER, puis sur "user", plutot que d'echouer.
@@ -156,12 +212,32 @@ impl russh::client::Handler for AvashAuth {
         // TOFU (Trust On First Use), avec la distinction que fait OpenSSH :
         // hôte inconnu  -> on apprend la clé (premier contact) ;
         // clé CHANGÉE   -> on refuse, sans jamais réapprendre en silence.
-        match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
+        //
+        // On lit nous-mêmes les clés enregistrées plutôt que de nous fier au
+        // booléen de `check_known_hosts` : celui-ci confond « algorithme
+        // différent » avec « hôte inconnu » (voir `juger_cle_hote`).
+        if known_hosts_illisible() {
+            *self.verdict.lock().unwrap() = Some(
+                "~/.ssh/known_hosts existe mais n'est pas lisible : impossible de \
+                 vérifier l'identité du serveur. Connexion refusée."
+                    .into(),
+            );
+            return Err(russh::Error::UnknownKey);
+        }
+        let enregistrees = match russh::keys::known_hosts::known_host_keys(&self.host, self.port) {
+            Ok(k) => k,
+            Err(e) => {
+                *self.verdict.lock().unwrap() =
+                    Some(format!("Vérification de la clé d'hôte impossible : {e}"));
+                return Err(russh::Error::UnknownKey);
+            }
+        };
+        match juger_cle_hote(&enregistrees, server_public_key) {
             // Hôte connu, clé identique.
-            Ok(true) => Ok(true),
+            VerdictCle::Connue => Ok(true),
 
             // Hôte inconnu : premier contact, on mémorise.
-            Ok(false) => {
+            VerdictCle::PremierContact => {
                 russh::keys::known_hosts::learn_known_hosts(
                     &self.host,
                     self.port,
@@ -173,7 +249,7 @@ impl russh::client::Handler for AvashAuth {
 
             // La clé d'hôte a changé : réinstallation du serveur, ou interception.
             // Dans le doute on refuse — c'est à l'utilisateur de trancher.
-            Err(russh::keys::Error::KeyChanged { line }) => {
+            VerdictCle::Changee { ligne: line } => {
                 let fp = server_public_key.fingerprint(russh::keys::HashAlg::Sha256);
                 *self.verdict.lock().unwrap() = Some(format!(
                     "{HOST_KEY_CHANGED} LA CLÉ D'HÔTE A CHANGÉ pour {}:{}.\n\n\
@@ -183,13 +259,6 @@ impl russh::client::Handler for AvashAuth {
                      Ancienne clé : ligne {} de ~/.ssh/known_hosts.",
                     self.host, self.port, line
                 ));
-                Err(russh::Error::UnknownKey)
-            }
-
-            // known_hosts illisible ou autre erreur : on refuse aussi.
-            Err(e) => {
-                *self.verdict.lock().unwrap() =
-                    Some(format!("Vérification de la clé d'hôte impossible : {e}"));
                 Err(russh::Error::UnknownKey)
             }
         }
@@ -771,5 +840,69 @@ mod tests {
         // Un client SSH a toujours besoin d'un nom : le repli garantit une
         // valeur non vide meme sans compte systeme lisible.
         assert!(!current_username().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_cle_hote {
+    use super::{juger_cle_hote, VerdictCle};
+    use russh::keys::{Algorithm, PrivateKey, PublicKey};
+
+    fn cle(algo: Algorithm) -> PublicKey {
+        PrivateKey::random(&mut rand::rng(), algo)
+            .unwrap()
+            .public_key()
+            .clone()
+    }
+
+    #[test]
+    fn rien_d_enregistre_donne_un_premier_contact() {
+        let presentee = cle(Algorithm::Ed25519);
+        assert_eq!(juger_cle_hote(&[], &presentee), VerdictCle::PremierContact);
+    }
+
+    #[test]
+    fn la_meme_cle_est_reconnue() {
+        let k = cle(Algorithm::Ed25519);
+        assert_eq!(juger_cle_hote(&[(3, k.clone())], &k), VerdictCle::Connue);
+    }
+
+    #[test]
+    fn une_autre_cle_du_meme_algorithme_est_un_changement() {
+        let enregistree = cle(Algorithm::Ed25519);
+        let presentee = cle(Algorithm::Ed25519);
+        assert_eq!(
+            juger_cle_hote(&[(7, enregistree)], &presentee),
+            VerdictCle::Changee { ligne: 7 }
+        );
+    }
+
+    /// Le cœur du correctif : un intercepteur qui annonce un AUTRE algorithme
+    /// ne doit pas être pris pour un premier contact. C'est exactement ce que
+    /// `check_known_hosts` de russh laissait passer — il répond « hôte inconnu »
+    /// dès que l'algorithme diffère, ce qui faisait apprendre la clé en silence
+    /// puis envoyer le mot de passe.
+    #[test]
+    fn une_cle_d_un_autre_algorithme_est_un_changement_pas_un_premier_contact() {
+        let enregistree = cle(Algorithm::Ed25519);
+        let presentee = cle(Algorithm::Rsa { hash: None });
+        let verdict = juger_cle_hote(&[(2, enregistree)], &presentee);
+        assert_ne!(
+            verdict,
+            VerdictCle::PremierContact,
+            "un algorithme différent ne doit JAMAIS passer pour un premier contact"
+        );
+        assert_eq!(verdict, VerdictCle::Changee { ligne: 2 });
+    }
+
+    #[test]
+    fn une_correspondance_parmi_plusieurs_suffit() {
+        // Un hôte peut légitimement publier plusieurs clés (une par algorithme).
+        let a = cle(Algorithm::Ed25519);
+        let b = cle(Algorithm::Ed25519);
+        assert_eq!(
+            juger_cle_hote(&[(1, a), (2, b.clone())], &b),
+            VerdictCle::Connue
+        );
     }
 }
