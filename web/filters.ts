@@ -292,3 +292,113 @@ export function snippetVars(command: string): string[] {
 export function renderSnippet(command: string, vars: Record<string, string>): string {
   return command.replace(/\{\{\s*([^}]*?)\s*\}\}/g, (_, name) => vars[name.trim()] ?? "");
 }
+
+// ---------- Arborescence des hôtes (dossiers unifiés SSH + RDP) ----------
+
+/**
+ * Un nœud de l'arbre des hôtes : un dossier, ses sous-dossiers, et les éléments
+ * qu'il contient directement. Le type des éléments (`T`) est libre — côté UI ce
+ * sont des hôtes SSH ou des bureaux RDP —, ce qui rend cette logique testable
+ * sans dépendre du DOM ni de l'état global.
+ */
+export type FolderNode<T> = {
+  name: string;
+  path: string;
+  children: Map<string, FolderNode<T>>;
+  items: T[];
+};
+
+function newFolderNode<T>(name: string, path: string): FolderNode<T> {
+  return { name, path, children: new Map(), items: [] };
+}
+
+/**
+ * Descend dans l'arbre jusqu'au nœud du chemin `a/b/c`, en créant les nœuds
+ * manquants au passage. `""` (ou un chemin vide) renvoie la racine.
+ */
+export function ensureFolderNode<T>(root: FolderNode<T>, path: string): FolderNode<T> {
+  let node = root;
+  let acc = "";
+  for (const seg of (path || "").split("/").filter(Boolean)) {
+    acc = acc ? `${acc}/${seg}` : seg;
+    let child = node.children.get(seg);
+    if (!child) {
+      child = newFolderNode<T>(seg, acc);
+      node.children.set(seg, child);
+    }
+    node = child;
+  }
+  return node;
+}
+
+/**
+ * Construit l'arbre à partir des dossiers connus (le registre, qui retient
+ * aussi les dossiers VIDES) et des éléments rangés (chacun avec son chemin de
+ * dossier). L'arbre est l'union des dossiers du registre et de ceux référencés
+ * par les éléments — un dossier peut donc apparaître même si le registre l'ignore.
+ */
+export function buildFolderTree<T>(
+  folders: string[],
+  items: { folder: string; item: T }[],
+): FolderNode<T> {
+  const root = newFolderNode<T>("", "");
+  for (const f of folders) ensureFolderNode(root, f);
+  for (const { folder, item } of items) ensureFolderNode(root, folder || "").items.push(item);
+  return root;
+}
+
+/** Nombre total d'éléments dans un nœud et tous ses descendants (récursif). */
+export function folderNodeCount<T>(node: FolderNode<T>): number {
+  let n = node.items.length;
+  for (const c of node.children.values()) n += folderNodeCount(c);
+  return n;
+}
+
+// ---------- Entrées RDP (scancodes clavier, mappage souris) ----------
+
+/**
+ * Traduit un `KeyboardEvent.code` en scancode PC/XT (set 1), attendu par le
+ * protocole RDP. Renvoie `null` pour une touche non prise en charge.
+ */
+export function rdpScancode(code: string): number | null {
+  const map: Record<string, number> = {
+    Escape: 0x01, Digit1: 0x02, Digit2: 0x03, Digit3: 0x04, Digit4: 0x05, Digit5: 0x06,
+    Digit6: 0x07, Digit7: 0x08, Digit8: 0x09, Digit9: 0x0a, Digit0: 0x0b, Minus: 0x0c, Equal: 0x0d,
+    Backspace: 0x0e, Tab: 0x0f, KeyQ: 0x10, KeyW: 0x11, KeyE: 0x12, KeyR: 0x13, KeyT: 0x14,
+    KeyY: 0x15, KeyU: 0x16, KeyI: 0x17, KeyO: 0x18, KeyP: 0x19, BracketLeft: 0x1a, BracketRight: 0x1b,
+    Enter: 0x1c, ControlLeft: 0x1d, KeyA: 0x1e, KeyS: 0x1f, KeyD: 0x20, KeyF: 0x21, KeyG: 0x22,
+    KeyH: 0x23, KeyJ: 0x24, KeyK: 0x25, KeyL: 0x26, Semicolon: 0x27, Quote: 0x28, Backquote: 0x29,
+    ShiftLeft: 0x2a, Backslash: 0x2b, KeyZ: 0x2c, KeyX: 0x2d, KeyC: 0x2e, KeyV: 0x2f, KeyB: 0x30,
+    KeyN: 0x31, KeyM: 0x32, Comma: 0x33, Period: 0x34, Slash: 0x35, ShiftRight: 0x36,
+    AltLeft: 0x38, Space: 0x39, CapsLock: 0x3a,
+  };
+  return map[code] ?? null;
+}
+
+/** Encode un entier 16 bits en petit-boutiste (2 octets), pour les messages WS. */
+export function le16(n: number): [number, number] {
+  return [n & 0xff, (n >> 8) & 0xff];
+}
+
+/**
+ * Mappe la position d'un clic (coordonnées écran) vers un pixel du bureau RDP.
+ * Le canvas est affiché en `object-fit: contain` : l'image est mise à l'échelle
+ * pour tenir dans l'élément en gardant son ratio, donc letterboxée (bandes). On
+ * retrouve le rectangle réellement peint pour un mappage exact, borné au bureau.
+ */
+export function rdpMousePos(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  w: number,
+  h: number,
+): [number, number] {
+  const scale = Math.min(rect.width / w, rect.height / h);
+  const dispW = w * scale;
+  const dispH = h * scale;
+  const offX = (rect.width - dispW) / 2;
+  const offY = (rect.height - dispH) / 2;
+  const x = Math.max(0, Math.min(w - 1, Math.round(((clientX - rect.left - offX) / dispW) * w)));
+  const y = Math.max(0, Math.min(h - 1, Math.round(((clientY - rect.top - offY) / dispH) * h)));
+  return [x, y];
+}

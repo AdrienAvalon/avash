@@ -325,3 +325,103 @@ describe("sortSftpEntries", () => {
     expect(src.map((x) => x.name)).toEqual(["b", "a"]);
   });
 });
+
+import { buildFolderTree, folderNodeCount, ensureFolderNode, rdpScancode, le16, rdpMousePos } from "./filters";
+
+describe("buildFolderTree", () => {
+  it("range les éléments à la racine et dans des dossiers imbriqués", () => {
+    const root = buildFolderTree<string>([], [
+      { folder: "", item: "racine" },
+      { folder: "prod", item: "p1" },
+      { folder: "prod/web", item: "w1" },
+      { folder: "prod/web", item: "w2" },
+    ]);
+    expect(root.items).toEqual(["racine"]);
+    const prod = root.children.get("prod")!;
+    expect(prod.path).toBe("prod");
+    expect(prod.items).toEqual(["p1"]);
+    expect(prod.children.get("web")!.items).toEqual(["w1", "w2"]);
+  });
+
+  it("crée les dossiers vides du registre, et ceux dérivés des éléments", () => {
+    const root = buildFolderTree<string>(["a/b/c"], [{ folder: "x", item: "h" }]);
+    // Dossier vide du registre, avec toute sa chaîne d'ancêtres.
+    expect(root.children.get("a")!.children.get("b")!.children.get("c")).toBeTruthy();
+    // Dossier dérivé d'un élément, même absent du registre.
+    expect(root.children.get("x")!.items).toEqual(["h"]);
+  });
+
+  it("un dossier vide ('') équivaut à la racine", () => {
+    const root = buildFolderTree<number>([], [{ folder: "", item: 1 }, { folder: "", item: 2 }]);
+    expect(root.items).toEqual([1, 2]);
+    expect(root.children.size).toBe(0);
+  });
+});
+
+describe("folderNodeCount", () => {
+  it("compte récursivement les éléments d'un nœud et de ses descendants", () => {
+    const root = buildFolderTree<string>([], [
+      { folder: "prod", item: "a" },
+      { folder: "prod/web", item: "b" },
+      { folder: "prod/web", item: "c" },
+      { folder: "autre", item: "d" },
+    ]);
+    expect(folderNodeCount(root)).toBe(4);
+    expect(folderNodeCount(root.children.get("prod")!)).toBe(3);
+    expect(folderNodeCount(root.children.get("prod")!.children.get("web")!)).toBe(2);
+  });
+});
+
+describe("ensureFolderNode", () => {
+  it("est idempotent : deux appels renvoient le même nœud", () => {
+    const root = buildFolderTree<number>([], []);
+    const a = ensureFolderNode(root, "x/y");
+    const b = ensureFolderNode(root, "x/y");
+    expect(a).toBe(b);
+    expect(root.children.get("x")!.children.get("y")).toBe(a);
+  });
+});
+
+describe("rdpScancode", () => {
+  it("mappe les touches usuelles et renvoie null pour l'inconnu", () => {
+    expect(rdpScancode("Enter")).toBe(0x1c);
+    expect(rdpScancode("KeyV")).toBe(0x2f);
+    expect(rdpScancode("ControlLeft")).toBe(0x1d);
+    expect(rdpScancode("Escape")).toBe(0x01);
+    expect(rdpScancode("F13")).toBeNull();
+    expect(rdpScancode("")).toBeNull();
+  });
+});
+
+describe("le16", () => {
+  it("encode un u16 en petit-boutiste", () => {
+    expect(le16(0)).toEqual([0, 0]);
+    expect(le16(1)).toEqual([1, 0]);
+    expect(le16(256)).toEqual([0, 1]);
+    expect(le16(0x1234)).toEqual([0x34, 0x12]);
+    expect(le16(65535)).toEqual([0xff, 0xff]);
+  });
+});
+
+describe("rdpMousePos", () => {
+  const rect = { left: 0, top: 0, width: 800, height: 600 };
+
+  it("mappe 1:1 quand le canvas remplit exactement (même ratio)", () => {
+    // 800x600 affiché dans 800x600 : pas de letterbox.
+    expect(rdpMousePos(0, 0, rect, 800, 600)).toEqual([0, 0]);
+    expect(rdpMousePos(400, 300, rect, 800, 600)).toEqual([400, 300]);
+    expect(rdpMousePos(799, 599, rect, 800, 600)).toEqual([799, 599]);
+  });
+
+  it("tient compte des bandes (letterbox) quand les ratios diffèrent", () => {
+    // Bureau 400x600 (portrait) dans une zone 800x600 : bandes à gauche/droite.
+    // scale = min(800/400, 600/600) = 1 ; image 400 de large, offset X = 200.
+    expect(rdpMousePos(200, 0, rect, 400, 600)).toEqual([0, 0]); // bord gauche de l'image
+    expect(rdpMousePos(400, 300, rect, 400, 600)).toEqual([200, 300]); // centre
+  });
+
+  it("borne au bureau (jamais hors [0, w-1] x [0, h-1])", () => {
+    expect(rdpMousePos(-50, -50, rect, 800, 600)).toEqual([0, 0]);
+    expect(rdpMousePos(9999, 9999, rect, 800, 600)).toEqual([799, 599]);
+  });
+});

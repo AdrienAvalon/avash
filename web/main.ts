@@ -20,6 +20,7 @@ import {
   sortSftpEntries, shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
+  buildFolderTree, folderNodeCount, rdpScancode, le16, rdpMousePos, type FolderNode,
 } from "./filters";
 
 // ---------- Systeme distant par hote ----------
@@ -257,41 +258,15 @@ function renderTagBar() {
 // ---------- Arbre des hôtes (dossiers unifiés SSH + RDP) ----------
 
 type TreeItem = { kind: "ssh"; ssh: Host } | { kind: "rdp"; rdp: RdpHostT };
-type TreeNode = { name: string; path: string; children: Map<string, TreeNode>; items: TreeItem[] };
+type TreeNode = FolderNode<TreeItem>;
 
-function newNode(name: string, path: string): TreeNode {
-  return { name, path, children: new Map(), items: [] };
-}
-
-/** Descend (en créant au besoin) jusqu'au nœud du chemin donné. */
-function ensureFolder(root: TreeNode, path: string): TreeNode {
-  let node = root;
-  let acc = "";
-  for (const seg of (path || "").split("/").filter(Boolean)) {
-    acc = acc ? `${acc}/${seg}` : seg;
-    let child = node.children.get(seg);
-    if (!child) {
-      child = newNode(seg, acc);
-      node.children.set(seg, child);
-    }
-    node = child;
-  }
-  return node;
-}
-
-/** Construit l'arbre à partir du registre de dossiers + des hôtes SSH et RDP. */
+/** Construit l'arbre unifié à partir du registre de dossiers et des hôtes SSH+RDP.
+ *  (Logique pure dans filters.ts, testée ; ici on ne fait que l'alimenter.) */
 function buildTree(): TreeNode {
-  const root = newNode("", "");
-  for (const f of state.folders) ensureFolder(root, f);
-  for (const h of state.hosts) ensureFolder(root, h.folder ?? "").items.push({ kind: "ssh", ssh: h });
-  for (const h of rdpHostsList) ensureFolder(root, h.folder ?? "").items.push({ kind: "rdp", rdp: h });
-  return root;
-}
-
-function nodeCount(node: TreeNode): number {
-  let n = node.items.length;
-  for (const c of node.children.values()) n += nodeCount(c);
-  return n;
+  return buildFolderTree<TreeItem>(state.folders, [
+    ...state.hosts.map((h) => ({ folder: h.folder ?? "", item: { kind: "ssh", ssh: h } as TreeItem })),
+    ...rdpHostsList.map((h) => ({ folder: h.folder ?? "", item: { kind: "rdp", rdp: h } as TreeItem })),
+  ]);
 }
 
 /** Une ligne d'hôte SSH (avatar, logo distro, tags, état), déplaçable. */
@@ -431,7 +406,7 @@ function folderRow(node: TreeNode, depth: number): HTMLElement {
   const collapsed = collapsedFolders.has(node.path);
   row.innerHTML = `<span class="chev">${collapsed ? "▸" : "▾"}</span><span class="fic">${ic("folder")}</span><span class="fname"></span><span class="fcount"></span>`;
   row.querySelector(".fname")!.textContent = node.name;
-  row.querySelector(".fcount")!.textContent = String(nodeCount(node));
+  row.querySelector(".fcount")!.textContent = String(folderNodeCount(node));
   row.title = `${node.path} — clic : plier/déplier, clic droit : options, déposer un hôte pour le ranger`;
   row.addEventListener("click", () => {
     if (collapsedFolders.has(node.path)) collapsedFolders.delete(node.path);
@@ -2763,21 +2738,9 @@ async function openRdp(t: RdpTarget) {
     const s = rdpSessions.get(id);
     if (s?.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array(bytes));
   };
-  const pos = (e: MouseEvent): [number, number] => {
-    // Le canvas est affiche en object-fit:contain : l'image est mise a l'echelle
-    // pour tenir dans l'element en gardant son ratio, donc letterboxee (bandes).
-    // On retrouve le rectangle reellement peint pour mapper le clic aux pixels RDP.
-    const r = canvas.getBoundingClientRect();
-    const scale = Math.min(r.width / rdpW, r.height / rdpH);
-    const dispW = rdpW * scale;
-    const dispH = rdpH * scale;
-    const offX = (r.width - dispW) / 2;
-    const offY = (r.height - dispH) / 2;
-    const x = Math.max(0, Math.min(rdpW - 1, Math.round(((e.clientX - r.left - offX) / dispW) * rdpW)));
-    const y = Math.max(0, Math.min(rdpH - 1, Math.round(((e.clientY - r.top - offY) / dispH) * rdpH)));
-    return [x, y];
-  };
-  const le16 = (n: number) => [n & 0xff, (n >> 8) & 0xff];
+  // Mappage souris -> pixels du bureau (letterbox object-fit:contain), testé.
+  const pos = (e: MouseEvent): [number, number] =>
+    rdpMousePos(e.clientX, e.clientY, canvas.getBoundingClientRect(), rdpW, rdpH);
   // Mouvements souris throttlés au rAF : un seul paquet par frame d'affichage.
   let moveX = 0, moveY = 0, movePending = false;
   canvas.addEventListener("mousemove", (e) => {
@@ -3111,20 +3074,6 @@ window.addEventListener("keydown", (e) => {
 });
 
 /** Table minimale code clavier → scancode PC (set 1). Suffisant pour saisir. */
-function rdpScancode(code: string): number | null {
-  const map: Record<string, number> = {
-    Escape: 0x01, Digit1: 0x02, Digit2: 0x03, Digit3: 0x04, Digit4: 0x05, Digit5: 0x06,
-    Digit6: 0x07, Digit7: 0x08, Digit8: 0x09, Digit9: 0x0a, Digit0: 0x0b, Minus: 0x0c, Equal: 0x0d,
-    Backspace: 0x0e, Tab: 0x0f, KeyQ: 0x10, KeyW: 0x11, KeyE: 0x12, KeyR: 0x13, KeyT: 0x14,
-    KeyY: 0x15, KeyU: 0x16, KeyI: 0x17, KeyO: 0x18, KeyP: 0x19, BracketLeft: 0x1a, BracketRight: 0x1b,
-    Enter: 0x1c, ControlLeft: 0x1d, KeyA: 0x1e, KeyS: 0x1f, KeyD: 0x20, KeyF: 0x21, KeyG: 0x22,
-    KeyH: 0x23, KeyJ: 0x24, KeyK: 0x25, KeyL: 0x26, Semicolon: 0x27, Quote: 0x28, Backquote: 0x29,
-    ShiftLeft: 0x2a, Backslash: 0x2b, KeyZ: 0x2c, KeyX: 0x2d, KeyC: 0x2e, KeyV: 0x2f, KeyB: 0x30,
-    KeyN: 0x31, KeyM: 0x32, Comma: 0x33, Period: 0x34, Slash: 0x35, ShiftRight: 0x36,
-    AltLeft: 0x38, Space: 0x39, CapsLock: 0x3a,
-  };
-  return map[code] ?? null;
-}
 
 // ---------- Panneaux redimensionnables (barre latérale + SFTP) ----------
 
