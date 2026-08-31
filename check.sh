@@ -89,7 +89,7 @@ fi
 #   ./scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 ./check.sh
 if [ -n "${CONFORMITE_RDP:-}" ]; then
   step "Conformite RDP (serveurs xrdp reels)"
-  run "conformite"         "$ROOT" ./scripts/conformite-rdp.sh "${PARC:-xfce}"
+  run "conformite"         "$ROOT" ./scripts/conformite.sh "${PARC:-xfce}"
 fi
 
 step "Front (avash-web)"

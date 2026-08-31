@@ -100,7 +100,7 @@ bout-en-bout:
 # Les trois défauts RDP de la 0.3.3 — image cisaillée, clavier en QWERTY,
 # connexion suspendue — ont été signalés par l'usage. Aucun n'était visible
 # depuis les tests. Ce travail est le seul qui les aurait vus.
-conformite-rdp:
+conformite:
   stage: eprouver
   image: docker:27
   services: ["docker:27-dind"]
@@ -114,6 +114,6 @@ conformite-rdp:
   script:
     - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
     - ./scripts/parc-rdp.sh up tous
-    - ./scripts/conformite-rdp.sh tous
+    - ./scripts/conformite.sh tous
   after_script:
     - ./scripts/parc-rdp.sh down || true

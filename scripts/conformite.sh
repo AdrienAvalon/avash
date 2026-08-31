@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Conformité RDP contre de VRAIS serveurs xrdp (parc local en conteneur).
+# Conformité contre de VRAIS serveurs (parc local en conteneur).
 #
 # Chacun de ces contrôles correspond à un défaut réellement rencontré, signalé
 # par l'usage et non par les tests. Ils existent pour que ce ne soit plus le cas.
 #
+# RDP :
 #   1. la connexion aboutit          — elle restait suspendue sans fin (autodetect)
 #   2. l'image n'est pas cisaillée   — le décodage glissait d'une ligne à l'autre
 #   3. le clavier annoncé est le bon — xrdp retombait sur du QWERTY
+# SSH :
+#   4. le repli clavier-interactif   — un compte de domaine ne pouvait pas se
+#      connecter, faute de ce repli ; signalé depuis Windows, pas par les tests
 #
-# Usage : scripts/conformite-rdp.sh [xfce|gnome|tous]
+# Usage : scripts/conformite.sh [xfce|gnome|ssh|tous]
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -62,13 +66,24 @@ eprouver() { # nom  port
   fi
 }
 
+eprouver_ssh() { # port
+  echo "▸ ssh clavier-interactif (127.0.0.1:$1)"
+  # Ce serveur REFUSE la méthode « password » : seul le repli peut aboutir.
+  if cargo run -q -p avash --example ssh_conformite -- "$1" essai 'essai-mot-de-passe'; then
+    :
+  else
+    echecs=$((echecs+1))
+  fi
+}
+
 quoi="${1:-xfce}"
 [ "$quoi" = "xfce"  ] || [ "$quoi" = "tous" ] && eprouver xfce  3390
 [ "$quoi" = "gnome" ] || [ "$quoi" = "tous" ] && eprouver gnome 3391
+[ "$quoi" = "ssh"   ] || [ "$quoi" = "tous" ] && eprouver_ssh 2222
 
 echo
 if [ "$echecs" -eq 0 ]; then
-  printf '\033[1;32m✓ Conformité RDP : tout est vert.\033[0m\n'
+  printf '\033[1;32m✓ Conformité : tout est vert.\033[0m\n'
 else
-  printf '\033[1;31m✗ Conformité RDP : %d contrôle(s) en échec.\033[0m\n' "$echecs"; exit 1
+  printf '\033[1;31m✗ Conformité : %d contrôle(s) en échec.\033[0m\n' "$echecs"; exit 1
 fi

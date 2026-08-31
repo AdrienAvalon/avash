@@ -13,6 +13,7 @@ utilisant avash, et **aucun n'était visible depuis les tests** :
 | image cisaillée en diagonale sur xrdp | rien : aucun test ne regardait une image |
 | clavier interprété en QWERTY | rien : aucun test n'envoyait de touche à un vrai serveur |
 | connexion suspendue sans fin | rien : aucun test ne menait une séquence complète |
+| SSH : compte de domaine impossible | rien : le simulacre PAM était le nôtre, pas un vrai sshd |
 
 Les tests unitaires vérifiaient nos fonctions, la suite bout en bout vérifiait
 l'interface, et entre les deux se trouvait le seul endroit où ces défauts
@@ -20,13 +21,29 @@ vivaient : le dialogue réel avec un serveur RDP.
 
 ## Usage
 
-    scripts/parc-rdp.sh up tous        # démarre XFCE (3390) et GNOME (3391)
-    scripts/conformite-rdp.sh tous     # les trois contrôles
+    scripts/parc-rdp.sh up tous        # XFCE (3390), GNOME (3391), sshd (2222)
+    scripts/conformite.sh tous         # les quatre contrôles
     scripts/parc-rdp.sh down           # nettoie
 
 Ou intégré à la vérification complète :
 
     scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
+
+## Les trois serveurs
+
+| Conteneur | Port | Ce qu'il joue |
+|---|---|---|
+| `xfce` | 3390 | xrdp + XFCE, refuse NLA — le cas SLED-15 |
+| `gnome` | 3391 | xrdp + GNOME, autre toolkit donc autre rendu |
+| `ssh` | 2222 | sshd qui **refuse** `password` et n'accepte que `keyboard-interactive` |
+
+Le serveur SSH mérite un mot : c'est le comportement d'un hôte joint à un
+annuaire, où SSSD répond par une conversation PAM. avash n'avait pas ce repli,
+et un compte de domaine ne pouvait donc pas se connecter. Le défaut a été
+signalé depuis Windows, par l'usage. Contrôle négatif fait : en débranchant le
+repli, le test échoue avec le message exact que voyait l'utilisateur —
+« Authentification échouée pour essai. Le serveur propose encore :
+keyboard-interactive. »
 
 ## Les deux bureaux
 
@@ -45,6 +62,8 @@ n'apparaît que lorsque le serveur complète ses tuiles à un multiple de quatre
    aucune vérification grossière ne l'aurait vue.
 3. **La disposition clavier annoncée n'est pas zéro.** Annoncer zéro fait
    retomber xrdp sur un clavier américain.
+4. **Le repli SSH clavier-interactif aboutit**, contre un serveur qui refuse la
+   méthode `password`.
 
 ## Ce détecteur est-il sérieux ?
 

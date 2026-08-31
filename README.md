@@ -164,13 +164,14 @@ vérifiaient nos fonctions, la suite bout en bout vérifiait l'interface ; entre
 les deux se trouvait le seul endroit où ces défauts vivaient : le dialogue réel
 avec un serveur RDP.
 
-Un parc de serveurs xrdp en conteneur comble ce vide, avec deux bureaux — XFCE
-et GNOME — parce qu'ils ne dessinent pas de la même façon, et que c'est cette
-diversité qui fait sortir les défauts de décodage.
+Un parc de serveurs en conteneur comble ce vide : deux bureaux xrdp — XFCE et
+GNOME, parce qu'ils ne dessinent pas de la même façon — et un sshd qui refuse la
+méthode `password`, pour éprouver le repli `keyboard-interactive` dont l'absence
+empêchait tout compte de domaine de se connecter.
 
 ```bash
-scripts/parc-rdp.sh up tous        # XFCE sur 3390, GNOME sur 3391
-scripts/conformite-rdp.sh tous     # connexion, image, clavier
+scripts/parc-rdp.sh up tous        # XFCE 3390, GNOME 3391, sshd 2222
+scripts/conformite.sh tous         # connexion, image, clavier, repli SSH
 scripts/parc-rdp.sh down
 ```
 

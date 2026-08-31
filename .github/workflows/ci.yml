@@ -211,8 +211,8 @@ jobs:
   #
   # XFCE et GNOME sont éprouvés tous les deux : ils ne dessinent pas pareil, et
   # c'est cette diversité qui fait sortir les défauts de décodage.
-  conformite-rdp:
-    name: Conformité RDP (xrdp réels, XFCE + GNOME)
+  conformite:
+    name: Conformité (xrdp réels XFCE + GNOME, sshd PAM)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -229,11 +229,11 @@ jobs:
 
       # docker est présent d'origine sur les exécuteurs ; parc-rdp.sh prend
       # podman s'il existe, docker sinon.
-      - name: Démarrer le parc (XFCE et GNOME)
+      - name: Démarrer le parc (XFCE, GNOME, sshd)
         run: ./scripts/parc-rdp.sh up tous
 
       - name: Conformité
-        run: ./scripts/conformite-rdp.sh tous
+        run: ./scripts/conformite.sh tous
 
       - name: Arrêter le parc
         if: always()

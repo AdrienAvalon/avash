@@ -164,17 +164,18 @@ serveur RDP**. Les trois défauts de la 0.3.3 y logeaient tous, et tous ont ét�
 signalés par l'usage plutôt que par la machine.
 
 ```bash
-scripts/parc-rdp.sh up tous        # xrdp + XFCE (3390) et xrdp + GNOME (3391)
-scripts/conformite-rdp.sh tous
+scripts/parc-rdp.sh up tous        # xrdp XFCE (3390), xrdp GNOME (3391), sshd (2222)
+scripts/conformite.sh tous
 scripts/parc-rdp.sh down
 
 # ou intégré à la porte complète
 scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
 ```
 
-Trois contrôles, un par défaut rencontré : la connexion aboutit, l'image n'est
-pas cisaillée, la disposition clavier annoncée n'est pas zéro. Voir
-[tests-parc/README.md](tests-parc/README.md).
+Quatre contrôles, un par défaut rencontré : la connexion RDP aboutit, l'image
+n'est pas cisaillée, la disposition clavier annoncée n'est pas zéro, et le repli
+SSH `keyboard-interactive` fonctionne contre un serveur qui refuse `password`.
+Voir [tests-parc/README.md](tests-parc/README.md).
 
 ## Exécuteur GitLab
 

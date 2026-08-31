@@ -1,0 +1,30 @@
+# sshd configuré pour n'accepter QUE keyboard-interactive (PAM).
+#
+# C'est le cas d'un hôte Linux joint à un annuaire : SSSD répond par une
+# conversation PAM, pas par la méthode « password ». avash n'avait pas ce
+# repli — un compte de domaine ne pouvait pas se connecter, et personne ne
+# l'a vu avant qu'Adrien ne l'essaie depuis Windows.
+FROM debian:12-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openssh-server libpam-modules \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Les clés d'hôte sont normalement produites par le postinst du paquet, qui ne
+# s'exécute pas dans une image : sans elles, sshd coupe chaque connexion.
+RUN useradd -m -s /bin/bash essai && echo 'essai:essai-mot-de-passe' | chpasswd \
+ && mkdir -p /run/sshd \
+ && ssh-keygen -A
+# PasswordAuthentication no : la méthode « password » est refusée. Seul le repli
+# clavier-interactif peut aboutir — c'est exactement ce qu'on veut éprouver.
+RUN printf '%s\n' \
+      'PasswordAuthentication no' \
+      'KbdInteractiveAuthentication yes' \
+      'UsePAM yes' \
+      'PubkeyAuthentication no' \
+      'PermitRootLogin no' \
+      > /etc/ssh/sshd_config.d/avash-essai.conf
+EXPOSE 22
+# /run est un tmpfs recréé au démarrage du conteneur : le répertoire créé à la
+# construction y disparaît, et sshd coupe alors chaque connexion avant même la
+# bannière. On le recrée au lancement.
+CMD ["/bin/sh","-c","mkdir -p /run/sshd && exec /usr/sbin/sshd -D -e"]

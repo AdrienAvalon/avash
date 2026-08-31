@@ -26,6 +26,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   accident.
 - Les correctifs portés sur IronRDP ont leurs tests exécutés par les quatre
   portes : sans cela, une montée de version pourrait les défaire en silence.
+- **Conformité SSH** : un sshd du parc refuse la méthode `password` et n'accepte
+  que `keyboard-interactive` — le comportement d'un hôte joint à un annuaire.
+  C'est le défaut signalé depuis Windows, désormais éprouvé contre un vrai
+  serveur. Contrôle négatif fait : en débranchant le repli, le test échoue avec
+  le message exact que voyait l'utilisateur.
 
 - **Une connexion RDP pouvait rester suspendue en pleine séquence, après une
   authentification réussie.** La détection automatique des caractéristiques
