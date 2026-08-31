@@ -14,6 +14,14 @@ pub struct HomeGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
+impl HomeGuard {
+    /// Le répertoire qui tient lieu de `HOME` pendant le test.
+    #[must_use]
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+}
+
 impl Drop for HomeGuard {
     fn drop(&mut self) {
         match &self.previous {

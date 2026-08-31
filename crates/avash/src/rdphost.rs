@@ -53,6 +53,16 @@ impl RdpHost {
         if self.host.trim().is_empty() {
             bail!("L'adresse du serveur RDP est vide.");
         }
+        // Le fichier d'empreintes `rdp_known_hosts` est en « clé empreinte »,
+        // découpé au premier espace. Une adresse contenant une espace produit
+        // une ligne qu'on ne retrouve jamais : chaque connexion redevient un
+        // premier contact, l'empreinte est réécrite en fin de fichier, et un
+        // changement de certificat n'est plus jamais détecté — le TOFU est
+        // neutralisé sans que rien ne le signale. Un saut de ligne, lui,
+        // permettrait d'y écrire une ligne arbitraire.
+        if self.host.contains([' ', '\t', '\n', '\r', '\0']) {
+            bail!("L'adresse du serveur RDP contient un caractère interdit (espace ou saut de ligne).");
+        }
         if self.user.trim().is_empty() {
             bail!("L'utilisateur RDP est vide.");
         }
@@ -94,14 +104,7 @@ pub fn load_hosts_from(path: &Path) -> Result<Vec<RdpHost>> {
 
 /// Ecriture atomique : un plantage en cours d'ecriture ne tronque pas le fichier.
 pub fn save_hosts_to(path: &Path, hosts: &[RdpHost]) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, serde_yaml::to_string(hosts)?)?;
-    std::fs::rename(&tmp, path)?;
-    crate::restreindre_au_proprietaire(path);
-    Ok(())
+    crate::ecrire_atomiquement(path, serde_yaml::to_string(hosts)?.as_bytes())
 }
 
 pub fn upsert_host_in(path: &Path, host: RdpHost) -> Result<Vec<RdpHost>> {
@@ -150,6 +153,32 @@ mod tests {
             keyring_account("adm", "10.0.0.1", 3389),
             "rdp:adm@10.0.0.1:3389"
         );
+    }
+
+    /// Le fichier d'empreintes RDP est en « clé empreinte », découpé au
+    /// premier espace : une adresse à espace produit une ligne qu'on ne
+    /// retrouve jamais, donc un premier contact perpétuel — le TOFU cesse de
+    /// protéger sans que rien ne le dise. Un saut de ligne permettrait d'y
+    /// écrire une ligne arbitraire.
+    #[test]
+    fn validate_refuse_une_adresse_qui_casserait_les_empreintes() {
+        for mauvais in [
+            "hote avec espace",
+            "hote\tab",
+            "hote\nautre 0000",
+            "hote\rx",
+        ] {
+            let mut h = RdpHost::new("", "10.0.0.1", 3389, "u", 0, 0);
+            h.host = mauvais.to_owned();
+            assert!(
+                h.validate().is_err(),
+                "adresse acceptée alors qu'elle casse rdp_known_hosts : {mauvais:?}"
+            );
+        }
+        // Une adresse normale reste acceptée (IPv6 littéral compris).
+        let mut ok = RdpHost::new("", "x", 3389, "u", 0, 0);
+        ok.host = "[2001:db8::1]".to_owned();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]

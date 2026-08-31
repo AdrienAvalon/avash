@@ -484,8 +484,7 @@ pub fn remove_host(alias: &str) -> anyhow::Result<()> {
     while out.contains("\n\n\n") {
         out = out.replace("\n\n\n", "\n\n");
     }
-    std::fs::write(&path, out.trim_start_matches('\n'))
-        .map_err(|e| anyhow::anyhow!("Écriture de {} : {e}", path.display()))?;
+    ecrire_atomiquement(&path, out.trim_start_matches('\n').as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -560,8 +559,7 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
     while out.contains("\n\n\n") {
         out = out.replace("\n\n\n", "\n\n");
     }
-    std::fs::write(&path, out.trim_start_matches('\n'))
-        .map_err(|e| anyhow::anyhow!("Écriture de {} : {e}", path.display()))?;
+    ecrire_atomiquement(&path, out.trim_start_matches('\n').as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -648,8 +646,7 @@ pub fn set_host_folder_at(path: &std::path::Path, alias: &str, folder: &str) -> 
             path.display()
         ));
     }
-    std::fs::write(path, out)
-        .map_err(|e| anyhow::anyhow!("Écriture de {} : {e}", path.display()))?;
+    ecrire_atomiquement(path, out.as_bytes())?;
     Ok(())
 }
 
@@ -692,6 +689,72 @@ pub fn render_host_block(host: &SshHost) -> String {
         let _ = writeln!(out, "    #Folder: {folder}");
     }
     out
+}
+
+/// Écrit un fichier de configuration **atomiquement** et sans fenêtre lisible.
+///
+/// Deux défauts corrigés d'un coup :
+///
+/// 1. `std::fs::write` tronque le fichier **puis** écrit. Une coupure entre les
+///    deux — disque plein, arrêt brutal — laissait un fichier vide. Pour
+///    `~/.ssh/config` c'est toute la configuration SSH de l'utilisateur, pas
+///    seulement celle d'Avash, qui disparaissait sur un simple renommage de
+///    dossier (une réécriture complète par hôte déplacé). Pour
+///    `rdp_known_hosts` c'était pire qu'une perte : sans empreintes, chaque
+///    serveur redevient un « premier contact » et tout certificat est réaccepté.
+/// 2. Le temporaire naissait avec l'umask, souvent 0644, et n'était resserré
+///    qu'après le renommage : `snippets.yaml` — qui contient des commandes
+///    d'administration, parfois avec un jeton dedans — était brièvement lisible
+///    par les autres comptes de la machine.
+///
+/// Le temporaire est créé dans le **même répertoire** que la cible, sans quoi
+/// `rename` franchirait un point de montage et échouerait.
+///
+/// # Errors
+/// Si le répertoire, l'écriture, la synchronisation ou le renommage échouent.
+pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    if let Some(dir) = path.parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| anyhow::anyhow!("Création de {} : {e}", dir.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+    }
+    let tmp = path.with_extension(format!(
+        "{}tmp{}",
+        path.extension().map_or("", |_| "."),
+        std::process::id()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let ecrire = || -> std::io::Result<()> {
+        let mut f = options.open(&tmp)?;
+        f.write_all(contenu)?;
+        // Sans cette synchronisation, le renommage peut être visible avant le
+        // contenu : on retrouverait un fichier de la bonne taille, rempli de
+        // zéros, après une coupure de courant.
+        f.sync_all()
+    };
+    if let Err(e) = ecrire() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(anyhow::anyhow!("Écriture de {} : {e}", tmp.display()));
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::anyhow!("Renommage vers {} : {e}", path.display())
+    })?;
+    restreindre_au_proprietaire(path);
+    Ok(())
 }
 
 /// Un alias finit dans un fichier de configuration lu par OpenSSH.
@@ -773,6 +836,83 @@ fn validate_alias(alias: &str) -> anyhow::Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests_ecriture_atomique {
+    use super::ecrire_atomiquement;
+    use crate::testutil::temp_home;
+
+    /// Le contenu doit être intégralement lisible, et le fichier ne doit jamais
+    /// avoir été lisible par un autre compte — le temporaire naissait avec
+    /// l'umask et n'était resserré qu'après le renommage.
+    #[test]
+    fn le_fichier_ecrit_est_complet_et_prive() {
+        let home = temp_home();
+        let cible = home.dir().join("secrets.yaml");
+        ecrire_atomiquement(&cible, b"contenu complet\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&cible).unwrap(),
+            "contenu complet\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&cible).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "lisible par d'autres comptes : {mode:o}");
+        }
+    }
+
+    /// Réécrire remplace le contenu sans laisser d'intermédiaire : aucun
+    /// résidu `.tmp` ne doit subsister dans le répertoire.
+    #[test]
+    fn la_reecriture_ne_laisse_aucun_residu() {
+        let home = temp_home();
+        let cible = home.dir().join("liste.yaml");
+        ecrire_atomiquement(&cible, b"premier").unwrap();
+        ecrire_atomiquement(&cible, b"second").unwrap();
+        assert_eq!(std::fs::read_to_string(&cible).unwrap(), "second");
+        let restants: Vec<_> = std::fs::read_dir(home.dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            restants,
+            vec!["liste.yaml".to_owned()],
+            "résidu : {restants:?}"
+        );
+    }
+
+    /// Le répertoire manquant est créé, et en 0700 : `~/.config/avash` naissait
+    /// lui aussi avec l'umask.
+    #[test]
+    fn le_repertoire_absent_est_cree_et_prive() {
+        let home = temp_home();
+        let cible = home.dir().join("neuf/sous/fichier.yaml");
+        ecrire_atomiquement(&cible, b"x").unwrap();
+        assert!(cible.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(cible.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "répertoire ouvert : {mode:o}");
+        }
+    }
+
+    /// Un chemin impossible doit remonter une erreur, pas laisser un temporaire
+    /// derrière lui.
+    #[test]
+    fn un_echec_ne_laisse_pas_de_temporaire() {
+        let home = temp_home();
+        let obstacle = home.dir().join("obstacle");
+        std::fs::write(&obstacle, b"je suis un fichier").unwrap();
+        // « obstacle » est un fichier : on ne peut pas en faire un répertoire.
+        let cible = obstacle.join("dedans.yaml");
+        assert!(ecrire_atomiquement(&cible, b"x").is_err());
+    }
 }
 
 #[cfg(test)]

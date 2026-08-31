@@ -596,6 +596,7 @@ impl AvashSession {
 
     /// Exécution one-shot : stdout + exit code.
     pub async fn run(&mut self, command: &str) -> Result<(String, u32)> {
+        const PLAFOND: usize = 1024 * 1024;
         let mut channel = self.session.channel_open_session().await?;
         channel.exec(false, command).await?;
         let mut stdout = String::new();
@@ -606,18 +607,31 @@ impl AvashSession {
         // que soit le vrai code de sortie — verifie contre un vrai serveur.
         // On laisse la boucle courir jusqu'a la fermeture du canal (wait()
         // rend None), ou jusqu'a Close.
+        //
+        // La sortie était accumulée sans plafond. Un serveur hostile — dont la
+        // clé d'hôte est déjà connue, donc TOFU satisfait — n'avait qu'à
+        // répondre `cat /dev/zero` à la sonde d'OS lancée à chaque ouverture
+        // d'onglet : plusieurs gigaoctets alloués d'un bloc, et c'est tout Avash
+        // qui tombe, avec tous ses autres onglets, tunnels et transferts. Aucun
+        // appelant de `run` n'attend plus que quelques kilo-octets.
+        let mut tronquee = false;
         while let Some(msg) = channel.wait().await {
             match msg {
-                russh::ChannelMsg::Data { ref data } => {
-                    stdout.push_str(&String::from_utf8_lossy(data));
-                }
-                russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                russh::ChannelMsg::Data { ref data }
+                | russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                    if stdout.len() >= PLAFOND {
+                        tronquee = true;
+                        continue;
+                    }
                     stdout.push_str(&String::from_utf8_lossy(data));
                 }
                 russh::ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status,
                 russh::ChannelMsg::Close => break,
                 _ => {}
             }
+        }
+        if tronquee {
+            stdout.push_str("\n[sortie tronquée : plafond de 1 Mio atteint]\n");
         }
         Ok((stdout, exit_code))
     }
@@ -835,7 +849,10 @@ pub fn forget_host_key_at(host: &str, port: u16, path: &Path) -> Result<usize> {
     if content.ends_with('\n') {
         out.push('\n');
     }
-    std::fs::write(path, out).with_context(|| format!("Écriture de {}", path.display()))?;
+    // Une coupure ici laissait un known_hosts vide : toutes les clés apprises
+    // disparaissaient et les connexions suivantes réapprenaient en silence —
+    // une interception passait alors inaperçue.
+    crate::ecrire_atomiquement(path, out.as_bytes())?;
     Ok(to_drop.len())
 }
 

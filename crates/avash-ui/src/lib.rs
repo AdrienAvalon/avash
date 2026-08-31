@@ -23,9 +23,15 @@ pub fn run() {
             inner: Mutex::new(HashMap::new()),
         })
         .manage(rdp::RdpStore::default())
+        // Trois commandes ont été retirées de cette liste : `run_command`,
+        // `snippet_vars` et `password_known`, qu'aucun appel du front
+        // n'utilisait. `run_command` était la plus fâcheuse — elle exécute une
+        // commande arbitraire sur n'importe quel alias, avec le mot de passe du
+        // trousseau chargé automatiquement. Une commande enregistrée est une
+        // surface offerte à la webview ; celle qui ne sert pas ne s'enregistre
+        // pas. Elles restent publiques dans le crate, donc testées.
         .invoke_handler(tauri::generate_handler![
             commands::list_hosts,
-            commands::run_command,
             commands::open_external,
             commands::keyboard_locks,
             commands::pty_open,
@@ -53,7 +59,6 @@ pub fn run() {
             commands::password_save,
             commands::password_forget,
             commands::known_hosts_forget,
-            commands::password_known,
             commands::keys_list,
             commands::key_generate,
             commands::key_deploy,
@@ -75,7 +80,6 @@ pub fn run() {
             rdp::rdp_password_forget,
             commands::open_sessions,
             commands::snippet_list,
-            commands::snippet_vars,
             commands::snippet_save,
             commands::snippet_delete,
             commands::snippet_send

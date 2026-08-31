@@ -987,12 +987,15 @@ function commandesPalette(): EntreePalette[] {
     {
       nom: actif ? "Ne plus partager le presse-papiers avec les bureaux RDP"
                  : "Partager le presse-papiers avec les bureaux RDP",
-      detail: actif ? "Actuellement partagé" : "Actuellement non partagé",
+      detail: actif ? "Actuellement échangé dans les deux sens" : "Actuellement non partagé",
       icone: "copy",
       ouvrir: () => {
         setPartageClipboard(!actif);
-        notify(actif ? "Le presse-papiers n'est plus transmis aux bureaux distants."
-                     : "Le presse-papiers est transmis aux bureaux distants.");
+        // Les sessions ouvertes doivent suivre : le réglage ne vaudrait sinon
+        // qu'à partir de la prochaine connexion.
+        for (const s of rdpSessions.values()) if (s.ws) annoncerPartageClip(s.ws);
+        notify(actif ? "Le presse-papiers n'est plus échangé avec les bureaux distants."
+                     : "Le presse-papiers est échangé avec les bureaux distants.");
       },
     },
   ];
@@ -3224,6 +3227,7 @@ async function openRdp(t: RdpTarget) {
     session.ws = ws;
     ws.onopen = () => {
       ws.send(new TextEncoder().encode(conn.token));
+      annoncerPartageClip(ws);
       // Annonce initiale du presse-papiers local au bureau distant.
       window.setTimeout(() => void pushLocalClipboard(), 600);
     };
@@ -3276,7 +3280,12 @@ async function openRdp(t: RdpTarget) {
         window.clearTimeout(resizeTimer);
         resizeTimer = window.setTimeout(sendResize, 120);
       } else if (kind === 8) {
-        // Le bureau distant a copié du texte -> presse-papiers du poste.
+        // Le bureau distant a copié du texte -> presse-papiers du poste. Le
+        // réglage vaut dans les deux sens : sans cela, un bureau hostile
+        // remplaçait en boucle le presse-papiers local — on copie une commande
+        // depuis sa documentation, on colle dans son terminal, on exécute la
+        // sienne — et ce, même après avoir explicitement coupé le partage.
+        if (!partageClipboard()) return;
         const text = new TextDecoder().decode(new Uint8Array(buf, 1));
         lastClipText = text; // ne pas le renvoyer aussitôt au distant
         clipWriteText(text).catch(() => {});
@@ -3310,6 +3319,15 @@ async function openRdp(t: RdpTarget) {
  *  y voyait la voie libre et poussait sans relâche des images entières — 8 Mo
  *  par trame en 1080p — vers un canvas invisible. Deux bureaux ouverts
  *  doublaient donc le travail utile sans rien afficher de plus. */
+/** Annonce au sidecar si le partage de presse-papiers est autorisé. Message [12].
+ *
+ *  Sans cela le sidecar réclamait au serveur le contenu de son presse-papiers à
+ *  chaque annonce de copie, même quand l'interface n'avait plus le droit de
+ *  l'appliquer : du trafic et une lecture inutiles. */
+function annoncerPartageClip(ws: WebSocket): void {
+  if (ws.readyState === WebSocket.OPEN) ws.send(new Uint8Array([12, partageClipboard() ? 1 : 0]));
+}
+
 function marquerVisibilite(s: { ws: WebSocket | null }, visible: boolean): void {
   if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([11, visible ? 0 : 1]));
 }

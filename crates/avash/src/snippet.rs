@@ -142,14 +142,7 @@ pub fn load_snippets_from(path: &Path) -> Result<Vec<Snippet>> {
 /// Ecriture atomique : un plantage en pleine ecriture ne laisse pas un
 /// fichier tronque qui perdrait tous les snippets.
 pub fn save_snippets_to(path: &Path, snippets: &[Snippet]) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, serde_yaml::to_string(snippets)?)?;
-    std::fs::rename(&tmp, path)?;
-    crate::restreindre_au_proprietaire(path);
-    Ok(())
+    crate::ecrire_atomiquement(path, serde_yaml::to_string(snippets)?.as_bytes())
 }
 
 /// Ajoute ou remplace (meme `id`) un snippet.

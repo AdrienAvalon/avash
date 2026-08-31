@@ -398,14 +398,7 @@ pub fn load_defs_from(path: &Path) -> Result<Vec<TunnelDef>> {
 /// Ecriture atomique : un plantage en pleine ecriture ne laisse pas un
 /// fichier tronque qui perdrait tous les tunnels.
 pub fn save_defs_to(path: &Path, defs: &[TunnelDef]) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, serde_yaml::to_string(defs)?)?;
-    std::fs::rename(&tmp, path)?;
-    crate::restreindre_au_proprietaire(path);
-    Ok(())
+    crate::ecrire_atomiquement(path, serde_yaml::to_string(defs)?.as_bytes())
 }
 
 /// Ajoute ou remplace (meme `id`) une definition.

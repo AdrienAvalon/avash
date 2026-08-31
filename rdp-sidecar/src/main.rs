@@ -76,9 +76,21 @@ enum ClipReq {
 struct ClipBackend {
     local_text: LocalClip,
     tx: tokio::sync::mpsc::UnboundedSender<ClipReq>,
+    /// Le partage de presse-papiers est-il autorisé ? Piloté par l'interface
+    /// (message `[12]`), dans les **deux** sens : le réglage ne gardait que le
+    /// sens sortant, alors qu'un bureau hostile pouvait remplacer en boucle le
+    /// presse-papiers du poste — on copie une commande depuis sa documentation,
+    /// on colle dans son terminal local, on exécute celle de l'attaquant.
+    partage: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 ironrdp::core::impl_as_any!(ClipBackend);
+
+impl ClipBackend {
+    fn partage_actif(&self) -> bool {
+        self.partage.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
 
 impl CliprdrBackend for ClipBackend {
     #[allow(clippy::unnecessary_literal_bound)]
@@ -89,15 +101,20 @@ impl CliprdrBackend for ClipBackend {
         ClipboardGeneralCapabilityFlags::empty()
     }
     fn on_ready(&mut self) {
-        if self.local_text.lock().is_ok_and(|t| t.is_some()) {
+        if self.partage_actif() && self.local_text.lock().is_ok_and(|t| t.is_some()) {
             let _ = self.tx.send(ClipReq::Advertise);
         }
     }
     fn on_request_format_list(&mut self) {
-        let _ = self.tx.send(ClipReq::Advertise);
+        if self.partage_actif() {
+            let _ = self.tx.send(ClipReq::Advertise);
+        }
     }
     fn on_process_negotiated_capabilities(&mut self, _caps: ClipboardGeneralCapabilityFlags) {}
     fn on_remote_copy(&mut self, formats: &[ClipboardFormat]) {
+        if !self.partage_actif() {
+            return; // on ne réclame même pas les données au serveur
+        }
         if formats
             .iter()
             .any(|f| f.id == ClipboardFormatId::CF_UNICODETEXT)
@@ -108,7 +125,7 @@ impl CliprdrBackend for ClipBackend {
         }
     }
     fn on_format_data_request(&mut self, req: FormatDataRequest) {
-        let resp = if req.format == ClipboardFormatId::CF_UNICODETEXT {
+        let resp = if self.partage_actif() && req.format == ClipboardFormatId::CF_UNICODETEXT {
             match self.local_text.lock().ok().and_then(|t| t.clone()) {
                 Some(text) => FormatDataResponse::new_unicode_string(&text).into_owned(),
                 None => FormatDataResponse::new_error().into_owned(),
@@ -417,6 +434,24 @@ fn input_ops(b: &[u8]) -> Vec<Operation> {
 }
 
 /// Rectangle mis à jour -> message FRAME binaire [2][x][y][w][h][RGBA].
+/// Plafond de résolution accepté d'un serveur RDP.
+///
+/// C'est le serveur qui **confirme** la résolution, et il n'est pas tenu de
+/// reprendre celle demandée. Rien ne bornait ce qu'on en faisait :
+/// `DecodedImage::new` alloue `largeur × hauteur × 4` octets d'un bloc, soit
+/// 17 Gio pour un 65535×65535 annoncé — mort du processus par manque de
+/// mémoire, rejouable à volonté par la renégociation `DeactivateAll`. 8192 est
+/// déjà la borne appliquée au redimensionnement côté interface.
+const TAILLE_MAX: u16 = 8192;
+
+fn taille_sure(w: u16, h: u16) -> anyhow::Result<(u16, u16)> {
+    anyhow::ensure!(
+        w > 0 && h > 0 && w <= TAILLE_MAX && h <= TAILLE_MAX,
+        "Le serveur annonce une résolution inacceptable ({w}x{h})."
+    );
+    Ok((w, h))
+}
+
 fn frame_msg(image: &DecodedImage, r: &ironrdp::pdu::geometry::InclusiveRectangle) -> Vec<u8> {
     let iw = usize::from(image.width());
     let data = image.data();
@@ -508,12 +543,16 @@ async fn main() -> Result<()> {
     let args = parse_args()?;
     let local_text: LocalClip = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel::<ClipReq>();
+    // Actif par défaut — parité avec les autres clients RDP ; l'interface
+    // annonce aussitôt le réglage retenu par l'utilisateur (message [12]).
+    let partage_clip = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let clip_backend = ClipBackend {
+        partage: partage_clip.clone(),
         local_text: local_text.clone(),
         tx: clip_tx.clone(),
     };
     let (result, mut framed) = connect(&args, clip_backend).await?;
-    let (w, h) = (result.desktop_size.width, result.desktop_size.height);
+    let (w, h) = taille_sure(result.desktop_size.width, result.desktop_size.height)?;
     let activation_factory = result.activation_factory;
     eprintln!("connecté : {w}x{h}");
     let mut image = DecodedImage::new(PixelFormat::RgbA32, w, h);
@@ -545,18 +584,34 @@ async fn main() -> Result<()> {
         .await?;
     out.flush().await?;
 
-    let (tcp, _) = listener.accept().await.context("acceptation WebSocket")?;
-    tcp.set_nodelay(true).ok();
-    let ws = tokio_tungstenite::accept_async(tcp)
-        .await
-        .context("handshake WebSocket")?;
-    let (mut sink, mut stream) = ws.split();
-
-    // Premier message du client = le jeton (sinon on refuse).
-    match stream.next().await {
-        Some(Ok(Message::Binary(t))) if t == token.as_bytes() => {}
-        _ => return Ok(()),
-    }
+    // On boucle sur les connexions au lieu d'en accepter une seule. Le port est
+    // ouvert avant même que l'interface n'en soit avertie : n'importe quel
+    // processus local — ou une page web, les WebSocket n'étant pas soumises à
+    // la politique d'origine pour *établir* la connexion — pouvait s'y
+    // présenter le premier. Un message quelconque faisait quitter le sidecar,
+    // détruisant une session RDP déjà authentifiée (TLS + NLA refaits) ; une
+    // connexion TCP laissée sans poignée de main WebSocket consommait la seule
+    // place d'`accept` et l'interface n'arrivait jamais à se connecter.
+    // Le jeton (64 bits) reste hors de portée : c'était un déni de service, pas
+    // un détournement. On rejette maintenant l'intrus et on attend le suivant,
+    // avec un délai de garde par tentative pour qu'un client muet ne bloque pas
+    // la file.
+    const DELAI_POIGNEE: Duration = Duration::from_secs(10);
+    let (mut sink, mut stream) = loop {
+        let (tcp, _) = listener.accept().await.context("acceptation WebSocket")?;
+        tcp.set_nodelay(true).ok();
+        let Ok(Ok(ws)) =
+            tokio::time::timeout(DELAI_POIGNEE, tokio_tungstenite::accept_async(tcp)).await
+        else {
+            continue; // poignée de main absente ou trop lente : au suivant
+        };
+        let (sink, mut stream) = ws.split();
+        // Premier message du client = le jeton (sinon on refuse ce client-là).
+        match tokio::time::timeout(DELAI_POIGNEE, stream.next()).await {
+            Ok(Some(Ok(Message::Binary(t)))) if t == token.as_bytes() => break (sink, stream),
+            _ => continue,
+        }
+    };
 
     // CONNECTED [1][w][h]
     let mut hello = vec![1u8];
@@ -645,12 +700,18 @@ async fn main() -> Result<()> {
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&8) => {
                         // Presse-papiers du poste : on mémorise le texte et on
                         // l'annonce au serveur (collage possible dans le distant).
-                        if let Ok(text) = std::str::from_utf8(&b[1..]) {
-                            if let Ok(mut g) = local_text.lock() {
-                                *g = Some(text.to_owned());
+                        if partage_clip.load(std::sync::atomic::Ordering::Relaxed) {
+                            if let Ok(text) = std::str::from_utf8(&b[1..]) {
+                                if let Ok(mut g) = local_text.lock() {
+                                    *g = Some(text.to_owned());
+                                }
+                                let _ = clip_tx.send(ClipReq::Advertise);
                             }
-                            let _ = clip_tx.send(ClipReq::Advertise);
                         }
+                    }
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&12) && b.len() >= 2 => {
+                        // CLIPBOARD : 0 = l'utilisateur a coupé le partage.
+                        partage_clip.store(b[1] != 0, std::sync::atomic::Ordering::Relaxed);
                     }
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&11) && b.len() >= 2 => {
                         // PAUSE : 1 = l'onglet est passé à l'arrière-plan.
@@ -790,11 +851,12 @@ async fn main() -> Result<()> {
                                     break desktop_size;
                                 }
                             };
-                            image = DecodedImage::new(PixelFormat::RgbA32, size.width, size.height);
+                            let (nw, nh) = taille_sure(size.width, size.height)?;
+                            image = DecodedImage::new(PixelFormat::RgbA32, nw, nh);
                             // Annonce la nouvelle taille à Avash (réutilise CONNECTED [1][w][h]).
                             let mut msg = vec![1u8];
-                            msg.extend_from_slice(&size.width.to_le_bytes());
-                            msg.extend_from_slice(&size.height.to_le_bytes());
+                            msg.extend_from_slice(&nw.to_le_bytes());
+                            msg.extend_from_slice(&nh.to_le_bytes());
                             sink.send(Message::Binary(msg)).await.context("annonce resize")?;
                             // Réinitialise le cadencement : une image en attente à
                             // l'ancienne taille n'a plus de sens, et un ACK laissé en

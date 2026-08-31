@@ -22,9 +22,20 @@ pub struct RdpConn {
     pub token: String,
 }
 
-fn sidecar_path() -> std::path::PathBuf {
+/// Chemin du processus RDP, ou `None` s'il est introuvable.
+///
+/// **Aucun repli relatif.** Le dernier recours était
+/// `rdp-sidecar/target/release/avash-rdp`, résolu depuis le répertoire courant :
+/// lancée depuis `/tmp`, un partage ou `~/Téléchargements`, l'application y
+/// exécutait le binaire qu'un autre compte avait pu y déposer — et lui écrivait
+/// le mot de passe RDP sur son entrée standard, celui du trousseau compris.
+/// Mieux vaut une erreur nommée qu'un chemin deviné.
+fn sidecar_path() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("AVASH_RDP_BIN") {
-        return p.into();
+        let p = std::path::PathBuf::from(p);
+        // Même une variable d'environnement doit désigner un chemin absolu :
+        // relative, elle rouvrirait exactement la porte qu'on vient de fermer.
+        return p.is_absolute().then_some(p);
     }
     // Sous Windows l'exécutable porte une extension : sans elle, le fichier
     // posé à côté de l'application (avash-rdp.exe) n'était jamais trouvé et
@@ -35,19 +46,21 @@ fn sidecar_path() -> std::path::PathBuf {
             // À côté de l'exe (installation / bundle / version portable).
             let side = dir.join(&nom);
             if side.exists() {
-                return side;
+                return Some(side);
             }
             // En dev : le sidecar est un projet séparé. Depuis target/release/,
             // remonter jusqu'à la racine du dépôt.
             if let Some(root) = dir.parent().and_then(std::path::Path::parent) {
+                // En dev : le sidecar est un projet séparé. `root` vient de
+                // current_exe(), donc absolu — pas du répertoire courant.
                 let devside = root.join("rdp-sidecar/target/release").join(&nom);
                 if devside.exists() {
-                    return devside;
+                    return Some(devside);
                 }
             }
         }
     }
-    std::path::PathBuf::from("rdp-sidecar/target/release").join(nom)
+    None
 }
 
 /// Lance le sidecar et renvoie le WebSocket (port + jeton) qu'il annonce.
@@ -80,7 +93,14 @@ pub async fn rdp_open(
     } else {
         password
     };
-    let mut cmd = tokio::process::Command::new(sidecar_path());
+    let Some(bin) = sidecar_path() else {
+        return Err(
+            "Le processus RDP (avash-rdp) est introuvable à côté de l'application. \
+             Réinstalle Avash, ou indique son chemin absolu dans AVASH_RDP_BIN."
+                .to_owned(),
+        );
+    };
+    let mut cmd = tokio::process::Command::new(bin);
     cmd.args([
         "--host",
         &host,
@@ -320,4 +340,36 @@ pub fn rdp_password_move(
 pub fn rdp_password_forget(host: String, port: u16, user: String) -> Result<(), String> {
     let id = rdphost::keyring_account(&user, &host, port);
     avash::secrets::forget(&id).map_err(|e| format!("{e:#}"))
+}
+
+#[cfg(test)]
+mod tests_chemin_sidecar {
+    use super::sidecar_path;
+
+    /// Le repli relatif `rdp-sidecar/target/release/avash-rdp` était résolu
+    /// depuis le répertoire courant : lancée depuis un répertoire où un autre
+    /// compte peut écrire, l'application y exécutait le binaire déposé et lui
+    /// confiait le mot de passe RDP sur l'entrée standard. Quoi qu'elle rende,
+    /// cette fonction doit rendre un chemin absolu — ou rien.
+    ///
+    /// Un seul test : `set_var`/`remove_var` portent sur tout le processus, et
+    /// deux tests concurrents se marcheraient dessus.
+    #[test]
+    fn le_chemin_rendu_n_est_jamais_relatif() {
+        // SAFETY: le test possède la variable et s'exécute d'un seul tenant.
+        unsafe { std::env::remove_var("AVASH_RDP_BIN") };
+        assert!(
+            sidecar_path().is_none_or(|p| p.is_absolute()),
+            "le repli ne doit pas dépendre du répertoire courant"
+        );
+
+        // Une variable d'environnement relative rouvrirait la même porte.
+        unsafe { std::env::set_var("AVASH_RDP_BIN", "avash-rdp") };
+        let rendu = sidecar_path();
+        unsafe { std::env::remove_var("AVASH_RDP_BIN") };
+        assert!(
+            rendu.is_none_or(|p| p.is_absolute()),
+            "AVASH_RDP_BIN relative doit être refusée"
+        );
+    }
 }

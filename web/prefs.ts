@@ -4,13 +4,16 @@
 // ce qui sort de la machine, ce qui les rend trop importants pour n'être
 // couverts que de bout en bout.
 
-/** Le presse-papiers local est-il partagé avec les bureaux distants ?
+/** Le presse-papiers est-il échangé avec les bureaux distants ?
  *
- *  Partager revient à confier le contenu du presse-papiers — souvent un mot de
- *  passe qu'on vient de copier — à un serveur distant, qui peut le réclamer dès
- *  qu'on le lui annonce. C'est le comportement attendu d'un client RDP, donc le
- *  défaut, mais il doit rester révocable : la bascule est offerte à la palette
- *  (Ctrl+K). L'absence de réglage vaut « partagé ». */
+ *  Le réglage vaut dans les **deux** sens. Sortant : confier le contenu du
+ *  presse-papiers — souvent un mot de passe qu'on vient de copier — à un
+ *  serveur qui peut le réclamer dès qu'on le lui annonce. Entrant : laisser un
+ *  bureau distant remplacer le presse-papiers du poste, ce dont un serveur
+ *  hostile se sert pour faire coller autre chose que ce qu'on croit avoir
+ *  copié. C'est le comportement attendu d'un client RDP, donc le défaut, mais
+ *  il doit rester révocable : la bascule est offerte à la palette (Ctrl+K).
+ *  L'absence de réglage vaut « partagé ». */
 export const CLIP_KEY = "avash.rdp.clipboard";
 
 export function partageClipboard(): boolean {

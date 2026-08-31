@@ -83,11 +83,7 @@ fn save_to(path: &Path, folders: &[String]) -> Result<()> {
     sorted.dedup();
     let f = FoldersFile { folders: sorted };
     let yaml = serde_yaml::to_string(&f).context("sérialisation folders.yaml")?;
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, yaml).with_context(|| format!("Écriture de {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("Renommage vers {}", path.display()))?;
-    crate::restreindre_au_proprietaire(path);
-    Ok(())
+    crate::ecrire_atomiquement(path, yaml.as_bytes())
 }
 
 /// Liste des dossiers connus (triée). Voir aussi les dossiers dérivés des hôtes.

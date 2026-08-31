@@ -83,6 +83,64 @@ avec la distinction que fait OpenSSH (voir `check_server_key` dans
 - **`known_hosts` illisible, ou certificat d'hôte non validable** : refus par
   défaut (mieux vaut refuser qu'accepter à l'aveugle).
 
+### Le processus RDP n'est jamais cherché en chemin relatif
+
+Le chemin de repli du processus `avash-rdp` était `rdp-sidecar/target/release/`,
+résolu depuis le **répertoire courant**. Lancée depuis `/tmp`, un partage ou
+`~/Téléchargements`, l'application y exécutait le binaire qu'un autre compte
+avait pu déposer — et lui écrivait le mot de passe RDP sur son entrée standard,
+celui du trousseau compris. Le repli a été supprimé : à côté de l'exécutable, un
+chemin absolu de développement, ou une erreur nommée. `AVASH_RDP_BIN` n'est
+honorée que si elle est absolue.
+
+### Rien d'illimité ne vient du réseau
+
+Trois allocations n'avaient aucun plafond, toutes pilotables par un serveur :
+
+- la sortie d'une commande distante était accumulée sans borne. La sonde d'OS
+  part à **chaque ouverture d'onglet** : un serveur répondant `cat /dev/zero`
+  faisait tomber Avash entier, avec tous ses autres onglets, tunnels et
+  transferts. Plafond : 1 Mio, la troncature est annoncée.
+- la résolution annoncée par un serveur RDP était allouée telle quelle
+  (`largeur × hauteur × 4`), soit 17 Gio pour un 65535×65535, rejouable à
+  volonté par renégociation. Plafond : 8192×8192.
+- le presse-papiers reçu du serveur était déjà borné à 8 Mio.
+
+### Le canal local du processus RDP n'est plus coupable d'un seul message
+
+Le port d'écoute du processus RDP s'ouvre avant que l'interface n'en soit
+avertie. Il n'acceptait **qu'une** connexion, et un premier message autre que le
+jeton le faisait quitter : n'importe quel processus local — ou une page web, les
+WebSocket n'étant pas soumises à la politique d'origine pour *établir* la
+connexion — détruisait ainsi une session RDP déjà authentifiée. Une connexion
+laissée sans poignée de main consommait la seule place disponible et l'interface
+n'arrivait jamais à se connecter. L'intrus est désormais rejeté, la file
+continue, et chaque tentative a un délai de garde. Le jeton (64 bits) n'a jamais
+été à portée : c'était un déni de service, pas un détournement.
+
+### Écritures atomiques
+
+`~/.ssh/config`, `known_hosts`, `rdp_known_hosts` et les quatre fichiers de
+configuration sont écrits dans un temporaire créé en 0600 dans le même
+répertoire, puis renommés. Auparavant la troncature précédait l'écriture : une
+coupure laissait un fichier vide — pour `~/.ssh/config`, **toute** la
+configuration SSH de l'utilisateur ; pour `rdp_known_hosts`, la perte des
+empreintes, donc le retour silencieux à « premier contact » pour tous les
+serveurs. Le temporaire naissait par ailleurs avec l'umask, laissant
+`snippets.yaml` — qui contient des commandes d'administration — brièvement
+lisible par les autres comptes.
+
+Une adresse de bureau RDP contenant une espace ou un saut de ligne est refusée :
+le fichier d'empreintes se découpe au premier espace, et une telle adresse
+produisait une ligne jamais retrouvée — TOFU neutralisé sans que rien ne le dise.
+
+### Surface d'appel réduite
+
+Trois commandes exposées à l'interface n'étaient appelées par aucun code :
+`run_command`, `snippet_vars` et `password_known`. La première exécutait une
+commande arbitraire sur n'importe quel alias, avec le mot de passe du trousseau
+chargé automatiquement. Elles ne sont plus enregistrées.
+
 ### Le presse-papiers n'est partagé que sur décision
 
 Partager le presse-papiers avec un bureau distant revient à confier son contenu
@@ -94,6 +152,12 @@ Ce n'est plus le cas : le presse-papiers ne part que depuis la session active,
 sur un geste dans le bureau distant. Et le partage est révocable — `Ctrl+K`,
 « Ne plus partager le presse-papiers avec les bureaux RDP » — le choix étant
 retenu d'un lancement à l'autre.
+
+Le réglage vaut dans les **deux** sens. Il ne gardait que le sens sortant, alors
+qu'un bureau distant pouvait remplacer en boucle le presse-papiers du poste : on
+copie une commande depuis sa documentation, on colle dans son terminal local, on
+exécute celle de l'attaquant. Refusé, le partage n'est plus ni annoncé ni
+réclamé au serveur — le processus RDP en est informé, pas seulement l'interface.
 
 ### Les mots de passe ne traversent pas l'interface
 

@@ -1688,7 +1688,14 @@ pub fn host_update(
         {
             if nouveau != ancien {
                 if let Some(secret) = avash::secrets::load(&ancien) {
-                    let _ = avash::secrets::save(&nouveau, &secret);
+                    // L'oubli n'a lieu qu'après une écriture réussie. Sinon —
+                    // trousseau verrouillé, D-Bus absent — la nouvelle entrée
+                    // n'existait pas, l'ancienne était quand même effacée, et
+                    // `host_update` renvoyait Ok : le mot de passe était perdu
+                    // sans un mot, pour un simple changement de port.
+                    avash::secrets::save(&nouveau, &secret).map_err(|e| {
+                        format!("Le mot de passe mémorisé n'a pas pu être déplacé : {e:#}")
+                    })?;
                     let _ = avash::secrets::forget(&ancien);
                 }
             }
