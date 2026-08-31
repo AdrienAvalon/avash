@@ -1,12 +1,32 @@
+/** Cherche une ligne par son libellé, en tolérant un rendu concurrent.
+ *
+ *  `$$()` rend des références d'éléments qui deviennent CADUQUES dès que la
+ *  liste est reconstruite — ce qui arrive tout seul : le tick des tunnels
+ *  toutes les cinq secondes, l'arrivée d'un logo d'OS, un changement d'état de
+ *  session. Interroger une référence caduque **lève** une erreur, et à
+ *  l'intérieur d'un `waitUntil` cette erreur avorte l'attente au lieu de la
+ *  faire réessayer.
+ *
+ *  C'est la cause d'une famille entière d'échecs qui ne se manifestaient que
+ *  sur une machine occupée — là où la fenêtre entre les deux appels s'élargit
+ *  assez pour qu'un rendu s'y glisse. On rend `null`, et l'appelant réessaie.
+ */
+export async function trouverLigne(selecteurLigne, selecteurNom, texte) {
+  try {
+    for (const r of await $$(selecteurLigne)) {
+      if ((await r.$(selecteurNom).getProperty("textContent")) === texte) return r;
+    }
+  } catch {
+    return null; // liste reconstruite pendant le parcours : on réessaiera
+  }
+  return null;
+}
+
 // Localise une ligne d'hôte par son alias (SSH) ou une ligne de dossier par son nom.
 // La liste est peuplée de façon asynchrone au démarrage : on patiente au lieu de
 // conclure à l'absence sur la toute première interrogation.
 async function chercheHote(alias) {
-  for (const r of await $$("#host-list .host")) {
-    const a = await r.$(".alias");
-    if ((await a.getProperty("textContent")) === alias) return r;
-  }
-  return null;
+  return trouverLigne("#host-list .host", ".alias", alias);
 }
 export async function findHostRow(alias, timeout = 8000) {
   let trouve = null;
@@ -20,11 +40,9 @@ export async function findHostRow(alias, timeout = 8000) {
   return trouve;
 }
 export async function findFolderRow(name) {
-  for (const r of await $$("#host-list .folder-row")) {
-    const f = await r.$(".fname");
-    if ((await f.getProperty("textContent")) === name) return r;
-  }
-  throw new Error(`dossier « ${name} » introuvable`);
+  const r = await trouverLigne("#host-list .folder-row", ".fname", name);
+  if (!r) throw new Error(`dossier « ${name} » introuvable`);
+  return r;
 }
 export async function folderExists(name) {
   try { await findFolderRow(name); return true; } catch { return false; }

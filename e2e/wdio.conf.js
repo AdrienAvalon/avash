@@ -105,6 +105,10 @@ export const config = {
   port: 4444,
   path: "/",
   mochaOpts: { ui: "bdd", timeout: 60000 },
+  // Le défaut de WebdriverIO est de 3 s. C'est court pour une application
+  // native qui vient de démarrer sur une machine occupée — et c'est la valeur
+  // qu'utilise toute attente écrite sans échéance explicite.
+  waitforTimeout: 10000,
   onPrepare: () => {
     process.env.AVASH_E2E_SANDBOX = sandbox; // hérité par les workers
     seedSandbox(); // crée ~/.ssh + config (référence la clé cliente)
@@ -121,6 +125,27 @@ export const config = {
   // que soit ce qu'ont fait les fichiers précédents (spécification isolation).
   beforeSession: () => {
     seedSandbox();
+  },
+  // ... et on attend qu'elle soit RÉELLEMENT prête avant le premier geste.
+  //
+  // Chaque fichier relance l'application ; les scénarios enchaînaient aussitôt
+  // sur un clic. Entre le démarrage de la fenêtre et le premier rendu, il y a
+  // le chargement du front puis un aller-retour vers le cœur pour lire la
+  // configuration : agir avant que cela n'aboutisse frappe un DOM à moitié
+  // câblé. C'est la cause d'une famille entière d'échecs intermittents, qui ne
+  // se manifestaient que sur une machine occupée.
+  //
+  // `#host-list` reçoit toujours au moins un enfant à la fin du rendu — une
+  // ligne d'hôte, ou le message d'accueil quand la configuration est vide.
+  before: async () => {
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const l = document.getElementById("host-list");
+          return document.readyState === "complete" && !!l && l.children.length > 0;
+        }),
+      { timeout: 30000, timeoutMsg: "l'application n'a jamais fini de démarrer" },
+    );
   },
   onComplete: () => {
     if (tauriDriver) tauriDriver.kill();

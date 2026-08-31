@@ -1,3 +1,5 @@
+import { trouverLigne } from "./helpers.js";
+
 describe("Tunnels — créer puis supprimer une définition", () => {
   it("crée un tunnel local, le voit dans la liste, le supprime (askConfirm)", async () => {
     await $("#tunnels-btn").click();
@@ -10,12 +12,9 @@ describe("Tunnels — créer puis supprimer une définition", () => {
     await $("#t-name").setValue("Tunnel E2E");
     await $("#t-submit").click();
 
-    const findRow = async () => {
-      for (const r of await $$("#tunnel-list .tunnel-row")) {
-        if ((await r.$(".tname").getProperty("textContent")) === "Tunnel E2E") return r;
-      }
-      return null;
-    };
+    // `trouverLigne` tolère une reconstruction de la liste pendant le parcours :
+    // une référence caduque levait une erreur qui avortait le `waitUntil`.
+    const findRow = () => trouverLigne("#tunnel-list .tunnel-row", ".tname", "Tunnel E2E");
     await browser.waitUntil(async () => (await findRow()) !== null, { timeout: 8000, timeoutMsg: "tunnel non listé" });
 
     await (await findRow()).$('[data-act="delete"]').click();

@@ -267,6 +267,16 @@ Apprises en construisant le projet, coûteuses à réapprendre :
   tous d'une interrogation faite trop tôt. Et « le port répond » n'est pas un
   état suffisant : un serveur qui traite ses clients l'un après l'autre doit être
   vu *revenir* accepter.
+- **Une référence d'élément devient caduque dès que la liste est reconstruite.**
+  Parcourir `$$()` puis interroger chaque ligne lève une erreur si un rendu
+  s'est glissé entre les deux — et à l'intérieur d'un `waitUntil`, cette erreur
+  **avorte l'attente** au lieu de la faire réessayer. C'était la cause d'une
+  famille entière d'échecs intermittents, invisibles sur une machine au repos.
+  Une recherche doit rendre « pas trouvé », jamais lever.
+- **Éprouver la stabilité sous charge, pas par répétition.** Relancer la suite
+  dix fois sur une machine oisive ne révèle rien ; la lancer une fois pendant
+  trois compilations concurrentes révèle tout. C'est la fenêtre temporelle qu'on
+  cherche à élargir, pas le nombre de tirages.
 - **Un serveur de test complaisant ne prouve rien.** Le nôtre rendait le même
   bloc quel que soit le décalage demandé : il aurait validé n'importe quel
   lecteur, y compris un lecteur en bandes parallèles qui réassemble de travers.
