@@ -22,7 +22,7 @@ vivaient : le dialogue réel avec un serveur RDP.
 ## Usage
 
     scripts/parc-rdp.sh up tous        # XFCE (3390), GNOME (3391), sshd (2222)
-    scripts/conformite.sh tous         # les quatre contrôles
+    scripts/conformite.sh tous         # les cinq contrôles
     scripts/parc-rdp.sh down           # nettoie
 
 Ou intégré à la vérification complète :
@@ -62,7 +62,11 @@ n'apparaît que lorsque le serveur complète ses tuiles à un multiple de quatre
    aucune vérification grossière ne l'aurait vue.
 3. **La disposition clavier annoncée n'est pas zéro.** Annoncer zéro fait
    retomber xrdp sur un clavier américain.
-4. **Le repli SSH clavier-interactif aboutit**, contre un serveur qui refuse la
+4. **Les trames ne portent pas un plein écran pour deux poussières.** Le
+   contrôle ne fixe pas de seuil en octets, qui serait fragile : il vérifie
+   qu'une trame porte *plusieurs* rectangles. Un retour à l'union englobante
+   donnerait exactement autant de rectangles que de trames.
+5. **Le repli SSH clavier-interactif aboutit**, contre un serveur qui refuse la
    méthode `password`.
 
 ## Ce détecteur est-il sérieux ?

@@ -7,6 +7,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **L'affichage RDP envoyait deux fois trop d'octets.** Le processus n'accumulait
+  qu'une union englobante des zones modifiées : deux poussières aux coins
+  opposés donnaient un rectangle plein écran. Les zones restent désormais
+  séparées, et ne fusionnent que si l'union coûte moins cher que les deux.
+  Mesuré sur le fil contre un vrai xrdp, même parcours : **8,39 Mo → 4,36 Mo**,
+  avec davantage de trames livrées. Un contrôle de conformité empêche le retour
+  en arrière.
+
 ### Outillage — combler l'angle mort qui a laissé passer trois défauts
 
 - **Parc RDP local** (`tests-parc/`) : de vrais serveurs xrdp en conteneur, avec

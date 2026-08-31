@@ -148,6 +148,7 @@ Entiers en little-endian.
 | `3`  | Erreur       | message UTF-8 — **réservé**, voir ci-dessous |
 | `7`  | Statistiques | `fps:u16`, `débit:u32` (Ko/s), `latence:u16` (ms) |
 | `8`  | Presse-papiers (distant → poste) | texte UTF-8 |
+| `13` | Écran, plusieurs rectangles | `n:u8`, puis `n` fois (`x:u16`, `y:u16`, `w:u16`, `h:u16`, pixels RGBA) |
 
 Le code `3` est géré par le front mais **n'est jamais émis** : un échec survenu
 avant la connexion sort sur l'erreur standard du processus et remonte comme
@@ -155,6 +156,27 @@ message d'erreur d'ouverture ; un échec en cours de session ferme le WebSocket,
 et l'interface relit les dernières lignes du processus (`rdp_diagnostic`) pour
 les afficher dans l'incrustation « Connexion RDP fermée ». Le code reste réservé.
 
+
+Le code `13` existe parce que le sidecar n'accumulait qu'une **union
+englobante** des zones modifiées. Deux poussières aux coins opposés donnaient un
+rectangle plein écran. Mesuré sur le fil contre un vrai xrdp, même parcours de
+souris, 20 secondes :
+
+| | trames | rectangles | octets |
+|---|---|---|---|
+| union englobante | 6 | 6 | 8,39 Mo |
+| fusion sélective | 9 | 20 | 4,36 Mo |
+
+Moitié moins d'octets, et davantage de trames livrées — donc plus fluide aussi.
+
+La règle de fusion est arithmétique, pas heuristique : deux zones ne fusionnent
+que si l'union coûte moins cher que les deux séparées, en-têtes compris. Le
+nombre de rectangles est borné à huit ; au-delà, la paire qui gaspille le moins
+fusionne, car une trame ne peut pas en porter un nombre illimité.
+
+Un seul rectangle garde la forme historique `2` ; plusieurs empruntent `13`.
+Dans les deux cas **une trame, un accusé de rendu** : le cadencement ci-dessous
+reste exact.
 
 Le code `6` (ACK de rendu) implémente un **cadencement adaptatif** : le front
 accuse réception de chaque frame, et le sidecar n'envoie la suivante qu'une fois

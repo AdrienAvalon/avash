@@ -38,11 +38,12 @@ fois à trancher une question qu'aucun raisonnement n'aurait tranchée.
 | `cargo-deny` | licences, dépendances en joker, sources inconnues |
 | `cargo-audit` | vulnérabilités déclarées |
 | `cargo-nextest` | exécution des tests plus lisible et plus rapide |
+| `python-websockets` | mesurer le trafic de trames RDP comme le fait l'interface |
 
 ```bash
 # Arch / CachyOS
 sudo pacman -S --needed podman freerdp tcpdump wireshark-cli \
-  xorg-server-xvfb hyperfine python-numpy python-pillow
+  xorg-server-xvfb hyperfine python-numpy python-pillow python-websockets
 cargo install cargo-audit cargo-deny cargo-nextest --locked
 ```
 
@@ -172,9 +173,10 @@ scripts/parc-rdp.sh down
 scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
 ```
 
-Quatre contrôles, un par défaut rencontré : la connexion RDP aboutit, l'image
-n'est pas cisaillée, la disposition clavier annoncée n'est pas zéro, et le repli
-SSH `keyboard-interactive` fonctionne contre un serveur qui refuse `password`.
+Cinq contrôles, un par défaut rencontré : la connexion RDP aboutit, l'image
+n'est pas cisaillée, les trames ne renvoient pas un plein écran pour deux
+poussières, la disposition clavier annoncée n'est pas zéro, et le repli SSH
+`keyboard-interactive` fonctionne contre un serveur qui refuse `password`.
 Voir [tests-parc/README.md](tests-parc/README.md).
 
 ## Exécuteur GitLab

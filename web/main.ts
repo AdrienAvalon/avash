@@ -3553,6 +3553,27 @@ async function openRdp(t: RdpTarget) {
         }
         // ACK de rendu (même si la frame était invalide, pour ne pas figer le flux).
         if (ws.readyState === WebSocket.OPEN) ws.send(RDP_ACK);
+      } else if (kind === 13) {
+        // Trame à plusieurs rectangles. Le sidecar n'accumulait qu'une union
+        // englobante : deux petites zones aux coins opposés donnaient un
+        // rectangle plein écran. Mesuré contre un vrai xrdp, 1,8 fois trop
+        // d'octets. Une seule trame, donc un seul accusé : le cadencement
+        // reste exact.
+        try {
+          const n = dv.getUint8(1);
+          let p = 2;
+          for (let i = 0; i < n; i++) {
+            const x = dv.getUint16(p, true), y = dv.getUint16(p + 2, true);
+            const fw = dv.getUint16(p + 4, true), fh = dv.getUint16(p + 6, true);
+            p += 8;
+            ctx.putImageData(
+              new ImageData(new Uint8ClampedArray(buf, p, fw * fh * 4), fw, fh), x, y);
+            p += fw * fh * 4;
+          }
+        } catch (err) {
+          console.warn("trame RDP multiple invalide", err);
+        }
+        if (ws.readyState === WebSocket.OPEN) ws.send(RDP_ACK);
       } else if (kind === 7) {
         const fps = dv.getUint16(1, true);
         const kbps = dv.getUint32(3, true);

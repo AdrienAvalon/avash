@@ -108,7 +108,7 @@ conformite:
     DOCKER_HOST: "tcp://docker:2375"
     DOCKER_TLS_CERTDIR: ""
   before_script:
-    - apk add --no-cache bash python3 py3-numpy py3-pillow curl build-base
+    - apk add --no-cache bash python3 py3-numpy py3-pillow py3-websockets curl build-base
     - curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
     - . "$HOME/.cargo/env"
   script:

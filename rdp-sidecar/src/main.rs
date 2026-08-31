@@ -659,6 +659,88 @@ fn input_ops(b: &[u8]) -> Vec<Operation> {
 /// anglais issu d'une dépendance : celui-ci ne changera pas sous nos pieds.
 pub const NLA_INDISPONIBLE: &str = "[AVASH_RDP_SANS_NLA]";
 
+/// Nombre maximal de rectangles portés par une trame.
+const RECTS_MAX: usize = 8;
+
+/// En-tête d'un rectangle dans le message : x, y, largeur, hauteur (u16).
+const ENTETE_RECT: usize = 8;
+
+/// Ajoute un rectangle à la zone sale, en ne fusionnant que si c'est rentable.
+///
+/// L'ancienne version gardait une **union englobante** : deux petites zones aux
+/// coins opposés donnaient un rectangle plein écran. Mesuré contre un vrai xrdp,
+/// sur une session animée : 7,94 Mo envoyés pour 4,35 Mo utiles, soit 1,8 fois
+/// trop dès que trois zones se rejoignaient.
+///
+/// La règle est arithmétique, pas heuristique : on ne fusionne que si l'union
+/// coûte moins cher que les deux rectangles séparés, en-têtes compris. Deux
+/// zones voisines fusionnent donc ; deux zones opposées, jamais.
+///
+/// Au-delà de `RECTS_MAX`, il faut bien céder : on fusionne alors la paire dont
+/// l'union gaspille le moins. Une trame ne peut pas porter un nombre illimité
+/// de rectangles.
+fn ajouter_rect(zone: &mut Vec<InclusiveRectangle>, r: &InclusiveRectangle) {
+    let aire = |a: &InclusiveRectangle| {
+        (u64::from(a.right) - u64::from(a.left) + 1) * (u64::from(a.bottom) - u64::from(a.top) + 1)
+    };
+    let union = |a: &InclusiveRectangle, b: &InclusiveRectangle| InclusiveRectangle {
+        left: a.left.min(b.left),
+        top: a.top.min(b.top),
+        right: a.right.max(b.right),
+        bottom: a.bottom.max(b.bottom),
+    };
+    let cout = |a: &InclusiveRectangle| aire(a) * 4 + ENTETE_RECT as u64;
+
+    for e in zone.iter_mut() {
+        let fusion = union(e, r);
+        if cout(&fusion) <= cout(e) + cout(r) {
+            *e = fusion;
+            return;
+        }
+    }
+    zone.push(r.clone());
+    while zone.len() > RECTS_MAX {
+        let mut choix = (u64::MAX, 0usize, 1usize);
+        for i in 0..zone.len() {
+            for j in (i + 1)..zone.len() {
+                let perte = aire(&union(&zone[i], &zone[j])) - aire(&zone[i]) - aire(&zone[j]);
+                if perte < choix.0 {
+                    choix = (perte, i, j);
+                }
+            }
+        }
+        let (_, i, j) = choix;
+        zone[i] = union(&zone[i], &zone[j]);
+        zone.remove(j);
+    }
+}
+
+/// Zone sale -> message binaire. Un seul rectangle garde la forme historique
+/// `[2]` ; plusieurs empruntent `[13]`, qui porte leur nombre. Une trame, un
+/// accusé de rendu : le cadencement reste exact.
+fn frames_msg(image: &DecodedImage, zone: &[InclusiveRectangle]) -> Vec<u8> {
+    if let [seul] = zone {
+        return frame_msg(image, seul);
+    }
+    let iw = usize::from(image.width());
+    let data = image.data();
+    let mut m = vec![13u8];
+    m.push(u8::try_from(zone.len()).unwrap_or(u8::MAX));
+    for r in zone {
+        let (x, y) = (r.left, r.top);
+        let (w, h) = (r.right - r.left + 1, r.bottom - r.top + 1);
+        m.extend_from_slice(&x.to_le_bytes());
+        m.extend_from_slice(&y.to_le_bytes());
+        m.extend_from_slice(&w.to_le_bytes());
+        m.extend_from_slice(&h.to_le_bytes());
+        for row in 0..usize::from(h) {
+            let start = ((usize::from(y) + row) * iw + usize::from(x)) * 4;
+            m.extend_from_slice(&data[start..start + usize::from(w) * 4]);
+        }
+    }
+    m
+}
+
 /// Plafond de résolution accepté d'un serveur RDP.
 ///
 /// C'est le serveur qui **confirme** la résolution, et il n'est pas tenu de
@@ -921,7 +1003,7 @@ async fn main() -> Result<()> {
     // rendu de la webview sont fusionnées (union des rectangles) ; à l'ACK, on
     // envoie l'état le plus récent. Rapide → chaque trame part aussitôt (aucune
     // latence ajoutée) ; lent → on fusionne, jamais de file qui s'accumule.
-    let mut dirty: Option<InclusiveRectangle> = None;
+    let mut dirty: Vec<InclusiveRectangle> = Vec::new();
     let mut awaiting_ack = false;
     // Onglet masqué : le canvas n'est pas à l'écran, mais l'accusé de rendu
     // partait quand même — le serveur voyait la voie libre en permanence et le
@@ -943,8 +1025,9 @@ async fn main() -> Result<()> {
     macro_rules! flush_dirty {
         () => {
             if !awaiting_ack && !en_pause {
-                if let Some(r) = dirty.take() {
-                    let msg = frame_msg(&image, &r);
+                if !dirty.is_empty() {
+                    let msg = frames_msg(&image, &dirty);
+                    dirty.clear();
                     stat_bytes += msg.len() as u64;
                     stat_frames += 1;
                     sink.send(Message::Binary(msg))
@@ -1030,7 +1113,7 @@ async fn main() -> Result<()> {
                         sink.send(Message::Binary(msg)).await.context("envoi refresh")?;
                         awaiting_ack = true;
                         last_send = Instant::now();
-                        dirty = None;
+                        dirty.clear();
                         // Un REFRESH ne s'obtient qu'en revenant au premier plan :
                         // il lève la pause. Le flux ne peut donc pas rester gelé
                         // si l'interface oubliait de la lever explicitement.
@@ -1121,12 +1204,7 @@ async fn main() -> Result<()> {
                     match o {
                         ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await.context("écriture réponse")?,
                         ActiveStageOutput::GraphicsUpdate(rect) => {
-                            dirty = Some(dirty.map_or(rect.clone(), |d| InclusiveRectangle {
-                                left: d.left.min(rect.left),
-                                top: d.top.min(rect.top),
-                                right: d.right.max(rect.right),
-                                bottom: d.bottom.max(rect.bottom),
-                            }));
+                            ajouter_rect(&mut dirty, &rect);
                             flush_dirty!();
                         }
                         ActiveStageOutput::Terminate(_) => return Ok(()),
@@ -1157,7 +1235,7 @@ async fn main() -> Result<()> {
                             // l'ancienne taille n'a plus de sens, et un ACK laissé en
                             // suspens gèlerait la reprise. Le serveur va renvoyer un
                             // rafraîchissement complet.
-                            dirty = None;
+                            dirty.clear();
                             awaiting_ack = false;
                         }
                         _ => {}
@@ -1394,5 +1472,88 @@ mod tests_disposition {
         assert_eq!(analyser_disposition("1036"), Some(1036));
         assert_eq!(analyser_disposition(" fr "), Some(0x0000_040C));
         assert_eq!(analyser_disposition("n'importe quoi"), None);
+    }
+}
+
+#[cfg(test)]
+mod tests_zone_sale {
+    use super::{ajouter_rect, RECTS_MAX};
+    use ironrdp::pdu::geometry::InclusiveRectangle;
+
+    fn r(l: u16, t: u16, ri: u16, b: u16) -> InclusiveRectangle {
+        InclusiveRectangle {
+            left: l,
+            top: t,
+            right: ri,
+            bottom: b,
+        }
+    }
+
+    #[test]
+    fn deux_zones_voisines_fusionnent() {
+        // Côte à côte : l'union ne coûte pas plus que les deux séparés.
+        let mut z = Vec::new();
+        ajouter_rect(&mut z, &r(0, 0, 9, 9));
+        ajouter_rect(&mut z, &r(10, 0, 19, 9));
+        assert_eq!(z.len(), 1, "deux zones contiguës doivent n'en faire qu'une");
+        assert_eq!((z[0].left, z[0].right), (0, 19));
+    }
+
+    #[test]
+    fn deux_coins_opposes_ne_fusionnent_pas() {
+        // C'est LE cas qui envoyait un plein écran pour deux poussières.
+        let mut z = Vec::new();
+        ajouter_rect(&mut z, &r(0, 0, 9, 9));
+        ajouter_rect(&mut z, &r(1200, 700, 1209, 709));
+        assert_eq!(z.len(), 2, "deux coins opposés doivent rester séparés");
+    }
+
+    #[test]
+    fn un_rectangle_inclus_disparait_dans_le_sien() {
+        let mut z = Vec::new();
+        ajouter_rect(&mut z, &r(0, 0, 99, 99));
+        ajouter_rect(&mut z, &r(10, 10, 19, 19));
+        assert_eq!(z.len(), 1);
+        assert_eq!((z[0].right, z[0].bottom), (99, 99));
+    }
+
+    #[test]
+    fn le_nombre_de_rectangles_reste_borne() {
+        // Une trame ne peut pas porter un nombre illimité de zones : au-delà du
+        // plafond, la paire la moins coûteuse fusionne.
+        let mut z = Vec::new();
+        for i in 0..40u16 {
+            let x = i * 30;
+            ajouter_rect(&mut z, &r(x, x, x + 5, x + 5));
+        }
+        assert!(
+            z.len() <= RECTS_MAX,
+            "zone non bornée : {} rectangles",
+            z.len()
+        );
+    }
+
+    #[test]
+    fn la_zone_couvre_toujours_tout_ce_qui_a_ete_signale() {
+        // Propriété essentielle : on peut fusionner, jamais PERDRE un pixel sale.
+        let mut z = Vec::new();
+        let entrees = [
+            r(5, 5, 9, 9),
+            r(700, 400, 720, 420),
+            r(1200, 10, 1210, 20),
+            r(300, 300, 305, 305),
+        ];
+        for e in &entrees {
+            ajouter_rect(&mut z, e);
+        }
+        for e in &entrees {
+            assert!(
+                z.iter().any(|c| c.left <= e.left
+                    && c.top <= e.top
+                    && c.right >= e.right
+                    && c.bottom >= e.bottom),
+                "le rectangle {e:?} n'est couvert par aucune zone"
+            );
+        }
     }
 }

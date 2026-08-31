@@ -52,6 +52,29 @@ eprouver() { # nom  port
   fi
 
   # 3. La disposition clavier annoncée est celle du poste, pas 0.
+  # 4. Le trafic de trames : les zones modifiées doivent rester séparées.
+  #
+  # Le processus n'accumulait qu'une union englobante — deux poussières aux
+  # coins opposés donnaient un plein écran, soit le double d'octets mesuré sur
+  # le fil. Le contrôle ne fixe pas de seuil en octets, qui serait fragile : il
+  # vérifie qu'une trame porte PLUSIEURS rectangles. Un retour à l'union
+  # englobante donnerait exactement autant de rectangles que de trames.
+  if python3 -c "import websockets" 2>/dev/null; then
+    local mesure t_ r_ o_
+    if mesure=$(python3 tests-parc/mesure-trames.py "$port" 12 2>/dev/null); then
+      read -r t_ r_ o_ <<<"$mesure"
+      if [ "$r_" -gt "$t_" ]; then
+        vert "trames : $t_ pour $r_ rectangles, $(( o_ / 1000 )) Ko ($(( o_ / t_ / 1000 )) Ko/trame)"
+      else
+        rouge "chaque trame ne porte qu'un rectangle ($t_ trames, $r_ rectangles) : retour à l'union englobante ?"
+      fi
+    else
+      rouge "mesure de trames impossible"
+    fi
+  else
+    printf '  \033[33m~\033[0m %s\n' "trafic de trames (python-websockets absent)"
+  fi
+
   # Viser la ligne « Send ConnectInitial » : c'est CELLE qu'on envoie. Les
   # capacités échangées ensuite contiennent d'autres champs du même nom, à zéro,
   # qui feraient conclure à tort.
