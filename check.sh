@@ -35,6 +35,10 @@ run "compilation"        "$ROOT" cargo check --workspace --all-targets
 run "tests"              "$ROOT" cargo test --workspace --all-targets
 run "format"             "$ROOT" cargo fmt --all --check
 run "clippy"             "$ROOT" cargo clippy --workspace --all-targets -- -D warnings
+# Clippy ne compile qu'en debug : un bloc sous `cfg(debug_assertions)` peut
+# laisser une variable inutilisée en release sans que rien ne le signale — c'est
+# arrive. Ce passage-ci ne coute presque rien, le cache etant deja chaud.
+run "clippy (release)"   "$ROOT" cargo clippy --workspace --release -- -D warnings
 
 # Le sidecar RDP est HORS du workspace (conflit de versions pre-publication
 # entre IronRDP et russh) : `--workspace` ne le voit pas. Ses tests — dont ceux

@@ -5,7 +5,7 @@ exclude = ["rdp-sidecar", "test-rdp-server"]
 
 # Metadonnees communes : un seul endroit a modifier pour une release.
 [workspace.package]
-version = "0.2.7"
+version = "0.3.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 authors = ["Adrien Cros <adrien.cros@outlook.com>"]

@@ -7,6 +7,104 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.3.0] - 2026-08-31
+
+Deux multi-audits complets — fiabilité, sécurité, performance, ergonomie, puis
+qualité des tests — et les corrections qui en découlent. Le second audit avait
+pour première mission de vérifier ce que le premier cycle avait cassé ; il a
+trouvé cinq régressions, toutes corrigées ici.
+
+### Sécurité
+
+- **La clé d'hôte SSH n'était pas réellement vérifiée.** `check_known_hosts` de
+  russh répond « hôte inconnu » quand seul l'algorithme diffère : une clé
+  changée passait donc pour un premier contact et était réapprise en silence.
+- **Le certificat du serveur RDP n'était pas vérifié du tout** — la bibliothèque
+  installe `NoCertificateVerification`. L'empreinte SHA-256 de la clé publique
+  est désormais épinglée, et la vérification précède CredSSP : après, les
+  identifiants seraient déjà partis.
+- **Le repli vers TLS seul était accepté en RDP.** En annonçant `PROTOCOL_SSL`,
+  nous disions au serveur accepter de sauter NLA ; un serveur répondant « SSL »
+  recevait alors le mot de passe dans le Client Info PDU, sans authentification
+  mutuelle. Seul HYBRID est désormais annoncé.
+- **Les marqueurs `@revoked` et `@cert-authority` de `known_hosts` étaient
+  ignorés** : une clé marquée comme compromise était réapprise et acceptée, là
+  où `ssh(1)` refuse catégoriquement.
+- **Le processus RDP était cherché en chemin relatif** en dernier recours.
+  Lancée depuis un répertoire partagé, l'application y aurait exécuté le binaire
+  qu'on y avait déposé — en lui écrivant le mot de passe RDP sur l'entrée
+  standard.
+- **Trois allocations sans plafond**, toutes pilotables par un serveur distant :
+  la sortie d'une commande (la sonde d'OS part à chaque ouverture d'onglet) et
+  la résolution annoncée par un serveur RDP (17 Gio pour un 65535×65535).
+- **Le presse-papiers** n'est plus poussé au simple retour de fenêtre, le
+  réglage vaut dans les deux sens, et il est révocable (Ctrl+K).
+- **Le mot de passe RDP** ne traverse plus l'interface, y compris à la première
+  connexion.
+- Écritures atomiques pour `~/.ssh/config`, `known_hosts`, `rdp_known_hosts` et
+  les fichiers de configuration : la troncature précédait l'écriture, et une
+  coupure laissait un fichier vide.
+- Trois commandes exposées à l'interface sans être utilisées ont été retirées.
+
+### Corrigé
+
+- Le téléchargement SFTP **détruisait le fichier local avant de savoir s'il
+  aboutirait**, et pouvait laisser un fichier tronqué portant le bon nom.
+- Fermer un onglet ignorait l'existence de l'autre type d'onglet : zone centrale
+  vide, ou écran « Aucune session » par-dessus une session vivante.
+- Les modales partageaient un résolveur unique : une seconde demande abandonnait
+  la première à jamais, laissant un onglet figé.
+- La connexion se poursuivait après la fermeture de l'onglet, jusqu'à ouvrir une
+  demande de mot de passe pour un onglet qui n'existait plus.
+- Renommer ou supprimer un dossier avalait silencieusement les échecs.
+- Une fenêtre sans propriétaire à l'ouverture d'un tunnel laissait un tunnel
+  orphelin, ou en installait un que l'utilisateur venait d'arrêter.
+- La fin d'une session RDP ne libérait ni le processus ni l'observateur de
+  taille ; les sessions mortes restaient proposées comme cibles de snippet.
+
+### Performance
+
+- **Téléchargement SFTP en bandes parallèles** : il n'avait aucune requête en
+  vol et plafonnait à un bloc par aller-retour — environ huit fois plus lent que
+  le téléversement sur le même lien.
+- **`TCP_NODELAY`** : russh laisse l'algorithme de Nagle actif par défaut, ce
+  qui retenait chaque frappe jusqu'à l'accusé précédent.
+- **Un onglet RDP masqué** continuait d'accuser réception de chaque trame : le
+  processus poussait des images entières (8 Mo en 1080p) vers un canvas
+  invisible.
+- La sonde d'OS distante bloquait le premier affichage du terminal.
+- Le listing SFTP figeait plusieurs secondes sur un répertoire système.
+
+### Ergonomie
+
+- **La barre latérale est utilisable au clavier** : un seul arrêt de tabulation,
+  les flèches à l'intérieur, Entrée pour agir, Maj+F10 pour le menu — lequel se
+  parcourt aussi aux flèches et se referme à Échap en rendant le focus.
+- Le filtre par tag ignorait les bureaux RDP ; il dit maintenant combien il en
+  masque.
+- « Mémoriser le mot de passe » ne faisait rien si « Enregistrer la connexion »
+  n'était pas cochée.
+- Une confirmation destructive ne pré-focalise plus son bouton rouge.
+- Les badges « rebond » et « tunnels vifs », stylés depuis toujours, sont enfin
+  rendus. Un alias long ne déborde plus.
+- « Oublier le mot de passe » dit ce qu'il a fait.
+- Une session RDP qui meurt affiche le diagnostic du processus.
+
+### Interne
+
+- **Les tests du processus RDP ne s'exécutaient nulle part** : hors du
+  workspace, ils échappaient à `cargo test --workspace`, et l'intégration
+  continue se contentait de le compiler. Ils passent désormais par les trois
+  portes, et six tests s'y ajoutent.
+- Le hook de pré-commit ne touchait pas au front ; `check.sh` ne construisait
+  pas le processus RDP dont dépend pourtant son propre build.
+- La liste des scénarios bout en bout en intégration continue était énumérative
+  et avait pris du retard : elle désigne maintenant ce qui exige un serveur.
+- Des tests qui ne pouvaient pas échouer ont été refaits, et le serveur SSH de
+  test sait enfin refuser une authentification.
+- Les attentes par durée ont laissé place à des attentes d'état.
+
+
 ## [0.2.7] - 2026-08-31
 
 ### Corrigé

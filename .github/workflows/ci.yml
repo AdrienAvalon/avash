@@ -77,6 +77,11 @@ jobs:
       - name: Rust — clippy (avertissements = erreurs)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Clippy ne compile qu'en debug : un bloc sous cfg(debug_assertions) peut
+      # laisser une variable inutilisée en release sans que rien ne le signale.
+      - name: Rust — clippy en profil release
+        run: cargo clippy --workspace --release -- -D warnings
+
       - name: Rust — tests
         run: cargo test --workspace --all-targets
 

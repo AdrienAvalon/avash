@@ -50,20 +50,21 @@ fn sidecar_path() -> Option<std::path::PathBuf> {
             if side.exists() {
                 return Some(side);
             }
-            // En dev : le sidecar est un projet séparé. Depuis target/release/,
-            // remonter jusqu'à la racine du dépôt.
+            // En développement seulement : le sidecar est un projet séparé, et
+            // l'on remonte de target/debug/ jusqu'à la racine du dépôt. `root`
+            // vient de `current_exe()`, donc absolu. En release ce chemin n'a
+            // rien à faire là : pour une installation dans ~/.local/bin il
+            // désignerait ~/rdp-sidecar/target/release/, un emplacement
+            // imprévu à qui l'on écrit le mot de passe.
+            //
+            // Le `cfg` porte sur tout le bloc, `root` compris : placé plus bas,
+            // il laissait une variable inutilisée en release — invisible à
+            // clippy, qui ne compile qu'en debug.
+            #[cfg(debug_assertions)]
             if let Some(root) = dir.parent().and_then(std::path::Path::parent) {
-                // En dev seulement : le sidecar est un projet séparé. `root`
-                // vient de current_exe(), donc absolu. En release ce chemin
-                // n'a rien à faire là : pour une installation dans
-                // ~/.local/bin il désignerait ~/rdp-sidecar/target/release/,
-                // un emplacement imprévu à qui l'on écrit le mot de passe.
-                #[cfg(debug_assertions)]
-                {
-                    let devside = root.join("rdp-sidecar/target/release").join(&nom);
-                    if devside.exists() {
-                        return Some(devside);
-                    }
+                let devside = root.join("rdp-sidecar/target/release").join(&nom);
+                if devside.exists() {
+                    return Some(devside);
                 }
             }
         }
