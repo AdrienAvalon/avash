@@ -48,21 +48,37 @@ export function startRdpServer(port) {
     { cwd: resolve("../test-rdp-server"), stdio: "ignore" });
 }
 
-// Attend que `port` accepte des connexions (le serveur RDP met un instant à
-// écouter après spawn ; l'app ne réessaie pas si le connect échoue -> flakiness).
+// Attend que `port` soit prêt à recevoir l'app.
+//
+// Une seule connexion réussie ne suffit pas : elle prouve que le socket écoute,
+// pas que le serveur est *revenu* l'écouter. Le serveur de test traite ses
+// clients l'un après l'autre — notre sonde en est un — et l'app, elle, ne
+// réessaie pas si son handshake tombe dans l'intervalle. D'où des échecs
+// intermittents, uniquement en suite complète, où la machine est chargée.
+//
+// On exige donc DEUX connexions successives : la seconde n'est tentée qu'après
+// fermeture de la première, ce qui vérifie que la boucle d'acceptation a bouclé.
+// C'est bien un état qu'on attend, pas une durée.
 import { connect } from "node:net";
 export function waitForPort(port, timeout = 8000) {
   const deadline = Date.now() + timeout;
-  return new Promise((resolve, reject) => {
-    const tryOnce = () => {
+  const uneConnexion = () =>
+    new Promise((ok, ko) => {
       const sock = connect(port, "127.0.0.1");
-      sock.once("connect", () => { sock.destroy(); resolve(); });
-      sock.once("error", () => {
-        sock.destroy();
+      sock.once("connect", () => { sock.end(); ok(); });
+      sock.once("error", (e) => { sock.destroy(); ko(e); });
+    });
+  return new Promise((resolve, reject) => {
+    const essayer = async () => {
+      try {
+        await uneConnexion();
+        await uneConnexion(); // le serveur est revenu accepter
+        resolve();
+      } catch {
         if (Date.now() > deadline) reject(new Error(`port ${port} pas prêt à temps`));
-        else setTimeout(tryOnce, 120);
-      });
+        else setTimeout(() => void essayer(), 120);
+      }
     };
-    tryOnce();
+    void essayer();
   });
 }

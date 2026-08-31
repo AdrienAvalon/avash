@@ -272,6 +272,44 @@ function buildTree(): TreeNode {
 }
 
 /** Une ligne d'hôte SSH (avatar, logo distro, tags, état), déplaçable. */
+/** Rend une ligne de la barre latérale utilisable au clavier.
+ *
+ *  Ces lignes étaient de simples `div` : la connexion passait par un
+ *  double-clic et les options par un clic droit. Tab sautait donc du champ de
+ *  recherche aux boutons du bas, la liste entière restant hors d'atteinte — on
+ *  ne pouvait ni connecter, ni éditer, ni déplacer, ni supprimer un hôte sans
+ *  souris. La palette rattrapait la connexion, rien d'autre.
+ *
+ *  Entrée agit, Maj+F10 et la touche Menu ouvrent le menu contextuel là où se
+ *  trouve la ligne, les flèches se déplacent d'une ligne à l'autre. */
+function rendreAtteignableAuClavier(
+  el: HTMLElement,
+  agir: () => void,
+  menu: (position: { clientX: number; clientY: number }) => void,
+): void {
+  el.tabIndex = 0;
+  el.setAttribute("role", "button");
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      agir();
+      return;
+    }
+    if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      menu({ clientX: r.left + 16, clientY: r.bottom - 4 });
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const lignes = [...$("host-list").querySelectorAll<HTMLElement>('[role="button"]')];
+      const i = lignes.indexOf(el);
+      lignes[i + (e.key === "ArrowDown" ? 1 : -1)]?.focus();
+    }
+  });
+}
+
 function sshHostElement(h: Host): HTMLElement {
   const el = document.createElement("div");
   el.className = "host";
@@ -291,27 +329,37 @@ function sshHostElement(h: Host): HTMLElement {
   }
   el.querySelector(".alias")!.textContent = h.alias;
   el.querySelector(".meta")!.textContent = target;
-  if (h.tags.length > 0) {
-    const chips = document.createElement("span");
-    chips.className = "host-tags";
-    for (const t of h.tags.slice(0, 3)) {
-      const c = document.createElement("span");
-      c.className = "host-tag" + (t === state.tagFilter ? " on" : "");
-      c.textContent = t;
-      c.title = `Filtrer par « ${t} »`;
-      c.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        state.tagFilter = state.tagFilter === t ? null : t;
-        renderHosts();
-      });
-      chips.appendChild(c);
-    }
-    el.querySelector(".info")!.appendChild(chips);
+  // Deux badges étaient stylés depuis toujours mais jamais posés : rien
+  // n'indiquait qu'un hôte transite par un bastion ni qu'il porte des tunnels
+  // vifs — alors que le compte des tunnels était déjà calculé à chaque tick, et
+  // déclenchait même un rendu complet de la liste, pour un badge inexistant.
+  const info = el.querySelector(".info")!;
+  if (h.proxy_jump) {
+    const j = document.createElement("span");
+    j.className = "jumptag";
+    j.textContent = "rebond";
+    j.title = `Passe par ${h.proxy_jump}`;
+    info.appendChild(j);
+  }
+  const vifs = tunnels.byHost.get(h.alias) ?? 0;
+  if (vifs > 0) {
+    const t = document.createElement("span");
+    t.className = "tun";
+    t.textContent = String(vifs);
+    t.title = `${vifs} tunnel(s) ouvert(s) sur cet hôte`;
+    info.appendChild(t);
   }
   const dot = el.querySelector(".dot") as HTMLElement;
   dot.className = "dot " + hostSessionState(h.alias);
   if (h.alias === state.pickedAlias) el.classList.add("picked");
-  if (!os) el.title = "Double-clic : connexion — clic droit : options";
+  // L'alias peut être tronqué et les tags ne tiennent pas dans la ligne : les
+  // deux se retrouvent ici, où l'on va naturellement chercher le détail.
+  const detail = [h.alias, target, h.tags.length > 0 ? `tags : ${h.tags.join(", ")}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  el.title = os
+    ? `${detail} — ${os.pretty}`
+    : `${detail} — double-clic : connexion, clic droit : options`;
   el.addEventListener("click", () => {
     state.pickedAlias = h.alias;
     state.pickedRdp = null;
@@ -323,6 +371,7 @@ function sshHostElement(h: Host): HTMLElement {
     e.preventDefault();
     openHostMenu(h, e as MouseEvent);
   });
+  rendreAtteignableAuClavier(el, () => void openSession(h), (p) => openHostMenu(h, p as MouseEvent));
   makeHostDraggable(el, "ssh", h.alias);
   return el;
 }
@@ -338,7 +387,7 @@ function rdpHostElement(h: RdpHostT): HTMLElement {
   (el.querySelector(".dot") as HTMLElement).className = "dot" + (live ? " live" : "");
   el.querySelector(".alias")!.textContent = h.name;
   el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
-  el.title = "Double-clic : connexion RDP — clic droit : options";
+  el.title = `${h.name} · ${h.user}@${h.host}:${h.port} — double-clic : connexion RDP, clic droit : options`;
   if (h.id === state.pickedRdp) el.classList.add("picked");
   el.addEventListener("click", () => {
     state.pickedRdp = h.id;
@@ -351,6 +400,7 @@ function rdpHostElement(h: RdpHostT): HTMLElement {
     e.preventDefault();
     openRdpMenu(h, e as MouseEvent);
   });
+  rendreAtteignableAuClavier(el, () => void connectRdpSaved(h), (p) => openRdpMenu(h, p as MouseEvent));
   makeHostDraggable(el, "rdp", h.id);
   return el;
 }
@@ -2316,14 +2366,19 @@ $("host-context").addEventListener("click", async (e) => {
       notifyErreur(`Suppression impossible : ${err}`);
     }
   } else if (act === "forget") {
+    // L'action ne disait rien du tout : ni succès, ni échec. On ne pouvait pas
+    // savoir si le trousseau avait été purgé ou si le clic avait manqué sa
+    // cible — et un échec réel (trousseau verrouillé, D-Bus absent) laissait
+    // croire le secret effacé alors qu'il était toujours là.
     try {
       await invoke("password_forget", {
         addr: h.hostname ?? h.alias,
         port: h.port,
         user: h.user ?? null,
       });
-    } catch {
-      /* pas de mot de passe memorise : rien a faire */
+      notify(`Mot de passe oublié pour ${h.alias}.`, "succes");
+    } catch (err) {
+      notifyErreur(`Le mot de passe n'a pas pu être oublié : ${err}`);
     }
   }
 });
@@ -3476,7 +3531,10 @@ $("rdp-context").addEventListener("click", async (e) => {
   else if (act === "edit") openEditRdp(h);
   else if (act === "move") openMoveModal("rdp", h.id);
   else if (act === "forget") {
-    await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user }).catch(() => {});
+    // cf. le volet SSH : une action muette ne se distingue pas d'un clic raté.
+    await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user })
+      .then(() => notify(`Mot de passe oublié pour ${h.name}.`, "succes"))
+      .catch((err) => notifyErreur(`Le mot de passe n'a pas pu être oublié : ${err}`));
   } else if (act === "delete") {
     if (!(await askConfirm(`Supprimer le bureau RDP « ${h.name} » ?\n\nSon mot de passe mémorisé sera aussi oublié.`))) return;
     await invoke("rdp_host_delete", { id: h.id }).catch((err) => notifyErreur(`Suppression impossible : ${err}`));

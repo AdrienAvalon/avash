@@ -224,13 +224,6 @@
     .tag-pill:hover { color: var(--text); border-color: var(--accent-line); }
     .tag-pill.on { background: var(--accent-tint); border-color: var(--accent-line); color: var(--accent-soft); }
     .tag-pill.clear { color: var(--text-faint); }
-    .host-tags { display: inline-flex; gap: 4px; margin-top: 3px; flex-wrap: wrap; }
-    .host-tag {
-      font-size: 9.5px; padding: 0 5px; border-radius: 4px; cursor: pointer;
-      background: var(--border-soft); color: var(--text-dim); line-height: 15px;
-    }
-    .host-tag:hover { color: var(--text); }
-    .host-tag.on { background: var(--accent-tint); color: var(--accent-soft); }
     .host-list { flex: 1; overflow-y: auto; padding: 2px 8px 8px; }
     .host {
       position: relative; padding: 7px 10px 7px 10px; border-radius: var(--r-md);
@@ -276,7 +269,6 @@
     .host .avatar.rdp { background: transparent; border: none; }
     .host .avatar.rdp .ic-svg { width: 14px; height: 14px; }
     .host .avatar .dot { width: 7px; height: 7px; right: -2px; bottom: -2px; border-width: 1.5px; }
-    .host .host-tags { display: none; }
     .folder-row {
       display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
       padding: 4px 8px; border-radius: var(--r-md); margin: 1px 0;
@@ -302,11 +294,14 @@
     .host .avatar .dot.live { display: block; background: var(--ok); }
     .host .avatar .dot.connecting { display: block; background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
     .host .info { min-width: 0; flex: 1; display: flex; flex-direction: row; align-items: baseline; gap: 6px; }
-    .host .alias { flex: none; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+    /* flex:none + nowrap sans overflow : un alias long écrasait l'adresse puis
+       débordait de la barre latérale, coupé net et sans « … » pour le dire. */
+    .host .alias { flex: 0 1 auto; min-width: 0; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .host .meta { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .host .jumptag {
-      margin-left: 6px; font-size: 11px; color: var(--accent-soft);
-      font-family: var(--mono); vertical-align: middle;
+      flex: none; margin-left: 2px; font-size: 10px; color: var(--accent-soft);
+      font-family: var(--mono); border: 1px solid var(--accent-soft);
+      border-radius: 6px; padding: 0 5px; opacity: .85;
     }
     .host .tun {
       flex: none; font-size: 10.5px; font-family: var(--mono); font-weight: 600;

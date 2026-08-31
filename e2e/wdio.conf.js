@@ -81,6 +81,7 @@ export const config = {
         "./specs/snippets.spec.js", "./specs/tunnels.spec.js",
         "./specs/a11y.spec.js", "./specs/clavier.spec.js",
         "./specs/isolation.spec.js", "./specs/prefs.spec.js",
+        "./specs/liste-clavier.spec.js",
       ],
   maxInstances: 1,
   capabilities: [
