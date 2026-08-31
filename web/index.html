@@ -35,7 +35,19 @@
       --border-soft: #1b2030;
       --text: #e9ecf4;
       --text-dim: #8d96ab;
-      --text-faint: #5b6478;
+      /* 4,5:1 minimum sur --bg-soft ET sur --card. L'ancienne valeur #5b6478
+         donnait 3,15:1 : mesuré par axe-core sur l'application réelle, pas
+         estimé à l'œil. Teinte conservée, clarté relevée. */
+      --text-faint: #7e879d;
+      /* Part de la teinte d'hôte dans l'encre des initiales. Le reste vient de
+         --text, donc la lisibilité suit le thème automatiquement. Valeurs
+         choisies pour tenir 4,5:1 sur la teinte LA PIRE des 360, pas sur une
+         teinte moyenne. */
+      --ini-mix: 72%;
+      /* Accent lisible SUR une pastille teintée. En sombre l'accent clair
+         convient ; en clair il faut l'assombrir, sinon la pastille de version
+         tombe à 2,86:1. */
+      --accent-sur-teinte: var(--accent-soft);
       --accent: #8b7cf6;
       --accent-soft: #a89bfa;
       --accent-ink: #14101f;    /* texte sur fond accent */
@@ -65,7 +77,7 @@
       --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #ffffff;
       --card: #ffffff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
-      --text: #171b26; --text-dim: #5a6478; --text-faint: #929bad;
+      --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
       --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff;
       --accent-glow: rgba(109,92,240,.16); --accent-line: rgba(109,92,240,.42);
       --accent-tint: rgba(109,92,240,.10);
@@ -79,7 +91,7 @@
       --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #ffffff;
       --card: #ffffff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
-      --text: #171b26; --text-dim: #5a6478; --text-faint: #929bad;
+      --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
       --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff;
       --accent-glow: rgba(109,92,240,.16); --accent-line: rgba(109,92,240,.42);
       --accent-tint: rgba(109,92,240,.10);
@@ -185,7 +197,7 @@
     .brand .mascot .mark { width: 27px; height: 27px; display: block; }
     .brand .ver {
       margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .4px;
-      color: var(--accent-soft); background: var(--accent-tint);
+      color: var(--accent-sur-teinte); background: var(--accent-tint);
       padding: 2px 7px; border-radius: 20px; cursor: pointer;
     }
     .brand .ver:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
@@ -268,7 +280,13 @@
       width: 16px; height: 16px; border-radius: 4px; background: transparent; border: none;
     }
     .host .avatar .logo { font-size: 13px; }
-    .host .avatar .ini { font-size: 8.5px; font-weight: 700; color: var(--hue, var(--accent-soft)); }
+    /* L'encre mêle la teinte de l'hôte à la couleur de texte du thème : la
+       teinte reste reconnaissable, le contraste suit le fond. Auparavant la
+       teinte brute donnait 4,44:1 en sombre et bien moins en clair. */
+    .host .avatar .ini {
+      font-size: 8.5px; font-weight: 700;
+      color: color-mix(in srgb, var(--hue, var(--accent-soft)) var(--ini-mix), var(--text));
+    }
     .host .avatar.rdp { background: transparent; border: none; }
     .host .avatar.rdp .ic-svg { width: 14px; height: 14px; }
     .host .avatar .dot { width: 7px; height: 7px; right: -2px; bottom: -2px; border-width: 1.5px; }
@@ -727,6 +745,11 @@
       transition: background var(--t-fast), color var(--t-fast);
     }
     .sftp-ib:hover { background: var(--card-hover); color: var(--text); }
+    /* La boîte est la div qui porte role="dialog" ; le formulaire ne doit pas
+       créer de boîte intermédiaire, sinon la mise en page de .modal se casse.
+       role="dialog" n'est pas admis sur un <form>, dont le rôle implicite est
+       « form » — signalé par axe-core. */
+    #manual-form { display: contents; }
     .sftp-path {
       flex: 1; min-width: 0; height: 28px; padding: 0 9px; border-radius: 7px;
       background: var(--card); border: 1px solid var(--border-soft); outline: none;
@@ -889,7 +912,7 @@
           <div class="sftp-resize" id="sftp-resize"></div>
           <div class="sftp-head">
             <button class="sftp-ib" id="sftp-up" title="Dossier parent" type="button" data-icon="arrowUp" aria-label="Dossier parent"></button>
-            <input class="sftp-path" id="sftp-path" spellcheck="false" autocomplete="off" title="Chemin distant — Entrée pour y aller" />
+            <input class="sftp-path" id="sftp-path" spellcheck="false" autocomplete="off" aria-label="Chemin distant" title="Chemin distant — Entrée pour y aller" />
             <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" type="button" data-icon="refresh" aria-label="Rafraîchir"></button>
           </div>
           <div class="sftp-list" id="sftp-list"></div>
@@ -925,7 +948,8 @@
   <script type="module" src="/main.ts"></script>
 
     <div class="modal-backdrop" id="manual-modal">
-      <form class="modal" id="manual-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="manual-modal-title">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="manual-modal-title">
+      <form id="manual-form" autocomplete="off">
         <h2 id="manual-modal-title">Connexion directe</h2>
         <p class="modal-hint">Sans passer par <code>~/.ssh/config</code>.</p>
 
@@ -982,6 +1006,7 @@
           <button type="submit" class="btn-primary" id="m-submit">Se connecter</button>
         </div>
       </form>
+      </div>
     </div>
 
     <div class="modal-backdrop" id="keys-modal">

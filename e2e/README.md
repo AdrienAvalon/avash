@@ -83,3 +83,21 @@ réellement joignable n'est pas semé.
 - `waitForPort` exige **deux** connexions successives : une seule prouve que le
   socket écoute, pas que le serveur est *revenu* l'écouter. Il traite ses
   clients l'un après l'autre, et notre sonde en est un.
+
+## Audit d'accessibilité (`axe.spec.js`)
+
+`axe-core` est injecté dans l'application réelle et audite la vue principale, le
+thème clair et la boîte de connexion manuelle.
+
+Deux précautions, apprises en écrivant ce test :
+
+- **Geler transitions et animations AVANT toute bascule de thème.** Sans cela,
+  l'audit lit des couleurs à mi-transition — exactement à mi-chemin entre les
+  deux palettes — et invente des violations qui n'existent dans aucune image
+  réellement affichée.
+- **Basculer le thème par le bouton**, comme l'utilisateur, et non en posant
+  `data-theme` à la main : l'application repilote cet attribut depuis sa
+  préférence, et l'écrasait en cours d'audit.
+
+Les deux fois, c'est l'instrument qui mentait, pas le style. Un test
+d'accessibilité qui produit de faux positifs finit ignoré, donc inutile.

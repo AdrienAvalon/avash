@@ -7,6 +7,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Contrastes insuffisants corrigés dans les deux thèmes.** Un audit `axe-core`
+  sur l'application réelle a trouvé un texte secondaire à 3,15:1 au lieu de 4,5,
+  des initiales d'avatar à 4,44, un champ sans étiquette visible et un rôle ARIA
+  interdit sur un `<form>`. Le thème clair était pire — 2,45:1 — et aucun test
+  ne l'aurait montré, tous tournant en sombre. L'audit fait désormais partie de
+  la suite, sur les deux thèmes.
+
 - **L'affichage RDP envoyait deux fois trop d'octets.** Le processus n'accumulait
   qu'une union englobante des zones modifiées : deux poussières aux coins
   opposés donnaient un rectangle plein écran. Les zones restent désormais

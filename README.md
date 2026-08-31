@@ -148,12 +148,26 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 | Processus RDP | 21 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests, zone sale |
 | Correctifs portés sur IronRDP | 8 | remplissage des tuiles bitmap, mesure de bande passante (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
 | Front (Vitest) | 78 | logique pure : arborescence, filtres, scancodes, mappage souris, réglages |
-| Bout en bout (WebdriverIO) | 35 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier |
+| Bout en bout (WebdriverIO) | 38 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
 qui ne voient pas le même code — ESLint typé, `cargo audit` et `cargo deny` sur
 les deux arbres de dépendances, et une garde qui interdit les motifs dangereux
 (voir [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+### Accessibilité : un juge extérieur
+
+Les vérifications écrites à la main couvrent ce à quoi on a pensé — rôles des
+modales, piège à focus, retour du focus. `axe-core` couvre ce à quoi on n'a pas
+pensé, et il a trouvé du premier coup : un texte secondaire à **3,15:1** au lieu
+de 4,5, des initiales d'avatar à 4,44, un champ sans étiquette visible, un rôle
+ARIA interdit sur un `<form>`. Le thème clair était **pire encore** — 2,45:1 —
+et aucun test ne l'aurait montré : ils tournent tous en sombre.
+
+Corrigé par le calcul, pas à l'œil : chaque couleur retenue tient 4,5:1 sur
+*toutes* les surfaces où elle apparaît, et l'encre des initiales mêle la teinte
+de l'hôte à la couleur de texte du thème, de sorte que la lisibilité suive
+automatiquement.
 
 ### Conformité RDP : de vrais serveurs, pas des simulacres
 
