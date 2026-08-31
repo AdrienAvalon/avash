@@ -38,10 +38,11 @@ Le fichier `Cargo.toml` à la racine définit un workspace de deux crates, et en
 - **`crates/avash`** — le **cœur SSH réutilisable**. Il ne dépend pas de Tauri
   et regroupe toute la logique métier :
   - `lib.rs` — parseur et sérialiseur de `~/.ssh/config` (avec `Include`),
-    validation des champs contre l'injection ;
+    validation des champs contre l'injection, et `ecrire_atomiquement` — le
+    seul chemin d'écriture des fichiers de configuration ;
   - `ssh.rs` — connexion et authentification (russh), vérification TOFU des
     clés d'hôte, redirections de ports ;
-  - `sftp.rs` — client SFTP ;
+  - `sftp.rs` — client SFTP, dont un téléchargement **en bandes parallèles** ;
   - `tunnel.rs` — tunnels SSH ;
   - `snippet.rs` — snippets ;
   - `folders.rs` — arborescence de dossiers (annotations `#Folder:`) ;
@@ -77,7 +78,11 @@ Le front vit dans `web/` (paquet `avash-web`, `type: module`) :
   WebSocket) ;
 - **`filters.ts`** — la logique **pure et testable** extraite du reste : arbre
   des hôtes, correspondance de recherche, scancodes clavier, mappage souris
-  RDP (letterbox). Couverte par `filters.test.ts` (Vitest) ;
+  RDP (letterbox), lecture des verrous clavier. Couverte par `filters.test.ts` ;
+- **`prefs.ts`** — les réglages retenus d'un lancement à l'autre. Isolés du
+  module d'entrée précisément pour être exerçables : ils décident de ce qui sort
+  de la machine, ce qui les rend trop importants pour n'être couverts que de
+  bout en bout ;
 - **`index.html`**, `icons.ts` — interface et icônes.
 
 Le terminal repose sur **xterm.js** et ses add-ons (`fit`, `search`,
@@ -96,12 +101,20 @@ Deux comportements de WebKitGTK/WRY ont dicté des choix importants :
 
 ## Protocole WebSocket binaire (application <-> sidecar RDP)
 
-Le sidecar `avash-rdp` écoute sur `127.0.0.1:<port éphémère>` et n'accepte
-qu'**une** connexion, authentifiée par un jeton aléatoire. Il l'annonce sur sa
-sortie standard sous la forme `<port> <jeton>` ; l'application lit ces valeurs
-(voir `crates/avash-ui/src/rdp.rs`) et ouvre le WebSocket. La **première trame**
-envoyée par le front est le jeton (texte) ; toute connexion qui ne le présente
-pas est rejetée (voir `rdp-sidecar/src/main.rs`).
+Le sidecar `avash-rdp` écoute sur `127.0.0.1:<port éphémère>`, authentifié par
+un jeton aléatoire de 64 bits. Il l'annonce sur sa sortie standard sous la forme
+`<port> <jeton>` ; l'application lit ces valeurs (voir
+`crates/avash-ui/src/rdp.rs`) et ouvre le WebSocket. La **première trame**
+envoyée par le front est le jeton.
+
+Le sidecar **boucle** sur les connexions entrantes et rejette celles qui ne
+présentent pas le bon jeton, avec un délai de garde par tentative. Il n'en
+acceptait qu'une auparavant, et un premier message quelconque le faisait
+quitter : le port étant ouvert avant que l'interface n'en soit avertie,
+n'importe quel processus local — ou une page web, les WebSocket n'étant pas
+soumises à la politique d'origine pour *établir* la connexion — détruisait ainsi
+une session RDP déjà authentifiée. Le jeton, lui, n'a jamais été à portée :
+c'était un déni de service, pas un détournement.
 
 Ensuite, tout transite en **binaire** (`ArrayBuffer` natif — ni base64, ni
 JSON), le premier octet étant le code de message. Les définitions de référence
@@ -122,6 +135,9 @@ Entiers en little-endian.
 | `6`  | ACK de rendu | (aucune — cadencement adaptatif) |
 | `8`  | Presse-papiers (poste → distant) | texte UTF-8 |
 | `9`  | Redemander l'image complète | (aucune) |
+| `10` | État des verrous clavier | `bits:u8` (Verr. num / maj / défil.) |
+| `11` | Onglet visible ou en pause | `pause:u8` |
+| `12` | Partage du presse-papiers autorisé | `autorise:u8` |
 
 ### Sidecar → application
 
@@ -129,14 +145,32 @@ Entiers en little-endian.
 |------|--------------|--------------|
 | `1`  | Connecté / nouvelle taille | `largeur:u16`, `hauteur:u16` |
 | `2`  | Rectangle d'écran (FRAME) | `x:u16`, `y:u16`, `w:u16`, `h:u16`, puis pixels RGBA |
-| `3`  | Erreur       | message UTF-8 |
+| `3`  | Erreur       | message UTF-8 — **réservé**, voir ci-dessous |
 | `7`  | Statistiques | `fps:u16`, `débit:u32` (Ko/s), `latence:u16` (ms) |
 | `8`  | Presse-papiers (distant → poste) | texte UTF-8 |
+
+Le code `3` est géré par le front mais **n'est jamais émis** : un échec survenu
+avant la connexion sort sur l'erreur standard du processus et remonte comme
+message d'erreur d'ouverture ; un échec en cours de session ferme le WebSocket,
+et l'interface relit les dernières lignes du processus (`rdp_diagnostic`) pour
+les afficher dans l'incrustation « Connexion RDP fermée ». Le code reste réservé.
+
 
 Le code `6` (ACK de rendu) implémente un **cadencement adaptatif** : le front
 accuse réception de chaque frame, et le sidecar n'envoie la suivante qu'une fois
 l'ACK reçu (avec un `ACK_TIMEOUT` de garde), ce qui évite d'inonder un poste
 plus lent que le débit du serveur.
+
+Le code `11` complète ce cadencement pour les onglets d'arrière-plan. Un onglet
+masqué accusait quand même réception de chaque trame : le sidecar y voyait la
+voie libre et poussait sans relâche des images entières — 8 Mo en 1080p — vers
+un canvas invisible. En pause, il accumule le rectangle sale sans rien émettre ;
+le `9` envoyé au retour au premier plan lève la pause, de sorte qu'un oubli côté
+interface ne peut pas geler le flux.
+
+Le code `12` transmet au sidecar le réglage de partage du presse-papiers. Sans
+lui, le sidecar réclamait au serveur le contenu de son presse-papiers à chaque
+annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 
 ## Choix techniques notables
 
@@ -151,7 +185,34 @@ plus lent que le débit du serveur.
   un vrai `sshd`, mais un binaire final plus léger (~2 Mo de moins).
 - **RDP via IronRDP** dans un sidecar, avec le canal **Display Control (DVC)**
   pour le redimensionnement natif et **CLIPRDR** pour le presse-papiers.
-- **Vérification des clés d'hôte TOFU** stricte : refus si la clé change.
+- **Vérification des clés d'hôte TOFU** stricte, des deux côtés. Côté SSH, la
+  décision est prise par `juger_cle_hote` sur les clés enregistrées, et **non**
+  par le booléen de `check_known_hosts` : celui-ci confond « algorithme
+  différent » et « hôte inconnu », si bien qu'une clé changée passait pour un
+  premier contact. Les marqueurs `@revoked` et `@cert-authority` font refuser la
+  connexion — russh les ignore, et une clé marquée compromise aurait été
+  réapprise. Côté RDP, l'empreinte SHA-256 de la **clé publique** du serveur est
+  épinglée dans `~/.config/avash/rdp_known_hosts`, et la vérification a lieu
+  **avant** CredSSP : après, les identifiants seraient déjà partis. On épingle
+  la clé et non le certificat entier, pour qu'une reconduction ne déclenche pas
+  de fausse alerte.
+- **Pas de repli NLA → TLS.** IronRDP n'annonce `PROTOCOL_SSL` que si on le lui
+  demande, et le faire revient à dire au serveur qu'on accepte de sauter NLA —
+  auquel cas le mot de passe part dans le Client Info PDU, sans authentification
+  mutuelle. Avash n'annonce que `HYBRID` : un serveur incapable de NLA fait
+  échouer la négociation, ce qui est le bon comportement.
+- **`TCP_NODELAY` sur les sessions SSH.** russh laisse l'algorithme de Nagle
+  actif par défaut ; sur une session interactive, chaque frappe attendait
+  l'accusé du segment précédent. OpenSSH pose ce drapeau sans condition.
+- **Écritures atomiques** (`ecrire_atomiquement`) pour tout fichier de
+  configuration : temporaire créé en 0600 dans le même répertoire, synchronisé,
+  puis renommé. La fonction suit les liens symboliques — un renommage
+  remplacerait le lien, et une configuration de dotfiles deviendrait
+  silencieusement orpheline — et refuse d'écraser une cible en lecture seule.
+- **`WEBKIT_DISABLE_COMPOSITING_MODE` sous Linux.** Le redimensionnement de la
+  fenêtre était saccadé : WebKitGTK réallouait ses tampons GPU à chaque image du
+  geste (42 % du temps dans le noyau, mesuré au profileur). Sans compositing
+  accéléré, la part noyau retombe à 19 % et le débit RDP est inchangé.
 - **Secrets dans le trousseau du système** (`keyring`), jamais en clair sur le
   disque ; mot de passe RDP passé au sidecar par stdin.
 - **Build release optimisé** : `opt-level = 3`, LTO, `codegen-units = 1`,
@@ -173,5 +234,7 @@ plus lent que le débit du serveur.
 | Sidecar RDP (protocole, IronRDP) | `rdp-sidecar/src/main.rs` |
 | Front (application) | `web/main.ts` |
 | Front (logique pure testable) | `web/filters.ts` |
+| Front (réglages persistants) | `web/prefs.ts` |
+| Client SFTP (dont bandes parallèles) | `crates/avash/src/sftp.rs` |
 | Validation qualité | `check.sh`, `scripts/guard.sh` |
 | Tests de bout en bout | `e2e/` |

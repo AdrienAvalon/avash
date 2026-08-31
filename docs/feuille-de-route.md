@@ -4,8 +4,9 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 31 août 2026, après un multi-audit complet (fiabilité,
-sécurité, performance, ergonomie) et six lots de corrections.
+Dernière révision : 31 août 2026, après **deux** cycles d'audits (fiabilité,
+sécurité, performance, ergonomie, puis qualité des tests) et la publication de
+la version 0.3.0.
 
 Dépôts : [GitHub](https://github.com/AdrienAvalon/avash) (public) · GitLab interne (privé).
 
@@ -33,16 +34,17 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 31/08/2026 |
 |---|---|
-| Tests | 160 Rust (106 cœur, 20 intégration, 34 interface) · 78 front · 18 fichiers bout en bout |
+| Tests | 182 Rust (115 cœur, 24 intégration, 34 interface, 9 processus RDP) · 78 front · 35 scénarios bout en bout |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
+| Version publiée | 0.3.0 (Linux + Windows, signées, attestation Sigstore) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
-automatique), gel au redimensionnement corrigé après profilage, et un
-multi-audit dont les constats sont traités ci-dessous.
+automatique), gel au redimensionnement corrigé après profilage, et deux cycles
+d'audits dont les constats sont traités ci-dessous.
 
 ---
 
@@ -90,7 +92,7 @@ vérifie. Il a été vu échouer avant correction, conformément à la règle.
 
 ---
 
-## Le multi-audit du 31 août — ce qu'il a trouvé
+## Les deux cycles d'audits du 31 août — ce qu'ils ont trouvé
 
 Quatre audits parallèles (fiabilité, sécurité, performance, ergonomie) sur
 l'ensemble du code. Trente-huit constats, dont ceux-ci, tous corrigés et chacun
@@ -123,9 +125,23 @@ aboutirait.
 
 **La barre latérale**, entièrement hors d'atteinte au clavier.
 
+**Le second cycle**, lancé sur l'état corrigé, avait pour première mission de
+vérifier ce que le premier avait cassé. Il a trouvé cinq régressions de notre
+main, dont deux graves : l'écriture atomique remplaçait les **liens
+symboliques** (une configuration de dotfiles serait devenue silencieusement
+orpheline), et le téléchargement en bandes pouvait promouvoir un fichier
+**troué** en le déclarant réussi. Il a aussi trouvé le pire du lot côté RDP —
+**le repli de NLA vers TLS était accepté**, donc un serveur pouvait obtenir le
+mot de passe sans authentification mutuelle.
+
+Et un constat d'un autre ordre : **les tests du processus RDP ne s'exécutaient
+nulle part**. Hors du workspace, ils échappaient à `cargo test --workspace`, et
+l'intégration continue se contentait de le compiler. Les trois tests du TOFU de
+certificat n'avaient jamais tourné depuis leur écriture.
+
 Ce que l'exercice enseigne : les défauts les plus graves n'étaient pas dans le
 code neuf, mais dans les hypothèses tacites — « la bibliothèque vérifie », « ce
-chemin n'arrive jamais », « le serveur est honnête ».
+chemin n'arrive jamais », « le serveur est honnête », « les tests tournent ».
 
 ---
 
@@ -163,9 +179,16 @@ sur des mesures de ce qui coûte réellement.
   téléchargement SFTP sans requête en vol ne se voit qu'en latence réelle, et
   Nagle restait actif sur toutes les sessions (russh ne pose pas `TCP_NODELAY`
   par défaut, contrairement à OpenSSH).
-- **Reste à mesurer** : un profil à la flamme sur un flux RDP chargé. Le sidecar
-  fusionne encore ses rectangles sales en boîte englobante — deux coins opposés
-  produisent une trame plein écran, 8 Mo là où 2 Ko suffiraient.
+- **Fait depuis** : le téléchargement SFTP n'avait aucune requête en vol et
+  plafonnait à un bloc par aller-retour — huit fois plus lent que le
+  téléversement sur le même lien ; Nagle restait actif sur toutes les sessions ;
+  un onglet RDP masqué continuait de tirer des trames pleines.
+- **Reste à faire, identifié et chiffré** : le processus RDP fusionne ses
+  rectangles sales en **boîte englobante** — deux coins opposés produisent une
+  trame plein écran, 8 Mo là où 2 Ko suffiraient, ce qui plafonne le nombre
+  d'images par seconde sur un bureau chargé. Et le panneau SFTP **rouvre une
+  session SSH complète**, chaîne de rebonds comprise, au lieu d'ouvrir un canal
+  sur celle de l'onglet : cinq à sept allers-retours avant le moindre listing.
 - **Repères de non-régression.** Les mesures existantes (regroupement, décodage
   UTF-8) affichent des chiffres mais rien ne casse s'ils se dégradent. Un seuil
   d'échec les transformerait en garde-fous.
@@ -212,7 +235,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2 | 3 |
-| Scénarios bout en bout | 18 fichiers | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 35 | en hausse à chaque fonctionnalité |
 | Couverture des tests | non mesurée | mesurée, puis en hausse |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |

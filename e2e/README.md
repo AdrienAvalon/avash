@@ -33,7 +33,7 @@ une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) 
 effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 (`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`.
 
-## Couverture (27 scénarios)
+## Couverture (35 scénarios, 18 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -51,14 +51,35 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 | `rdp.spec.js`         | **connexion RDP réelle** (serveur dédié) → handshake CredSSP + canvas (`.state.live`) |
 | `rdp-clipboard.spec.js` | **presse-papiers RDP** (distant → poste) : pilote le sidecar sur son WebSocket, sans toucher au presse-papiers du système |
 | `rdp-reconnect.spec.js` | **overlay de reconnexion** quand le serveur RDP coupe |
+| `clavier.spec.js`     | palette aux flèches, `Ctrl+K` bloqué par-dessus une boîte, Échap ne ferme qu'une boîte à la fois |
+| `liste-clavier.spec.js` | **barre latérale au clavier** : un seul arrêt de tabulation, flèches et Origine/Fin, focus qui vaut sélection, `Maj+F10` et navigation dans le menu |
+| `prefs.spec.js`       | réglage du **partage de presse-papiers** : présent à la palette, bascule, retenu, libellé qui annonce l'état courant |
+| `resize.spec.js`      | l'application reste répondante après une rafale de redimensionnements |
 
 Chaque fichier de tests repart de l'état semé (`beforeSession` remet le bac à sable à zéro).
 Serveurs locaux : chaque spec RDP démarre son propre serveur de test (aucun couplage) ;
 un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spec`.
-En CI (`E2E_NO_RDP=1`), les specs à serveur local (ssh, rdp, rdp-reconnect) sont retirées.
+
+En CI (`E2E_NO_RDP=1`), la configuration **exclut** les cinq scénarios qui
+exigent un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`,
+`rdp-clipboard`). C'est une exclusion et non une énumération de ce qui tourne :
+la liste énumérative prenait du retard à chaque scénario ajouté, et cinq
+scénarios pourtant sans serveur ne tournaient plus qu'en local. Une nouvelle
+spec sans serveur tourne désormais en intégration continue d'office.
+
+L'attendu d'`isolation.spec.js` est **dérivé du semage** (`HOTES_SEMES`, exporté
+par `wdio.conf.js`) : le réénoncer l'avait rendu faux en CI, où l'hôte
+réellement joignable n'est pas semé.
 
 ## Astuces WebKitGTK
 
 - `getText()` renvoie parfois vide → lire `getProperty("textContent")`.
 - Le clic droit ne génère pas d'`contextmenu` → le dispatcher (`helpers.openCtx`).
 - Les radios stylées ne sont pas « interactables » → cocher via `browser.execute` + event `change`.
+- **Attendre un état, jamais une durée.** Les `browser.pause` ont tous disparu :
+  ils mesuraient la charge de la machine plus que le comportement. Pour un cas
+  « rien ne doit changer », attendre un événement observable — un aller simple
+  jusqu'au moteur via `requestAnimationFrame` — puis constater.
+- `waitForPort` exige **deux** connexions successives : une seule prouve que le
+  socket écoute, pas que le serveur est *revenu* l'écouter. Il traite ses
+  clients l'un après l'autre, et notre sonde en est un.

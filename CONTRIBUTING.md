@@ -70,12 +70,30 @@ La porte qualité complète est le script `check.sh` à la racine :
 ./check.sh --quick    # idem, sans le build release final (boucle de dev plus rapide)
 ```
 
-`check.sh` enchaîne, pour le cœur Rust et l'interface :
+`check.sh` enchaîne :
 
-- `cargo check`, `cargo test`, `cargo fmt --check`, `cargo clippy -D warnings` ;
-- `cargo audit` (si `cargo-audit` est installé) ;
+- pour le workspace (cœur + interface) : `cargo check`, `cargo test`,
+  `cargo fmt --check`, `cargo clippy -D warnings` — et **`clippy` une seconde
+  fois en profil release**. Clippy ne compile qu'en debug : un bloc placé sous
+  `cfg(debug_assertions)` peut laisser une variable orpheline en release sans
+  que rien ne le signale. C'est arrivé ;
+- pour le **processus RDP**, qui vit hors du workspace : ses propres `check`,
+  `test`, `fmt` et `clippy`. Ils ne s'exécutaient nulle part pendant des
+  semaines — `cargo test --workspace` ne le voit pas, et l'intégration continue
+  se contentait de le compiler ;
+- `cargo audit` sur **les deux** `Cargo.lock` (si `cargo-audit` est installé) ;
 - pour le front : la garde `scripts/guard.sh`, ESLint typé, `tsc --noEmit`,
-  Vitest, puis le build Vite.
+  Vitest, puis le build Vite ;
+- au build release enfin : la construction du processus RDP **avant** celle
+  d'`avash-ui`, qui en dépend par `externalBin`.
+
+> **Toute crate ajoutée hors du workspace doit être branchée explicitement sur
+> les trois portes** — `check.sh`, le hook de pré-commit et
+> `.github/workflows/ci.yml`. Aucune ne la verra autrement.
+
+Le hook `pre-commit` reprend l'essentiel : garde, format, clippy, tests Rust,
+tests du processus RDP, et les trois vérifications rapides du front (`tsc`,
+ESLint, Vitest). Il se contourne ponctuellement avec `git commit --no-verify`.
 
 Les tests de bout en bout pilotent la **vraie application compilée** via
 `tauri-driver` et WebdriverIO. Ils vivent dans `e2e/` :
@@ -89,7 +107,7 @@ npm test                # toute la suite
 ```
 
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
-et le détail des 24 scénarios.
+et le détail des 35 scénarios.
 
 ## Style de code
 
@@ -105,10 +123,33 @@ et le détail des 24 scénarios.
 - **Garde anti-étourderie (`scripts/guard.sh`).** Cette garde bloque avant
   commit les restes de mise au point (harnais de test, `debugger`,
   auto-connexion vers un serveur de test) **et** l'usage des dialogues natifs
-  `confirm()` / `prompt()`. Ces dialogues sont **INOPÉRANTS sous WebKitGTK/WRY** :
-  `confirm()` renvoie une `Promise` toujours vraie et `prompt()` renvoie
-  toujours `null`. Utilise à la place les fonctions maison `askConfirm()` et
-  `askText()`.
+  `confirm()` / `prompt()` / `alert()`. Ces dialogues sont **INOPÉRANTS sous
+  WebKitGTK/WRY** : `confirm()` renvoie une `Promise` toujours vraie,
+  `prompt()` renvoie `null`, et `alert()` ne bloque pas. Utilise à la place les
+  fonctions maison `askConfirm()`, `askText()` et `notify()`.
+
+## Écrire un test
+
+Une seule règle, mais elle n'est pas négociable : **un nouveau test doit avoir
+été vu échouer**. Débranche ce qu'il couvre — inverse une condition, retire un
+garde — et vérifie qu'il tombe, puis remets en état. Un test qui ne peut pas
+échouer ne protège rien, et il coûte plus cher qu'il ne rapporte : il donne
+l'illusion d'une couverture.
+
+Deux corollaires appris à nos dépens :
+
+- **Un serveur de test complaisant ne prouve rien.** Le nôtre rendait le même
+  bloc quel que soit le décalage demandé : il aurait validé n'importe quel
+  lecteur, y compris un lecteur parallèle qui réassemble de travers. Un serveur
+  factice doit être aussi exigeant que la chose qu'il remplace.
+- **Attendre un état, jamais une durée.** Les échecs intermittents viennent
+  presque tous d'une interrogation faite trop tôt. Et « le port répond » n'est
+  pas un état suffisant : un serveur qui traite ses clients l'un après l'autre
+  doit être vu *revenir* accepter.
+
+Un piège de manipulation, enfin : **ne défais jamais un contrôle négatif par
+`git checkout <fichier>`** — il emporte tout le travail non commité du fichier.
+Défais exactement l'édition que tu as faite.
 
 ## Format des commits
 

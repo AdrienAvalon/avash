@@ -7,6 +7,7 @@ et — côté Windows — signé pour éviter les alertes.
 |---|---|---|---|
 | Linux | `Avash_<version>_amd64.AppImage` | copier le fichier, `chmod +x`, lancer | aucune (tout est empaqueté dedans) |
 | Windows | `Avash_<version>_x64-setup.exe` (NSIS) | lancer l'installeur | WebView2 (préinstallé Win10 récent / Win11) |
+| Windows | `avash-<version>-windows-x64.zip` | décompresser et lancer, sans installation | WebView2 — garder `avash-rdp.exe` à côté d'`avash.exe` |
 
 > L'AppImage embarque WebKitGTK et ses dépendances : c'est le seul artefact
 > réellement « copier-coller et ça marche » sur une autre machine.
@@ -32,8 +33,9 @@ Un seul point d'entrée, qui **valide puis construit** :
 ./scripts/release.sh --sign-gpg <KEYID>   # + signature GPG (Linux recommandé)
 ```
 
-- `check.sh` est exécuté d'abord : format, clippy strict, tests (93 Rust + 51
-  front), `cargo audit`. On ne publie pas du code non validé.
+- `check.sh` est exécuté d'abord : format, clippy strict (debug **et** release),
+  tests (182 Rust dont 9 dans le processus RDP, 78 front), `cargo audit` sur les
+  deux arbres de dépendances. On ne publie pas du code non validé.
 - Le **sidecar RDP** (`avash-rdp`, projet séparé hors workspace) est construit
   et déposé dans `crates/avash-ui/binaries/avash-rdp-<triple>` ; Tauri l'embarque
   via `externalBin` **à côté de l'exe** dans l'AppImage (le RDP marche donc dans
@@ -123,20 +125,31 @@ est fourni.
   signature, emplacement du certificat (à renseigner).
 - `scripts/release.sh` : build validé + `SHA256SUMS` + signature GPG optionnelle.
 - `check.sh` : la porte qualité exécutée avant chaque release.
-- `LICENSE` (MIT), icônes multi-résolutions (`crates/avash-ui/icons/`).
+- `LICENSE` (**AGPL-3.0-or-later**), icônes multi-résolutions
+  (`crates/avash-ui/icons/`).
+- `.github/workflows/release.yml` : sur un tag `v*`, construit Linux et Windows,
+  produit le manifeste `latest.json` signé, les empreintes `SHA256SUMS` et une
+  **attestation de provenance Sigstore**, puis publie la release.
 
 À fournir par toi : le **certificat Authenticode** (Windows) et, si tu veux
 signer l'AppImage, une **clé GPG**.
+
+> L'attestation Sigstore n'est **pas** de l'Authenticode : elle prouve d'où
+> vient le binaire, elle ne lève pas l'avertissement de Windows.
 
 ## 7. Mises à jour automatiques
 
 Avash embarque le plugin updater (Tauri). En cliquant sur la pastille de
 version, l'app vérifie un manifeste distant et propose d'installer.
 
-**Ce qui est déjà en place :**
+**En place et éprouvé en conditions réelles** — une version installée détecte la
+suivante, la télécharge et redémarre :
 - Plugins `updater` + `process`, permissions, UI de vérification.
 - Clé publique de signature dans `tauri.conf.json` (`plugins.updater.pubkey`).
-- Endpoint (à adapter) : `releases/latest/download/latest.json`.
+- Endpoint : `https://github.com/AdrienAvalon/avash/releases/latest/download/latest.json`.
+- `bundle.createUpdaterArtifacts: true` — **indispensable** : sans lui, Tauri ne
+  signe rien, même avec la clé. C'était l'une des trois causes d'une mise à jour
+  qui échouait en silence.
 
 **Clé de signature des updates** (minisign, générée le 29/08) :
 - Privée : `~/.config/avash-release/updater.key` — **hors dépôt, à garder
@@ -145,18 +158,27 @@ version, l'app vérifie un manifeste distant et propose d'installer.
 - Pour en régénérer une : `cargo tauri signer generate -w <chemin>`, puis
   remplacer `pubkey` dans `tauri.conf.json`.
 
-**Publier une mise à jour :**
-1. Build en signant les artefacts updater :
-   ```
-   export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.config/avash-release/updater.key)"
-   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # si passphrase
-   cd crates/avash-ui && cargo tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
-   ```
-   (`createUpdaterArtifacts` n'est PAS activé par défaut pour ne pas exiger la
-   clé à chaque build local.)
-2. Publier les artefacts + leur `.sig` sur l'hébergement.
-3. Générer/mettre à jour `latest.json` (version, notes, URLs + signatures) et
-   le servir à l'endpoint configuré. Format : voir la doc Tauri updater.
+**Publier une mise à jour — la voie normale :**
 
-Sans manifeste publié, le bouton affiche simplement « vérification
-impossible » — c'est attendu tant que la première release n'est pas en ligne.
+1. Porter le numéro de version dans les six endroits qui le déclarent :
+   `Cargo.toml` (workspace), les trois `Cargo.toml` de crates, `tauri.conf.json`,
+   `web/package.json`, et `VERSION` dans `.github/workflows/release.yml`.
+2. Renseigner le `CHANGELOG.md`.
+3. `NO_STRIP=1 ./scripts/release.sh` — valide, construit, et **régénère la
+   distribution locale**. Ne pas sauter cette étape : sans elle, on essaie la
+   version publiée en ligne pendant que sa propre copie est périmée.
+4. Poser le tag et le pousser : `git tag -a vX.Y.Z -m "…" && git push <remote> vX.Y.Z`.
+   Le workflow fait le reste — les deux plateformes, le manifeste signé, les
+   empreintes, l'attestation, la release.
+
+Le workflow **échoue volontairement** si aucune signature n'est trouvée : un
+manifeste sans signature ferait échouer la mise à jour sans rien dire, ce qui
+est pire qu'une publication qui s'arrête.
+
+**En local, hors workflow** (rarement utile) :
+```
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.config/avash-release/updater.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # si passphrase
+cd crates/avash-ui && NO_STRIP=1 cargo tauri build
+```
+`scripts/release.sh` exporte déjà cette clé si elle est présente.

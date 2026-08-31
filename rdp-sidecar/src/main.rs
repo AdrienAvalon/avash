@@ -6,8 +6,16 @@
 //! client présentant le bon jeton. Imprime « PORT TOKEN » sur stdout au départ.
 //!
 //! Messages WebSocket (binaires, auto-délimités) :
-//!   sidecar -> app : [1]=CONNECTED w:u16 h:u16 · [2]=FRAME x,y,w,h:u16 + RGBA · [3]=ERROR utf8
-//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16 · [4]KEY sc:u16,down · [5]RESIZE w,h · [6]ACK · [8]CLIPBOARD utf8 · [9]REFRESH · [10]LOCKS bits:u8
+//!   sidecar -> app : [1]=CONNECTED w:u16 h:u16 · [2]=FRAME x,y,w,h:u16 + RGBA
+//!                     · [7]=STATS fps:u16 kbps:u32 lat:u16 · [8]=CLIPBOARD utf8
+//!                     ([3]=ERROR est réservé et géré côté front, mais nous ne
+//!                      l'émettons pas : un échec avant connexion sort sur
+//!                      stderr, un échec en session ferme le WebSocket et le
+//!                      diagnostic est relu par `rdp_diagnostic`)
+//!   app -> sidecar : [1]MOUSE_MOVE x,y · [2]BUTTON b,down,x,y · [3]WHEEL delta:i16
+//!                     · [4]KEY sc:u16,down · [5]RESIZE w,h · [6]ACK · [8]CLIPBOARD utf8
+//!                     · [9]REFRESH · [10]LOCKS bits:u8 · [11]PAUSE pause:u8
+//!                     · [12]CLIPBOARD_AUTORISE autorise:u8
 //!
 //! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png]
 

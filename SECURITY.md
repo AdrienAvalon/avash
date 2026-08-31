@@ -28,10 +28,15 @@ correctifs de sécurité sont priorisés par rapport aux autres travaux.
 
 | Version | Supportée          |
 |---------|--------------------|
-| 0.2.x   | Oui                |
-| < 0.2   | Non                |
+| 0.3.x   | Oui                |
+| < 0.3   | Non                |
 
-Les correctifs de sécurité sont publiés pour la série **0.2.x**.
+Les correctifs de sécurité sont publiés pour la série **0.3.x**.
+
+> **La 0.3.0 corrige plusieurs défauts sérieux des séries antérieures** — clé
+> d'hôte SSH insuffisamment vérifiée, certificat RDP pas vérifié du tout, repli
+> de NLA vers TLS accepté. Une mise à jour depuis une 0.2.x est vivement
+> recommandée. Le détail est dans le [CHANGELOG](CHANGELOG.md).
 
 ## Modèle de sécurité
 
@@ -64,9 +69,13 @@ processus, où tout utilisateur de la machine pourrait le lire.
 
 Le flux entre l'application et le sidecar passe par un WebSocket qui écoute
 **uniquement sur `127.0.0.1`**, sur un port éphémère. La première trame que le
-sidecar attend est un **jeton aléatoire** généré à son démarrage : toute
-connexion qui ne le présente pas est rejetée. Cela empêche un autre processus
-local de se brancher sur la session.
+sidecar attend est un **jeton aléatoire** de 64 bits généré à son démarrage :
+toute connexion qui ne le présente pas est rejetée. Cela empêche un autre
+processus local de se brancher sur la session.
+
+Le sidecar **boucle** sur les connexions entrantes plutôt que d'en accepter une
+seule — voir plus bas, « Le canal local du processus RDP n'est plus coupable
+d'un seul message ».
 
 ### Vérification des clés d'hôte SSH (TOFU)
 
@@ -82,6 +91,21 @@ avec la distinction que fait OpenSSH (voir `check_server_key` dans
   présentée. La clé n'est **jamais réapprise en silence** ;
 - **`known_hosts` illisible, ou certificat d'hôte non validable** : refus par
   défaut (mieux vaut refuser qu'accepter à l'aveugle).
+
+**L'algorithme n'entre pas en compte dans la décision**, et c'est le point le
+plus important. Le booléen de `check_known_hosts` de russh répond « hôte
+inconnu » lorsque l'algorithme de la clé présentée diffère de celui enregistré :
+s'y fier revenait à traiter une clé changée comme un premier contact, et à la
+réapprendre en silence. Avash lit lui-même les clés enregistrées et tranche dans
+`juger_cle_hote`.
+
+**Les marqueurs d'OpenSSH font refuser la connexion.** La correspondance d'hôte
+de russh est une simple égalité de chaîne : une ligne `@revoked srv …` était
+découpée en hôte « @revoked », qui ne correspond à rien — la clé que vous aviez
+marquée comme compromise aurait été réapprise et acceptée. Avash refuse
+`@revoked` et `@cert-authority` avec un message qui dit pourquoi : nous ne
+savons pas valider une autorité de certification, et faire semblant serait pire
+que refuser.
 
 ### Le processus RDP n'est jamais cherché en chemin relatif
 
@@ -166,6 +190,18 @@ connexion. L'interface ne le demande pas au trousseau et ne le reçoit jamais :
 elle interroge seulement son existence. Le volet SSH procède ainsi depuis
 toujours ; le volet RDP rapatriait le secret dans la webview, où il séjournait
 toute la durée de l'onglet.
+
+### Pas de repli de NLA vers TLS seul (RDP)
+
+C'est le serveur qui choisit le protocole de sécurité parmi ceux que le client
+annonce. Annoncer `PROTOCOL_SSL` revient — la documentation d'IronRDP le dit mot
+pour mot — à lui signifier qu'on **accepte de renoncer à NLA**. Un serveur
+répondant « SSL seul » faisait alors sauter CredSSP, et le mot de passe partait
+dans le *Client Info PDU*, sans authentification mutuelle du serveur.
+
+Avash n'annonce que `HYBRID` : un serveur incapable de NLA fait échouer la
+négociation. C'est au **premier contact** — le seul moment où l'épinglage
+ci-dessous ne protège pas encore — que cette différence compte le plus.
 
 ### Vérification du serveur RDP (TOFU)
 
