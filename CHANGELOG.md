@@ -7,6 +7,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.3.3] - 2026-08-31
+
+Trois défauts RDP trouvés en une soirée, tous contre de vraies machines du parc
+de test, tous signalés par l'usage réel avant d'être cherchés dans le code.
+
 - **Le clavier était interprété en QWERTY sur les serveurs xrdp.** RDP
   transporte des scancodes, pas des caractères : c'est le serveur qui les
   traduit, d'après la disposition que le client annonce. avash annonçait 0 ;
