@@ -34,6 +34,11 @@ whoami = "2"
 rand = "0.10"
 keyring = "4"
 
+# join_all : le téléchargement SFTP lit en bandes parallèles, dont le nombre
+# dépend de la taille du fichier — tokio::join! ne prend qu'un nombre fixe de
+# futures. `futures` est déjà dans l'arbre (russh en dépend).
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+
 [dev-dependencies]
 bytes = "1.12.1"
 log = "0.4.34"

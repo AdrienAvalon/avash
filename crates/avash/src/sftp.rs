@@ -102,6 +102,24 @@ impl SftpHandle {
             .await
             .with_context(|| format!("Ouverture distant {remote}"))?;
         let partiel = chemin_partiel(local);
+        // Taille connue et fichier assez gros : on lit en bandes parallèles.
+        if total > (2 * CHUNK) as u64 {
+            let recu = self
+                .telecharger_en_bandes(remote, &partiel, total, &mut progress)
+                .await;
+            return match recu {
+                Ok(n) => {
+                    tokio::fs::rename(&partiel, local)
+                        .await
+                        .with_context(|| format!("Renommage vers {}", local.display()))?;
+                    Ok(n)
+                }
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(&partiel).await;
+                    Err(e)
+                }
+            };
+        }
         let mut local_file = tokio::fs::File::create(&partiel)
             .await
             .with_context(|| format!("Création local {}", partiel.display()))?;
@@ -138,6 +156,119 @@ impl SftpHandle {
             .await
             .with_context(|| format!("Renommage vers {}", local.display()))?;
         Ok(done)
+    }
+
+    /// Téléchargement en bandes parallèles.
+    ///
+    /// `File` de russh-sftp n'émet **qu'une** requête `SSH_FXP_READ` à la fois
+    /// et attend sa réponse : le débit descendant plafonnait donc à
+    /// `CHUNK / aller-retour`, soit ~2 Mo/s à 30 ms de latence et 0,6 Mo/s en
+    /// transatlantique. La montée, elle, est déjà pipelinée par la bibliothèque
+    /// (huit écritures en vol) : le téléchargement était environ huit fois plus
+    /// lent que le téléversement sur le même lien.
+    ///
+    /// Faute d'API publique pour empiler des lectures sur un même descripteur,
+    /// on ouvre plusieurs descripteurs sur le même chemin — c'est licite, et
+    /// bien en deçà de la limite d'un serveur OpenSSH — et chacun lit sa bande,
+    /// à son propre décalage. Les écritures locales ne se recouvrent pas :
+    /// chaque bande a son propre descripteur local et son propre intervalle,
+    /// donc aucun verrou.
+    async fn telecharger_en_bandes(
+        &self,
+        remote: &str,
+        partiel: &Path,
+        total: u64,
+        progress: &mut impl FnMut(u64, u64),
+    ) -> Result<u64> {
+        /// Au-delà, on encombre le serveur sans gagner : le lien sature avant.
+        const BANDES_MAX: u64 = 8;
+        let bandes = (total / (CHUNK as u64)).clamp(1, BANDES_MAX);
+        let taille_bande = total.div_ceil(bandes);
+
+        // Le fichier est créé (et vidé) une fois, avant que les bandes n'y
+        // écrivent chacune à son décalage.
+        tokio::fs::File::create(partiel)
+            .await
+            .with_context(|| format!("Création local {}", partiel.display()))?;
+
+        // La progression appartient à l'appelant et n'est pas partageable : les
+        // bandes annoncent leur avancement, cette tâche-ci le rapporte.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
+        let mut travaux = Vec::new();
+        for i in 0..bandes {
+            let debut = i * taille_bande;
+            let fin = ((i + 1) * taille_bande).min(total);
+            if debut >= fin {
+                break;
+            }
+            travaux.push(self.une_bande(remote, partiel, debut, fin, tx.clone()));
+        }
+        drop(tx); // sans quoi la boucle d'annonce n'aurait pas de fin
+
+        let annonces = async {
+            let mut fait = 0u64;
+            while let Some(n) = rx.recv().await {
+                fait += n;
+                progress(fait, total);
+            }
+            fait
+        };
+        let (issues, fait) = tokio::join!(futures::future::join_all(travaux), annonces);
+        for issue in issues {
+            issue?;
+        }
+        Ok(fait)
+    }
+
+    /// Lit `[debut, fin)` du fichier distant et l'écrit au même décalage local.
+    async fn une_bande(
+        &self,
+        remote: &str,
+        partiel: &Path,
+        debut: u64,
+        fin: u64,
+        tx: tokio::sync::mpsc::UnboundedSender<u64>,
+    ) -> Result<()> {
+        use tokio::io::AsyncSeekExt as _;
+        let mut distant = self
+            .sftp
+            .open(remote)
+            .await
+            .with_context(|| format!("Ouverture distant {remote}"))?;
+        distant
+            .seek(std::io::SeekFrom::Start(debut))
+            .await
+            .context("Positionnement distant")?;
+        let mut local = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(partiel)
+            .await
+            .with_context(|| format!("Ouverture local {}", partiel.display()))?;
+        local
+            .seek(std::io::SeekFrom::Start(debut))
+            .await
+            .context("Positionnement local")?;
+
+        let mut buf = vec![0u8; CHUNK];
+        let mut reste = fin - debut;
+        while reste > 0 {
+            let vise = usize::try_from(reste.min(CHUNK as u64)).unwrap_or(CHUNK);
+            let n = distant
+                .read(&mut buf[..vise])
+                .await
+                .context("Lecture distante")?;
+            if n == 0 {
+                break; // le fichier a rétréci depuis la lecture de sa taille
+            }
+            local
+                .write_all(&buf[..n])
+                .await
+                .context("Écriture locale")?;
+            reste -= n as u64;
+            let _ = tx.send(n as u64);
+        }
+        local.flush().await.context("Vidage local")?;
+        Ok(())
     }
 
     /// Televersement avec progression.

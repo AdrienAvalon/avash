@@ -1008,20 +1008,35 @@ function refreshEmptyHint() {
 }
 
 async function loadHosts() {
-  try {
-    state.hosts = await invoke<Host[]>("list_hosts");
-  } catch (e) {
-    console.warn("Config SSH illisible :", e);
-  }
-  rdpHostsList = await invoke<RdpHostT[]>("rdp_hosts").catch(() => []);
-  state.folders = await invoke<string[]>("folders_list").catch(() => []);
+  // Les trois lectures s'enchaînaient, chacune attendant la précédente : trois
+  // allers-retours IPC en série sur le chemin du tout premier affichage, alors
+  // qu'elles ne dépendent pas les unes des autres.
+  const [hotes, bureaux, dossiers] = await Promise.all([
+    invoke<Host[]>("list_hosts").catch((e) => {
+      console.warn("Config SSH illisible :", e);
+      return state.hosts;
+    }),
+    invoke<RdpHostT[]>("rdp_hosts").catch(() => [] as RdpHostT[]),
+    invoke<string[]>("folders_list").catch(() => [] as string[]),
+  ]);
+  state.hosts = hotes;
+  rdpHostsList = bureaux;
+  state.folders = dossiers;
   renderHosts();
   refreshEmptyHint();
 }
 
 // Search sidebar
 const searchEl = $("search") as HTMLInputElement;
-searchEl.addEventListener("input", () => { state.filter = searchEl.value; renderHosts(); });
+// Un rendu complet par frappe : à 200 hôtes, chaque ligne coûte une analyse
+// HTML, quatre requêtes de sélecteur et six écouteurs. On regroupe les frappes
+// d'une même rafale sur une image, ce qui reste imperceptible à la saisie.
+let rechercheEnAttente: number | undefined;
+searchEl.addEventListener("input", () => {
+  state.filter = searchEl.value;
+  window.clearTimeout(rechercheEnAttente);
+  rechercheEnAttente = window.setTimeout(renderHosts, 50);
+});
 
 // Palette
 const paletteEl = $("palette") as HTMLDivElement;
@@ -1204,36 +1219,87 @@ async function sftpNavigate(path: string) {
       up.addEventListener("dblclick", () => sftpNavigate(parentDir(path)));
       list.appendChild(up);
     }
-    for (const e of sorted) {
-      const el = document.createElement("div");
+    // Chaque entrée coûtait deux analyses HTML — le gabarit, puis l'icône, un
+    // SVG de plusieurs nœuds réanalysé alors qu'il n'existe que huit icônes
+    // distinctes — plus trois écouteurs, et un appendChild dans la liste vivante.
+    // Sur /usr/bin (≈ 4000 entrées) cela figeait le fil principal plusieurs
+    // secondes. On clone un gabarit, on clone des icônes préparées, on assemble
+    // hors document, et les trois écouteurs sont délégués au conteneur.
+    const gabarit = document.createElement("div");
+    gabarit.innerHTML = `<span class="ic"></span><span class="nm"></span><span class="sz"></span>`;
+    const icones = new Map<string, Node>();
+    const icone = (nom: string): Node => {
+      let n = icones.get(nom);
+      if (!n) {
+        const porteur = document.createElement("span");
+        porteur.innerHTML = ic(nom);
+        n = porteur.firstChild!;
+        icones.set(nom, n);
+      }
+      return n.cloneNode(true);
+    };
+    const lot = document.createDocumentFragment();
+    sorted.forEach((e, i) => {
+      const el = gabarit.cloneNode(true) as HTMLElement;
       el.className = "sftp-entry" + (e.is_dir ? " dir" : "");
-      el.innerHTML = `<span class="ic"></span><span class="nm"></span><span class="sz"></span>`;
-      el.querySelector(".ic")!.innerHTML = ic(fileIconName(e.name, e.is_dir));
+      el.dataset.i = String(i); // retrouve l'entrée depuis le conteneur
+      el.firstChild!.appendChild(icone(fileIconName(e.name, e.is_dir)));
       el.querySelector(".nm")!.textContent = e.name;
       el.querySelector(".sz")!.textContent = e.is_dir ? shortDate(e.modified) : humanSize(e.size);
       el.title = e.is_dir
         ? `${e.name} — modifié ${shortDate(e.modified) || "?"} — double-clic : ouvrir`
         : `${e.name} — ${humanSize(e.size)}, modifié ${shortDate(e.modified) || "?"} — double-clic : télécharger`;
-      // Simple clic : selection. Double clic : ouvrir (dossier) / telecharger.
-      el.addEventListener("click", () => {
-        for (const n of list.querySelectorAll(".sftp-entry.sel")) n.classList.remove("sel");
-        el.classList.add("sel");
-      });
-      el.addEventListener("dblclick", () => {
-        if (e.is_dir) void sftpNavigate(remoteJoin(path, e.name));
-        else void sftpDownload(remoteJoin(path, e.name), e.name);
-      });
-      el.addEventListener("contextmenu", (ev) => {
-        ev.preventDefault();
-        sftpOpenMenu(e, path, ev as MouseEvent);
-      });
-      list.appendChild(el);
-    }
+      lot.appendChild(el);
+    });
+    list.appendChild(lot);
+
+    // Délégation : trois écouteurs pour toute la liste, au lieu de trois par
+    // entrée. `sftpDelegue` est réarmé à chaque navigation avec le lot courant.
+    sftpDelegue(list, sorted, path);
     sftpStatus(`${entries.length} élément${entries.length > 1 ? "s" : ""}`);
   } catch (e) {
     list.innerHTML = "";
     sftpStatus(`⚠️ ${e}`, "err");
   }
+}
+
+/** Branche les trois gestes du panneau SFTP sur le conteneur, une fois.
+ *
+ *  Les entrées sont retrouvées par leur `data-i` : le lot courant et le chemin
+ *  courant sont gardés à part, si bien qu'une navigation n'a pas à rebrancher
+ *  quoi que ce soit.
+ */
+let sftpLot: { entries: SftpEntry[]; path: string } = { entries: [], path: "" };
+let sftpDelegueBranche = false;
+function sftpDelegue(list: HTMLElement, entries: SftpEntry[], path: string): void {
+  sftpLot = { entries, path };
+  if (sftpDelegueBranche) return;
+  sftpDelegueBranche = true;
+  const viser = (ev: Event): { el: HTMLElement; e: SftpEntry } | null => {
+    const el = (ev.target as HTMLElement).closest<HTMLElement>(".sftp-entry");
+    if (!el || el.classList.contains("up")) return null;
+    const e = sftpLot.entries[Number(el.dataset.i)];
+    return e ? { el, e } : null;
+  };
+  list.addEventListener("click", (ev) => {
+    const cible = viser(ev);
+    if (!cible) return;
+    for (const n of list.querySelectorAll(".sftp-entry.sel")) n.classList.remove("sel");
+    cible.el.classList.add("sel");
+  });
+  list.addEventListener("dblclick", (ev) => {
+    const cible = viser(ev);
+    if (!cible) return;
+    const { e } = cible;
+    if (e.is_dir) void sftpNavigate(remoteJoin(sftpLot.path, e.name));
+    else void sftpDownload(remoteJoin(sftpLot.path, e.name), e.name);
+  });
+  list.addEventListener("contextmenu", (ev) => {
+    const cible = viser(ev);
+    if (!cible) return;
+    ev.preventDefault();
+    sftpOpenMenu(cible.e, sftpLot.path, ev as MouseEvent);
+  });
 }
 
 function sftpRefresh() {

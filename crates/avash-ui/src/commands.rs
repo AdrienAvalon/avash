@@ -437,62 +437,76 @@ async fn open_on_target(
     let app2 = app.clone();
     let pump_epoch = epoch;
     let _pump = tokio::spawn(async move {
-        probe_and_emit_os(&app2, sid, label_for_event, &mut session).await;
+        // La sonde d'OS tourne EN MÊME TEMPS que le relais, plus avant lui.
+        // Elle ouvre un canal exec, lance un `cat /etc/os-release` distant et
+        // attend sa sortie *et* son code de retour : deux à trois allers-retours
+        // plus un fork distant. Placée en tête, rien ne s'affichait tant qu'elle
+        // n'avait pas rendu la main — quelques centaines de millisecondes d'écran
+        // noir sur un lien lointain, jusqu'aux quatre secondes du délai de garde
+        // sur un hôte chargé. Rien n'était perdu (le canal tamponne), mais le
+        // geste le plus fréquent de l'application paraissait lent.
+        // La boucle ne touche pas à `session` : les deux emprunts cohabitent.
+        let relais = async {
+            let mut decoder = Utf8Stream::default();
+            let mut buffer = String::new();
+            let mut deadline: Option<tokio::time::Instant> = None;
 
-        let mut decoder = Utf8Stream::default();
-        let mut buffer = String::new();
-        let mut deadline: Option<tokio::time::Instant> = None;
-
-        loop {
-            // Tant que le tampon attend, on borne l'attente a l'echeance :
-            // sans cela un octet isole resterait bloque jusqu'au suivant.
-            let recu = match deadline {
-                Some(d) => {
-                    if let Ok(v) = tokio::time::timeout_at(d, out_rx.recv()).await {
-                        v
-                    } else {
-                        if !buffer.is_empty() {
-                            let _ = app2.emit(
-                                "pty-output",
-                                serde_json::json!({ "id": sid, "data": buffer }),
-                            );
-                            buffer.clear();
+            loop {
+                // Tant que le tampon attend, on borne l'attente a l'echeance :
+                // sans cela un octet isole resterait bloque jusqu'au suivant.
+                let recu = match deadline {
+                    Some(d) => {
+                        if let Ok(v) = tokio::time::timeout_at(d, out_rx.recv()).await {
+                            v
+                        } else {
+                            if !buffer.is_empty() {
+                                let _ = app2.emit(
+                                    "pty-output",
+                                    serde_json::json!({ "id": sid, "data": buffer }),
+                                );
+                                buffer.clear();
+                            }
+                            deadline = None;
+                            continue;
                         }
-                        deadline = None;
-                        continue;
                     }
+                    None => out_rx.recv().await,
+                };
+
+                let Some(bytes) = recu else { break };
+                let text = decoder.push(&bytes);
+                if text.is_empty() {
+                    continue; // sequence UTF-8 encore incomplete
                 }
-                None => out_rx.recv().await,
-            };
+                buffer.push_str(&text);
 
-            let Some(bytes) = recu else { break };
-            let text = decoder.push(&bytes);
-            if text.is_empty() {
-                continue; // sequence UTF-8 encore incomplete
+                // Gros volume : inutile d'attendre, on ecoule tout de suite.
+                if buffer.len() >= FLUSH_BYTES {
+                    let _ = app2.emit(
+                        "pty-output",
+                        serde_json::json!({ "id": sid, "data": buffer }),
+                    );
+                    buffer.clear();
+                    deadline = None;
+                } else if deadline.is_none() {
+                    deadline = Some(
+                        tokio::time::Instant::now()
+                            + tokio::time::Duration::from_millis(COALESCE_MS),
+                    );
+                }
             }
-            buffer.push_str(&text);
-
-            // Gros volume : inutile d'attendre, on ecoule tout de suite.
-            if buffer.len() >= FLUSH_BYTES {
+            // Ne pas perdre ce qui restait au moment de la fermeture.
+            if !buffer.is_empty() {
                 let _ = app2.emit(
                     "pty-output",
                     serde_json::json!({ "id": sid, "data": buffer }),
                 );
-                buffer.clear();
-                deadline = None;
-            } else if deadline.is_none() {
-                deadline = Some(
-                    tokio::time::Instant::now() + tokio::time::Duration::from_millis(COALESCE_MS),
-                );
             }
-        }
-        // Ne pas perdre ce qui restait au moment de la fermeture.
-        if !buffer.is_empty() {
-            let _ = app2.emit(
-                "pty-output",
-                serde_json::json!({ "id": sid, "data": buffer }),
-            );
-        }
+        };
+        tokio::join!(
+            probe_and_emit_os(&app2, sid, label_for_event, &mut session),
+            relais
+        );
         // La session distante s'est terminee (exit, coupure, kill). On ne
         // l'annonce que si cet id ne porte pas deja une session plus recente
         // (voir `is_superseded`), sinon on fermerait le nouvel onglet.

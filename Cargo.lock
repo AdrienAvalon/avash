@@ -343,6 +343,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "dirs",
+ "futures",
  "keyring",
  "log",
  "rand",

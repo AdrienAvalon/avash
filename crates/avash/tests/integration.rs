@@ -269,6 +269,10 @@ fn ok_status(id: u32) -> Status {
 }
 
 #[derive(Default)]
+/// Trois drapeaux décrivent le chemin ouvert (coupure, gros fichier), un
+/// quatrième l'état de lecture. Les regrouper en énumération alourdirait un
+/// serveur de démonstration sans rien clarifier.
+#[allow(clippy::struct_excessive_bools)]
 struct TestSftpSession {
     root_read_done: bool,
     /// Octets deja servis par `read()` : sans cet etat, le serveur renvoie le
@@ -276,6 +280,8 @@ struct TestSftpSession {
     file_read_done: bool,
     /// Le chemin ouvert demande une coupure après le premier bloc.
     coupure_en_lecture: bool,
+    /// Le chemin ouvert sert le fichier de démonstration, à décalage honoré.
+    gros_fichier: bool,
 }
 
 // Les methodes du trait Handler de russh-sftp sont declarees
@@ -298,6 +304,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
         _attrs: FileAttributes,
     ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
         self.coupure_en_lecture = filename.contains("coupure");
+        self.gros_fichier = filename.contains("gros");
         async move {
             // Deux chemins réservés pour exercer les échecs, que le reste du
             // mock accepte trop volontiers : « introuvable » échoue à
@@ -318,15 +325,30 @@ impl russh_sftp::server::Handler for TestSftpSession {
         &mut self,
         id: u32,
         _handle: String,
-        _offset: u64,
-        _len: u32,
+        offset: u64,
+        len: u32,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Data, Self::Error>> + Send {
         let done = std::mem::replace(&mut self.file_read_done, true);
         let coupure = self.coupure_en_lecture;
+        let gros = self.gros_fichier;
         async move {
             if done && coupure {
                 // La liaison tombe après le premier bloc.
                 return Err(StatusCode::Failure);
+            }
+            // Le fichier de démonstration honore décalage et longueur : sans
+            // cela, un lecteur en bandes parallèles serait « validé » par un
+            // serveur qui lui rend toujours le même bloc.
+            if gros {
+                let debut = usize::try_from(offset).unwrap_or(usize::MAX);
+                if debut >= GROS_FICHIER.len() {
+                    return Err(StatusCode::Eof);
+                }
+                let fin = (debut + len as usize).min(GROS_FICHIER.len());
+                return Ok(russh_sftp::protocol::Data {
+                    id,
+                    data: GROS_FICHIER[debut..fin].to_vec(),
+                });
             }
             if done {
                 // Fin de fichier : sans ce retour, le client relit sans fin.
@@ -505,19 +527,33 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn stat(
         &mut self,
         id: u32,
-        _path: String,
+        path: String,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Attrs, Self::Error>> + Send {
+        // Le lecteur en bandes se règle sur la taille annoncée : elle doit être
+        // exacte pour le fichier de démonstration.
+        let taille = if path.contains("gros") {
+            GROS_FICHIER.len() as u64
+        } else {
+            42
+        };
         async move {
             Ok(russh_sftp::protocol::Attrs {
                 id,
                 attrs: FileAttributes {
-                    size: Some(42),
+                    size: Some(taille),
                     ..Default::default()
                 },
             })
         }
     }
 }
+
+/// Fichier de démonstration servi par le serveur SFTP de test, à décalage
+/// honoré. 400 Kio, soit plus de deux blocs de 64 Kio : le téléchargement passe
+/// donc par la lecture en bandes parallèles. Chaque octet dépend de sa position,
+/// de sorte qu'un réassemblage erroné ne peut pas passer inaperçu.
+static GROS_FICHIER: std::sync::LazyLock<Vec<u8>> =
+    std::sync::LazyLock::new(|| (0..400 * 1024u32).map(|i| (i % 251) as u8).collect());
 
 // ---------- Harnais de test ----------
 
@@ -1065,6 +1101,48 @@ async fn un_telechargement_qui_echoue_ne_touche_pas_le_fichier_local() {
         !partiel.exists(),
         "un .part orphelin est resté : {}",
         partiel.display()
+    );
+
+    let _ = std::fs::remove_file(&local);
+    sftp.close().await.unwrap();
+}
+
+/// Le téléchargement en bandes parallèles doit rendre EXACTEMENT le fichier.
+///
+/// `File` de russh-sftp n'émet qu'une requête de lecture à la fois : le débit
+/// descendant plafonnait à un bloc par aller-retour, huit fois moins que la
+/// montée, déjà pipelinée. On lit désormais par bandes, à décalages distincts —
+/// ce qui n'a de valeur que si le réassemblage est juste. Le serveur de test
+/// honore décalage et longueur, et chaque octet du fichier dépend de sa
+/// position : une bande mal placée se verrait immédiatement.
+#[tokio::test]
+async fn un_telechargement_en_bandes_rend_le_fichier_a_l_octet_pres() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    let local = std::env::temp_dir().join(format!("avash-bandes-{}.bin", std::process::id()));
+
+    let mut progression = Vec::new();
+    let n = sftp
+        .download_with("/srv/gros.bin", &local, |fait, total| {
+            progression.push((fait, total));
+        })
+        .await
+        .unwrap();
+
+    let attendu: &[u8] = &GROS_FICHIER;
+    assert_eq!(n as usize, attendu.len(), "taille annoncée");
+    assert_eq!(
+        std::fs::read(&local).unwrap(),
+        attendu,
+        "le réassemblage des bandes ne rend pas le fichier d'origine"
+    );
+    // La progression reste croissante et finit sur le total, malgré des bandes
+    // qui avancent en parallèle.
+    assert_eq!(progression.last().map(|(f, _)| *f), Some(n));
+    assert!(
+        progression.windows(2).all(|p| p[0].0 <= p[1].0),
+        "progression non monotone"
     );
 
     let _ = std::fs::remove_file(&local);
