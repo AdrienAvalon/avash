@@ -42,13 +42,23 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 /// sans quoi la clé reste lisible par tout ce à quoi ce dossier donne accès —
 /// puis `/grant:r` rétablit un droit unique et complet pour l'utilisateur.
 ///
-/// Isolé du reste pour être vérifiable par un test sur n'importe quel système.
+/// **`/grant:r` et le couple compte/permission sont DEUX arguments distincts.**
+/// Ils étaient collés (`/grant:rutilisateur:F`), ce qu'`icacls` rejette :
+/// « Invalid parameter ». Toute création de clé SSH échouait donc sous Windows,
+/// et personne ne l'avait vu — cette fonction n'avait aucun test, en dépit du
+/// commentaire qui prétendait le contraire.
+///
+/// Pour un **répertoire**, `(OI)(CI)` fait porter le droit sur ce qu'il
+/// contiendra : l'héritage venant d'être coupé, un fichier créé ensuite dans
+/// `~/.ssh` n'hériterait sinon d'aucune autorisation.
 #[must_use]
-pub fn icacls_args(path: &str, user: &str) -> Vec<String> {
+pub fn icacls_args(path: &str, user: &str, repertoire: bool) -> Vec<String> {
+    let droits = if repertoire { "(OI)(CI)F" } else { "(F)" };
     vec![
         path.to_owned(),
         "/inheritance:r".to_owned(),
-        format!("/grant:r{user}:F"),
+        "/grant:r".to_owned(),
+        format!("{user}:{droits}"),
     ]
 }
 
@@ -69,7 +79,7 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
     let user = crate::ssh::current_username();
     let chemin = path.to_string_lossy().to_string();
     let sortie = std::process::Command::new("icacls")
-        .args(icacls_args(&chemin, &user))
+        .args(icacls_args(&chemin, &user, path.is_dir()))
         .output()
         .with_context(|| format!("Restriction des droits sur {}", path.display()))?;
     if !sortie.status.success() {
@@ -247,6 +257,45 @@ pub fn interpret_deploy(output: &str) -> Result<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `icacls` rejette `/grant:r` collé au compte : ce sont deux arguments.
+    ///
+    /// La forme fautive — `/grant:rutilisateur:F` — répondait « Invalid
+    /// parameter » et faisait échouer toute création de clé SSH sous Windows.
+    /// Ce test tourne sur n'importe quel système : il n'exécute pas `icacls`,
+    /// il vérifie la ligne de commande qu'on lui destine.
+    #[test]
+    fn icacls_recoit_grant_et_compte_en_arguments_separes() {
+        let a = icacls_args("C:\\Users\\x\\.ssh\\id_ed25519", "x", false);
+        assert_eq!(
+            a[0], "C:\\Users\\x\\.ssh\\id_ed25519",
+            "le chemin vient en premier"
+        );
+        assert_eq!(
+            a[1], "/inheritance:r",
+            "l'héritage du dossier parent doit être coupé"
+        );
+        assert_eq!(a[2], "/grant:r", "« /grant:r » est un argument à lui seul");
+        assert_eq!(
+            a[3], "x:(F)",
+            "compte et permission forment l'argument suivant"
+        );
+        assert!(
+            !a.iter()
+                .any(|arg| arg.starts_with("/grant:r") && arg.len() > "/grant:r".len()),
+            "compte collé à /grant:r — icacls répond « Invalid parameter » : {a:?}"
+        );
+    }
+
+    /// Un répertoire doit transmettre le droit à ce qu'il contiendra : après
+    /// `/inheritance:r`, un fichier créé dans ~/.ssh n'hériterait de rien.
+    #[test]
+    fn un_repertoire_recoit_les_marqueurs_d_heritage() {
+        let dossier = icacls_args("C:\\Users\\x\\.ssh", "x", true);
+        assert_eq!(dossier[3], "x:(OI)(CI)F");
+        let fichier = icacls_args("C:\\Users\\x\\.ssh\\cle", "x", false);
+        assert_eq!(fichier[3], "x:(F)", "un fichier n'a rien à transmettre");
+    }
 
     #[test]
     fn deploy_command_est_idempotente() {

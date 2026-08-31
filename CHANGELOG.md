@@ -7,6 +7,21 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- **Générer une clé SSH échouait systématiquement sous Windows.** La ligne de
+  commande passée à `icacls` collait `/grant:r` au nom du compte
+  (`/grant:rutilisateur:F`), ce qu'`icacls` rejette : « Invalid parameter ». Ce
+  sont deux arguments distincts. Sur une machine sans `~/.ssh`, lister les clés
+  échouait pour la même raison. Un répertoire reçoit désormais aussi les
+  marqueurs d'héritage `(OI)(CI)` — l'héritage du parent venant d'être coupé,
+  un fichier créé ensuite dans `~/.ssh` n'aurait hérité d'aucune autorisation.
+
+  La fonction concernée portait un commentaire affirmant qu'elle était « isolée
+  du reste pour être vérifiable par un test » — elle n'en avait aucun. Ce sont
+  les tests Windows, activés la veille, qui l'ont attrapée.
+
+
 ## [0.3.1] - 2026-08-31
 
 ### Corrigé
