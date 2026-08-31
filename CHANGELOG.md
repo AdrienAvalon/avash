@@ -7,6 +7,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le clavier était interprété en QWERTY sur les serveurs xrdp.** RDP
+  transporte des scancodes, pas des caractères : c'est le serveur qui les
+  traduit, d'après la disposition que le client annonce. avash annonçait 0 ;
+  xrdp en déduisait un clavier américain, et taper « a » produisait « q ».
+  La disposition du poste est maintenant détectée (`XKB_DEFAULT_LAYOUT`, la
+  configuration KDE, puis `localectl` ; le registre sous Windows), et
+  `--layout` permet de l'imposer.
+
 - **L'affichage RDP partait en biais sur les serveurs xrdp.** RDP autorise un
   bitmap plus large que le rectangle où il se pose ; xrdp s'en sert, en
   annonçant par exemple 340 pixels pour un rectangle de 337. Le décodeur

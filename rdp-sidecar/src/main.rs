@@ -17,7 +17,7 @@
 //!                     · [9]REFRESH · [10]LOCKS bits:u8 · [11]PAUSE pause:u8
 //!                     · [12]CLIPBOARD_AUTORISE autorise:u8
 //!
-//! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png]
+//! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png] [--layout fr]
 
 // Lints stylistiques assumés pour ce petit binaire d'orchestration :
 // noms de produits en prose (doc_markdown), main() qui séquence tout le
@@ -172,6 +172,7 @@ struct Args {
     domain: Option<String>,
     /// L'utilisateur a accepté de se passer de NLA pour ce serveur.
     sans_nla: bool,
+    layout: u32,
     width: u16,
     height: u16,
     shot: Option<String>,
@@ -232,6 +233,10 @@ fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
         pass,
         domain: a.opt("--domain"),
         sans_nla: a.drapeau("--sans-nla"),
+        layout: a
+            .opt("--layout")
+            .and_then(|v| analyser_disposition(&v))
+            .unwrap_or_else(disposition_detectee),
         width: a
             .opt("--width")
             .and_then(|s| s.parse().ok())
@@ -261,6 +266,118 @@ fn split_credentials(user: &str, explicit_domain: Option<&str>) -> (String, Opti
     (user.to_string(), None)
 }
 
+/// Identifiant RDP de disposition clavier pour un code XKB (« fr », « de »…).
+///
+/// RDP transporte des **scancodes**, pas des caractères : c'est le serveur qui
+/// les traduit, d'après la disposition que le client annonce. En annonçant 0,
+/// avash laissait le serveur choisir — en pratique l'américain. Sur un clavier
+/// AZERTY, taper « a » produisait « q ». Signalé par Adrien sur SLED-15.
+///
+/// Windows ne s'en plaignait pas : il rend `0` par son propre défaut, souvent
+/// aligné sur la session. xrdp, lui, retombe sur l'américain.
+fn disposition_pour_code(code: &str) -> Option<u32> {
+    // Identifiants Microsoft (« Keyboard Identifiers »).
+    Some(match code.split([',', '(']).next()?.trim() {
+        "fr" => 0x0000_040C,
+        "be" => 0x0000_080C,
+        "ca" => 0x0000_0C0C,
+        "ch" => 0x0000_100C,
+        "de" => 0x0000_0407,
+        "at" => 0x0000_0C07,
+        "us" => 0x0000_0409,
+        "gb" | "uk" => 0x0000_0809,
+        "es" => 0x0000_040A,
+        "it" => 0x0000_0410,
+        "pt" => 0x0000_0816,
+        "br" => 0x0000_0416,
+        "nl" => 0x0000_0413,
+        "dk" => 0x0000_0406,
+        "no" => 0x0000_0414,
+        "se" => 0x0000_041D,
+        "fi" => 0x0000_040B,
+        "pl" => 0x0000_0415,
+        "cz" => 0x0000_0405,
+        "ru" => 0x0000_0419,
+        "tr" => 0x0000_041F,
+        "jp" => 0x0000_0411,
+        _ => return None,
+    })
+}
+
+/// Accepte un identifiant numérique (« 0x40c », « 1036 ») ou un code (« fr »).
+fn analyser_disposition(v: &str) -> Option<u32> {
+    let v = v.trim();
+    if let Some(hex) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
+        return u32::from_str_radix(hex, 16).ok();
+    }
+    if let Ok(n) = v.parse::<u32>() {
+        return Some(n);
+    }
+    disposition_pour_code(v)
+}
+
+/// Disposition du poste, ou 0 si on ne sait pas — mieux vaut le défaut du
+/// serveur qu'une disposition inventée.
+fn disposition_detectee() -> u32 {
+    if let Some(v) = std::env::var_os("AVASH_RDP_LAYOUT")
+        .and_then(|v| v.into_string().ok())
+        .and_then(|v| analyser_disposition(&v))
+    {
+        return v;
+    }
+    #[cfg(unix)]
+    {
+        if let Some(v) = std::env::var_os("XKB_DEFAULT_LAYOUT")
+            .and_then(|v| v.into_string().ok())
+            .and_then(|v| disposition_pour_code(&v))
+        {
+            return v;
+        }
+        // KDE garde la disposition de session ici, que localectl ignore.
+        if let Some(v) = repertoire_configuration()
+            .map(|c| c.join("kxkbrc"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|t| {
+                t.lines()
+                    .find_map(|l| l.strip_prefix("LayoutList="))
+                    .and_then(disposition_pour_code)
+            })
+        {
+            return v;
+        }
+        if let Some(v) = std::process::Command::new("localectl")
+            .arg("status")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|t| {
+                t.lines()
+                    .find_map(|l| l.trim().strip_prefix("X11 Layout:"))
+                    .and_then(disposition_pour_code)
+            })
+        {
+            return v;
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Some(v) = std::process::Command::new("reg")
+            .args(["query", r"HKCU\Keyboard Layout\Preload", "/v", "1"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|t| {
+                t.split_whitespace()
+                    .last()
+                    .and_then(|v| u32::from_str_radix(v, 16).ok())
+            })
+        {
+            return v;
+        }
+    }
+    0
+}
+
 fn build_config(a: &Args) -> connector::Config {
     let (username, domain) = split_credentials(&a.user, a.domain.as_deref());
     connector::Config {
@@ -288,7 +405,7 @@ fn build_config(a: &Args) -> connector::Config {
         enable_credssp: true,
         keyboard_type: KeyboardType::IbmEnhanced,
         keyboard_subtype: 0,
-        keyboard_layout: 0,
+        keyboard_layout: a.layout,
         keyboard_functional_keys_count: 12,
         ime_file_name: String::new(),
         dig_product_id: String::new(),
@@ -1203,5 +1320,41 @@ mod tests_fichier_empreintes {
             chercher_empreinte(contenu, "srv:3389").as_deref(),
             Some("originale")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_disposition {
+    use super::{analyser_disposition, disposition_pour_code};
+
+    #[test]
+    fn les_dispositions_courantes_sont_reconnues() {
+        assert_eq!(disposition_pour_code("fr"), Some(0x0000_040C));
+        assert_eq!(disposition_pour_code("de"), Some(0x0000_0407));
+        assert_eq!(disposition_pour_code("us"), Some(0x0000_0409));
+        assert_eq!(disposition_pour_code("be"), Some(0x0000_080C));
+    }
+
+    #[test]
+    fn une_liste_xkb_ne_retient_que_la_premiere() {
+        // KDE écrit « LayoutList=fr,us » quand deux dispositions coexistent.
+        assert_eq!(disposition_pour_code("fr,us"), Some(0x0000_040C));
+        // Et setxkbmap rend parfois « fr(azerty) ».
+        assert_eq!(disposition_pour_code("fr(azerty)"), Some(0x0000_040C));
+    }
+
+    #[test]
+    fn une_disposition_inconnue_ne_donne_rien() {
+        // Mieux vaut le défaut du serveur qu'une disposition inventée.
+        assert_eq!(disposition_pour_code("klingon"), None);
+        assert_eq!(disposition_pour_code(""), None);
+    }
+
+    #[test]
+    fn l_argument_accepte_hexa_decimal_et_code() {
+        assert_eq!(analyser_disposition("0x40c"), Some(0x40C));
+        assert_eq!(analyser_disposition("1036"), Some(1036));
+        assert_eq!(analyser_disposition(" fr "), Some(0x0000_040C));
+        assert_eq!(analyser_disposition("n'importe quoi"), None);
     }
 }
