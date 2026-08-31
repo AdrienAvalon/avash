@@ -1557,3 +1557,55 @@ mod tests_zone_sale {
         }
     }
 }
+
+#[cfg(test)]
+mod tests_entrees_hostiles {
+    use super::input_ops;
+
+    /// Générateur déterministe : un échec doit pouvoir être rejoué à
+    /// l'identique. Un test aléatoire non reproductible n'aide personne.
+    fn suite(graine: u64) -> impl FnMut() -> u64 {
+        let mut e = graine;
+        move || {
+            e ^= e << 13;
+            e ^= e >> 7;
+            e ^= e << 17;
+            e
+        }
+    }
+
+    #[test]
+    fn aucun_message_malforme_ne_fait_paniquer() {
+        // Ces octets viennent du canal local. Il est authentifié par jeton, mais
+        // un client authentifié reste un client : rien ne garantit qu'il envoie
+        // des messages bien formés — un bogue d'interface suffit. Une analyse
+        // qui panique ferait tomber une session RDP déjà établie.
+        let mut alea = suite(0x5eed_1234_abcd_ef01);
+        for _ in 0..20_000 {
+            let n = (alea() % 24) as usize;
+            let mut b = Vec::with_capacity(n);
+            for _ in 0..n {
+                b.push((alea() & 0xff) as u8);
+            }
+            let _ = input_ops(&b);
+        }
+    }
+
+    #[test]
+    fn chaque_type_connu_tronque_a_toutes_les_longueurs() {
+        // Le vrai piège n'est pas l'octet aléatoire mais le message VALIDE
+        // coupé trop tôt : le type est reconnu, la charge manque.
+        for type_msg in 0u8..=13 {
+            for longueur in 0..20usize {
+                let mut b = vec![type_msg];
+                b.extend(std::iter::repeat_n(0xa5u8, longueur));
+                let _ = input_ops(&b);
+            }
+        }
+    }
+
+    #[test]
+    fn un_message_vide_ne_produit_rien() {
+        assert!(input_ops(&[]).is_empty());
+    }
+}

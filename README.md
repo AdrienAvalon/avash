@@ -145,7 +145,7 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 | Cœur (`crates/avash`) | 115 | parseur `~/.ssh/config`, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques |
 | Intégration | 24 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP, tunnels, rebonds `ProxyJump` |
 | Interface (`crates/avash-ui`) | 34 | commandes Tauri, décodage UTF-8 en flux, verrous clavier |
-| Processus RDP | 21 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests, zone sale |
+| Processus RDP | 24 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés** |
 | Correctifs portés sur IronRDP | 8 | remplissage des tuiles bitmap, mesure de bande passante (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
 | Front (Vitest) | 78 | logique pure : arborescence, filtres, scancodes, mappage souris, réglages |
 | Bout en bout (WebdriverIO) | 38 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** |

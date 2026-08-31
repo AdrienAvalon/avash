@@ -7,6 +7,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- Le processus RDP est éprouvé contre des messages malformés : vingt mille
+  messages aléatoires et tous les types connus tronqués à toutes les longueurs.
+  Le canal local est authentifié par jeton, mais un client authentifié reste un
+  client — un bogue d'interface suffirait à envoyer n'importe quoi, et une
+  analyse qui panique ferait tomber une session déjà établie.
+
 - **Contrastes insuffisants corrigés dans les deux thèmes.** Un audit `axe-core`
   sur l'application réelle a trouvé un texte secondaire à 3,15:1 au lieu de 4,5,
   des initiales d'avatar à 4,44, un champ sans étiquette visible et un rôle ARIA
