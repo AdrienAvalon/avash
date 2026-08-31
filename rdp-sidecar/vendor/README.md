@@ -1,6 +1,11 @@
 # Correctifs portés sur IronRDP
 
-Deux crates sont copiés ici avec un changement chacun. `diff -r` avec les
+Deux crates sont copiés ici avec un changement chacun.
+
+Une retouche mécanique s'y ajoute, sans rapport avec les défauts : les
+`#[expect(lint)]` deviennent `#[allow(lint)]`. Hors de leur espace de travail
+d'origine, les lints attendus ne sont pas activés, l'attente devient « non
+satisfaite » et bruite chaque compilation. `diff -r` avec les
 versions de crates.io ne doit signaler que le fichier nommé dans chaque section.
 
 ## `ironrdp-session` — l'affichage part en biais sur xrdp

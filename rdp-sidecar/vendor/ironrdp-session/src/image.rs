@@ -71,7 +71,7 @@ struct PointerRenderingState {
     update_rectangle: InclusiveRectangle,
 }
 
-#[expect(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn copy_cursor_data(
     from: &[u8],
     from_pos: (usize, usize),
@@ -123,7 +123,7 @@ fn copy_cursor_data(
                     continue;
                 }
 
-                #[expect(clippy::as_conversions, reason = "(u16 >> 8) fits into u8 + hot loop")]
+                #[allow(clippy::as_conversions, reason = "(u16 >> 8) fits into u8 + hot loop")]
                 {
                     // Integer alpha blending, source represented as premultiplied alpha color, calculation in floating point
                     to[to_start + pixel * PIXEL_SIZE] =
