@@ -7,6 +7,42 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.3.1] - 2026-08-31
+
+### Corrigé
+
+- **Impossible de se connecter en SSH à un hôte joint à un annuaire** (Active
+  Directory via SSSD/PAM), avec un compte de la forme `DOMAINE\utilisateur`.
+  Le message était « Authentification échouée », alors que le mot de passe était
+  bon. La cause : ces hôtes désactivent presque toujours
+  `PasswordAuthentication` et confient la conversation à PAM, en
+  **`keyboard-interactive`**. OpenSSH bascule tout seul sur cette méthode ;
+  Avash ne la connaissait pas et s'arrêtait au premier refus. Signalé par
+  l'usage réel sous Windows.
+
+  Avash répond désormais aux invites masquées avec le mot de passe déjà saisi,
+  sur autant de tours que le serveur en pose. Une invite **en clair** — code à
+  usage unique, question de sécurité — n'est pas remplie à l'aveugle : y envoyer
+  le mot de passe le livrerait à l'écran du serveur sans aboutir. Avash renonce
+  alors en citant ce qui était demandé.
+
+- **Un échec d'authentification ne disait pas sa cause.** Le serveur indique les
+  méthodes qu'il accepte encore ; nous le taisions. Le message les nomme
+  maintenant, ce qui distingue « mauvais mot de passe » de « cette méthode n'est
+  pas proposée » — deux situations qui appellent des gestes opposés.
+
+### Interne
+
+- **Aucun test ne s'exécutait sous Windows.** Le job d'intégration continue se
+  contentait d'un `cargo check` sur le cœur. C'est l'angle mort qui a laissé
+  passer le défaut ci-dessus : ce sont les tests d'intégration — un vrai serveur
+  SSH monté en mémoire — qui l'auraient attrapé, et ils tournent aussi bien sur
+  Windows. Ils y tournent désormais, ainsi que ceux du processus RDP.
+- Le serveur SSH de test sait conduire une conversation PAM (invite unique,
+  invites multiples, invite en clair), et vérifie qu'un compte
+  `DOMAINE\utilisateur` lui arrive intact.
+
+
 ## [0.3.0] - 2026-08-31
 
 Deux multi-audits complets — fiabilité, sécurité, performance, ergonomie, puis

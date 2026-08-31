@@ -41,6 +41,11 @@ impl russh::server::Handler for TestSshSession {
         user: &str,
         _key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
+        // Les comptes « pam-* » refusent la clé : sans quoi le test
+        // n'atteindrait jamais keyboard-interactive.
+        if user.starts_with("pam-") {
+            return Ok(Auth::reject());
+        }
         // Un serveur qui accepte tout le monde ne peut pas exercer les chemins
         // d'échec : le marqueur PASSWORD_REQUIRED, sur lequel repose toute la
         // relance de saisie côté interface, n'était produit par aucun test.
@@ -51,7 +56,60 @@ impl russh::server::Handler for TestSshSession {
         Ok(Auth::Accept)
     }
 
+    /// Conversation PAM, telle qu'un hôte joint à un annuaire l'impose.
+    ///
+    /// Le serveur pose une invite masquée et attend la réponse : c'est le seul
+    /// moyen d'exercer le chemin `keyboard-interactive`, qu'aucun test ne
+    /// couvrait — et qu'Avash ne savait pas emprunter.
+    async fn auth_keyboard_interactive<'a>(
+        &'a mut self,
+        user: &str,
+        _submethods: &str,
+        response: Option<russh::server::Response<'a>>,
+    ) -> Result<Auth, Self::Error> {
+        // « pam-seul » n'accepte QUE cette méthode, comme un serveur dont
+        // PasswordAuthentication est désactivé.
+        if user != "pam-seul" && user != "pam-double" && user != "pam-otp" {
+            return Ok(Auth::reject());
+        }
+        let Some(mut r) = response else {
+            // Premier tour : on pose la ou les questions.
+            let prompts: Vec<(std::borrow::Cow<'static, str>, bool)> = match user {
+                // Une invite en clair : Avash doit refuser d'y répondre plutôt
+                // que d'y envoyer le mot de passe.
+                "pam-otp" => vec![("Code à usage unique : ".into(), true)],
+                "pam-double" => vec![
+                    ("Password: ".into(), false),
+                    ("Password again: ".into(), false),
+                ],
+                _ => vec![("Password: ".into(), false)],
+            };
+            return Ok(Auth::Partial {
+                name: "PAM".into(),
+                instructions: String::new().into(),
+                prompts: prompts.into(),
+            });
+        };
+        *DERNIER_UTILISATEUR.lock().unwrap() = Some(user.to_owned());
+        let attendu = b"le-bon".as_slice();
+        let toutes_bonnes = r.all(|rep| rep == attendu);
+        if toutes_bonnes {
+            Ok(Auth::Accept)
+        } else {
+            Ok(Auth::reject())
+        }
+    }
+
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        // Les comptes « pam-* » n'acceptent PAS le mot de passe simple : c'est
+        // ce qui force le repli vers keyboard-interactive.
+        if user.starts_with("pam-") {
+            return Ok(Auth::reject());
+        }
+        // Consigné tel quel : c'est ce que le serveur voit réellement, et le
+        // seul moyen de vérifier qu'un nom de domaine « DOMAINE\\utilisateur »
+        // traverse la chaîne sans être abîmé.
+        *DERNIER_UTILISATEUR.lock().unwrap() = Some(user.to_owned());
         // « refuse » n'accepte qu'un mot de passe précis : de quoi distinguer
         // « il en faut un » de « celui-ci est mauvais ».
         if user == "refuse" && password != "le-bon" {
@@ -582,6 +640,10 @@ impl russh_sftp::server::Handler for TestSftpSession {
 /// de sorte qu'un réassemblage erroné ne peut pas passer inaperçu.
 static GROS_FICHIER: std::sync::LazyLock<Vec<u8>> =
     std::sync::LazyLock::new(|| (0..400 * 1024u32).map(|i| (i % 251) as u8).collect());
+
+/// Dernier nom d'utilisateur reçu par le serveur de test, en authentification
+/// par mot de passe. Un seul serveur à la fois pour les tests qui s'en servent.
+static DERNIER_UTILISATEUR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 // ---------- Harnais de test ----------
 
@@ -1273,6 +1335,13 @@ async fn un_mauvais_mot_de_passe_ne_porte_pas_le_marqueur() {
         e.contains("Authentification échouée"),
         "message inattendu : {e}"
     );
+    // Le message doit dire ce que le serveur accepte encore : sans cela,
+    // l'utilisateur ne peut pas distinguer « mauvais mot de passe » de
+    // « cette méthode n'est pas proposée », qui appellent des gestes opposés.
+    assert!(
+        e.contains("Le serveur propose encore"),
+        "l'échec ne nomme pas les méthodes restantes : {e}"
+    );
 }
 
 /// Le bon mot de passe passe : sans ce cas, les deux tests ci-dessus
@@ -1324,6 +1393,99 @@ async fn un_fichier_plus_court_que_promis_ne_passe_pas_pour_un_succes() {
     assert!(!partiel.exists(), "un .part orphelin est resté");
 
     sftp.close().await.unwrap();
+}
+
+/// Un compte de domaine `DOMAINE\utilisateur` doit arriver INTACT au serveur.
+///
+/// C'est la forme qu'impose un hôte Linux joint à un annuaire Active Directory.
+/// La contre-oblique traverse la saisie, l'IPC de Tauri (donc du JSON, où elle
+/// s'échappe) et la requête d'authentification SSH : si l'une de ces étapes la
+/// mangeait ou la doublait, le serveur verrait un autre compte et refuserait,
+/// sans que rien n'indique pourquoi.
+#[tokio::test]
+async fn un_compte_de_domaine_arrive_intact_au_serveur() {
+    let port = spawn_test_sshd().await;
+    let _home = virtual_home();
+    *DERNIER_UTILISATEUR.lock().unwrap() = None;
+
+    let auth = avash::ssh::ClientAuth {
+        user: "TEST\\Adrien".into(),
+        key_path: None,
+        password: Some("secret".into()),
+    };
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+
+    assert_eq!(
+        DERNIER_UTILISATEUR.lock().unwrap().as_deref(),
+        Some("TEST\\Adrien"),
+        "le nom de domaine n'est pas arrivé intact"
+    );
+    session.disconnect().await.unwrap();
+}
+
+/// Un serveur qui n'accepte QUE `keyboard-interactive` doit être joignable.
+///
+/// C'est la configuration courante d'un hôte Linux joint à un annuaire :
+/// `PasswordAuthentication` désactivé, la conversation confiée à PAM. OpenSSH
+/// bascule tout seul ; Avash ne savait pas, et rendait « authentification
+/// échouée » avec un mot de passe pourtant juste.
+#[tokio::test]
+async fn un_serveur_qui_n_accepte_que_pam_est_joignable() {
+    let port = spawn_test_sshd().await;
+    let _home = virtual_home();
+    let auth = avash::ssh::ClientAuth {
+        user: "pam-seul".into(),
+        key_path: None,
+        password: Some("le-bon".into()),
+    };
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("un serveur en keyboard-interactive doit être joignable");
+    session.disconnect().await.unwrap();
+}
+
+/// Plusieurs invites masquées d'affilée : chacune reçoit le mot de passe.
+#[tokio::test]
+async fn plusieurs_invites_masquees_sont_toutes_honorees() {
+    let port = spawn_test_sshd().await;
+    let _home = virtual_home();
+    let auth = avash::ssh::ClientAuth {
+        user: "pam-double".into(),
+        key_path: None,
+        password: Some("le-bon".into()),
+    };
+    assert!(avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .is_ok());
+}
+
+/// Une invite EN CLAIR n'est pas un mot de passe — code à usage unique,
+/// question de sécurité. Y envoyer le mot de passe le livrerait à l'écran du
+/// serveur sans aboutir. On renonce en nommant ce qui était demandé.
+#[tokio::test]
+async fn une_invite_en_clair_n_est_pas_remplie_avec_le_mot_de_passe() {
+    let port = spawn_test_sshd().await;
+    let _home = virtual_home();
+    let auth = avash::ssh::ClientAuth {
+        user: "pam-otp".into(),
+        key_path: None,
+        password: Some("le-bon".into()),
+    };
+    let issue = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth).await;
+    let Err(e) = issue else {
+        panic!("une invite en clair ne doit pas être remplie à l'aveugle")
+    };
+    let msg = e.to_string();
+    assert!(
+        msg.contains("Code à usage unique"),
+        "l'invite doit être citée : {msg}"
+    );
+    assert!(
+        !msg.contains("le-bon"),
+        "le mot de passe ne doit pas fuiter dans le message"
+    );
 }
 
 // ---------- ProxyJump ----------

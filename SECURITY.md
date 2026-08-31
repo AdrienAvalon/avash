@@ -191,6 +191,21 @@ elle interroge seulement son existence. Le volet SSH procède ainsi depuis
 toujours ; le volet RDP rapatriait le secret dans la webview, où il séjournait
 toute la durée de l'onglet.
 
+### Authentification par PAM : ce à quoi nous répondons, et ce à quoi nous refusons de répondre
+
+Quand un serveur confie l'authentification à PAM (`keyboard-interactive`), il
+pose des questions et le client y répond. Avash répond avec le mot de passe déjà
+saisi **uniquement aux invites masquées** — celles dont la réponse ne s'affiche
+pas, c'est-à-dire un mot de passe.
+
+Une invite **en clair** n'est pas un mot de passe : c'est un code à usage unique,
+une question de sécurité, un choix de second facteur. Y envoyer le mot de passe
+le livrerait tel quel au serveur, qui l'afficherait, et n'aboutirait pas. Avash
+renonce alors en citant l'invite, plutôt que de tenter à l'aveugle.
+
+L'authentification à plusieurs facteurs n'est donc **pas encore prise en
+charge** — c'est une limite connue, pas un oubli silencieux.
+
 ### Pas de repli de NLA vers TLS seul (RDP)
 
 C'est le serveur qui choisit le protocole de sécurité parmi ceux que le client

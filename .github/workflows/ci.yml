@@ -108,13 +108,20 @@ jobs:
       - name: Rust — build release
         run: cargo build --release -p avash-ui
 
-  # Le cœur (crate avash) doit compiler sous Windows. Ce job est le garde-fou de
-  # la promesse « multi-plateforme » : il a été ajouté après la découverte que
-  # l'authentification par agent SSH utilisait une API Unix seulement, ce qui
-  # rendait toute compilation Windows impossible — invisible sur une machine
-  # Linux. Compilation seule (pas de bundle Tauri) : rapide et suffisant.
+  # Le cœur (crate avash) doit compiler ET PASSER SES TESTS sous Windows.
+  #
+  # Ce job est le garde-fou de la promesse « multi-plateforme ». Il a d'abord
+  # été ajouté après la découverte que l'authentification par agent SSH
+  # utilisait une API Unix seulement — toute compilation Windows était
+  # impossible, et invisible depuis une machine Linux.
+  #
+  # Il se contentait ensuite d'un `cargo check` : aucun test ne s'exécutait sur
+  # Windows. C'est l'angle mort qui a laissé passer l'absence de repli vers
+  # `keyboard-interactive`, signalée par l'usage réel et non par nous. Les tests
+  # d'intégration montent un vrai serveur SSH en mémoire : ils tournent aussi
+  # bien ici, et couvrent l'authentification, le PTY, SFTP et les tunnels.
   windows-coeur:
-    name: Cœur — compilation Windows
+    name: Cœur — tests Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,6 +129,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (crate avash)
         run: cargo check -p avash --all-targets
+      - name: cargo test (crate avash)
+        run: cargo test -p avash --all-targets
+      # Le processus RDP est lui aussi livré sous Windows.
+      - name: Processus RDP — compilation et tests
+        working-directory: rdp-sidecar
+        run: |
+          cargo check --all-targets
+          cargo test
 
   e2e:
     name: E2E (app réelle, headless)

@@ -580,12 +580,29 @@ impl AvashSession {
         if Self::authenticate_agent(session, &auth.user).await? {
             return Ok(());
         }
+        // Ce que le serveur accepte encore, tel qu'il le dit lui-même. Sans
+        // cela l'échec était muet sur sa cause : « authentification échouée »,
+        // et à l'utilisateur de deviner s'il s'était trompé de mot de passe ou
+        // si sa méthode n'était tout simplement pas proposée.
+        let mut restantes: Vec<&'static str> = Vec::new();
         if let Some(password) = &auth.password {
-            if session
-                .authenticate_password(&auth.user, password)
-                .await?
-                .success()
+            let issue = session.authenticate_password(&auth.user, password).await?;
+            if issue.success() {
+                return Ok(());
+            }
+            if let russh::client::AuthResult::Failure {
+                remaining_methods, ..
+            } = &issue
             {
+                restantes = remaining_methods.iter().map(<&str>::from).collect();
+            }
+            // `password` refusé ne veut pas dire « mauvais mot de passe ».
+            // Un hôte joint à un annuaire (SSSD/PAM) désactive très souvent
+            // `PasswordAuthentication` et fait conduire la conversation par PAM,
+            // en `keyboard-interactive`. OpenSSH bascule tout seul ; nous ne
+            // savions pas, et l'utilisateur voyait « authentification échouée »
+            // avec un mot de passe pourtant juste.
+            if Self::authenticate_clavier(session, &auth.user, password).await? {
                 return Ok(());
             }
         }
@@ -598,7 +615,65 @@ impl AvashSession {
                 auth.user
             ));
         }
-        Err(anyhow!("Authentification échouée pour {}", auth.user))
+        if restantes.is_empty() {
+            return Err(anyhow!("Authentification échouée pour {}.", auth.user));
+        }
+        Err(anyhow!(
+            "Authentification échouée pour {}. Le serveur propose encore : {}.",
+            auth.user,
+            restantes.join(", ")
+        ))
+    }
+
+    /// Authentification `keyboard-interactive`, en répondant le mot de passe.
+    ///
+    /// C'est le mécanisme par lequel un serveur délègue la conversation à PAM :
+    /// il pose des questions, le client répond. Le cas courant est une invite
+    /// unique et masquée (« Password: »), à laquelle on répond le mot de passe
+    /// déjà saisi.
+    ///
+    /// **On ne répond pas à n'importe quoi.** Une invite en clair (`echo`),
+    /// c'est-à-dire dont la réponse s'affiche, n'est pas un mot de passe : ce
+    /// peut être un code à usage unique, une question de sécurité, un choix de
+    /// second facteur. Y envoyer le mot de passe le livrerait en clair à
+    /// l'écran du serveur, et n'aboutirait pas. Dans ce cas on renonce en
+    /// nommant ce que le serveur demandait, ce qui vaut mieux qu'un échec muet.
+    async fn authenticate_clavier(
+        session: &mut russh::client::Handle<AvashAuth>,
+        user: &str,
+        password: &str,
+    ) -> Result<bool> {
+        use russh::client::KeyboardInteractiveAuthResponse as Reponse;
+
+        // Le serveur peut enchaîner plusieurs tours ; on borne pour ne pas
+        // tourner indéfiniment face à un serveur qui pose sans fin.
+        const TOURS_MAX: usize = 8;
+        let mut reponse = session
+            .authenticate_keyboard_interactive_start(user.to_owned(), None)
+            .await?;
+        for _ in 0..TOURS_MAX {
+            match reponse {
+                Reponse::Success => return Ok(true),
+                Reponse::Failure { .. } => return Ok(false),
+                Reponse::InfoRequest { prompts, .. } => {
+                    // Un tour sans question : le serveur se contente d'afficher
+                    // quelque chose (bannière PAM). On répond une liste vide.
+                    if let Some(clair) = prompts.iter().find(|p| p.echo) {
+                        return Err(anyhow!(
+                            "Le serveur demande « {} », qui n'est pas un mot de passe \
+                             (la réponse s'afficherait en clair). Avash ne sait pas \
+                             encore répondre à une authentification à plusieurs facteurs.",
+                            clair.prompt.trim()
+                        ));
+                    }
+                    let reponses = vec![password.to_owned(); prompts.len()];
+                    reponse = session
+                        .authenticate_keyboard_interactive_respond(reponses)
+                        .await?;
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// L'agent SSH expose-t-il au moins une identite ? Permet a l'interface de
