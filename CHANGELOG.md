@@ -7,6 +7,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.3.2] - 2026-08-31
+
+Six correctifs, dont trois trouvés en confrontant le code à de vraies machines
+plutôt qu'à des serveurs de test.
+
 ### Interne
 
 - **Le téléchargement SFTP en bandes parallèles est désormais mesuré, plus
