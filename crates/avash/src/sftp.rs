@@ -11,6 +11,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// en dessous, la progression est fine mais les allers-retours coutent.
 const CHUNK: usize = 64 * 1024;
 
+/// Nom du fichier temporaire d'un téléchargement : `rapport.pdf.part`.
+fn chemin_partiel(local: &Path) -> PathBuf {
+    let mut nom = local.as_os_str().to_owned();
+    nom.push(".part");
+    PathBuf::from(nom)
+}
+
 use super::ssh::AvashSession;
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +81,14 @@ impl SftpHandle {
 
     /// Telechargement avec progression : `progress(octets_faits, total)`.
     /// `total` vaut 0 si le serveur ne donne pas la taille.
+    ///
+    /// Le transfert passe par un fichier `.part` voisin, renommé une fois
+    /// complet. `File::create` **tronque** la cible : un double-clic sur un
+    /// fichier déjà présent dans `~/Téléchargements` l'écrasait d'emblée, et
+    /// une coupure en cours de route laissait à sa place un fichier tronqué
+    /// portant le bon nom — l'interface ne montrant qu'un avertissement fugace,
+    /// on croyait avoir son fichier. Tant que le transfert n'a pas abouti, la
+    /// cible n'est pas touchée.
     pub async fn download_with(
         &self,
         remote: &str,
@@ -86,27 +101,42 @@ impl SftpHandle {
             .open(remote)
             .await
             .with_context(|| format!("Ouverture distant {remote}"))?;
-        let mut local_file = tokio::fs::File::create(local)
+        let partiel = chemin_partiel(local);
+        let mut local_file = tokio::fs::File::create(&partiel)
             .await
-            .with_context(|| format!("Création local {}", local.display()))?;
+            .with_context(|| format!("Création local {}", partiel.display()))?;
         let mut buf = vec![0u8; CHUNK];
         let mut done = 0u64;
-        loop {
-            let n = remote_file
-                .read(&mut buf)
-                .await
-                .context("Lecture distante")?;
-            if n == 0 {
-                break;
+        let issue = async {
+            loop {
+                let n = remote_file
+                    .read(&mut buf)
+                    .await
+                    .context("Lecture distante")?;
+                if n == 0 {
+                    break;
+                }
+                local_file
+                    .write_all(&buf[..n])
+                    .await
+                    .context("Écriture locale")?;
+                done += n as u64;
+                progress(done, total);
             }
-            local_file
-                .write_all(&buf[..n])
-                .await
-                .context("Écriture locale")?;
-            done += n as u64;
-            progress(done, total);
+            local_file.flush().await.context("Vidage local")?;
+            anyhow::Ok(())
         }
-        local_file.flush().await?;
+        .await;
+        drop(local_file);
+        // Un transfert interrompu n'a pas à laisser de trace : ni fichier
+        // tronqué à la place de la cible, ni `.part` orphelin.
+        if let Err(e) = issue {
+            let _ = tokio::fs::remove_file(&partiel).await;
+            return Err(e);
+        }
+        tokio::fs::rename(&partiel, local)
+            .await
+            .with_context(|| format!("Renommage vers {}", local.display()))?;
         Ok(done)
     }
 

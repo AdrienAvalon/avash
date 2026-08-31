@@ -332,6 +332,24 @@ async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &m
 
 /// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
 #[tauri::command]
+/// Établit la session SSH et son canal PTY. Extrait d'`open_on_target` pour que
+/// tous ses chemins d'échec passent par un seul point de nettoyage.
+async fn etablir(
+    target: &Target,
+    cols: u32,
+    rows: u32,
+) -> Result<(AvashSession, avash::ssh::PtyChannel), String> {
+    let mut session =
+        AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
+            .await
+            .map_err(|e| e.to_string())?;
+    let pty = session
+        .open_pty(cols, rows, "xterm-256color")
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((session, pty))
+}
+
 async fn open_on_target(
     app: AppHandle,
     state: &tauri::State<'_, SessionStore>,
@@ -344,14 +362,19 @@ async fn open_on_target(
     const COALESCE_MS: u64 = 8;
     const FLUSH_BYTES: usize = 16 * 1024;
 
-    let mut session =
-        AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
-            .await
-            .map_err(|e| e.to_string())?;
-    let pty = session
-        .open_pty(cols, rows, "xterm-256color")
-        .await
-        .map_err(|e| e.to_string())?;
+    let (mut session, pty) = match etablir(&target, cols, rows).await {
+        Ok(v) => v,
+        Err(e) => {
+            // Une sortie en erreur doit oublier l'annulation éventuelle : elle
+            // restait sinon dans l'ensemble pour toujours, et comme le front
+            // renumérote ses onglets à partir de 1 à chaque rechargement de
+            // fenêtre, la session qui héritait de cet identifiant se connectait
+            // puis se voyait répondre « annulée » — onglet figé sur
+            // « connexion en cours », sans message ni reconnexion possible.
+            state.annules.lock().unwrap().remove(&id);
+            return Err(e);
+        }
+    };
 
     let input = pty.in_tx.clone();
     let resize = pty.resize_tx.clone();
@@ -376,20 +399,30 @@ async fn open_on_target(
     // L'onglet a-t-il été fermé pendant que l'on se connectait ? Si oui, on
     // n'enregistre rien : lâcher `input`/`resize` ferme les canaux, le pump
     // s'arrête et la session SSH se referme d'elle-même.
-    if state.annules.lock().unwrap().remove(&id) {
-        return Err(CONNEXION_ANNULEE.to_owned());
-    }
     let epoch = SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
-    let evicted = state.inner.lock().unwrap().insert(
-        id,
-        SessionHandle {
-            epoch,
-            input,
-            resize,
-            sftp: Mutex::new(None),
-            target,
-        },
-    );
+    // Le test d'annulation et l'insertion se font **sous le même verrou**.
+    // Séparés, un `pty_close` pouvait se glisser entre les deux : il ne
+    // trouvait rien à retirer, notait l'annulation, et l'insertion qui suivait
+    // laissait une session SSH pleinement établie sans onglet — vivante jusqu'à
+    // l'arrêt de l'application, et toujours listée par `open_sessions`, si bien
+    // qu'un snippet « toutes les sessions » partait sur un serveur dont
+    // l'onglet était fermé. `pty_close` prend les verrous dans le même ordre.
+    let evicted = {
+        let mut inner = state.inner.lock().unwrap();
+        if state.annules.lock().unwrap().remove(&id) {
+            return Err(CONNEXION_ANNULEE.to_owned());
+        }
+        inner.insert(
+            id,
+            SessionHandle {
+                epoch,
+                input,
+                resize,
+                sftp: Mutex::new(None),
+                target,
+            },
+        )
+    };
     if let Some(old) = evicted {
         drop(old);
     }
@@ -572,13 +605,20 @@ pub async fn pty_resize(
 /// Ferme une session (fermeture d'onglet). Coupe aussi la session SFTP liée.
 #[tauri::command]
 pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result<(), String> {
-    let handle = state.inner.lock().unwrap().remove(&id);
-    if handle.is_none() {
-        // Rien à fermer : soit l'onglet était déjà clos, soit sa connexion est
-        // encore en cours. On note l'annulation pour qu'`open_on_target` la voie
-        // en arrivant, plutôt que d'abandonner une session vivante.
-        state.annules.lock().unwrap().insert(id);
-    }
+    // Retrait et note d'annulation sous le même verrou, dans le même ordre que
+    // `open_on_target` (inner puis annules) : sans cela les deux pouvaient
+    // s'entrelacer et laisser une session vivante sans onglet.
+    let handle = {
+        let mut inner = state.inner.lock().unwrap();
+        let h = inner.remove(&id);
+        if h.is_none() {
+            // Rien à fermer : soit l'onglet était déjà clos, soit sa connexion
+            // est encore en cours. On note l'annulation pour qu'`open_on_target`
+            // la voie en arrivant, plutôt que d'abandonner une session vivante.
+            state.annules.lock().unwrap().insert(id);
+        }
+        h
+    };
     if let Some(h) = handle {
         // into_inner() echoue si le mutex a ete empoisonne par un panic
         // ailleurs. Fermer un onglet ne doit jamais planter pour autant :

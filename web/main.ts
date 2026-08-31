@@ -726,6 +726,12 @@ async function connectByAlias(s: Session, h: Host) {
   term.write(`\x1b[90mConnexion à ${label}…\x1b[0m\r\n`);
 
   for (let essai = 0; essai < 3; essai++) {
+    // L'onglet a pu être fermé pendant qu'on attendait : sans cette garde, la
+    // boucle continuait pour un onglet qui n'existe plus — une modale « Mot de
+    // passe » s'ouvrait pour lui, et la remplir établissait une vraie session
+    // SSH sur le serveur, aussitôt jetée. Les autres branches écrivaient dans
+    // un Terminal déjà détruit.
+    if (!state.sessions.has(id)) return;
     try {
       await invoke("pty_open", { id, alias: h.alias, password, cols: term.cols, rows: term.rows });
       setSessionState(id, "live");
@@ -787,6 +793,9 @@ async function connectByAlias(s: Session, h: Host) {
  * l'utilisateur ne sait pas si ca charge encore ni comment relancer.
  */
 function markClosed(s: Session, why: string) {
+  // L'onglet peut avoir été fermé entre-temps : `term` est alors détruit et
+  // l'écriture se perd au mieux.
+  if (!state.sessions.has(s.id)) return;
   s.closed = true;
   setSessionState(s.id, "closed");
   s.term.write(
@@ -880,8 +889,12 @@ function closeSession(id: number) {
   (s.term.element?.parentElement)?.remove();
   state.sessions.delete(id);
   if (state.active === id) {
-    const first = state.sessions.keys().next();
-    if (first.done) {
+    // Le repli se faisait sur la première session SSH seulement : fermer le
+    // dernier onglet SSH pendant qu'un bureau RDP vivait affichait l'écran
+    // « Aucune session » par-dessus une session bien vivante. On reprend
+    // l'ordre réel des onglets, les deux protocoles confondus.
+    const suivant = orderedTabs().find((t) => !(t.kind === "ssh" && t.id === id));
+    if (!suivant) {
       state.active = null;
       $("terminal-empty").style.display = "flex";
       // Le panneau SFTP appartient a une session : sans session, il n'a plus
@@ -893,7 +906,7 @@ function closeSession(id: number) {
       sftpSyncButton();
       setTitlebar();
     } else {
-      focusSession(first.value);
+      focusTab(suivant);
     }
   }
 }
@@ -1450,6 +1463,11 @@ function askText(title: string, label: string, initial: string): Promise<string 
     const dot = initial.lastIndexOf(".");
     input.setSelectionRange(0, dot > 0 ? dot : initial.length);
   }, 30);
+  // Une demande déjà en attente doit être close, sinon son résolveur est
+  // écrasé et sa promesse n'est jamais tenue : l'appelant reste bloqué à
+  // jamais — un onglet figé sur « Connexion en cours… », une closure qui ne se
+  // libère pas. Deux double-clics rapides suffisaient.
+  askResolve?.(null);
   return new Promise((resolve) => { askResolve = resolve; });
 }
 function askClose(v: string | null) {
@@ -1492,6 +1510,7 @@ function askConfirm(text: string, opts: { ok?: string; danger?: boolean } = {}):
   // par réflexe, ou restée enfoncée depuis l'action précédente, supprimait un
   // hôte de ~/.ssh/config avant qu'on ait lu la phrase d'avertissement.
   setTimeout(() => (dangereux ? ($("confirm-cancel") as HTMLButtonElement) : okBtn).focus(), 30);
+  confirmResolve?.(false); // cf. askText : ne jamais abandonner une promesse
   return new Promise((resolve) => { confirmResolve = resolve; });
 }
 function confirmClose(v: boolean) {
@@ -2118,6 +2137,7 @@ function askPassword(target: string, erreur?: string): Promise<{ password: strin
   passModal().classList.add("open");
   setTimeout(() => ($("pass-input") as HTMLInputElement).focus(), 30);
   return new Promise((resolve) => {
+    passResolve?.(null); // cf. askText : ne jamais abandonner une promesse
     passResolve = resolve;
   });
 }
@@ -3298,6 +3318,13 @@ async function openRdp(t: RdpTarget) {
       const st = tab.querySelector(".state");
       if (st) st.className = "state closed";
       tab.classList.add("dead");
+      // Le processus RDP et l'observateur de taille survivaient à la coupure :
+      // le premier restait dans la table côté Rust jusqu'à l'arrêt de
+      // l'application, le second continuait d'observer #terminal pour un
+      // canvas mort. L'onglet et le canvas restent, eux — « Reconnecter »
+      // doit rester possible.
+      rdpSessions.get(id)?.ro?.disconnect();
+      void invoke("rdp_close", { id }).catch(() => {});
       showRdpClosed(id);
     };
     ws.onerror = () => { /* onclose suivra */ };
@@ -3373,8 +3400,16 @@ function closeRdp(id: number) {
   s.tab.remove();
   rdpSessions.delete(id);
   if (state.active === id) {
+    // Même défaut en miroir : `focusRdp` masque tous les terminaux SSH, et
+    // fermer le bureau actif laissait la zone centrale vide alors qu'une
+    // session SSH restait ouverte dans la barre d'onglets.
+    const suivant = orderedTabs().find((t) => !(t.kind === "rdp" && t.id === id));
     state.active = null;
-    if (state.sessions.size === 0 && rdpSessions.size === 0) $("terminal-empty").style.display = "flex";
+    if (suivant) {
+      focusTab(suivant);
+    } else {
+      $("terminal-empty").style.display = "flex";
+    }
   }
   renderHosts(); // éteint le voyant vert de l'hôte fermé
 }

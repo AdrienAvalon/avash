@@ -227,14 +227,64 @@ pub fn rename_core(
         anyhow::bail!("Dossier invalide.");
     }
     if let Some(content) = read_optional(ssh)? {
+        let multiples = alias_a_alias_multiples(&content);
+        let mut recales = Vec::new();
         for host in crate::parse_config_str(&content) {
             if let Some(nf) = remap(&host.folder, &from, &to) {
-                let _ = crate::set_host_folder_at(ssh, &host.alias, &nf);
+                if crate::set_host_folder_at(ssh, &host.alias, &nf).is_err()
+                    && !multiples.contains(&host.alias)
+                {
+                    recales.push(host.alias.clone());
+                }
             }
         }
+        signaler_les_recales(&recales, "déplacés")?;
     }
     remap_rdp(rdp, |f| remap(f, &from, &to))?;
     rename_in(reg, &from, &to)
+}
+
+/// Alias déclarés dans un bloc `Host a b c` — plusieurs noms sur une ligne.
+///
+/// `set_host_folder_at` refuse volontairement d'y toucher : il ne saurait pas
+/// où poser le marqueur de dossier sans changer le sens du bloc pour les autres
+/// alias. Ces échecs-là sont attendus et ne doivent pas être signalés.
+fn alias_a_alias_multiples(content: &str) -> std::collections::HashSet<String> {
+    let mut multiples = std::collections::HashSet::new();
+    for ligne in content.lines() {
+        let l = ligne.trim();
+        let Some(reste) = l
+            .strip_prefix("Host ")
+            .or_else(|| l.strip_prefix("host "))
+            .or_else(|| l.strip_prefix("HOST "))
+        else {
+            continue;
+        };
+        let alias: Vec<&str> = reste.split_whitespace().collect();
+        if alias.len() > 1 {
+            multiples.extend(alias.into_iter().map(str::to_owned));
+        }
+    }
+    multiples
+}
+
+/// Signale les hôtes qu'on n'a pas su déplacer.
+///
+/// L'échec était intégralement avalé (`let _ =`). C'est justifié pour un bloc
+/// à alias multiples — écarté en amont — mais cela masquait aussi les vraies
+/// erreurs : `~/.ssh/config` en lecture seule, disque plein. Le registre était
+/// alors mis à jour, `Ok` renvoyé, l'interface annonçait le renommage, et
+/// l'ancien dossier réapparaissait aussitôt dans l'arbre — il est dérivé des
+/// hôtes. Deux dossiers là où l'on en attendait un, sans explication.
+fn signaler_les_recales(recales: &[String], quoi: &str) -> Result<()> {
+    if recales.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} hôte(s) n'ont pas pu être {quoi} : {}. Vérifie que ~/.ssh/config est accessible en écriture.",
+        recales.len(),
+        recales.join(", ")
+    )
 }
 
 /// Supprime un dossier : ses hôtes (et ceux des sous-dossiers) reviennent à la
@@ -248,11 +298,17 @@ pub fn delete_core(ssh: &Path, rdp: &Path, reg: &Path, path: &str) -> Result<Vec
         anyhow::bail!("Dossier invalide.");
     }
     if let Some(content) = read_optional(ssh)? {
+        let multiples = alias_a_alias_multiples(&content);
+        let mut recales = Vec::new();
         for host in crate::parse_config_str(&content) {
-            if is_under(&host.folder, &norm) {
-                let _ = crate::set_host_folder_at(ssh, &host.alias, "");
+            if is_under(&host.folder, &norm)
+                && crate::set_host_folder_at(ssh, &host.alias, "").is_err()
+                && !multiples.contains(&host.alias)
+            {
+                recales.push(host.alias.clone());
             }
         }
+        signaler_les_recales(&recales, "ramenés à la racine")?;
     }
     remap_rdp(rdp, |f| is_under(f, &norm).then(String::new))?;
     remove_in(reg, &norm)
@@ -335,6 +391,37 @@ mod tests {
         let d = std::env::temp_dir().join(format!("avash-core-{}", rand::random::<u64>()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// Un `~/.ssh/config` inscriptible par personne faisait échouer chaque
+    /// déplacement d'hôte — silencieusement. Le registre était quand même mis à
+    /// jour et `Ok` renvoyé : l'interface annonçait le renommage, puis l'ancien
+    /// dossier réapparaissait dans l'arbre, qui est dérivé des hôtes.
+    #[test]
+    #[cfg(unix)]
+    fn rename_core_signale_un_config_non_inscriptible() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("avash-ro-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ssh = dir.join("config");
+        let rdp = dir.join("rdp.yaml");
+        let reg = dir.join("folders.yaml");
+        std::fs::write(
+            &ssh,
+            "Host web-1\n    HostName 1.1.1.1\n    #Folder: prod\n",
+        )
+        .unwrap();
+        // Lecture seule : parse_config_str lit encore, l'écriture échoue.
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o400)).unwrap();
+
+        let issue = rename_core(&ssh, &rdp, &reg, "prod", "production");
+
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let e = issue
+            .expect_err("un config non inscriptible doit être signalé")
+            .to_string();
+        assert!(e.contains("web-1"), "l'hôte concerné doit être nommé : {e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

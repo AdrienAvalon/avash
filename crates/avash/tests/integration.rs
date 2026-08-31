@@ -274,6 +274,8 @@ struct TestSftpSession {
     /// Octets deja servis par `read()` : sans cet etat, le serveur renvoie le
     /// contenu indefiniment et le client telecharge en boucle infinie.
     file_read_done: bool,
+    /// Le chemin ouvert demande une coupure après le premier bloc.
+    coupure_en_lecture: bool,
 }
 
 // Les methodes du trait Handler de russh-sftp sont declarees
@@ -291,11 +293,20 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn open(
         &mut self,
         id: u32,
-        _filename: String,
+        filename: String,
         _pflags: russh_sftp::protocol::OpenFlags,
         _attrs: FileAttributes,
     ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
+        self.coupure_en_lecture = filename.contains("coupure");
         async move {
+            // Deux chemins réservés pour exercer les échecs, que le reste du
+            // mock accepte trop volontiers : « introuvable » échoue à
+            // l'ouverture, « coupure » rend un bloc puis casse en pleine
+            // lecture — c'est ce second cas qui laissait un fichier tronqué à
+            // la place de la cible.
+            if filename.contains("introuvable") {
+                return Err(StatusCode::NoSuchFile);
+            }
             Ok(Handle {
                 id,
                 handle: "file".into(),
@@ -311,7 +322,12 @@ impl russh_sftp::server::Handler for TestSftpSession {
         _len: u32,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Data, Self::Error>> + Send {
         let done = std::mem::replace(&mut self.file_read_done, true);
+        let coupure = self.coupure_en_lecture;
         async move {
+            if done && coupure {
+                // La liaison tombe après le premier bloc.
+                return Err(StatusCode::Failure);
+            }
             if done {
                 // Fin de fichier : sans ce retour, le client relit sans fin.
                 return Err(StatusCode::Eof);
@@ -1012,6 +1028,45 @@ async fn sftp_download_rapporte_sa_progression() {
         "la derniere progression = total transfere"
     );
     assert_eq!(std::fs::read(&local).unwrap(), b"CONTENU-FICHIER-TEST");
+    let _ = std::fs::remove_file(&local);
+    sftp.close().await.unwrap();
+}
+
+/// La cible ne doit pas être touchée tant que le transfert n'a pas abouti.
+///
+/// `File::create` tronquait d'emblée : un double-clic sur un fichier déjà
+/// présent dans ~/Téléchargements l'écrasait, et une coupure laissait à sa
+/// place un fichier tronqué portant le bon nom. On vérifie ici qu'un
+/// téléchargement voué à l'échec — chemin distant inexistant — laisse le
+/// fichier local intact et ne sème pas de `.part`.
+#[tokio::test]
+async fn un_telechargement_qui_echoue_ne_touche_pas_le_fichier_local() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    let local = std::env::temp_dir().join(format!("avash-intact-{}.bin", std::process::id()));
+    std::fs::write(&local, b"PRECIEUX").unwrap();
+
+    // Coupure APRÈS le premier bloc : c'est ce cas-là qui laissait un fichier
+    // tronqué portant le bon nom. Un échec à l'ouverture, lui, n'a jamais rien
+    // écrit — le tester ne prouverait rien.
+    let echec = sftp
+        .download_with("/srv/coupure.bin", &local, |_, _| {})
+        .await;
+
+    assert!(echec.is_err(), "le téléchargement aurait dû échouer");
+    assert_eq!(
+        std::fs::read(&local).unwrap(),
+        b"PRECIEUX",
+        "le fichier local a été touché alors que le transfert a échoué"
+    );
+    let partiel = local.with_extension("bin.part");
+    assert!(
+        !partiel.exists(),
+        "un .part orphelin est resté : {}",
+        partiel.display()
+    );
+
     let _ = std::fs::remove_file(&local);
     sftp.close().await.unwrap();
 }

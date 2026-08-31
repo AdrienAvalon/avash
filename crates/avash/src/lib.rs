@@ -725,6 +725,17 @@ pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Re
             }
         }
     }
+    // Écrire par renommage remplace la cible même si **elle** est en lecture
+    // seule : seul le droit d'écriture du répertoire compte. Un utilisateur qui
+    // a délibérément passé son ~/.ssh/config en 0400 ne s'attend pas à le voir
+    // réécrit ; on refuse plutôt que de passer outre.
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::metadata(path) {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o200 == 0 {
+            return Err(anyhow::anyhow!("{} est en lecture seule.", path.display()));
+        }
+    }
     let tmp = path.with_extension(format!(
         "{}tmp{}",
         path.extension().map_or("", |_| "."),
