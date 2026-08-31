@@ -950,9 +950,15 @@ function markClosed(s: Session, why: string) {
  * le formulaire affiche le message et reste ouvert pour corriger la saisie.
  * On referme donc l'onglet plutot que de laisser une coquille morte.
  */
-async function openManualSession(t: ManualTarget) {
+/// `alias` : le nom sous lequel l'hôte vient d'être enregistré, s'il l'a été.
+///
+/// Sans lui, l'onglet s'intitulait `utilisateur@adresse` alors que l'hôte
+/// portait un alias, et la session n'était rattachée à aucune ligne de la barre
+/// latérale — voyant éteint, menu qui ne la reconnaît pas. Il fallait fermer
+/// l'onglet et se reconnecter depuis la liste pour retrouver le bon nom.
+async function openManualSession(t: ManualTarget, alias?: string) {
   await ensureFontLoaded();
-  const { id, term, session } = newSessionShell(`${t.user}@${t.addr}`);
+  const { id, term, session } = newSessionShell(alias?.trim() || `${t.user}@${t.addr}`);
   warnIfDeaf(term);
   try {
     await connectManual(session, t);
@@ -988,7 +994,14 @@ async function connectManual(s: Session, t: ManualTarget) {
     cols: term.cols,
     rows: term.rows,
   });
-  s.tab.querySelector(".label")!.textContent = label;
+  // Le cœur renvoie toujours « utilisateur@adresse ». L'onglet, lui, a déjà été
+  // nommé par `newSessionShell` — avec l'alias sous lequel l'hôte vient d'être
+  // enregistré, le cas échéant. L'écraser ici rendait le titre faux, et il le
+  // restait jusqu'à ce qu'on ferme l'onglet et rouvre depuis la barre latérale.
+  if (!s.alias) {
+    s.alias = label;
+    s.tab.querySelector(".label")!.textContent = label;
+  }
   setSessionState(id, "live");
 }
 
@@ -2065,12 +2078,15 @@ async function manualSubmit(ev: Event) {
   manualError().hidden = true;
   submit.disabled = true;
   submit.textContent = "Connexion…";
+  // Retenu hors du bloc : l'onglet doit porter ce nom-là, pas
+  // « utilisateur@adresse ».
+  let alias: string | undefined;
   try {
     if (($("m-save") as HTMLInputElement).checked) {
       // Enregistrer AVANT de connecter : si l'ecriture echoue (alias deja
       // pris, fichier illisible), l'utilisateur le voit dans le formulaire
       // plutot que de decouvrir plus tard que rien n'a ete sauve.
-      const alias = ($("m-alias") as HTMLInputElement).value.trim();
+      alias = ($("m-alias") as HTMLInputElement).value.trim();
       if (!alias) throw new Error("Donne un nom à l'hôte pour l'enregistrer.");
       await invoke("host_save", {
         alias,
@@ -2083,7 +2099,7 @@ async function manualSubmit(ev: Event) {
       });
       await loadHosts();
     }
-    await openManualSession(target);
+    await openManualSession(target, alias);
     manualClose();
   } catch (e) {
     // Le backend renvoie un message deja redige pour l'utilisateur
@@ -3625,6 +3641,26 @@ function marquerVisibilite(s: { ws: WebSocket | null }, visible: boolean): void 
   if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([11, visible ? 0 : 1]));
 }
 
+/** Donne le focus clavier au bureau, et s'assure qu'il l'a bien pris.
+ *
+ *  Le canvas vient de passer de `display: none` à visible. Un `focus()` posé
+ *  dans la même tâche que ce changement n'aboutit pas toujours — le moteur n'a
+ *  pas encore calculé la disposition, et un élément sans boîte n'est pas
+ *  focalisable. Le symptôme : le bureau réapparaît après la fermeture d'un
+ *  autre onglet, mais les frappes ne partent nulle part.
+ *
+ *  On réessaie donc à l'image suivante si le focus n'a pas pris. Deux
+ *  tentatives suffisent : au-delà, c'est que quelque chose d'autre le retient
+ *  (une boîte de dialogue ouverte, par exemple), et le lui arracher serait pire.
+ */
+function donnerLeFocusAuBureau(canvas: HTMLCanvasElement): void {
+  canvas.focus();
+  if (document.activeElement === canvas) return;
+  requestAnimationFrame(() => {
+    if (canvas.isConnected && document.activeElement !== canvas) canvas.focus();
+  });
+}
+
 function focusRdp(id: number) {
   state.active = id;
   for (const [sid, s] of rdpSessions) {
@@ -3633,7 +3669,7 @@ function focusRdp(id: number) {
     (s.canvas.parentElement as HTMLElement).style.display = active ? "flex" : "none";
     marquerVisibilite(s, active);
     if (active) {
-      s.canvas.focus();
+      donnerLeFocusAuBureau(s.canvas);
       // La session inactive n'a pas suivi les redimensionnements de la fenêtre
       // (seule l'active se resize) : on rattrape sa taille en devenant active.
       s.syncSize?.();

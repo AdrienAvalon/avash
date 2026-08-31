@@ -29,6 +29,11 @@ export const LOCAL_SERVERS = !process.env.E2E_NO_RDP;
 // Exporté pour que les specs raisonnent sur le semage plutôt que de le
 // réénoncer : `isolation.spec.js` affirmait « db-1, test-ssh, web-1 » alors que
 // la CI ne sème pas `test-ssh` — la garde d'isolation ne pouvait qu'y échouer.
+// Chemin de la clé cliente semée : les scénarios qui remplissent le formulaire
+// « Connexion directe » en ont besoin, et le déduire chez eux les rendrait faux
+// le jour où le harnais change d'emplacement.
+export const CLE_CLIENTE = join(sandbox, ".ssh", "test_client");
+
 export const HOTES_SEMES = LOCAL_SERVERS ? ["db-1", "test-ssh", "web-1"] : ["db-1", "web-1"];
 
 function seedSandbox() {
@@ -87,6 +92,7 @@ export const config = {
         "./specs/ssh.spec.js", "./specs/sftp.spec.js",
         "./specs/rdp.spec.js", "./specs/rdp-reconnect.spec.js",
         "./specs/rdp-clipboard.spec.js",
+        "./specs/onglets-mixtes.spec.js", "./specs/enregistrer-et-connecter.spec.js",
       ],
   maxInstances: 1,
   capabilities: [

@@ -9,6 +9,20 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **Un hôte enregistré puis connecté dans la foulée portait le mauvais titre.**
+  L'onglet s'intitulait « utilisateur@adresse » au lieu de l'alias saisi, et la
+  session n'était rattachée à aucune ligne de la barre latérale — voyant éteint,
+  menu qui ne la reconnaissait pas. Il fallait fermer l'onglet et se reconnecter
+  depuis la liste pour retrouver le bon nom. Deux causes : l'onglet était nommé
+  avant que l'alias ne soit connu, et le cœur écrasait ensuite ce nom par le
+  sien, qui est toujours « utilisateur@adresse ».
+- **Le bureau RDP pouvait rester sans focus clavier** après la fermeture d'un
+  onglet SSH voisin : il redevenait visible et actif, mais les frappes ne
+  partaient nulle part. Le `focus()` était posé dans la même tâche que le
+  passage de `display: none` à visible, ce qui n'aboutit pas toujours — un
+  élément dont la disposition n'est pas encore calculée n'est pas focalisable.
+  Une seconde tentative a lieu à l'image suivante si la première n'a pas pris.
+
 - **Générer une clé SSH échouait systématiquement sous Windows.** La ligne de
   commande passée à `icacls` collait `/grant:r` au nom du compte
   (`/grant:rutilisateur:F`), ce qu'`icacls` rejette : « Invalid parameter ». Ce
