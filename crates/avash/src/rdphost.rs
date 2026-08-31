@@ -79,7 +79,7 @@ pub fn keyring_account(user: &str, host: &str, port: u16) -> String {
 /// `~/.config/avash/rdp.yaml`
 #[must_use]
 pub fn hosts_path() -> PathBuf {
-    dirs::config_dir()
+    crate::repertoire_configuration()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("avash")
         .join("rdp.yaml")

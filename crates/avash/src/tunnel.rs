@@ -368,7 +368,7 @@ where
 /// `~/.config/avash/tunnels.yaml`
 #[must_use]
 pub fn defs_path() -> PathBuf {
-    dirs::config_dir()
+    crate::repertoire_configuration()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("avash")
         .join("tunnels.yaml")

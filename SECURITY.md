@@ -249,6 +249,19 @@ hôte sont validés (voir `validate_host` / `validate_config_value` dans
 Les noms de dossiers sont normalisés de la même façon (segments contenant un
 saut de ligne retirés — voir `crates/avash/src/folders.rs`).
 
+### `AVASH_HOME` : où Avash cherche votre configuration
+
+Par défaut, Avash lit `~/.ssh` et sa propre configuration à l'emplacement que le
+système désigne comme répertoire personnel. La variable d'environnement
+`AVASH_HOME`, quand elle est posée, prend le pas — c'est ce qui permet aux tests
+de s'isoler du vrai profil, y compris sous Windows où le remplacement de `HOME`
+n'a aucun effet.
+
+Ce n'est pas une porte dérobée : qui peut poser une variable d'environnement
+dans le processus peut déjà bien davantage (précharger une bibliothèque,
+détourner le `PATH`). C'est documenté ici parce qu'une variable qui change
+l'endroit d'où l'on lit des clés mérite d'être connue, pas cachée.
+
 ### Aucune télémétrie
 
 Avash **ne collecte et n'envoie aucune donnée d'usage**. Les seules connexions

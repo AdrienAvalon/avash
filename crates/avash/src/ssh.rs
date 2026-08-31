@@ -63,16 +63,26 @@ pub fn juger_cle_hote(
 /// du code prendrait pour « hôte inconnu », et qui ferait accepter n'importe
 /// quelle clé. On préfère refuser.
 fn known_hosts_illisible() -> bool {
-    let Some(chemin) = dirs::home_dir().map(|h| h.join(".ssh").join("known_hosts")) else {
-        return false; // pas de répertoire personnel : russh le signalera lui-même
+    let Some(chemin) = chemin_known_hosts() else {
+        return false; // pas de répertoire personnel : signalé plus loin
     };
     fichier_present_mais_illisible(&chemin)
 }
 
+/// Le fichier `known_hosts`, résolu une seule fois pour tout le monde.
+///
+/// russh résout ce chemin de son côté avec `std::env::home_dir()`, qui sous
+/// Windows consulte `USERPROFILE` là où `dirs::home_dir()` interroge le dossier
+/// de profil du système. Les deux peuvent différer : nous inspections alors un
+/// fichier pendant que russh en lisait un autre, et la vérification de clé
+/// d'hôte ne vérifiait plus rien. On lui passe donc le chemin explicitement.
+fn chemin_known_hosts() -> Option<std::path::PathBuf> {
+    crate::repertoire_personnel().map(|h| h.join(".ssh").join("known_hosts"))
+}
+
 /// L'hôte porte-t-il un marqueur OpenSSH que nous ne savons pas traiter ?
 fn marqueur_bloquant(hote: &str) -> Option<String> {
-    let chemin = dirs::home_dir()?.join(".ssh").join("known_hosts");
-    let contenu = std::fs::read_to_string(chemin).ok()?;
+    let contenu = std::fs::read_to_string(chemin_known_hosts()?).ok()?;
     marqueur_bloquant_dans(&contenu, hote)
 }
 
@@ -284,24 +294,34 @@ impl russh::client::Handler for AvashAuth {
             );
             return Err(russh::Error::UnknownKey);
         }
-        let enregistrees = match russh::keys::known_hosts::known_host_keys(&self.host, self.port) {
-            Ok(k) => k,
-            Err(e) => {
-                *self.verdict.lock().unwrap() =
-                    Some(format!("Vérification de la clé d'hôte impossible : {e}"));
-                return Err(russh::Error::UnknownKey);
-            }
+        let Some(chemin) = chemin_known_hosts() else {
+            *self.verdict.lock().unwrap() = Some(
+                "Répertoire personnel introuvable : impossible de vérifier \
+                 l'identité du serveur. Connexion refusée."
+                    .into(),
+            );
+            return Err(russh::Error::UnknownKey);
         };
+        let enregistrees =
+            match russh::keys::known_hosts::known_host_keys_path(&self.host, self.port, &chemin) {
+                Ok(k) => k,
+                Err(e) => {
+                    *self.verdict.lock().unwrap() =
+                        Some(format!("Vérification de la clé d'hôte impossible : {e}"));
+                    return Err(russh::Error::UnknownKey);
+                }
+            };
         match juger_cle_hote(&enregistrees, server_public_key) {
             // Hôte connu, clé identique.
             VerdictCle::Connue => Ok(true),
 
             // Hôte inconnu : premier contact, on mémorise.
             VerdictCle::PremierContact => {
-                russh::keys::known_hosts::learn_known_hosts(
+                russh::keys::known_hosts::learn_known_hosts_path(
                     &self.host,
                     self.port,
                     server_public_key,
+                    &chemin,
                 )
                 .map_err(|_| russh::Error::UnknownKey)?;
                 Ok(true)
@@ -958,7 +978,7 @@ pub struct PtyChannel {
 /// lignes correspondantes de `~/.ssh/known_hosts`. Le prochain contact
 /// re-apprendra la nouvelle cle (TOFU). Rend le nombre de lignes retirees.
 pub fn forget_host_key(host: &str, port: u16) -> Result<usize> {
-    let path = dirs::home_dir()
+    let path = crate::repertoire_personnel()
         .ok_or_else(|| anyhow!("Répertoire personnel introuvable"))?
         .join(".ssh/known_hosts");
     forget_host_key_at(host, port, &path)

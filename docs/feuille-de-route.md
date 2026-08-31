@@ -273,6 +273,15 @@ Apprises en construisant le projet, coûteuses à réapprendre :
   Un mock doit être aussi exigeant que la chose qu'il remplace.
 - **Ne jamais annuler un contrôle négatif par `git checkout`.** Il emporte tout
   le travail non commité du fichier. Défaire exactement l'édition faite.
+- **Juger une exécution de tests à son code de sortie, pas à un `grep`.** Un
+  débordement de pile écrit « fatal runtime error », pas « FAILED » ni
+  « panicked » : trois exécutions ont été déclarées vertes alors qu'elles
+  échouaient, parce que le motif cherché ne couvrait pas ce cas. `check.sh`, lui,
+  regarde le code de sortie — c'est lui qui a vu juste.
+- **Un remplacement en masse relit ce qu'il vient d'écrire.** Remplacer
+  `dirs::home_dir()` par `repertoire_personnel()` dans tout un fichier a
+  transformé le repli de cette fonction en appel à elle-même. Après un
+  `sed`/`replace` global, relire la définition de ce qu'on a introduit.
 
 ---
 

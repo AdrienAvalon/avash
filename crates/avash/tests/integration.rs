@@ -665,17 +665,21 @@ async fn spawn_test_sshd() -> u16 {
     port
 }
 
-/// HOME virtuel pour ne pas toucher au `known_hosts` réel (TOFU du client).
-fn virtual_home() -> String {
-    let home = format!("/tmp/avash-it-home-{}", std::process::id());
+/// Répertoire personnel virtuel, pour ne pas toucher au `known_hosts` réel.
+///
+/// `/tmp` était codé en dur, et `HOME` seul n'isole rien sous Windows — où
+/// `dirs::home_dir()` interroge le dossier de profil du système. On passe par
+/// le répertoire temporaire de la plateforme et l'on pose aussi `AVASH_HOME`,
+/// que le cœur honore partout.
+fn virtual_home() -> std::path::PathBuf {
+    let home = std::env::temp_dir().join(format!("avash-it-home-{}", std::process::id()));
     std::fs::create_dir_all(&home).unwrap();
     home
 }
 
 /// Clé éphémère pour l'auth.
 fn temp_key_path() -> std::path::PathBuf {
-    let home = virtual_home();
-    let path = std::path::PathBuf::from(home).join("id_ed25519");
+    let path = virtual_home().join("id_ed25519");
     if !path.exists() {
         let key = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
         let mut buf = Vec::new();
@@ -693,7 +697,9 @@ fn temp_key_path() -> std::path::PathBuf {
 /// garde ne se tient pas à travers un `.await` ; poser la variable une seule
 /// fois, avant tout test, règle la question sans verrou.
 static HOME_POSE: std::sync::LazyLock<()> = std::sync::LazyLock::new(|| {
-    std::env::set_var("HOME", virtual_home());
+    let home = virtual_home();
+    std::env::set_var("HOME", &home);
+    std::env::set_var("AVASH_HOME", &home);
 });
 
 fn test_auth() -> avash::ssh::ClientAuth {

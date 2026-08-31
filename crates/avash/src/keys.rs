@@ -18,7 +18,8 @@ pub struct KeyEntry {
 
 /// Repertoire `~/.ssh`, cree au besoin avec les droits qu'OpenSSH exige.
 pub fn ssh_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("Répertoire personnel introuvable"))?;
+    let home =
+        crate::repertoire_personnel().ok_or_else(|| anyhow!("Répertoire personnel introuvable"))?;
     let dir = home.join(".ssh");
     if !dir.exists() {
         std::fs::create_dir_all(&dir).with_context(|| format!("Création de {}", dir.display()))?;

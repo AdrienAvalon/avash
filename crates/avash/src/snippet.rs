@@ -116,7 +116,7 @@ pub fn terminal_payload(text: &str, run: bool) -> String {
 /// `~/.config/avash/snippets.yaml`
 #[must_use]
 pub fn snippets_path() -> PathBuf {
-    dirs::config_dir()
+    crate::repertoire_configuration()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("avash")
         .join("snippets.yaml")

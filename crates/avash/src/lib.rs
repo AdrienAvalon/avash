@@ -33,7 +33,7 @@ pub struct SshHost {
 
 #[must_use]
 pub fn ssh_config_path() -> std::path::PathBuf {
-    dirs::home_dir()
+    repertoire_personnel()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".ssh/config")
 }
@@ -92,7 +92,7 @@ fn resolve_includes(content: &str, base: &Path, depth: usize) -> String {
 /// Developpe un motif d'`Include` en liste de fichiers existants.
 fn expand_include(pattern: &str, base: &Path) -> Vec<PathBuf> {
     let expanded = if let Some(rest) = pattern.strip_prefix("~/") {
-        dirs::home_dir()
+        repertoire_personnel()
             .unwrap_or_else(|| base.to_path_buf())
             .join(rest)
     } else if pattern.starts_with('/') {
@@ -691,6 +691,47 @@ pub fn render_host_block(host: &SshHost) -> String {
     out
 }
 
+/// Répertoire personnel de l'utilisateur, avec un point d'entrée unique.
+///
+/// Deux raisons de ne pas appeler `repertoire_personnel()` directement partout.
+///
+/// **La cohérence avec russh.** Sous Windows, `repertoire_personnel()` interroge
+/// `SHGetKnownFolderPath(FOLDERID_Profile)` alors que `std::env::home_dir()` —
+/// celui dont russh se sert pour `known_hosts` — consulte d'abord `USERPROFILE`.
+/// Les deux peuvent différer : nous vérifiions alors un fichier pendant que
+/// russh en lisait un autre, ce qui vide de sens la vérification de clé d'hôte.
+/// Tout passe désormais par ici, et les chemins `known_hosts` sont donnés
+/// explicitement à russh plutôt que laissés à sa propre résolution.
+///
+/// **L'isolation des tests.** Elle reposait sur le remplacement de `HOME`, que
+/// Windows ignore : les tests y travaillaient sur le vrai profil, tous en
+/// parallèle sur les mêmes fichiers. `AVASH_HOME` sert de dérogation explicite,
+/// honorée sur toutes les plateformes. Ce n'est pas une porte dérobée : qui
+/// peut poser une variable d'environnement dans le processus peut déjà
+/// beaucoup plus.
+#[must_use]
+pub fn repertoire_personnel() -> Option<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("AVASH_HOME") {
+        let p = std::path::PathBuf::from(p);
+        if !p.as_os_str().is_empty() {
+            return Some(p);
+        }
+    }
+    dirs::home_dir()
+}
+
+/// Répertoire de configuration d'Avash (`~/.config/avash` ou son équivalent).
+///
+/// Suit `AVASH_HOME` quand il est posé, pour que les tests isolent aussi les
+/// fichiers d'état (dossiers, bureaux RDP, snippets, tunnels).
+#[must_use]
+pub fn repertoire_configuration() -> Option<std::path::PathBuf> {
+    if std::env::var_os("AVASH_HOME").is_some() {
+        return repertoire_personnel().map(|h| h.join(".config"));
+    }
+    dirs::config_dir()
+}
+
 /// Écrit un fichier de configuration **atomiquement** et sans fenêtre lisible.
 ///
 /// Deux défauts corrigés d'un coup :
@@ -1181,7 +1222,7 @@ Host autre
     #[test]
     fn append_host_voit_les_alias_declares_dans_un_include() {
         let _h = temp_home();
-        let ssh = dirs::home_dir().unwrap().join(".ssh");
+        let ssh = repertoire_personnel().unwrap().join(".ssh");
         std::fs::create_dir_all(ssh.join("config.d")).unwrap();
         std::fs::write(
             ssh.join("config.d").join("10-prod"),

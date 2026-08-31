@@ -19,7 +19,7 @@ struct FoldersFile {
 
 #[must_use]
 pub fn folders_path() -> PathBuf {
-    dirs::config_dir()
+    crate::repertoire_configuration()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("avash")
         .join("folders.yaml")
