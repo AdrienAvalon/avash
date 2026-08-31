@@ -391,9 +391,21 @@ mod tests {
         assert!(private.is_file(), "cle privee absente");
         assert!(public.is_file(), "cle publique absente");
 
-        // La cle privee doit etre lisible par son seul proprietaire :
-        // OpenSSH refuse de s'en servir autrement.
-        assert_eq!(k.mode, "600", "droits de la cle privee");
+        // La clé privée ne doit être lisible que par son propriétaire :
+        // OpenSSH refuse de s'en servir autrement. Ce qu'on peut en vérifier
+        // dépend du système.
+        #[cfg(unix)]
+        assert_eq!(k.mode, "600", "droits de la clé privée");
+        #[cfg(windows)]
+        {
+            // Windows n'a pas de bits de permission : `mode` est un marqueur,
+            // et la restriction passe par une liste de contrôle d'accès qu'on
+            // ne sait pas relire à bon compte. Ce qui est vérifiable, et qui
+            // suffit : `generate` ci-dessus a réussi, or il propage l'échec
+            // d'`icacls` — c'est précisément ce qui a révélé que la ligne de
+            // commande était fausse et que toute génération de clé échouait.
+            assert_eq!(k.mode, "-", "marqueur attendu hors Unix");
+        }
 
         let line = std::fs::read_to_string(&public).unwrap();
         assert!(
