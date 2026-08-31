@@ -69,6 +69,41 @@ fn known_hosts_illisible() -> bool {
     fichier_present_mais_illisible(&chemin)
 }
 
+/// L'hôte porte-t-il un marqueur OpenSSH que nous ne savons pas traiter ?
+fn marqueur_bloquant(hote: &str) -> Option<String> {
+    let chemin = dirs::home_dir()?.join(".ssh").join("known_hosts");
+    let contenu = std::fs::read_to_string(chemin).ok()?;
+    marqueur_bloquant_dans(&contenu, hote)
+}
+
+/// Cherche `@revoked` / `@cert-authority` visant `hote` dans un `known_hosts`.
+///
+/// Séparé de la lecture pour être exerçable. La correspondance est volontairement
+/// **large** : on compare l'hôte à chaque nom de la liste séparée par des
+/// virgules, sans traiter les motifs ni les entrées condensées — dans le doute,
+/// mieux vaut refuser une connexion légitime que réapprendre une clé marquée.
+fn marqueur_bloquant_dans(contenu: &str, hote: &str) -> Option<String> {
+    for ligne in contenu.lines() {
+        let l = ligne.trim();
+        if !l.starts_with('@') {
+            continue;
+        }
+        let mut mots = l.split_whitespace();
+        let marqueur = mots.next()?;
+        if marqueur != "@revoked" && marqueur != "@cert-authority" {
+            continue;
+        }
+        let Some(hotes) = mots.next() else { continue };
+        if hotes
+            .split(',')
+            .any(|h| h == hote || h.split(':').next() == Some(hote))
+        {
+            return Some(marqueur.to_owned());
+        }
+    }
+    None
+}
+
 /// Le fichier est-il là sans qu'on puisse l'ouvrir ?
 ///
 /// Séparé du chemin pour être exerçable sans toucher au `HOME` du processus,
@@ -225,6 +260,22 @@ impl russh::client::Handler for AvashAuth {
         // On lit nous-mêmes les clés enregistrées plutôt que de nous fier au
         // booléen de `check_known_hosts` : celui-ci confond « algorithme
         // différent » avec « hôte inconnu » (voir `juger_cle_hote`).
+        // Marqueurs OpenSSH : russh les ignore, sa correspondance d'hôte étant
+        // une simple égalité de chaîne. Une ligne `@revoked srv …` était donc
+        // découpée en hôte « @revoked », qui ne correspond à rien — verdict
+        // « premier contact », et **la clé révoquée était réapprise et acceptée
+        // sans un mot**, là où ssh(1) refuse catégoriquement. On ne sait pas
+        // valider une autorité de certification non plus : dans les deux cas,
+        // on refuse plutôt que de faire semblant.
+        if let Some(marqueur) = marqueur_bloquant(&self.host) {
+            *self.verdict.lock().unwrap() = Some(format!(
+                "~/.ssh/known_hosts porte « {marqueur} » pour {}. Avash ne sait pas \
+                 traiter ce marqueur et refuse plutôt que de l'ignorer — ce qui \
+                 reviendrait à réapprendre une clé que vous avez marquée.",
+                self.host
+            ));
+            return Err(russh::Error::UnknownKey);
+        }
         if known_hosts_illisible() {
             *self.verdict.lock().unwrap() = Some(
                 "~/.ssh/known_hosts existe mais n'est pas lisible : impossible de \
@@ -879,6 +930,63 @@ mod tests {
         // Un client SSH a toujours besoin d'un nom : le repli garantit une
         // valeur non vide meme sans compte systeme lisible.
         assert!(!current_username().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_marqueurs {
+    use super::marqueur_bloquant_dans;
+
+    /// `ssh(1)` refuse catégoriquement une clé marquée `@revoked`. russh, lui,
+    /// découpe la ligne en hôte « @revoked » — qui ne correspond à rien — et
+    /// rend une liste vide : verdict « premier contact », clé révoquée
+    /// réapprise et acceptée sans un mot.
+    #[test]
+    fn une_cle_revoquee_est_signalee() {
+        let c = "@revoked srv.exemple.com ssh-ed25519 AAAA\n";
+        assert_eq!(
+            marqueur_bloquant_dans(c, "srv.exemple.com").as_deref(),
+            Some("@revoked")
+        );
+    }
+
+    /// Une autorité de certification, que nous ne savons pas valider non plus.
+    #[test]
+    fn une_autorite_de_certification_est_signalee() {
+        let c = "@cert-authority *.interne,srv.exemple.com ssh-rsa AAAA\n";
+        assert_eq!(
+            marqueur_bloquant_dans(c, "srv.exemple.com").as_deref(),
+            Some("@cert-authority")
+        );
+    }
+
+    #[test]
+    fn un_hote_sans_marqueur_ne_bloque_rien() {
+        let c = "@revoked autre.exemple.com ssh-ed25519 AAAA\n\
+                 srv.exemple.com ssh-ed25519 BBBB\n";
+        assert_eq!(marqueur_bloquant_dans(c, "srv.exemple.com"), None);
+    }
+
+    #[test]
+    fn un_fichier_ordinaire_ne_bloque_rien() {
+        for c in [
+            "",
+            "srv ssh-ed25519 AAAA\n",
+            "# commentaire\n",
+            "@inconnu srv k v\n",
+        ] {
+            assert_eq!(marqueur_bloquant_dans(c, "srv"), None, "{c:?}");
+        }
+    }
+
+    /// La forme `[hôte]:port` doit être reconnue comme visant l'hôte.
+    #[test]
+    fn la_forme_avec_port_est_reconnue() {
+        let c = "@revoked srv.exemple.com:2222 ssh-ed25519 AAAA\n";
+        assert_eq!(
+            marqueur_bloquant_dans(c, "srv.exemple.com").as_deref(),
+            Some("@revoked")
+        );
     }
 }
 

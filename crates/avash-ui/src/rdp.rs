@@ -13,6 +13,8 @@ use tokio::process::Child;
 #[derive(Default)]
 pub struct RdpStore {
     pub inner: Mutex<HashMap<u64, Child>>,
+    /// Dernières lignes de diagnostic du sidecar, par session.
+    pub journaux: Mutex<HashMap<u64, std::sync::Arc<Mutex<std::collections::VecDeque<String>>>>>,
 }
 
 /// Point de connexion WebSocket renvoyé au front.
@@ -179,33 +181,9 @@ pub async fn rdp_open(
         }
     }
 
-    // Le sidecar imprime « PORT TOKEN » quand son WebSocket est prêt. S'il
-    // échoue avant (auth, TLS, NLA…), on remonte son diagnostic (stderr).
-    let mut lines = BufReader::new(stdout).lines();
-    let first = match lines.next_line().await {
-        Ok(l) => l,
-        Err(e) => return Err(tuer(&state, id, e.to_string())),
-    };
-    let Some(line) = first else {
-        let mut diag = String::new();
-        let _ = stderr.read_to_string(&mut diag).await;
-        let msg = diag.trim().lines().last().unwrap_or("").to_string();
-        return Err(tuer(
-            &state,
-            id,
-            if msg.is_empty() {
-                "Le sidecar RDP s'est arrêté sans se connecter.".into()
-            } else {
-                msg
-            },
-        ));
-    };
-    let mut it = line.split_whitespace();
-    let Some(port) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
-        return Err(tuer(&state, id, "Port WebSocket illisible.".into()));
-    };
-    let Some(token) = it.next().map(str::to_owned) else {
-        return Err(tuer(&state, id, "Jeton WebSocket manquant.".into()));
+    let (port, token) = match lire_annonce(stdout, &mut stderr).await {
+        Ok(v) => v,
+        Err(e) => return Err(tuer(&state, id, e)),
     };
 
     // L'utilisateur a-t-il fermé l'onglet pendant la connexion ? `rdp_close` a
@@ -214,7 +192,97 @@ pub async fn rdp_open(
     if !state.inner.lock().unwrap().contains_key(&id) {
         return Err(CONNEXION_ANNULEE.into());
     }
+
+    suivre_diagnostic(&state, id, stderr);
     Ok(RdpConn { port, token })
+}
+
+/// Garde les dernières lignes que le sidecar écrit sur son erreur standard.
+///
+/// Passé l'ouverture, `stderr` n'était plus lu : il était libéré à la sortie de
+/// `rdp_open`. Une panique ou une erreur du sidecar **en cours de session**
+/// écrivait alors dans un tube fermé — le message était perdu et l'onglet RDP
+/// mourait sans motif.
+fn suivre_diagnostic(
+    state: &tauri::State<'_, RdpStore>,
+    id: u64,
+    flux: tokio::process::ChildStderr,
+) {
+    let journal = state
+        .journaux
+        .lock()
+        .unwrap()
+        .entry(id)
+        .or_default()
+        .clone();
+    tokio::spawn(async move {
+        let mut sorties = BufReader::new(flux).lines();
+        while let Ok(Some(l)) = sorties.next_line().await {
+            let mut g = journal.lock().unwrap();
+            if g.len() == JOURNAL_MAX {
+                g.pop_front();
+            }
+            g.push_back(l);
+        }
+    });
+}
+
+/// Lit l'annonce « PORT JETON » que le sidecar imprime quand il est prêt.
+///
+/// S'il s'arrête avant (authentification, TLS, NLA…), on remonte la dernière
+/// ligne de son diagnostic plutôt qu'un message générique.
+async fn lire_annonce(
+    stdout: tokio::process::ChildStdout,
+    stderr: &mut tokio::process::ChildStderr,
+) -> Result<(u16, String), String> {
+    let mut lines = BufReader::new(stdout).lines();
+    let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? else {
+        let mut diag = String::new();
+        let _ = stderr.read_to_string(&mut diag).await;
+        let msg = diag.trim().lines().last().unwrap_or("").to_owned();
+        return Err(if msg.is_empty() {
+            "Le sidecar RDP s'est arrêté sans se connecter.".to_owned()
+        } else {
+            msg
+        });
+    };
+    let mut it = line.split_whitespace();
+    let port = it
+        .next()
+        .and_then(|s| s.parse::<u16>().ok())
+        .ok_or_else(|| "Port WebSocket illisible.".to_owned())?;
+    let token = it
+        .next()
+        .map(str::to_owned)
+        .ok_or_else(|| "Jeton WebSocket manquant.".to_owned())?;
+    Ok((port, token))
+}
+
+/// Nombre de lignes de diagnostic gardées par session. De quoi expliquer une
+/// fin de session sans laisser un serveur bavard remplir la mémoire.
+const JOURNAL_MAX: usize = 32;
+
+/// Dernières lignes écrites par le sidecar d'une session.
+///
+/// L'interface les joint au message de fermeture : sans elles, un onglet RDP
+/// qui meurt en cours de route ne dit rien de la raison.
+#[tauri::command]
+#[must_use]
+pub fn rdp_diagnostic(state: tauri::State<'_, RdpStore>, id: u64) -> String {
+    state
+        .journaux
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|j| {
+            j.lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
 }
 
 /// Message d'annulation volontaire : le front le reconnaît pour ne pas
@@ -229,6 +297,7 @@ fn tuer(state: &tauri::State<'_, RdpStore>, id: u64, msg: String) -> String {
     if let Some(mut child) = state.inner.lock().unwrap().remove(&id) {
         let _ = child.start_kill();
     }
+    state.journaux.lock().unwrap().remove(&id);
     msg
 }
 
@@ -237,6 +306,7 @@ pub fn rdp_close(state: tauri::State<'_, RdpStore>, id: u64) -> Result<(), Strin
     if let Some(mut child) = state.inner.lock().unwrap().remove(&id) {
         let _ = child.start_kill();
     }
+    state.journaux.lock().unwrap().remove(&id);
     Ok(())
 }
 

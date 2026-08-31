@@ -643,6 +643,31 @@ fn test_auth() -> avash::ssh::ClientAuth {
     }
 }
 
+/// Attend que les compteurs d'un tunnel atteignent l'état visé.
+///
+/// Les tests dormaient 100 ms avant de lire un instantané : sous charge, les
+/// compteurs atomiques n'étaient pas encore à jour et la suite rougissait sans
+/// la moindre régression. On attend un état, avec une échéance — et le message
+/// d'échec dit ce qu'on attendait.
+async fn attendre_compteurs(
+    tunnel: &avash::tunnel::Tunnel,
+    vise: impl Fn(&avash::tunnel::TunnelSnapshot) -> bool,
+    quoi: &str,
+) -> avash::tunnel::TunnelSnapshot {
+    let echeance = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let snap = tunnel.snapshot();
+        if vise(&snap) {
+            return snap;
+        }
+        assert!(
+            tokio::time::Instant::now() < echeance,
+            "compteurs jamais arrivés à l'état attendu ({quoi}) : {snap:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 // ---------- Les tests ----------
 
 #[tokio::test]
@@ -907,8 +932,12 @@ async fn tunnel_local_relaie_les_octets_dans_les_deux_sens() {
     drop(client);
 
     // Les compteurs refletent la connexion.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let snap = tunnel.snapshot();
+    let snap = attendre_compteurs(
+        &tunnel,
+        |s| s.total == 1 && s.active == 0 && s.bytes_up == 4,
+        "une connexion terminée, 4 octets montants",
+    )
+    .await;
     assert!(snap.alive);
     assert_eq!(snap.total, 1);
     assert_eq!(snap.active, 0, "connexion terminee");
@@ -940,8 +969,12 @@ async fn tunnel_local_signale_une_destination_injoignable() {
         .expect("fermeture dans les temps")
         .unwrap();
     assert_eq!(n, 0, "connexion fermee sans donnees");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let snap = tunnel.snapshot();
+    let snap = attendre_compteurs(
+        &tunnel,
+        |s| s.last_error.is_some(),
+        "une erreur de destination injoignable",
+    )
+    .await;
     assert!(snap.alive, "le tunnel lui-meme reste debout");
     assert!(
         snap.last_error
@@ -1035,8 +1068,12 @@ async fn tunnel_distant_relaie_vers_un_service_local() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let snap = tunnel.snapshot();
+    let snap = attendre_compteurs(
+        &tunnel,
+        |s| s.total == 1 && s.bytes_down == 5 && s.bytes_up == 5,
+        "un aller-retour de 5 octets dans chaque sens",
+    )
+    .await;
     assert_eq!(snap.total, 1);
     assert_eq!(snap.bytes_down, 5, "« hello » vers le service local");
     assert_eq!(snap.bytes_up, 5, "« HELLO » vers le serveur");

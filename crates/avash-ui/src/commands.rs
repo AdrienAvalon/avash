@@ -341,6 +341,27 @@ async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &m
     }
 }
 
+/// Annonce la fin d'une session et la retire du magasin.
+///
+/// L'entrée survivait jusqu'à ce que l'utilisateur ferme l'onglet : le sélecteur
+/// « envoyer à toutes les sessions » proposait donc des serveurs déjà
+/// déconnectés, et le nombre annoncé ne correspondait pas à la sélection.
+///
+/// Rien n'est fait si cet identifiant porte déjà une session plus récente : on
+/// fermerait le nouvel onglet.
+fn clore_session(app: &AppHandle, sid: u64, epoch: u64) {
+    use tauri::Manager as _;
+    if is_superseded(app, sid, epoch) {
+        return;
+    }
+    app.state::<SessionStore>()
+        .inner
+        .lock()
+        .unwrap()
+        .remove(&sid);
+    let _ = app.emit("pty-closed", serde_json::json!({ "id": sid }));
+}
+
 /// Enregistre la session, ou signale qu'on l'a annulée entre-temps.
 ///
 /// Le test d'annulation et l'insertion se font **sous le même verrou**.
@@ -537,9 +558,7 @@ async fn open_on_target(
         // l'annonce que si cet id ne porte pas deja une session plus recente
         // (voir `is_superseded`), sinon on fermerait le nouvel onglet.
         let _ = session.disconnect().await;
-        if !is_superseded(&app2, sid, pump_epoch) {
-            let _ = app2.emit("pty-closed", serde_json::json!({ "id": sid }));
-        }
+        clore_session(&app2, sid, pump_epoch);
     });
 
     Ok(label)
@@ -907,6 +926,17 @@ pub async fn sftp_rename(
 /// Tunnels ouverts, par identifiant de definition. Independants des onglets.
 pub struct TunnelStore {
     pub inner: Mutex<HashMap<String, Tunnel>>,
+    /// Tunnels dont l'ouverture est en cours, et ceux qu'on a arrêtés pendant.
+    ///
+    /// Entre le retrait du précédent et l'insertion du nouveau, le magasin ne
+    /// contenait rien pour cet identifiant — pendant plusieurs secondes de
+    /// connexion. Deux clics sur « relancer » passaient donc tous deux, et le
+    /// perdant était **écrasé sans `close()`** : sa socket d'écoute et sa tâche
+    /// survivaient, invisibles de l'interface. Symétriquement, un arrêt demandé
+    /// pendant la connexion ne trouvait rien à retirer, et le tunnel s'installait
+    /// quand même. C'est le défaut déjà corrigé pour les sessions SSH.
+    pub en_cours: Mutex<std::collections::HashSet<String>>,
+    pub annules: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Etat d'un tunnel ouvert, tel que l'interface l'affiche.
@@ -996,7 +1026,12 @@ pub async fn tunnel_start(
     target.override_password(password);
     // Un tunnel deja ouvert (ou mort) sous cet id est remplace : c'est le
     // geste « relancer » de l'interface.
-    let previous = tunnels.inner.lock().unwrap().remove(&id);
+    let previous = {
+        let mut inner = tunnels.inner.lock().unwrap();
+        tunnels.en_cours.lock().unwrap().insert(id.clone());
+        tunnels.annules.lock().unwrap().remove(&id);
+        inner.remove(&id)
+    };
     if let Some(t) = previous {
         t.close().await;
     }
@@ -1011,13 +1046,40 @@ pub async fn tunnel_start(
         .await
         .map_err(|e| e.to_string())?;
     let snapshot = tunnel.snapshot();
-    tunnels.inner.lock().unwrap().insert(id.clone(), tunnel);
+    // Arrêt demandé pendant la connexion : on ferme ce qu'on vient d'ouvrir
+    // plutôt que de l'installer contre la volonté de l'utilisateur. Et un
+    // évincé — deux « relancer » simultanés — est fermé, pas seulement lâché.
+    let evince = {
+        let mut inner = tunnels.inner.lock().unwrap();
+        tunnels.en_cours.lock().unwrap().remove(&id);
+        if tunnels.annules.lock().unwrap().remove(&id) {
+            Some(tunnel) // arrêté entre-temps : à fermer, pas à installer
+        } else {
+            inner.insert(id.clone(), tunnel)
+        }
+    };
+    if let Some(t) = evince {
+        t.close().await;
+        if !tunnels.inner.lock().unwrap().contains_key(&id) {
+            return Err("Tunnel arrêté pendant l'ouverture.".to_owned());
+        }
+    }
     Ok(TunnelStatus { id, snapshot })
 }
 
 #[tauri::command]
 pub async fn tunnel_stop(tunnels: tauri::State<'_, TunnelStore>, id: String) -> Result<(), String> {
-    let t = tunnels.inner.lock().unwrap().remove(&id);
+    let t = {
+        let mut inner = tunnels.inner.lock().unwrap();
+        let t = inner.remove(&id);
+        // Rien à retirer alors qu'une ouverture est en cours : on note l'arrêt
+        // pour que `tunnel_start` le voie en arrivant, au lieu d'installer un
+        // tunnel que l'utilisateur vient d'arrêter.
+        if t.is_none() && tunnels.en_cours.lock().unwrap().contains(&id) {
+            tunnels.annules.lock().unwrap().insert(id.clone());
+        }
+        t
+    };
     if let Some(t) = t {
         t.close().await;
     }

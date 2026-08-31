@@ -52,8 +52,10 @@ describe("Dossiers — cycle de vie complet", () => {
     await $('#folder-context [data-act="delete"]').click();
     await $("#confirm-modal").waitForDisplayed({ timeout: 5000 });
     await $("#confirm-cancel").click();
-    // Toujours là après annulation : le refus est bien respecté.
-    await browser.pause(600);
+    // Toujours là après annulation : le refus est bien respecté. On attend la
+    // fermeture de la confirmation — état observable qui dit que le clic a été
+    // traité — plutôt que de parier sur une durée.
+    await $("#confirm-modal").waitForDisplayed({ reverse: true, timeout: 5000 });
     expect(await folderExists("a-garder")).toBe(true);
   });
 });

@@ -37,7 +37,9 @@ describe("Navigation au clavier", () => {
     await $("#manual-btn").click();
     await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
     await browser.keys(["Control", "k"]);
-    await browser.pause(300);
+    // « La palette ne doit PAS s'ouvrir » : on laisse le moteur traiter la
+    // frappe, puis on constate — sans parier sur une durée.
+    await browser.execute(() => new Promise((r) => requestAnimationFrame(() => r(null))));
     expect(await $("#palette").isDisplayed()).toBe(false);
     await browser.keys("Escape");
   });
@@ -48,7 +50,9 @@ describe("Navigation au clavier", () => {
     // Une confirmation par-dessus : l'annuler ne doit pas emporter la fenêtre.
     await browser.execute(() => document.getElementById("confirm-modal").classList.add("open"));
     await browser.keys("Escape");
-    await browser.pause(300);
+    // La confirmation, elle, doit s'être refermée : c'est l'état observable qui
+    // dit que la touche a été traitée. La fenêtre du dessous doit rester.
+    await $("#confirm-modal").waitForDisplayed({ reverse: true, timeout: 5000 });
     expect(await $("#tunnels-modal").isDisplayed()).toBe(true);
     await browser.execute(() => document.getElementById("confirm-modal").classList.remove("open"));
     await browser.keys("Escape");

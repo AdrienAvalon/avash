@@ -238,9 +238,15 @@ function renderTagBar() {
   bar.hidden = false;
   bar.innerHTML = "";
   for (const t of tags) {
-    const c = document.createElement("span");
+    // La barre de filtres est devenue le seul endroit où consulter les tags —
+    // les pastilles ont quitté les lignes d'hôte. Elle ne peut donc plus être
+    // le seul contrôle hors d'atteinte au clavier.
+    const c = document.createElement("button");
+    c.type = "button";
     c.className = "tag-pill" + (t === state.tagFilter ? " on" : "");
     c.textContent = t;
+    c.setAttribute("aria-pressed", String(t === state.tagFilter));
+    c.title = `Filtrer par « ${t} »`;
     c.addEventListener("click", () => {
       state.tagFilter = state.tagFilter === t ? null : t;
       renderHosts();
@@ -248,7 +254,8 @@ function renderTagBar() {
     bar.appendChild(c);
   }
   if (state.tagFilter) {
-    const clear = document.createElement("span");
+    const clear = document.createElement("button");
+    clear.type = "button";
     clear.className = "tag-pill clear";
     clear.textContent = "✕";
     clear.title = "Effacer le filtre";
@@ -1356,6 +1363,13 @@ function sftpDelegue(list: HTMLElement, entries: SftpEntry[], path: string): voi
   sftpLot = { entries, path };
   if (sftpDelegueBranche) return;
   sftpDelegueBranche = true;
+  // Le simple clic sélectionne, y compris « .. » : c'est un repère visuel.
+  list.addEventListener("click", (ev) => {
+    const el = (ev.target as HTMLElement).closest<HTMLElement>(".sftp-entry.up");
+    if (!el) return;
+    for (const n of list.querySelectorAll(".sftp-entry.sel")) n.classList.remove("sel");
+    el.classList.add("sel");
+  });
   const viser = (ev: Event): { el: HTMLElement; e: SftpEntry } | null => {
     const el = (ev.target as HTMLElement).closest<HTMLElement>(".sftp-entry");
     if (!el || el.classList.contains("up")) return null;
@@ -1577,7 +1591,12 @@ $("sftp-context").addEventListener("click", (e) => {
 });
 
 $("sftp-list").addEventListener("contextmenu", (e) => {
-  if ((e.target as HTMLElement).closest(".sftp-entry")) return;
+  // `:not(.up)` : sur l'entrée « .. », les deux écouteurs se neutralisaient —
+  // la délégation l'écarte, celui-ci sortait tôt. Résultat : aucun menu Avash
+  // ET aucun `preventDefault`, donc le menu natif de WebKitGTK pouvait
+  // apparaître par-dessus le panneau. « .. » reçoit maintenant le menu du
+  // répertoire courant, ce qui est la bonne réponse.
+  if ((e.target as HTMLElement).closest(".sftp-entry:not(.up)")) return;
   e.preventDefault();
   const s = sftpSession();
   if (s) sftpOpenMenu(null, s.sftpPath || ".", e as MouseEvent);
@@ -3672,10 +3691,20 @@ function showRdpClosed(id: number) {
   ov.className = "rdp-closed";
   ov.innerHTML =
     `<div class="rdp-closed-box"><p>Connexion RDP fermée.</p>` +
+    `<pre class="rdp-closed-diag" hidden></pre>` +
     `<div class="rdp-closed-actions">` +
     `<button type="button" class="btn-primary" data-act="reconnect">Reconnecter</button>` +
     `<button type="button" class="btn-ghost" data-act="close">Fermer l'onglet</button>` +
     `</div></div>`;
+  // « Connexion RDP fermée » sans un mot de plus ne dit pas si le serveur a
+  // redémarré, si le réseau a lâché ou si le processus a échoué. Le sidecar
+  // écrit ses raisons ; on les montre.
+  void invoke<string>("rdp_diagnostic", { id }).then((diag) => {
+    const zone = ov.querySelector(".rdp-closed-diag") as HTMLElement | null;
+    if (!zone || !diag.trim()) return;
+    zone.textContent = diag.trim().split("\n").slice(-4).join("\n");
+    zone.hidden = false;
+  }).catch(() => { /* pas de diagnostic : l'incrustation reste sobre */ });
   ov.querySelector('[data-act="reconnect"]')!.addEventListener("click", () => {
     const t = s.target;
     closeRdp(id);

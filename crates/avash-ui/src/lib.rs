@@ -22,6 +22,8 @@ pub fn run() {
         })
         .manage(commands::TunnelStore {
             inner: Mutex::new(HashMap::new()),
+            en_cours: Mutex::new(std::collections::HashSet::new()),
+            annules: Mutex::new(std::collections::HashSet::new()),
         })
         .manage(rdp::RdpStore::default())
         // Trois commandes ont été retirées de cette liste : `run_command`,
@@ -76,6 +78,7 @@ pub fn run() {
             rdp::rdp_host_delete,
             rdp::rdp_host_set_folder,
             rdp::rdp_password_save,
+            rdp::rdp_diagnostic,
             rdp::rdp_password_known,
             rdp::rdp_password_move,
             rdp::rdp_password_forget,
