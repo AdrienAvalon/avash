@@ -7,6 +7,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Interne
+
+- **Le téléchargement SFTP en bandes parallèles est désormais mesuré, plus
+  seulement déduit.** Il avait été écrit et validé contre le serveur de test du
+  dépôt, qui ne reproduit ni les limites annoncées par OpenSSH ni son
+  comportement avec plusieurs descripteurs sur un même fichier. Éprouvé contre
+  un vrai `internal-sftp` (`examples/sftp_probe.rs`) : octets identiques à
+  toutes les latences, et un gain de 6,3 × à 7,1 × entre 10 et 60 ms
+  d'aller-retour — ~2 × en réseau local, où la latence n'est plus le facteur
+  limitant. L'estimation théorique annoncée jusqu'ici était du bon ordre.
+
 ### Corrigé
 
 - **RÉGRESSION de la 0.3.1 : les serveurs RDP sans NLA étaient devenus

@@ -165,10 +165,21 @@ impl SftpHandle {
     ///
     /// `File` de russh-sftp n'émet **qu'une** requête `SSH_FXP_READ` à la fois
     /// et attend sa réponse : le débit descendant plafonnait donc à
-    /// `CHUNK / aller-retour`, soit ~2 Mo/s à 30 ms de latence et 0,6 Mo/s en
-    /// transatlantique. La montée, elle, est déjà pipelinée par la bibliothèque
-    /// (huit écritures en vol) : le téléchargement était environ huit fois plus
-    /// lent que le téléversement sur le même lien.
+    /// `CHUNK / aller-retour`. La montée, elle, est déjà pipelinée par la
+    /// bibliothèque (huit écritures en vol).
+    ///
+    /// Mesuré contre un vrai `internal-sftp` d'OpenSSH, sur 8 Mio
+    /// (`examples/sftp_probe.rs`, latence introduite par un relais qui modélise
+    /// un délai de propagation) :
+    ///
+    /// | aller-retour | séquentiel | en bandes | gain  |
+    /// |--------------|------------|-----------|-------|
+    /// | ~10 ms       | 5,6 Mo/s   | 34,9 Mo/s | 6,3 × |
+    /// | ~30 ms       | 2,0 Mo/s   | 13,5 Mo/s | 6,8 × |
+    /// | ~60 ms       | 1,0 Mo/s   |  7,1 Mo/s | 7,1 × |
+    ///
+    /// En réseau local le gain retombe à ~2 ×, la latence n'y étant plus le
+    /// facteur limitant. Les octets sont identiques dans tous les cas.
     ///
     /// Faute d'API publique pour empiler des lectures sur un même descripteur,
     /// on ouvre plusieurs descripteurs sur le même chemin — c'est licite, et

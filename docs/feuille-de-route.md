@@ -179,10 +179,13 @@ sur des mesures de ce qui coûte réellement.
   téléchargement SFTP sans requête en vol ne se voit qu'en latence réelle, et
   Nagle restait actif sur toutes les sessions (russh ne pose pas `TCP_NODELAY`
   par défaut, contrairement à OpenSSH).
-- **Fait depuis** : le téléchargement SFTP n'avait aucune requête en vol et
-  plafonnait à un bloc par aller-retour — huit fois plus lent que le
-  téléversement sur le même lien ; Nagle restait actif sur toutes les sessions ;
-  un onglet RDP masqué continuait de tirer des trames pleines.
+- **Fait, et MESURÉ depuis** : le téléchargement SFTP n'avait aucune requête en
+  vol et plafonnait à un bloc par aller-retour. Éprouvé contre un vrai
+  `internal-sftp` d'OpenSSH (`examples/sftp_probe.rs`), le passage en bandes
+  parallèles donne **6,3 × à 7,1 ×** selon la latence (10 à 60 ms d'aller-retour),
+  ~2 × en réseau local, et des octets identiques dans tous les cas. Nagle restait
+  par ailleurs actif sur toutes les sessions, et un onglet RDP masqué continuait
+  de tirer des trames pleines.
 - **Reste à faire, identifié et chiffré** : le processus RDP fusionne ses
   rectangles sales en **boîte englobante** — deux coins opposés produisent une
   trame plein écran, 8 Mo là où 2 Ko suffiraient, ce qui plafonne le nombre
@@ -273,6 +276,12 @@ Apprises en construisant le projet, coûteuses à réapprendre :
   **avorte l'attente** au lieu de la faire réessayer. C'était la cause d'une
   famille entière d'échecs intermittents, invisibles sur une machine au repos.
   Une recherche doit rendre « pas trouvé », jamais lever.
+- **Un instrument de mesure se vérifie avant la mesure.** Un premier relais
+  destiné à simuler de la latence lisait un bloc, dormait, puis écrivait — ce
+  qui bloque la lecture pendant l'attente et sérialise justement le pipeline
+  qu'on veut mesurer. Il donnait 3 × là où un modèle correct de délai de
+  propagation donne 7 ×. Une mesure qui contredit la théorie accuse d'abord
+  l'instrument.
 - **Éprouver la stabilité sous charge, pas par répétition.** Relancer la suite
   dix fois sur une machine oisive ne révèle rien ; la lancer une fois pendant
   trois compilations concurrentes révèle tout. C'est la fenêtre temporelle qu'on
