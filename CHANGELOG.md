@@ -7,6 +7,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Une connexion RDP pouvait rester suspendue en pleine séquence, après une
+  authentification réussie.** La détection automatique des caractéristiques
+  réseau attend des résultats de mesure de bande passante ; IronRDP ne les
+  envoyait pas, en supposant que le serveur poursuivrait sans. Un serveur du
+  parc de test attend bel et bien. La mesure est désormais faite et renvoyée.
+  Correctif porté dans `rdp-sidecar/vendor/`.
+
+- Le message d'erreur de fin de connexion n'accuse plus NLA à tort. Un serveur
+  qui accepte les identifiants puis met fin à la session le dit maintenant en
+  clair, au lieu d'afficher « finalisation (CredSSP/NLA) ».
+
 ## [0.3.3] - 2026-08-31
 
 Trois défauts RDP trouvés en une soirée, tous contre de vraies machines du parc

@@ -52,6 +52,7 @@ run "tests"              "$SIDECAR" cargo test
 # Le correctif porté sur ironrdp-session (cf. rdp-sidecar/vendor/README.md) a ses
 # propres tests : sans cette ligne, il pourrait être défait sans que rien ne le dise.
 run "correctif porté"    "$SIDECAR" cargo test -p ironrdp-session
+run "correctif porté 2"  "$SIDECAR" cargo test -p ironrdp-connector
 run "format"             "$SIDECAR" cargo fmt --check
 run "clippy"             "$SIDECAR" cargo clippy --all-targets -- -D warnings
 # Vulnerabilites connues des dependances. cargo-audit s'installe avec

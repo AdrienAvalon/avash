@@ -1,4 +1,9 @@
-# Correctif porté sur `ironrdp-session`
+# Correctifs portés sur IronRDP
+
+Deux crates sont copiés ici avec un changement chacun. `diff -r` avec les
+versions de crates.io ne doit signaler que le fichier nommé dans chaque section.
+
+## `ironrdp-session` — l'affichage part en biais sur xrdp
 
 Ce répertoire contient une copie de `ironrdp-session` 0.11.0 avec **un seul
 changement**, dans `src/fast_path.rs`. Tout le reste est identique à l'amont ;
@@ -37,3 +42,33 @@ jamais ce remplissage, rend exactement pareil avant et après.
 Ce n'est pas un correctif propre à avash : c'est un défaut d'IronRDP qui touche
 tout client parlant à xrdp. Dès qu'une version publiée le corrige, supprimer ce
 répertoire et la section `[patch.crates-io]` de `rdp-sidecar/Cargo.toml`.
+
+
+## `ironrdp-connector` — la connexion reste suspendue sans fin
+
+Dans `src/connection.rs`. La détection automatique des caractéristiques réseau
+([MS-RDPBCGR] 2.2.14) se déroule ainsi : le serveur envoie *Bandwidth Measure
+Start*, une ou plusieurs charges, puis *Stop* — et attend des *Bandwidth Measure
+Results*.
+
+La version amont ne répond qu'au RTT. Son commentaire explicite l'hypothèse :
+
+> the server proceeds to licensing whether or not it receives them, so skipping
+> them does not stall the sequence
+
+Contre un serveur réel du parc de test, cette hypothèse est fausse. Le serveur
+attend les résultats, ne les reçoit jamais, et la séquence reste suspendue là —
+pour toujours, sans un mot. La trace le montre sans ambiguïté :
+
+    Wait for PDU  connector.state="ConnectTimeAutoDetection"
+    PDU received  length=25
+    PDU received  length=16347      <- la charge de mesure
+    Wait for PDU  connector.state="ConnectTimeAutoDetection"   <- et plus rien
+
+La mesure est donc réellement effectuée : instant de départ au *Start*, cumul
+des octets à chaque charge — **y compris celle que porte le *Stop* lui-même à la
+connexion** —, puis réponse avec le délai et le volume.
+
+Après ce correctif, la séquence franchit la licence et atteint l'échange de
+capacités. Sur ce serveur-là elle échoue ensuite pour une raison qui lui est
+propre, mais elle échoue **en le disant**, au lieu de rester pendue.

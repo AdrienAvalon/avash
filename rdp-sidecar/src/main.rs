@@ -773,12 +773,42 @@ async fn connect(
         None,
     )
     .await
-    .context("finalisation (CredSSP/NLA)")?;
+    .map_err(|e| {
+        // Cette étape couvre TOUTE la fin de séquence, pas seulement NLA :
+        // licence, capacités, activation. Un serveur qui coupe après avoir
+        // accepté les identifiants tombait ici sous l'étiquette « CredSSP/NLA »,
+        // qui accusait l'authentification alors qu'elle avait réussi.
+        // La phrase vit dans la CHAÎNE de causes, pas dans l'affichage direct :
+        // il faut la parcourir, sinon la détection ne voit rien.
+        let mut texte = format!("{e} {e:?}");
+        let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&e);
+        while let Some(c) = source {
+            texte.push(' ');
+            texte.push_str(&c.to_string());
+            source = c.source();
+        }
+        if texte.contains("disconnect provider ultimatum") {
+            anyhow::anyhow!(
+                "Le serveur a accepté vos identifiants puis a mis fin à la session \
+                 avant de l'ouvrir. L'authentification n'est pas en cause : c'est \
+                 côté serveur que la session ne démarre pas (compte sans session \
+                 autorisée, service de session en échec, ou poste déjà occupé)."
+            )
+        } else {
+            anyhow::Error::new(e).context("fin de la séquence de connexion")
+        }
+    })?;
     Ok((result, framed))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::var_os("RUST_LOG").is_some() {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .init();
+    }
     let args = parse_args()?;
     let local_text: LocalClip = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel::<ClipReq>();
