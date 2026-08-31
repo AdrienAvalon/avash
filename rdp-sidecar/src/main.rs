@@ -657,7 +657,25 @@ async fn main() -> Result<()> {
         local_text: local_text.clone(),
         tx: clip_tx.clone(),
     };
-    let (result, mut framed) = connect(&args, clip_backend).await?;
+    // Une tentative de connexion doit être BORNÉE. Sans cela le processus reste
+    // pendu indéfiniment, sans un mot : constaté contre un xrdp qui annonce NLA
+    // mais ne mène jamais l'échange CredSSP à son terme — TLS est monté, les
+    // données circulent, et rien n'aboutit. L'utilisateur voit un onglet figé.
+    const DELAI_CONNEXION: Duration = Duration::from_secs(25);
+    let (result, mut framed) =
+        match tokio::time::timeout(DELAI_CONNEXION, connect(&args, clip_backend)).await {
+            Ok(r) => r?,
+            Err(_) if !args.sans_nla => anyhow::bail!(
+                "{NLA_INDISPONIBLE} L'authentification réseau (NLA) n'a pas abouti \
+             en {} s. Certains serveurs annoncent NLA sans savoir le mener à \
+             bien — c'est le cas de plusieurs versions de xrdp.",
+                DELAI_CONNEXION.as_secs()
+            ),
+            Err(_) => anyhow::bail!(
+                "Le serveur n'a pas répondu en {} s.",
+                DELAI_CONNEXION.as_secs()
+            ),
+        };
     let (w, h) = taille_sure(result.desktop_size.width, result.desktop_size.height)?;
     let activation_factory = result.activation_factory;
     eprintln!("connecté : {w}x{h}");

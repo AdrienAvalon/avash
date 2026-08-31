@@ -7,7 +7,11 @@
 //! le même fichier. Cette sonde va chercher ces réponses-là.
 //!
 //! Usage :
-//!   `sftp_probe <hôte> <port> <utilisateur> <clé-privée> <chemin-distant>`
+//!   `sftp_probe <hôte> <port> <utilisateur> <clé|trousseau> <chemin-distant>`
+//!
+//! `trousseau` au lieu d'un chemin de clé : le mot de passe est lu dans le
+//! trousseau du système, à l'entrée qu'Avash y a écrite. Le secret n'est ni
+//! affiché ni journalisé.
 //!
 //! Elle télécharge deux fois : par bandes (le chemin de production) puis
 //! séquentiellement (une lecture après l'autre), compare les octets et donne
@@ -22,10 +26,21 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("usage : sftp_probe <hôte> <port> <user> <clé> <chemin>"))?;
     let port: u16 = port.parse()?;
 
-    let auth = avash::ssh::ClientAuth {
-        user,
-        key_path: Some(std::path::PathBuf::from(cle)),
-        password: None,
+    let auth = if cle == "trousseau" {
+        let compte = avash::secrets::account_id(&user, &hote, port);
+        let password = avash::secrets::load(&compte)
+            .ok_or_else(|| anyhow::anyhow!("aucun mot de passe mémorisé pour {compte}"))?;
+        avash::ssh::ClientAuth {
+            user,
+            key_path: None,
+            password: Some(password),
+        }
+    } else {
+        avash::ssh::ClientAuth {
+            user,
+            key_path: Some(std::path::PathBuf::from(cle)),
+            password: None,
+        }
     };
     let session = avash::ssh::AvashSession::connect(&hote, port, &auth).await?;
     let sftp = avash::sftp::SftpHandle::open(session).await?;

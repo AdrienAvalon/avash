@@ -3623,7 +3623,7 @@ async function openRdp(t: RdpTarget) {
     // Le serveur ne sait pas faire d'authentification réseau. Ce n'est pas
     // forcément une attaque — un xrdp dont le module PAM n'est pas configuré
     // est dans ce cas —, mais ce n'est pas à nous d'en décider en silence.
-    if (String(e).includes("[AVASH_RDP_SANS_NLA]") && (await proposerSansNla(t))) {
+    if (String(e).includes("[AVASH_RDP_SANS_NLA]") && (await proposerSansNla(t, String(e)))) {
       closeRdp(id);
       await openRdp({ ...t, sansNla: true });
       return;
@@ -3645,13 +3645,15 @@ async function openRdp(t: RdpTarget) {
  *  exactement le compromis du TOFU, et il faut le dire tel quel plutôt que
  *  d'agiter un avertissement vague.
  */
-async function proposerSansNla(t: RdpTarget): Promise<boolean> {
+async function proposerSansNla(t: RdpTarget, erreur: string): Promise<boolean> {
+  // Le processus RDP distingue deux cas — le serveur refuse NLA d'emblée, ou il
+  // l'annonce sans mener l'échange à terme. On reprend SA phrase plutôt que
+  // d'en inventer une générique qui serait fausse dans l'un des deux cas.
+  const raison = erreur.replace(/^.*\[AVASH_RDP_SANS_NLA\]\s*/s, "").trim();
   const ok = await askConfirm(
-    `${t.name ?? t.host} n'accepte pas l'authentification réseau (NLA).\n\n` +
-      "C'est le cas de certains serveurs légitimes — un bureau Linux servi par " +
-      "xrdp, par exemple. Sans NLA, votre mot de passe part dans un canal " +
-      "chiffré, mais sans que le serveur se soit authentifié auprès d'Avash au " +
-      "préalable.\n\n" +
+    `${t.name ?? t.host} — ${raison}\n\n` +
+      "Sans NLA, votre mot de passe part dans un canal chiffré, mais sans que " +
+      "le serveur se soit authentifié auprès d'Avash au préalable.\n\n" +
       "L'empreinte du serveur reste épinglée : dès la prochaine connexion, un " +
       "imposteur sera refusé. Le risque ne porte donc que sur ce premier " +
       "contact.\n\nSe connecter quand même ?",

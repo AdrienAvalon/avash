@@ -35,6 +35,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   porte que sur le premier contact, exactement comme pour une clé d'hôte SSH.
   Le choix est retenu par serveur, jamais globalement.
 
+- **Une tentative de connexion RDP pouvait rester pendue indéfiniment.** Constaté
+  contre un xrdp qui annonce NLA sans jamais mener l'échange CredSSP à son
+  terme : TLS monte, les données circulent, et rien n'aboutit — l'onglet reste
+  figé sans un mot. La tentative est désormais bornée à 25 secondes, et le
+  message distingue les deux cas : un serveur qui refuse NLA d'emblée, et un
+  serveur qui l'annonce sans savoir le mener à bien.
+
 - **Un hôte enregistré puis connecté dans la foulée portait le mauvais titre.**
   L'onglet s'intitulait « utilisateur@adresse » au lieu de l'alias saisi, et la
   session n'était rattachée à aucune ligne de la barre latérale — voyant éteint,
