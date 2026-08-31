@@ -4,7 +4,8 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 30 août 2026 (version 0.2.0).
+Dernière révision : 31 août 2026, après un multi-audit complet (fiabilité,
+sécurité, performance, ergonomie) et six lots de corrections.
 
 Dépôts : [GitHub](https://github.com/AdrienAvalon/avash) (public) · GitLab interne (privé).
 
@@ -30,17 +31,18 @@ défaut n'est pas livrée, même terminée.
 
 ## Où nous en sommes (mesuré)
 
-| Indicateur | Valeur au 30/08/2026 |
+| Indicateur | Valeur au 31/08/2026 |
 |---|---|
-| Tests | 139 Rust · 61 front · 24 bout en bout |
-| Binaire Linux | 18,3 Mo (`codegen-units=1`, LTO fin) |
-| Paquet front | 577 Ko en un seul module |
-| Plateformes construites | Linux (AppImage) et Windows (NSIS) — Windows pas encore éprouvé sur machine réelle |
+| Tests | 160 Rust (106 cœur, 20 intégration, 34 interface) · 78 front · 18 fichiers bout en bout |
+| Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) |
+| Paquet front | 572 Ko en un seul module |
+| Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
-Acquis récents : presse-papiers RDP testé de bout en bout, accessibilité des
-boîtes de dialogue, cadence adaptative RDP, arborescence de dossiers.
+Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
+automatique), gel au redimensionnement corrigé après profilage, et un
+multi-audit dont les constats sont traités ci-dessous.
 
 ---
 
@@ -57,7 +59,7 @@ corrigées, la clé de signature est déposée en secret du dépôt, et la chaî
 **éprouvée en conditions réelles** : une version installée détecte la suivante,
 la télécharge et redémarre.
 
-### 1.2 Construire réellement pour Windows — **construit, pas encore éprouvé**
+### 1.2 Construire réellement pour Windows — **fait**
 
 Le workflow a été exercé : **l'installeur Windows (8,2 Mo) et l'AppImage Linux
 (81 Mo) sont produits**. L'exercice a révélé trois défauts qu'une machine de
@@ -72,11 +74,12 @@ développement Linux masquait :
 Tous corrigés, avec un garde-fou d'intégration continue qui vérifie la
 compilation Windows du cœur à chaque poussée.
 
-**Reste à faire** : lancer l'installeur sur une vraie machine Windows. Les points
-à risque sont le sidecar RDP, le trousseau (Credential Manager) et les chemins de
-configuration. Tant que ce n'est pas fait, Windows est *compilé*, pas *validé*.
-
-*Fini quand* : un installeur Windows se lance, ouvre une session SSH et un bureau RDP.
+**Éprouvé depuis** sur une machine réelle, ce qui a révélé quatre défauts de plus,
+tous corrigés : une fenêtre de console s'ouvrait à côté de chaque bureau RDP
+(`CREATE_NO_WINDOW` manquant), l'antislash et le pavé numérique ne passaient pas,
+le verrouillage numérique était inversé entre le poste et le distant, et le
+sidecar n'était pas trouvé faute d'extension `.exe`. Une version portable
+accompagne désormais l'installeur.
 
 ### 1.3 Isoler l'état entre les fichiers de test — **fait**
 
@@ -84,6 +87,45 @@ Les scénarios partageaient un seul bac à sable : un fichier qui créait un dos
 ou déplaçait un hôte faussait les suivants. Corrigé — le bac à sable est remis à
 son état semé avant chaque fichier, et un garde-fou (`isolation.spec.js`) le
 vérifie. Il a été vu échouer avant correction, conformément à la règle.
+
+---
+
+## Le multi-audit du 31 août — ce qu'il a trouvé
+
+Quatre audits parallèles (fiabilité, sécurité, performance, ergonomie) sur
+l'ensemble du code. Trente-huit constats, dont ceux-ci, tous corrigés et chacun
+accompagné d'un test vu échouer :
+
+**Deux failles graves, du même genre** — nous ne vérifiions pas à qui nous
+parlions. La clé d'hôte SSH était jugée par `check_known_hosts` de russh, qui
+répond « hôte inconnu » quand seul l'algorithme diffère : une clé changée passait
+donc pour un premier contact. Et le volet RDP n'examinait aucun certificat, la
+bibliothèque installant `NoCertificateVerification` — les identifiants partaient
+ensuite par CredSSP. Les deux sont réglées, vérifiées en substituant réellement
+la clé du serveur de test.
+
+**Un chemin relatif exécutable.** Le processus RDP était cherché en dernier
+recours dans `rdp-sidecar/target/release/`, résolu depuis le répertoire courant ;
+lancée depuis un répertoire partagé, l'application y aurait exécuté n'importe
+quel binaire déposé, et lui aurait écrit le mot de passe RDP sur l'entrée
+standard.
+
+**Des allocations sans plafond**, toutes pilotables par un serveur distant : la
+sortie d'une commande (la sonde d'OS part à chaque ouverture d'onglet) et la
+résolution annoncée par un serveur RDP.
+
+**Des écritures qui tronquaient avant d'écrire** — dont `~/.ssh/config`, qui
+n'appartient pas qu'à nous.
+
+**Le téléchargement SFTP**, huit fois plus lent que le téléversement faute de
+requêtes en vol, et qui détruisait le fichier local avant de savoir s'il
+aboutirait.
+
+**La barre latérale**, entièrement hors d'atteinte au clavier.
+
+Ce que l'exercice enseigne : les défauts les plus graves n'étaient pas dans le
+code neuf, mais dans les hypothèses tacites — « la bibliothèque vérifie », « ce
+chemin n'arrive jamais », « le serveur est honnête ».
 
 ---
 
@@ -114,9 +156,16 @@ Les optimisations faites jusqu'ici l'ont été **sans profilage** : elles repose
 sur des choix raisonnables (regroupement des messages, cadence adaptative), pas
 sur des mesures de ce qui coûte réellement.
 
-- **Mesurer avant d'optimiser.** Un profil à la flamme (`cargo flamegraph`) sur une
-  session SSH chargée et sur un flux RDP dira où passe le temps. Sans cela, toute
-  optimisation supplémentaire est une supposition.
+- **Fait, et payant.** Le gel au redimensionnement a été attribué par `perf` au
+  renouvellement des tampons GPU (TTM/GEM), 42 % du coût :
+  `WEBKIT_DISABLE_COMPOSITING_MODE` l'a supprimé, confirmé en usage. L'audit a
+  ensuite trouvé, par lecture, ce qu'aucun profil local n'aurait montré — le
+  téléchargement SFTP sans requête en vol ne se voit qu'en latence réelle, et
+  Nagle restait actif sur toutes les sessions (russh ne pose pas `TCP_NODELAY`
+  par défaut, contrairement à OpenSSH).
+- **Reste à mesurer** : un profil à la flamme sur un flux RDP chargé. Le sidecar
+  fusionne encore ses rectangles sales en boîte englobante — deux coins opposés
+  produisent une trame plein écran, 8 Mo là où 2 Ko suffiraient.
 - **Repères de non-régression.** Les mesures existantes (regroupement, décodage
   UTF-8) affichent des chiffres mais rien ne casse s'ils se dégradent. Un seuil
   d'échec les transformerait en garde-fous.
@@ -162,8 +211,8 @@ Ces mesures sont à relever à chaque version :
 
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
-| Plateformes réellement livrées | 1 | 3 |
-| Scénarios bout en bout | 24 | en hausse à chaque fonctionnalité |
+| Plateformes réellement livrées | 2 | 3 |
+| Scénarios bout en bout | 18 fichiers | en hausse à chaque fonctionnalité |
 | Couverture des tests | non mesurée | mesurée, puis en hausse |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |
@@ -192,7 +241,15 @@ Apprises en construisant le projet, coûteuses à réapprendre :
 - **Un serveur de test par scénario.** Un serveur partagé entre fichiers de tests
   rend la suite instable.
 - **Attendre un état, jamais une durée.** Les échecs intermittents viennent presque
-  tous d'une interrogation faite trop tôt.
+  tous d'une interrogation faite trop tôt. Et « le port répond » n'est pas un
+  état suffisant : un serveur qui traite ses clients l'un après l'autre doit être
+  vu *revenir* accepter.
+- **Un serveur de test complaisant ne prouve rien.** Le nôtre rendait le même
+  bloc quel que soit le décalage demandé : il aurait validé n'importe quel
+  lecteur, y compris un lecteur en bandes parallèles qui réassemble de travers.
+  Un mock doit être aussi exigeant que la chose qu'il remplace.
+- **Ne jamais annuler un contrôle négatif par `git checkout`.** Il emporte tout
+  le travail non commité du fichier. Défaire exactement l'édition faite.
 
 ---
 
