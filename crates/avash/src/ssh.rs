@@ -76,7 +76,13 @@ fn known_hosts_illisible() -> bool {
 /// de profil du système. Les deux peuvent différer : nous inspections alors un
 /// fichier pendant que russh en lisait un autre, et la vérification de clé
 /// d'hôte ne vérifiait plus rien. On lui passe donc le chemin explicitement.
-fn chemin_known_hosts() -> Option<std::path::PathBuf> {
+///
+/// Public pour que les tests visent **le même fichier** que le code : y écrire
+/// par la résolution implicite de russh revenait à préparer un décor que la
+/// vérification ne regardait pas — le test passait alors pour de mauvaises
+/// raisons sous Unix, et échouait sous Windows.
+#[must_use]
+pub fn chemin_known_hosts() -> Option<std::path::PathBuf> {
     crate::repertoire_personnel().map(|h| h.join(".ssh").join("known_hosts"))
 }
 

@@ -868,7 +868,13 @@ async fn changed_host_key_is_refused() {
     // On inscrit volontairement une cle qui n'est PAS celle du serveur.
     let decoy = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
     let decoy_pub = decoy.public_key().clone();
-    russh::keys::known_hosts::learn_known_hosts("127.0.0.1", port, &decoy_pub)
+    // On vise EXPLICITEMENT le fichier que le code consultera. La résolution
+    // implicite de russh passe par `std::env::home_dir()`, qui sous Windows
+    // consulte `USERPROFILE` et ignore notre home de test : le leurre atterrissait
+    // dans le vrai profil, la vérification ne le voyait pas, et la connexion
+    // était acceptée comme un premier contact.
+    let known_hosts = avash::ssh::chemin_known_hosts().expect("chemin known_hosts");
+    russh::keys::known_hosts::learn_known_hosts_path("127.0.0.1", port, &decoy_pub, &known_hosts)
         .expect("ecriture known_hosts");
 
     // Le serveur presente sa vraie cle : elle differe de celle memorisee.
@@ -902,7 +908,15 @@ async fn unknown_host_is_learned_on_first_contact() {
         .expect("premier contact : la connexion doit passer (TOFU)");
     drop(session);
 
-    // La cle doit desormais etre memorisee : une reconnexion passe aussi.
+    // La clé doit désormais être mémorisée. Le vérifier DANS LE FICHIER : se
+    // contenter d'une seconde connexion réussie ne prouve rien, puisqu'un
+    // second « premier contact » passerait tout aussi bien.
+    let known_hosts = avash::ssh::chemin_known_hosts().expect("chemin known_hosts");
+    let apprises =
+        russh::keys::known_hosts::known_host_keys_path("127.0.0.1", port, &known_hosts).unwrap();
+    assert_eq!(apprises.len(), 1, "la clé d'hôte n'a pas été mémorisée");
+
+    // Et la reconnexion passe, cette fois en « hôte connu ».
     avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
         .await
         .expect("reconnexion sur hote connu : doit passer");
