@@ -22,6 +22,11 @@ pub struct RdpHost {
     /// Dossier de rangement Avash (ex. « prod/web »), vide = racine.
     #[serde(default)]
     pub folder: String,
+    /// L'utilisateur a accepté que ce serveur se passe d'authentification
+    /// réseau (NLA). Faux par défaut, y compris pour un fichier écrit par une
+    /// version antérieure : on ne relâche jamais une garde en silence.
+    #[serde(default)]
+    pub sans_nla: bool,
 }
 
 impl RdpHost {
@@ -46,6 +51,7 @@ impl RdpHost {
             width,
             height,
             folder: String::new(),
+            sans_nla: false,
         }
     }
 

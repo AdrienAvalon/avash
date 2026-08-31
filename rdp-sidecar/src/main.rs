@@ -170,6 +170,8 @@ struct Args {
     user: String,
     pass: String,
     domain: Option<String>,
+    /// L'utilisateur a accepté de se passer de NLA pour ce serveur.
+    sans_nla: bool,
     width: u16,
     height: u16,
     shot: Option<String>,
@@ -182,6 +184,9 @@ impl Pa {
             .iter()
             .position(|a| a == k)
             .and_then(|i| self.0.get(i + 1).cloned())
+    }
+    fn drapeau(&self, k: &str) -> bool {
+        self.0.iter().any(|a| a == k)
     }
     fn req2(&self, k1: &str, k2: &str) -> Result<String> {
         self.opt(k1)
@@ -207,12 +212,26 @@ fn read_password(a: &Pa) -> Result<String> {
 
 fn parse_args() -> Result<Args> {
     let a = Pa(std::env::args().skip(1).collect());
+    let pass = read_password(&a)?;
+    parse_args_de_pa(&a, pass)
+}
+
+/// Variante testable : les arguments et le mot de passe sont fournis, plutôt
+/// que lus dans l'environnement et sur l'entrée standard.
+#[cfg(test)]
+fn parse_args_de(args: &[&str], pass: &str) -> Result<Args> {
+    let pa = Pa(args.iter().map(|s| (*s).to_owned()).collect());
+    parse_args_de_pa(&pa, pass.to_owned())
+}
+
+fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
     Ok(Args {
         host: a.opt("--host").context("argument requis : --host")?,
         port: a.opt("--port").and_then(|s| s.parse().ok()).unwrap_or(3389),
         user: a.req2("-u", "--username")?,
-        pass: read_password(&a)?,
+        pass,
         domain: a.opt("--domain"),
+        sans_nla: a.drapeau("--sans-nla"),
         width: a
             .opt("--width")
             .and_then(|s| s.parse().ok())
@@ -259,7 +278,13 @@ fn build_config(a: &Args) -> connector::Config {
         // le seul moment où le TOFU ne protège pas — que cela coûte le plus.
         // En n'annonçant que HYBRID, un serveur incapable de NLA fait échouer
         // la négociation, ce qui est le bon comportement.
-        enable_tls: false,
+        //
+        // `--sans-nla` rétablit l'annonce de SSL, **sur décision explicite de
+        // l'utilisateur** et pour ce serveur-là seulement : certains serveurs
+        // légitimes n'offrent pas NLA — un xrdp dont le module PAM n'est pas
+        // configuré, par exemple. On annonce alors les deux, et le serveur
+        // choisit : NLA reste préféré s'il sait le faire.
+        enable_tls: a.sans_nla,
         enable_credssp: true,
         keyboard_type: KeyboardType::IbmEnhanced,
         keyboard_subtype: 0,
@@ -494,6 +519,13 @@ fn input_ops(b: &[u8]) -> Vec<Operation> {
 }
 
 /// Rectangle mis à jour -> message FRAME binaire [2][x][y][w][h][RGBA].
+/// Marqueur reconnu par l'interface : le serveur ne sait pas faire de NLA.
+///
+/// Elle propose alors de se connecter quand même, en expliquant ce que cela
+/// coûte, et retient le choix pour ce serveur. Un marqueur plutôt qu'un texte
+/// anglais issu d'une dépendance : celui-ci ne changera pas sous nos pieds.
+pub const NLA_INDISPONIBLE: &str = "[AVASH_RDP_SANS_NLA]";
+
 /// Plafond de résolution accepté d'un serveur RDP.
 ///
 /// C'est le serveur qui **confirme** la résolution, et il n'est pas tenu de
@@ -553,9 +585,23 @@ async fn connect(
         )
         // Canal CLIPRDR : presse-papiers partagé poste <-> bureau distant (texte).
         .with_static_channel(CliprdrClient::new(Box::new(clip_backend)));
-    let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
-        .await
-        .context("début de connexion")?;
+    let should_upgrade = match ironrdp_tokio::connect_begin(&mut framed, &mut connector).await {
+        Ok(v) => v,
+        // Le serveur a refusé la négociation alors que nous n'annoncions que
+        // NLA : il ne sait pas le faire. Ce n'est pas forcément une attaque —
+        // un xrdp sans module PAM est dans ce cas — mais ce n'est pas à nous
+        // d'en décider en silence. On remonte un marqueur que l'interface
+        // reconnaît, pour poser la question à l'utilisateur.
+        Err(e)
+            if !a.sans_nla && matches!(e.kind(), connector::ConnectorErrorKind::Negotiation(_)) =>
+        {
+            anyhow::bail!(
+                "{NLA_INDISPONIBLE} Ce serveur n'accepte pas l'authentification \
+                 réseau (NLA) et exige un simple canal TLS."
+            );
+        }
+        Err(e) => return Err(e).context("début de connexion"),
+    };
     let initial = framed.into_inner_no_leftover();
     let (upgraded_stream, cert) = ironrdp_tls::upgrade(initial, &a.host)
         .await
@@ -989,6 +1035,40 @@ mod tests_certificat {
             VerdictCert::Change {
                 attendue: "aa".into()
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_negociation {
+    use super::{build_config, parse_args_de};
+
+    /// Par défaut, seul NLA est annoncé : un serveur qui ne sait pas le faire
+    /// doit échouer la négociation, pas obtenir le mot de passe dans un canal
+    /// TLS sans s'être authentifié.
+    #[test]
+    fn par_defaut_seul_nla_est_annonce() {
+        let a = parse_args_de(&["--host", "x", "-u", "u"], "p").unwrap();
+        let c = build_config(&a);
+        assert!(
+            !c.enable_tls,
+            "SSL annoncé : le repli de NLA vers TLS redevient possible"
+        );
+        assert!(c.enable_credssp);
+    }
+
+    /// `--sans-nla` rétablit l'annonce de SSL — sur décision explicite de
+    /// l'utilisateur, pour un serveur qui ne propose pas NLA (un xrdp dont le
+    /// module PAM n'est pas configuré, par exemple). NLA reste préféré si le
+    /// serveur sait le faire : on annonce les deux, il choisit.
+    #[test]
+    fn sans_nla_annonce_les_deux_sans_renoncer_a_nla() {
+        let a = parse_args_de(&["--host", "x", "-u", "u", "--sans-nla"], "p").unwrap();
+        let c = build_config(&a);
+        assert!(c.enable_tls);
+        assert!(
+            c.enable_credssp,
+            "NLA doit rester préféré quand le serveur sait le faire"
         );
     }
 }

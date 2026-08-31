@@ -80,6 +80,10 @@ fn sidecar_path() -> Option<std::path::PathBuf> {
 /// un bureau enregistré : le secret est alors lu **ici**, côté natif, et ne
 /// traverse jamais l'IPC — comme le fait déjà le volet SSH. Il séjournait
 /// sinon dans le tas de la webview toute la durée de l'onglet.
+///
+/// `sans_nla` : l'utilisateur a accepté de se passer d'authentification réseau
+/// pour ce serveur. Refusé par défaut — c'est une décision qui lui appartient,
+/// pas un repli silencieux.
 #[tauri::command]
 pub async fn rdp_open(
     state: tauri::State<'_, RdpStore>,
@@ -90,6 +94,7 @@ pub async fn rdp_open(
     password: String,
     width: u16,
     height: u16,
+    sans_nla: bool,
 ) -> Result<RdpConn, String> {
     use std::process::Stdio;
     let password = if password.is_empty() {
@@ -130,6 +135,11 @@ pub async fn rdp_open(
         "--height",
         &height.to_string(),
     ])
+    .args(if sans_nla {
+        &["--sans-nla"][..]
+    } else {
+        &[][..]
+    })
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
@@ -290,6 +300,11 @@ pub fn rdp_diagnostic(state: tauri::State<'_, RdpStore>, id: u64) -> String {
 /// présenter une fermeture d'onglet comme un échec de connexion.
 pub const CONNEXION_ANNULEE: &str = "[AVASH_RDP_ANNULE]";
 
+/// Le serveur ne sait pas faire de NLA. L'interface le reconnaît pour proposer
+/// de se connecter quand même, en expliquant ce que cela coûte. Doit rester
+/// identique au marqueur émis par le processus RDP.
+pub const NLA_INDISPONIBLE: &str = "[AVASH_RDP_SANS_NLA]";
+
 /// Tue le sidecar enregistré sous `id` et rend le message d'erreur tel quel.
 ///
 /// Sans cela, chaque sortie en erreur après le `spawn` abandonnait un processus
@@ -419,6 +434,22 @@ pub fn rdp_password_move(
     // L'oubli n'a lieu qu'après une écriture réussie : l'inverse perdrait le
     // secret si le trousseau refusait la nouvelle entrée.
     avash::secrets::forget(&ancien).map_err(|e| format!("{e:#}"))
+}
+
+/// Retient qu'un serveur ne sait pas faire de NLA, après accord de l'utilisateur.
+///
+/// Sans cela il faudrait redonner cet accord à chaque connexion. Le choix est
+/// par serveur, jamais global : accepter pour un xrdp mal configuré ne doit pas
+/// relâcher la garde pour les autres.
+#[tauri::command]
+pub fn rdp_host_set_sans_nla(id: String, valeur: bool) -> Result<(), String> {
+    let chemin = avash::rdphost::hosts_path();
+    let mut tous = avash::rdphost::load_hosts_from(&chemin).map_err(|e| format!("{e:#}"))?;
+    let Some(h) = tous.iter_mut().find(|h| h.id == id) else {
+        return Err(format!("Bureau RDP inconnu : {id}"));
+    };
+    h.sans_nla = valeur;
+    avash::rdphost::save_hosts_to(&chemin, &tous).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]

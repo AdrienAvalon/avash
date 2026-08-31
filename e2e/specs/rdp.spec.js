@@ -1,6 +1,6 @@
 // Connexion RDP réelle contre un serveur de test DÉDIÉ (test/test sur 33899).
 // Valide toute la chaîne : formulaire → sidecar → WebSocket → rendu du canvas.
-import { startRdpServer, waitForPort } from "./helpers.js";
+import { startRdpServer, waitForPort, attendreBureauConnecte } from "./helpers.js";
 const RDP_PORT = 33899;
 let srv;
 
@@ -25,8 +25,7 @@ describe("RDP — connexion réelle au serveur de test", () => {
     await $(".rdp-container canvas").waitForExist({ timeout: 20000, timeoutMsg: "aucun canvas RDP" });
     // Signal fiable d'une vraie connexion : l'onglet passe à .state.live seulement
     // après le message « connecté » du sidecar (handshake CredSSP réussi).
-    await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
-      { timeout: 20000, timeoutMsg: "jamais connecté (handshake RDP échoué ?)" });
+    await attendreBureauConnecte();
     expect(await $(".rdp-closed").isExisting()).toBe(false);
   });
 });

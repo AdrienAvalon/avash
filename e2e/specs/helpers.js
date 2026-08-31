@@ -100,3 +100,36 @@ export function waitForPort(port, timeout = 8000) {
     void essayer();
   });
 }
+
+/** Attend qu'un bureau RDP soit connecté, et EXPLIQUE l'échec le cas échéant.
+ *
+ *  « jamais connecté » ne dit rien : ni pourquoi, ni où. Le processus RDP écrit
+ *  pourtant ses raisons, et l'interface les garde (`rdp_diagnostic`). On les
+ *  joint au message plutôt que de laisser un échec muet — c'est ce qui manquait
+ *  pour comprendre les rares échecs intermittents de ces scénarios.
+ */
+export async function attendreBureauConnecte(quoi = "le bureau RDP") {
+  try {
+    await browser.waitUntil(async () => (await $$(".state.live")).length > 0, {
+      timeout: 20000,
+      timeoutMsg: `${quoi} ne s'est jamais connecté`,
+    });
+  } catch (e) {
+    const diag = await browser.execute(async () => {
+      const { invoke } = window.__TAURI__?.core ?? {};
+      if (!invoke) return "(interface non instrumentée)";
+      const ids = [...document.querySelectorAll(".tab")].map((_, i) => i + 1);
+      const out = [];
+      for (const id of ids) {
+        try {
+          const d = await invoke("rdp_diagnostic", { id });
+          if (d) out.push(`onglet ${id} : ${d}`);
+        } catch { /* pas une session RDP */ }
+      }
+      const err = document.querySelector(".rdp-closed-diag")?.textContent;
+      if (err) out.push(`incrustation : ${err}`);
+      return out.join("\n") || "(le processus RDP n'a rien écrit)";
+    }).catch(() => "(diagnostic illisible)");
+    throw new Error(`${e.message}\n--- diagnostic du processus RDP ---\n${diag}`);
+  }
+}

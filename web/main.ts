@@ -3358,9 +3358,13 @@ $("app-version").addEventListener("click", checkForUpdates);
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
 
-type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string };
+type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string; sansNla?: boolean };
 
-type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string };
+/** Serveurs pour lesquels on a accepté de se passer de NLA, le temps de la
+ *  session. Un bureau enregistré, lui, retient ce choix dans son fichier. */
+const sansNlaAccepte = new Set<string>();
+
+type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string; sans_nla?: boolean };
 let rdpHostsList: RdpHostT[] = [];
 const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
 
@@ -3517,6 +3521,7 @@ async function openRdp(t: RdpTarget) {
     const conn = await invoke<{ port: number; token: string }>("rdp_open", {
       id, host: t.host, port: t.port, user: t.user, password: t.password,
       width: rdpW, height: rdpH,
+      sansNla: t.sansNla === true || sansNlaAccepte.has(`${t.host}:${t.port ?? 3389}`),
     });
     // L'onglet a pu être fermé pendant la connexion (TLS + NLA prennent du
     // temps) : sans cette garde, l'affectation levait une exception, attrapée
@@ -3615,11 +3620,51 @@ async function openRdp(t: RdpTarget) {
     // marqueur. Rien à afficher, l'onglet n'existe déjà plus.
     if (String(e).includes("[AVASH_RDP_ANNULE]")) return;
     if (!rdpSessions.has(id)) return;
+    // Le serveur ne sait pas faire d'authentification réseau. Ce n'est pas
+    // forcément une attaque — un xrdp dont le module PAM n'est pas configuré
+    // est dans ce cas —, mais ce n'est pas à nous d'en décider en silence.
+    if (String(e).includes("[AVASH_RDP_SANS_NLA]") && (await proposerSansNla(t))) {
+      closeRdp(id);
+      await openRdp({ ...t, sansNla: true });
+      return;
+    }
     tab.querySelector(".state")!.className = "state closed";
     notify(`Connexion RDP impossible : ${e}`, "erreur");
     showRdpClosed(id); // proposer de réessayer
   }
   focusRdp(id);
+}
+
+/** Demande s'il faut se connecter à un serveur qui ne propose pas NLA.
+ *
+ *  Le message doit dire ce qu'on perd, et ce qu'on garde. Sans NLA, le mot de
+ *  passe part dans le canal TLS sans que le serveur se soit authentifié auprès
+ *  de nous par CredSSP. Mais Avash épingle malgré tout l'empreinte du serveur,
+ *  comme il le fait pour une clé d'hôte SSH : dès la deuxième connexion, un
+ *  imposteur est refusé. Le risque se limite donc au premier contact — c'est
+ *  exactement le compromis du TOFU, et il faut le dire tel quel plutôt que
+ *  d'agiter un avertissement vague.
+ */
+async function proposerSansNla(t: RdpTarget): Promise<boolean> {
+  const ok = await askConfirm(
+    `${t.name ?? t.host} n'accepte pas l'authentification réseau (NLA).\n\n` +
+      "C'est le cas de certains serveurs légitimes — un bureau Linux servi par " +
+      "xrdp, par exemple. Sans NLA, votre mot de passe part dans un canal " +
+      "chiffré, mais sans que le serveur se soit authentifié auprès d'Avash au " +
+      "préalable.\n\n" +
+      "L'empreinte du serveur reste épinglée : dès la prochaine connexion, un " +
+      "imposteur sera refusé. Le risque ne porte donc que sur ce premier " +
+      "contact.\n\nSe connecter quand même ?",
+    { ok: "Se connecter sans NLA" },
+  );
+  if (!ok) return false;
+  sansNlaAccepte.add(`${t.host}:${t.port ?? 3389}`);
+  // Un bureau enregistré retient le choix ; une connexion directe ne vaut que
+  // pour cette session.
+  if (t.hostId) {
+    await invoke("rdp_host_set_sans_nla", { id: t.hostId, valeur: true }).catch(() => {});
+  }
+  return true;
 }
 
 /** Dit au sidecar si son bureau est visible. Message [11], 1 = en pause.
@@ -3774,7 +3819,12 @@ async function connectRdpSaved(h: RdpHostT) {
       if (memorise) pw = "";
     }
   }
-  await openRdp({ host: h.host, port: h.port, user: h.user, password: pw, hostId: h.id, name: h.name });
+  await openRdp({
+    host: h.host, port: h.port, user: h.user, password: pw,
+    hostId: h.id, name: h.name,
+    // Choix déjà donné pour ce bureau : on ne le redemande pas à chaque fois.
+    sansNla: h.sans_nla === true,
+  });
 }
 
 function openRdpMenu(h: RdpHostT, e: MouseEvent) {

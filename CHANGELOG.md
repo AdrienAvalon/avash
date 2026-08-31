@@ -9,6 +9,21 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **RÉGRESSION de la 0.3.1 : les serveurs RDP sans NLA étaient devenus
+  injoignables.** En exigeant l'authentification réseau — le correctif qui
+  empêche un serveur d'obtenir le mot de passe sans s'authentifier —, avash
+  refusait aussi des serveurs légitimes qui ne savent pas la faire : un bureau
+  Linux servi par xrdp sans module PAM, typiquement. Constaté contre un vrai
+  parc : sur quatre serveurs, trois négocient NLA et un le refuse.
+
+  NLA reste exigé par défaut. Quand le serveur le refuse, avash le dit et
+  **propose de se connecter quand même**, en expliquant ce que cela coûte et ce
+  que cela ne coûte pas : le mot de passe part alors dans un canal chiffré sans
+  que le serveur se soit authentifié au préalable, mais son empreinte reste
+  épinglée — dès la connexion suivante, un imposteur est refusé. Le risque ne
+  porte que sur le premier contact, exactement comme pour une clé d'hôte SSH.
+  Le choix est retenu par serveur, jamais globalement.
+
 - **Un hôte enregistré puis connecté dans la foulée portait le mauvais titre.**
   L'onglet s'intitulait « utilisateur@adresse » au lieu de l'alias saisi, et la
   session n'était rattachée à aucune ligne de la barre latérale — voyant éteint,

@@ -79,6 +79,7 @@ pub fn run() {
             rdp::rdp_host_set_folder,
             rdp::rdp_password_save,
             rdp::rdp_diagnostic,
+            rdp::rdp_host_set_sans_nla,
             rdp::rdp_password_known,
             rdp::rdp_password_move,
             rdp::rdp_password_forget,

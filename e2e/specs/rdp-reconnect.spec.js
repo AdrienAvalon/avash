@@ -1,7 +1,7 @@
 // Overlay de reconnexion : on connecte un RDP à un serveur DÉDIÉ (port 33898,
 // isolé du serveur partagé), on le tue, et l'overlay « Reconnecter / Fermer »
 // doit apparaître.
-import { startRdpServer, waitForPort } from "./helpers.js";
+import { startRdpServer, waitForPort, attendreBureauConnecte } from "./helpers.js";
 const PORT = 33898;
 let srv;
 
@@ -25,7 +25,7 @@ describe("RDP — overlay de reconnexion à la coupure", () => {
     await $("#m-password").setValue("test");
     await $("#m-submit").click();
 
-    await browser.waitUntil(async () => (await $$(".state.live")).length > 0, { timeout: 20000, timeoutMsg: "jamais connecté" });
+    await attendreBureauConnecte();
     // Coupe le serveur -> le WebSocket se ferme -> overlay.
     srv.kill("SIGKILL");
     await $(".rdp-closed").waitForExist({ timeout: 15000, timeoutMsg: "overlay de reconnexion absent" });
