@@ -78,3 +78,34 @@ puis en relançant contre le conteneur XFCE :
     saine      décalage=+0 (100% des lignes)
 
 Le parc reproduit donc le défaut réel, et le détecteur le distingue franchement.
+
+## Le magnétoscope : rejouer un serveur disparu
+
+`enregistrements/*.rec` contiennent le **dialogue authentique** de serveurs
+xrdp, capturé une fois puis figé. `avash-rdp --rejouer <fichier>` le repasse
+dans le décodeur, sans réseau, sans TLS, sans NLA.
+
+    scripts/parc-rdp.sh up xfce
+    rdp-sidecar/target/release/avash-rdp --host 127.0.0.1 --port 3390 \
+      -u essai -p essai-mot-de-passe --sans-nla --width 640 --height 480 \
+      --enregistrer tests-parc/enregistrements/xfce.rec --shot /tmp/e.png
+
+    rdp-sidecar/target/release/avash-rdp --rejouer tests-parc/enregistrements/xfce.rec
+
+Trois usages, et le troisième est le plus important :
+
+1. **Un serveur devient une fixture permanente.** Le comportement singulier
+   d'une machine reste éprouvé même quand la machine a disparu.
+2. **Les tests deviennent instantanés.** 5 millisecondes contre 5 secondes de
+   connexion réelle — mille fois plus vite. Vérifié : en débranchant le
+   correctif du remplissage des tuiles, l'empreinte du rendu passe de
+   `df04a5d714c2a784` à `3a5ac9ea470a6a13`. Le rejeu voit donc le cisaillement,
+   celui qu'il avait fallu un signalement d'utilisateur pour découvrir.
+3. **Le fuzzing part de trafic réel.** Muter des octets au hasard ne franchit
+   jamais les premières validations. Muter un enregistrement authentique atteint
+   le décodeur d'images — et y a trouvé **deux façons pour un serveur de faire
+   tomber le client**, corrigées depuis (voir `rdp-sidecar/vendor/README.md`).
+
+Campagne longue à la demande :
+
+    AVASH_FUZZ_TOURS=6000 cargo test un_serveur_hostile --manifest-path rdp-sidecar/Cargo.toml

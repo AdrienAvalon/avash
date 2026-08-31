@@ -218,6 +218,16 @@ impl Processor {
 
         for update in bitmap_update.rectangles {
             trace!("{update:?}");
+            // Écarter tout de suite les rectangles dégénérés : plus bas, la
+            // largeur et la hauteur sont calculées par soustraction, sans
+            // vérifier l'ordre des bords. Un serveur qui en envoie un faisait
+            // tomber le client. Trouvé par fuzzing sur un enregistrement réel.
+            if update.rectangle.right < update.rectangle.left
+                || update.rectangle.bottom < update.rectangle.top
+            {
+                warn!("rectangle dégénéré ignoré : {:?}", update.rectangle);
+                continue;
+            }
             buf.clear();
 
             // Bitmap data is either compressed or uncompressed, depending

@@ -7,7 +7,7 @@
 **Gestionnaire graphique de connexions SSH et RDP — natif, rapide, sécurisé.**
 
 [![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.3-8b7cf6.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.0-8b7cf6.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-295%20verts-brightgreen.svg)](#qualité)
 
 </div>
@@ -56,8 +56,8 @@ dans [SECURITY.md](SECURITY.md).
 ### Linux (AppImage)
 
 ```bash
-chmod +x Avash_0.3.3_amd64.AppImage
-./Avash_0.3.3_amd64.AppImage
+chmod +x Avash_0.4.0_amd64.AppImage
+./Avash_0.4.0_amd64.AppImage
 ```
 
 ### Windows
@@ -78,11 +78,11 @@ Deux moyens de vérifier qu'un fichier téléchargé est bien le nôtre :
 
 ```bash
 # 1. Empreinte : compare avec le fichier SHA256SUMS publié avec la version
-sha256sum Avash_0.3.3_x64-setup.exe
+sha256sum Avash_0.4.0_x64-setup.exe
 
 # 2. Provenance : preuve cryptographique que le binaire vient de ce dépôt,
 #    de ce commit, produit par notre chaîne d'intégration continue
-gh attestation verify Avash_0.3.3_x64-setup.exe --repo AdrienAvalon/avash
+gh attestation verify Avash_0.4.0_x64-setup.exe --repo AdrienAvalon/avash
 ```
 
 La seconde vérification est plus forte que la première : elle ne dit pas
@@ -145,7 +145,7 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 | Cœur (`crates/avash`) | 115 | parseur `~/.ssh/config`, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques |
 | Intégration | 24 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP, tunnels, rebonds `ProxyJump` |
 | Interface (`crates/avash-ui`) | 34 | commandes Tauri, décodage UTF-8 en flux, verrous clavier |
-| Processus RDP | 24 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés** |
+| Processus RDP | 33 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, magnétoscope, rejeu d'enregistrements réels, fuzzing par mutation |
 | Correctifs portés sur IronRDP | 8 | remplissage des tuiles bitmap, mesure de bande passante (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
 | Front (Vitest) | 78 | logique pure : arborescence, filtres, scancodes, mappage souris, réglages |
 | Bout en bout (WebdriverIO) | 38 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** |
@@ -168,6 +168,20 @@ Corrigé par le calcul, pas à l'œil : chaque couleur retenue tient 4,5:1 sur
 *toutes* les surfaces où elle apparaît, et l'encre des initiales mêle la teinte
 de l'hôte à la couleur de texte du thème, de sorte que la lisibilité suive
 automatiquement.
+
+### Rejouer un serveur disparu
+
+Le dialogue d'un vrai serveur est capturé une fois, puis rejoué sans réseau :
+**5 millisecondes contre 5 secondes de connexion**. Une machine du parc devient
+une fixture permanente, et le rendu obtenu est comparé à une empreinte de
+référence — en débranchant le correctif du cisaillement, elle change.
+
+Surtout, ces enregistrements servent de graines à un **fuzzing par mutation**.
+Muter des octets au hasard ne franchit jamais les premières validations ; muter
+du trafic authentique atteint le décodeur d'images. Il y a trouvé deux façons
+pour un serveur hostile de faire tomber le client — une écriture hors tampon et
+un débordement arithmétique — l'une et l'autre corrigées. Détails dans
+[SECURITY.md](SECURITY.md).
 
 ### Conformité RDP : de vrais serveurs, pas des simulacres
 

@@ -60,6 +60,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
+mod magnetoscope;
+
 /// Presse-papiers local partagé (texte), alimenté par le front, servi au serveur.
 type LocalClip = std::sync::Arc<std::sync::Mutex<Option<String>>>;
 
@@ -173,6 +175,7 @@ struct Args {
     /// L'utilisateur a accepté de se passer de NLA pour ce serveur.
     sans_nla: bool,
     layout: u32,
+    enregistrer: Option<String>,
     width: u16,
     height: u16,
     shot: Option<String>,
@@ -246,6 +249,7 @@ fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(800),
         shot: a.opt("--shot"),
+        enregistrer: a.opt("--enregistrer"),
     })
 }
 
@@ -899,6 +903,19 @@ async fn main() -> Result<()> {
             .with_writer(std::io::stderr)
             .init();
     }
+    if let Some(chemin) = std::env::args()
+        .nth(1)
+        .filter(|a| a == "--rejouer")
+        .and(std::env::args().nth(2))
+    {
+        let e = magnetoscope::lire(&chemin)?;
+        let r = magnetoscope::rejouer(&e, false)?;
+        println!(
+            "rejeu : {} acceptés, {} graphiques refusés, {} hors périmètre, {} rectangles, empreinte {:016x}",
+            r.acceptes, r.refuses, r.hors_perimetre, r.rectangles, r.empreinte
+        );
+        return Ok(());
+    }
     let args = parse_args()?;
     let local_text: LocalClip = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel::<ClipReq>();
@@ -933,6 +950,14 @@ async fn main() -> Result<()> {
     let activation_factory = result.activation_factory;
     eprintln!("connecté : {w}x{h}");
     let mut image = DecodedImage::new(PixelFormat::RgbA32, w, h);
+    let (io_channel_id, user_channel_id) = (result.io_channel_id, result.user_channel_id);
+    let (message_channel_id, share_id) = (result.message_channel_id, result.share_id);
+    let canal_dvc = result
+        .static_channels
+        .get_channel_id_by_type::<DrdynvcClient>();
+    let canal_clip = result
+        .static_channels
+        .get_channel_id_by_type::<CliprdrClient>();
     let mut active = ActiveStageBuilder {
         static_channels: result.static_channels,
         user_channel_id: result.user_channel_id,
@@ -945,8 +970,39 @@ async fn main() -> Result<()> {
     }
     .build();
 
+    // Magnétoscope : capture le dialogue du serveur pour le rejouer plus tard,
+    // sans réseau. Voir magnetoscope.rs — c'est ce qui transforme une machine du
+    // parc en fixture permanente.
+    let mut magneto = match args.enregistrer.as_deref() {
+        Some(chemin) => {
+            let entete = magnetoscope::Entete {
+                largeur: w,
+                hauteur: h,
+                io: io_channel_id,
+                utilisateur: user_channel_id,
+                message: message_channel_id,
+                partage: share_id,
+                compression: 0,
+                canal_dvc: canal_dvc.unwrap_or(0),
+                canal_clip: canal_clip.unwrap_or(0),
+            };
+            let e =
+                magnetoscope::Enregistreur::nouveau(chemin, &entete, magnetoscope::PLAFOND_DEFAUT)?;
+            eprintln!("enregistrement : {chemin}");
+            Some(e)
+        }
+        None => None,
+    };
+
     if let Some(path) = args.shot.clone() {
-        return run_shot(&mut active, &mut image, &mut framed, &path).await;
+        return run_shot(
+            &mut active,
+            &mut image,
+            &mut framed,
+            &path,
+            magneto.as_mut(),
+        )
+        .await;
     }
 
     // Serveur WebSocket local : un seul client (Avash), jeton obligatoire.
@@ -1200,6 +1256,9 @@ async fn main() -> Result<()> {
             }
             read = framed.read_pdu() => {
                 let (action, payload) = read.context("lecture PDU")?;
+                if let Some(m) = magneto.as_mut() {
+                    m.ajouter(action, &payload);
+                }
                 for o in active.process(&mut image, action, &payload)? {
                     match o {
                         ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await.context("écriture réponse")?,
@@ -1252,10 +1311,14 @@ async fn run_shot(
     image: &mut DecodedImage,
     framed: &mut ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
     path: &str,
+    mut magneto: Option<&mut magnetoscope::Enregistreur>,
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while let Ok(Ok((action, payload))) = tokio::time::timeout_at(deadline, framed.read_pdu()).await
     {
+        if let Some(m) = magneto.as_mut() {
+            m.ajouter(action, &payload);
+        }
         let mut done = false;
         for o in active.process(image, action, &payload)? {
             match o {

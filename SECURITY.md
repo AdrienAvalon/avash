@@ -301,3 +301,31 @@ portes restaient ouvertes, et le projet embarque désormais du code tiers modifi
 arbres de dépendances (workspace et processus RDP), dans `check.sh` comme dans
 les deux chaînes d'intégration continue. La politique est dans `deny.toml`, et
 chaque exception y est justifiée en clair.
+
+### Un serveur RDP est une entrée non fiable
+
+Le modèle de sécurité d'avash traitait le serveur comme un pair : on vérifie son
+identité (TOFU sur la clé publique), on refuse de dégrader NLA sans décision
+explicite. Mais une fois la session établie, tout ce qu'il envoie était décodé
+avec confiance.
+
+Or rien n'oblige un serveur à être correct. Il peut être malveillant, compromis,
+ou simplement abîmé. Un **fuzzing par mutation à partir d'un enregistrement
+réel** (voir `rdp-sidecar/src/magnetoscope.rs`) a mis au jour deux défauts par
+lesquels un serveur faisait tomber le client :
+
+- une **écriture hors du tampon d'image** quand il annonce plus de lignes que le
+  rectangle n'en contient — six chemins de décodage ne bornaient rien ;
+- un **débordement arithmétique** sur un rectangle dont les bords sont dans le
+  désordre, la garde existante ne vérifiant que l'appartenance à l'image.
+
+Rust arrête ces écritures : il n'y a pas de corruption mémoire, donc pas
+d'exécution de code. Mais le processus meurt, emportant une session établie —
+un déni de service à distance, déclenchable par le seul serveur auquel on se
+connecte.
+
+Les deux sont corrigés dans `rdp-sidecar/vendor/` et couverts par une campagne
+de fuzzing qui tourne à chaque vérification. La leçon dépasse ces deux cas :
+**muter du trafic authentique atteint des chemins que des octets aléatoires
+n'atteignent jamais**, parce que les premières validations rejettent tout ce qui
+ne ressemble pas à du RDP.

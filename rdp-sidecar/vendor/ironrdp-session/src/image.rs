@@ -201,8 +201,17 @@ impl DecodedImage {
     }
 
     /// Returns `true` if the rectangle fits entirely within the image bounds.
+    ///
+    /// Vérifie aussi que les bords sont DANS L'ORDRE. `width()` et `height()`
+    /// calculent `droite - gauche + 1` en supposant l'invariant sans le
+    /// contrôler : un rectangle dégénéré, tel qu'un serveur peut en envoyer,
+    /// faisait déborder la soustraction. Trouvé par fuzzing par mutation sur un
+    /// enregistrement réel.
     fn rect_fits(&self, rect: &InclusiveRectangle) -> bool {
-        rect.right < self.width && rect.bottom < self.height
+        rect.left <= rect.right
+            && rect.top <= rect.bottom
+            && rect.right < self.width
+            && rect.bottom < self.height
     }
 
     fn apply_pointer_layer(&mut self, layer: PointerLayer) -> SessionResult<Option<InclusiveRectangle>> {
@@ -508,7 +517,8 @@ impl DecodedImage {
             );
             return Ok(InclusiveRectangle::empty());
         }
-
+        // Ce chemin-ci découpe en régions et copie par blocs bornés : il n'a pas
+        // le défaut des chemins ligne à ligne corrigés plus bas.
         let pointer_rendering_state = self.pointer_rendering_begin(&clipping_rectangles.extents)?;
 
         let update_region = clipping_rectangles.intersect_rectangle(update_rectangle);
@@ -560,6 +570,13 @@ impl DecodedImage {
             );
             return Ok(InclusiveRectangle::empty());
         }
+        // Le contrôle de bornes ci-dessus porte sur le RECTANGLE de destination.
+        // Rien ne bornait la quantité de données reçue : un serveur envoyant plus
+        // de lignes que le rectangle n'en contient faisait écrire hors du tampon,
+        // et le client tombait. Trouvé par fuzzing par mutation sur un
+        // enregistrement réel. Un serveur RDP est une entrée non fiable : rien
+        // n'oblige celui d'en face à être correct.
+        let hauteur_rect = usize::from(update_rectangle.height());
 
         const SRC_COLOR_DEPTH: usize = 2;
         const DST_COLOR_DEPTH: usize = 4;
@@ -575,6 +592,7 @@ impl DecodedImage {
         rgb16
             .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
             .rev()
+            .take(hauteur_rect)
             .enumerate()
             .for_each(|(row_idx, row)| {
                 row.chunks_exact(SRC_COLOR_DEPTH)
@@ -613,6 +631,13 @@ impl DecodedImage {
             );
             return Ok(InclusiveRectangle::empty());
         }
+        // Le contrôle de bornes ci-dessus porte sur le RECTANGLE de destination.
+        // Rien ne bornait la quantité de données reçue : un serveur envoyant plus
+        // de lignes que le rectangle n'en contient faisait écrire hors du tampon,
+        // et le client tombait. Trouvé par fuzzing par mutation sur un
+        // enregistrement réel. Un serveur RDP est une entrée non fiable : rien
+        // n'oblige celui d'en face à être correct.
+        let hauteur_rect = usize::from(update_rectangle.height());
 
         const SRC_COLOR_DEPTH: usize = 2;
         const DST_COLOR_DEPTH: usize = 4;
@@ -628,6 +653,7 @@ impl DecodedImage {
         rgb15
             .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
             .rev()
+            .take(hauteur_rect)
             .enumerate()
             .for_each(|(row_idx, row)| {
                 row.chunks_exact(SRC_COLOR_DEPTH)
@@ -668,6 +694,13 @@ impl DecodedImage {
             );
             return Ok(InclusiveRectangle::empty());
         }
+        // Le contrôle de bornes ci-dessus porte sur le RECTANGLE de destination.
+        // Rien ne bornait la quantité de données reçue : un serveur envoyant plus
+        // de lignes que le rectangle n'en contient faisait écrire hors du tampon,
+        // et le client tombait. Trouvé par fuzzing par mutation sur un
+        // enregistrement réel. Un serveur RDP est une entrée non fiable : rien
+        // n'oblige celui d'en face à être correct.
+        let hauteur_rect = usize::from(update_rectangle.height());
 
         const SRC_COLOR_DEPTH: usize = 3;
         const DST_COLOR_DEPTH: usize = 4;
@@ -683,6 +716,7 @@ impl DecodedImage {
         bgr24
             .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
             .rev()
+            .take(hauteur_rect)
             .enumerate()
             .for_each(|(row_idx, row)| {
                 row.chunks_exact(SRC_COLOR_DEPTH)
@@ -718,6 +752,13 @@ impl DecodedImage {
             );
             return Ok(InclusiveRectangle::empty());
         }
+        // Le contrôle de bornes ci-dessus porte sur le RECTANGLE de destination.
+        // Rien ne bornait la quantité de données reçue : un serveur envoyant plus
+        // de lignes que le rectangle n'en contient faisait écrire hors du tampon,
+        // et le client tombait. Trouvé par fuzzing par mutation sur un
+        // enregistrement réel. Un serveur RDP est une entrée non fiable : rien
+        // n'oblige celui d'en face à être correct.
+        let hauteur_rect = usize::from(update_rectangle.height());
 
         const DST_COLOR_DEPTH: usize = 4;
 
@@ -732,6 +773,7 @@ impl DecodedImage {
         indexed
             .chunks_exact(rectangle_width)
             .rev()
+            .take(hauteur_rect)
             .enumerate()
             .for_each(|(row_idx, row)| {
                 row.iter().enumerate().for_each(|(col_idx, &index)| {
@@ -764,6 +806,13 @@ impl DecodedImage {
             );
             return Ok(InclusiveRectangle::empty());
         }
+        // Le contrôle de bornes ci-dessus porte sur le RECTANGLE de destination.
+        // Rien ne bornait la quantité de données reçue : un serveur envoyant plus
+        // de lignes que le rectangle n'en contient faisait écrire hors du tampon,
+        // et le client tombait. Trouvé par fuzzing par mutation sur un
+        // enregistrement réel. Un serveur RDP est une entrée non fiable : rien
+        // n'oblige celui d'en face à être correct.
+        let hauteur_rect = usize::from(update_rectangle.height());
 
         const SRC_COLOR_DEPTH: usize = 3;
         const DST_COLOR_DEPTH: usize = 4;
@@ -775,8 +824,10 @@ impl DecodedImage {
 
         let pointer_rendering_state = self.pointer_rendering_begin(update_rectangle)?;
 
-        rgb24.enumerate().for_each(|(row_idx, row)| {
+        let largeur_rect = usize::from(update_rectangle.width());
+        rgb24.take(hauteur_rect).enumerate().for_each(|(row_idx, row)| {
             row.chunks_exact(SRC_COLOR_DEPTH)
+                .take(largeur_rect)
                 .enumerate()
                 .for_each(|(col_idx, src_pixel)| {
                     let dst_idx = ((top + row_idx) * image_width + left + col_idx) * DST_COLOR_DEPTH;
@@ -825,6 +876,13 @@ impl DecodedImage {
             );
             return Ok(InclusiveRectangle::empty());
         }
+        // Le contrôle de bornes ci-dessus porte sur le RECTANGLE de destination.
+        // Rien ne bornait la quantité de données reçue : un serveur envoyant plus
+        // de lignes que le rectangle n'en contient faisait écrire hors du tampon,
+        // et le client tombait. Trouvé par fuzzing par mutation sur un
+        // enregistrement réel. Un serveur RDP est une entrée non fiable : rien
+        // n'oblige celui d'en face à être correct.
+        let hauteur_rect = usize::from(update_rectangle.height());
 
         const SRC_COLOR_DEPTH: usize = 4;
         const DST_COLOR_DEPTH: usize = 4;
@@ -884,6 +942,13 @@ impl DecodedImage {
             );
             return Ok(InclusiveRectangle::empty());
         }
+        // Le contrôle de bornes ci-dessus porte sur le RECTANGLE de destination.
+        // Rien ne bornait la quantité de données reçue : un serveur envoyant plus
+        // de lignes que le rectangle n'en contient faisait écrire hors du tampon,
+        // et le client tombait. Trouvé par fuzzing par mutation sur un
+        // enregistrement réel. Un serveur RDP est une entrée non fiable : rien
+        // n'oblige celui d'en face à être correct.
+        let hauteur_rect = usize::from(update_rectangle.height());
 
         const SRC_COLOR_DEPTH: usize = 4;
         const DST_COLOR_DEPTH: usize = 4;
@@ -899,6 +964,7 @@ impl DecodedImage {
             rgb32
                 .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
                 .rev()
+                .take(hauteur_rect)
                 .enumerate()
                 .for_each(|(row_idx, row)| {
                     row.chunks_exact(SRC_COLOR_DEPTH)
@@ -914,6 +980,7 @@ impl DecodedImage {
             rgb32
                 .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
                 .rev()
+                .take(hauteur_rect)
                 .enumerate()
                 .try_for_each(|(row_idx, row)| {
                     row.chunks_exact(SRC_COLOR_DEPTH)

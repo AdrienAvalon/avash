@@ -49,6 +49,36 @@ tout client parlant à xrdp. Dès qu'une version publiée le corrige, supprimer 
 répertoire et la section `[patch.crates-io]` de `rdp-sidecar/Cargo.toml`.
 
 
+## `ironrdp-session` — un serveur hostile fait tomber le client
+
+Deux défauts distincts dans `src/image.rs` et `src/fast_path.rs`, trouvés par
+**fuzzing par mutation sur un enregistrement réel** (voir `src/magnetoscope.rs`).
+Un serveur RDP est une entrée non fiable : rien n'oblige celui d'en face à être
+bienveillant, ni même correct.
+
+### Écriture hors du tampon
+
+Les fonctions `apply_*` vérifient que le RECTANGLE de destination tient dans
+l'image. Rien ne bornait la quantité de données reçue : un serveur envoyant plus
+de lignes que le rectangle n'en contient faisait écrire au-delà du tampon.
+
+    index out of bounds: the len is 1228800 but the index is 81776640
+
+Rust arrête l'écriture — il n'y a pas de corruption mémoire — mais le processus
+meurt, et avec lui une session établie. Six chemins étaient concernés : aucun ne
+bornait le nombre de lignes.
+
+### Débordement sur un rectangle dégénéré
+
+`InclusiveRectangle::width()` calcule `droite - gauche + 1` en supposant
+l'invariant `gauche <= droite`. `rect_fits` vérifiait que le rectangle tient
+dans l'image, jamais que ses bords sont dans l'ordre. Un rectangle dégénéré
+passait la garde puis faisait déborder la soustraction.
+
+Corrigé en deux endroits — la garde elle-même, et le rejet en amont dans le
+traitement des mises à jour — parce que la largeur est parfois calculée avant
+d'atteindre la garde.
+
 ## `ironrdp-connector` — la connexion reste suspendue sans fin
 
 Dans `src/connection.rs`. La détection automatique des caractéristiques réseau

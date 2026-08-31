@@ -7,6 +7,23 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.4.0] - 2026-09-01
+
+Une capacité nouvelle — enregistrer le dialogue d'un serveur pour le rejouer —
+qui a immédiatement mis au jour **deux façons pour un serveur RDP de faire
+tomber le client**. Plus la moitié des octets d'affichage économisés, et des
+contrastes enfin conformes dans les deux thèmes.
+
+### Sécurité
+
+- **Un serveur hostile ne fait plus tomber le client.** Deux défauts trouvés par
+  fuzzing par mutation à partir de trafic authentique : une écriture hors du
+  tampon d'image quand le serveur annonce plus de lignes que le rectangle n'en
+  contient — six chemins de décodage ne bornaient rien — et un débordement
+  arithmétique sur un rectangle dont les bords sont dans le désordre. Rust
+  arrête l'écriture, donc pas de corruption mémoire ; mais le processus mourait,
+  emportant une session établie. Voir SECURITY.md.
+
 - Le processus RDP est éprouvé contre des messages malformés : vingt mille
   messages aléatoires et tous les types connus tronqués à toutes les longueurs.
   Le canal local est authentifié par jeton, mais un client authentifié reste un
