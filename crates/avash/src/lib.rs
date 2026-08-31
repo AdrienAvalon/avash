@@ -714,6 +714,12 @@ pub fn render_host_block(host: &SshHost) -> String {
 /// Si le répertoire, l'écriture, la synchronisation ou le renommage échouent.
 pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Result<()> {
     use std::io::Write as _;
+    // Le temporaire doit être unique par APPEL, pas seulement par processus :
+    // `folders::rename_core` réécrit ~/.ssh/config une fois par hôte, et une
+    // autre commande peut y toucher au même moment. Deux appels ouvrant le même
+    // `.tmp` en troncature produisaient un fichier mêlant les deux contenus —
+    // exactement la perte que cette fonction doit empêcher.
+    static SUITE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
             std::fs::create_dir_all(dir)
@@ -725,6 +731,17 @@ pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Re
             }
         }
     }
+    // Un renommage remplace le **lien** symbolique, là où `std::fs::write` le
+    // suivait et écrivait dans sa cible. Une configuration de dotfiles —
+    // `~/.ssh/config` pointant vers un dépôt versionné, cas très courant —
+    // aurait vu son lien transformé en fichier ordinaire au premier
+    // déplacement d'hôte : le dépôt devenait silencieusement orphelin, sans
+    // que `git status` n'ait rien à dire. On écrit donc dans la cible réelle.
+    // `canonicalize` échoue si le fichier n'existe pas encore : c'est alors le
+    // chemin demandé qui convient.
+    let resolu = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = resolu.as_path();
+
     // Écrire par renommage remplace la cible même si **elle** est en lecture
     // seule : seul le droit d'écriture du répertoire compte. Un utilisateur qui
     // a délibérément passé son ~/.ssh/config en 0400 ne s'attend pas à le voir
@@ -737,9 +754,10 @@ pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Re
         }
     }
     let tmp = path.with_extension(format!(
-        "{}tmp{}",
+        "{}tmp{}.{}",
         path.extension().map_or("", |_| "."),
-        std::process::id()
+        std::process::id(),
+        SUITE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);

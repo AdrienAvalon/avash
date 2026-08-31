@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="$ROOT/crates/avash"
 UI="$ROOT/crates/avash-ui"
 WEB="$ROOT/web"
+SIDECAR="$ROOT/rdp-sidecar"
 QUICK=${1:-}
 FAILED=()
 
@@ -34,6 +35,18 @@ run "compilation"        "$ROOT" cargo check --workspace --all-targets
 run "tests"              "$ROOT" cargo test --workspace --all-targets
 run "format"             "$ROOT" cargo fmt --all --check
 run "clippy"             "$ROOT" cargo clippy --workspace --all-targets -- -D warnings
+
+# Le sidecar RDP est HORS du workspace (conflit de versions pre-publication
+# entre IronRDP et russh) : `--workspace` ne le voit pas. Ses tests — dont ceux
+# du TOFU de certificat, le garde-fou qui empeche d'accepter n'importe quel
+# serveur RDP — n'etaient donc executes NULLE PART, ni ici ni en CI, qui se
+# contentait de le compiler. Ils passaient, mais personne ne l'aurait su s'ils
+# avaient cesse de passer.
+step "Processus RDP (hors workspace)"
+run "compilation"        "$SIDECAR" cargo check --all-targets
+run "tests"              "$SIDECAR" cargo test
+run "format"             "$SIDECAR" cargo fmt --check
+run "clippy"             "$SIDECAR" cargo clippy --all-targets -- -D warnings
 # Vulnerabilites connues des dependances. cargo-audit s'installe avec
 #   cargo install cargo-audit --locked
 if cargo audit --version >/dev/null 2>&1; then
@@ -58,6 +71,13 @@ run "build"              "$WEB" npx vite build
 
 if [ "$QUICK" != "--quick" ]; then
   step "Build release"
+  # `externalBin` de tauri.conf.json exige le binaire du sidecar AVANT toute
+  # compilation d'avash-ui. Il n'est pas versionne : sur un clone neuf, cette
+  # etape echouait ici alors qu'elle passait en CI, qui le construit, elle.
+  run "processus RDP"    "$SIDECAR" cargo build --release
+  cible="$ROOT/crates/avash-ui/binaries/avash-rdp-$(rustc -vV | sed -n 's/^host: //p')"
+  mkdir -p "$(dirname "$cible")"
+  cp "$SIDECAR/target/release/avash-rdp" "$cible" 2>/dev/null || true
   run "binaire Tauri"    "$ROOT" cargo build --release -p avash-ui
 fi
 

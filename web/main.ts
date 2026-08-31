@@ -272,6 +272,28 @@ function buildTree(): TreeNode {
 }
 
 /** Une ligne d'hôte SSH (avatar, logo distro, tags, état), déplaçable. */
+/** Les lignes de la barre latérale, dans l'ordre où on les parcourt.
+ *  Hôtes SSH, bureaux RDP et dossiers confondus : c'est ce que voit l'œil. */
+function lignesBarre(): HTMLElement[] {
+  return [...$("host-list").querySelectorAll<HTMLElement>("[data-cle]")];
+}
+
+/** Un seul arrêt de tabulation pour toute la liste (« tabindex glissant »).
+ *
+ *  Poser `tabindex=0` sur chaque ligne demandait deux cents pressions de Tab
+ *  pour traverser une barre latérale bien remplie : le champ de recherche et
+ *  les boutons du bas devenaient inatteignables en pratique. On entre donc dans
+ *  la liste en un Tab, et on s'y déplace aux flèches. */
+function majTabulation(courante?: HTMLElement): void {
+  const lignes = lignesBarre();
+  if (lignes.length === 0) return;
+  const cible =
+    courante ??
+    lignes.find((l) => l.classList.contains("picked")) ??
+    lignes[0];
+  for (const l of lignes) l.tabIndex = l === cible ? 0 : -1;
+}
+
 /** Rend une ligne de la barre latérale utilisable au clavier.
  *
  *  Ces lignes étaient de simples `div` : la connexion passait par un
@@ -280,15 +302,26 @@ function buildTree(): TreeNode {
  *  ne pouvait ni connecter, ni éditer, ni déplacer, ni supprimer un hôte sans
  *  souris. La palette rattrapait la connexion, rien d'autre.
  *
- *  Entrée agit, Maj+F10 et la touche Menu ouvrent le menu contextuel là où se
- *  trouve la ligne, les flèches se déplacent d'une ligne à l'autre. */
+ *  Entrée agit, Maj+F10 et la touche Menu ouvrent le menu contextuel au bord de
+ *  la ligne, les flèches se déplacent, Origine et Fin vont aux extrémités.
+ *  `cle` identifie la ligne d'un rendu à l'autre, pour lui rendre le focus. */
 function rendreAtteignableAuClavier(
   el: HTMLElement,
+  cle: string,
   agir: () => void,
   menu: (position: { clientX: number; clientY: number }) => void,
 ): void {
-  el.tabIndex = 0;
+  el.dataset.cle = cle;
+  el.tabIndex = -1; // majTabulation() désignera l'unique arrêt
   el.setAttribute("role", "button");
+  // Le focus vaut sélection : sans cela le cadre bleu restait sur la dernière
+  // ligne cliquée pendant que l'anneau de focus était ailleurs, et l'on ne
+  // savait plus laquelle des deux allait agir.
+  el.addEventListener("focus", () => {
+    for (const n of $("host-list").querySelectorAll(".picked")) n.classList.remove("picked");
+    el.classList.add("picked");
+    majTabulation(el);
+  });
   el.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -298,17 +331,32 @@ function rendreAtteignableAuClavier(
     if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
       e.preventDefault();
       const r = el.getBoundingClientRect();
+      // Le menu s'ouvre au bord de la ligne ; `placerMenu` le recadre s'il
+      // dépasse — le dernier hôte de la liste ouvrait sinon un menu dont le bas
+      // sortait de la fenêtre.
       menu({ clientX: r.left + 16, clientY: r.bottom - 4 });
+      const ouvert = MENUS_CONTEXTUELS.map((id) => $(id)).find((m) => m.classList.contains("open"));
+      if (ouvert) ouvrirMenuAuClavier(ouvert, el);
       return;
     }
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const lignes = [...$("host-list").querySelectorAll<HTMLElement>('[role="button"]')];
-      const i = lignes.indexOf(el);
-      lignes[i + (e.key === "ArrowDown" ? 1 : -1)]?.focus();
-    }
+    const lignes = lignesBarre();
+    const i = lignes.indexOf(el);
+    const vise =
+      e.key === "ArrowDown" ? i + 1
+      : e.key === "ArrowUp" ? i - 1
+      : e.key === "Home" ? 0
+      : e.key === "End" ? lignes.length - 1
+      : null;
+    if (vise === null) return;
+    e.preventDefault();
+    lignes[Math.max(0, Math.min(vise, lignes.length - 1))]?.focus();
   });
 }
+
+/** Les gestes d'une ligne, souris et clavier. Le suffixe était perdu sur les
+ *  hôtes dont l'OS est connu — donc les plus utilisés — et n'a jamais nommé les
+ *  gestes clavier, alors que l'infobulle est le seul endroit où les découvrir. */
+const GESTES_LIGNE = "double-clic ou Entrée : ouvrir ; clic droit ou Maj+F10 : options";
 
 function sshHostElement(h: Host): HTMLElement {
   const el = document.createElement("div");
@@ -323,7 +371,6 @@ function sshHostElement(h: Host): HTMLElement {
     ini.textContent = b.glyph;
     ini.className = "ini logo";
     el.style.setProperty("--hue", b.color);
-    el.title = `${os.pretty} — double-clic : connexion, clic droit : options`;
   } else {
     ini.textContent = hostInitials(h.alias);
   }
@@ -354,12 +401,10 @@ function sshHostElement(h: Host): HTMLElement {
   if (h.alias === state.pickedAlias) el.classList.add("picked");
   // L'alias peut être tronqué et les tags ne tiennent pas dans la ligne : les
   // deux se retrouvent ici, où l'on va naturellement chercher le détail.
-  const detail = [h.alias, target, h.tags.length > 0 ? `tags : ${h.tags.join(", ")}` : ""]
+  const detail = [h.alias, target, os?.pretty, h.tags.length > 0 ? `tags : ${h.tags.join(", ")}` : ""]
     .filter(Boolean)
     .join(" · ");
-  el.title = os
-    ? `${detail} — ${os.pretty}`
-    : `${detail} — double-clic : connexion, clic droit : options`;
+  el.title = `${detail} — ${GESTES_LIGNE}`;
   el.addEventListener("click", () => {
     state.pickedAlias = h.alias;
     state.pickedRdp = null;
@@ -371,7 +416,8 @@ function sshHostElement(h: Host): HTMLElement {
     e.preventDefault();
     openHostMenu(h, e as MouseEvent);
   });
-  rendreAtteignableAuClavier(el, () => void openSession(h), (p) => openHostMenu(h, p as MouseEvent));
+  rendreAtteignableAuClavier(el, `ssh:${h.alias}`, () => void openSession(h), (p) =>
+    openHostMenu(h, p as MouseEvent));
   makeHostDraggable(el, "ssh", h.alias);
   return el;
 }
@@ -387,7 +433,7 @@ function rdpHostElement(h: RdpHostT): HTMLElement {
   (el.querySelector(".dot") as HTMLElement).className = "dot" + (live ? " live" : "");
   el.querySelector(".alias")!.textContent = h.name;
   el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
-  el.title = `${h.name} · ${h.user}@${h.host}:${h.port} — double-clic : connexion RDP, clic droit : options`;
+  el.title = `${h.name} · ${h.user}@${h.host}:${h.port} — ${GESTES_LIGNE}`;
   if (h.id === state.pickedRdp) el.classList.add("picked");
   el.addEventListener("click", () => {
     state.pickedRdp = h.id;
@@ -400,7 +446,8 @@ function rdpHostElement(h: RdpHostT): HTMLElement {
     e.preventDefault();
     openRdpMenu(h, e as MouseEvent);
   });
-  rendreAtteignableAuClavier(el, () => void connectRdpSaved(h), (p) => openRdpMenu(h, p as MouseEvent));
+  rendreAtteignableAuClavier(el, `rdp:${h.id}`, () => void connectRdpSaved(h), (p) =>
+    openRdpMenu(h, p as MouseEvent));
   makeHostDraggable(el, "rdp", h.id);
   return el;
 }
@@ -459,7 +506,7 @@ function folderRow(node: TreeNode, depth: number): HTMLElement {
   row.innerHTML = `<span class="chev">${collapsed ? "▸" : "▾"}</span><span class="fic">${ic("folder")}</span><span class="fname"></span><span class="fcount"></span>`;
   row.querySelector(".fname")!.textContent = node.name;
   row.querySelector(".fcount")!.textContent = String(folderNodeCount(node));
-  row.title = `${node.path} — clic : plier/déplier, clic droit : options, déposer un hôte pour le ranger`;
+  row.title = `${node.path} — clic ou Entrée : plier/déplier ; clic droit ou Maj+F10 : options ; déposer un hôte pour le ranger`;
   row.addEventListener("click", () => {
     if (collapsedFolders.has(node.path)) collapsedFolders.delete(node.path);
     else collapsedFolders.add(node.path);
@@ -470,6 +517,18 @@ function folderRow(node: TreeNode, depth: number): HTMLElement {
     e.preventDefault();
     openFolderMenu(node.path, e as MouseEvent);
   });
+  rendreAtteignableAuClavier(
+    row,
+    `dossier:${node.path}`,
+    () => {
+      if (collapsedFolders.has(node.path)) collapsedFolders.delete(node.path);
+      else collapsedFolders.add(node.path);
+      saveCollapsed();
+      renderHosts();
+    },
+    (p) => openFolderMenu(node.path, p as MouseEvent),
+  );
+  row.setAttribute("aria-expanded", String(!collapsed));
   setupFolderDrop(row, node.path);
   return row;
 }
@@ -495,13 +554,20 @@ function renderNode(node: TreeNode, container: HTMLElement, depth: number) {
 
 function renderHosts() {
   const list = $("host-list");
+  // AVANT le vidage, impérativement : `innerHTML = ""` met scrollHeight à 0 et
+  // le moteur borne aussitôt scrollTop, si bien qu'une lecture faite ensuite
+  // rend toujours 0. Sans cela la liste saute au sommet à chaque événement sans
+  // rapport — un logo d'OS qui arrive, un état de session qui change —
+  // pendant qu'on la fait défiler.
+  const defilement = list.scrollTop;
+  // Même raison pour le focus : la ligne focalisée est sur le point d'être
+  // détruite, et le focus retomberait sur <body>. On note laquelle, pour la
+  // retrouver après reconstruction.
+  const focalisee = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
+    "#host-list [data-cle]",
+  )?.dataset.cle;
   list.innerHTML = "";
   renderTagBar();
-  // `innerHTML = ""` met scrollHeight à 0, le navigateur borne scrollTop à 0 et
-  // le réajout ne le restaure pas : la liste sautait au sommet à chaque
-  // événement sans rapport (arrivée d'un logo d'OS, changement d'état d'une
-  // session), pendant qu'on faisait défiler.
-  const defilement = list.scrollTop;
   const q = state.filter.trim().toLowerCase();
   const filtering = q !== "" || state.tagFilter !== null;
   const sshShown = filterHosts(state.hosts, state.filter, state.tagFilter);
@@ -538,7 +604,22 @@ function renderHosts() {
     empty.innerHTML = `<p>Aucun hôte ne correspond à « ${stripHtml(critere)} ».</p>`;
     list.appendChild(empty);
   }
+  // Filtrer par tag écarte tous les bureaux RDP — ils n'en portent pas. Ils
+  // disparaissaient de la liste et du compteur sans un mot, ce qui se lit comme
+  // une perte de données.
+  if (state.tagFilter !== null && rdpHostsList.length > 0) {
+    const note = document.createElement("div");
+    note.className = "host-empty";
+    note.innerHTML =
+      `<p class="sub">${rdpHostsList.length} bureau${rdpHostsList.length > 1 ? "x" : ""} RDP ` +
+      `masqué${rdpHostsList.length > 1 ? "s" : ""} : les bureaux ne portent pas de tag.</p>`;
+    list.appendChild(note);
+  }
   list.scrollTop = defilement;
+  if (focalisee !== undefined) {
+    list.querySelector<HTMLElement>(`[data-cle="${CSS.escape(focalisee)}"]`)?.focus();
+  }
+  majTabulation();
 }
 
 
@@ -1467,8 +1548,7 @@ function sftpOpenMenu(entry: SftpEntry | null, path: string, e: MouseEvent) {
     const dirOnly = act === "cd";
     item.hidden = (needsEntry && !entry) || (act === "download" && !!entry?.is_dir) || (dirOnly && !!entry && !entry.is_dir);
   }
-  m.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
-  m.style.top = `${Math.min(e.clientY, window.innerHeight - 240)}px`;
+  placerMenu(m, e);
   m.classList.add("open");
 }
 function sftpHideMenu() { $("sftp-context").classList.remove("open"); }
@@ -2373,8 +2453,54 @@ ctxMenu().addEventListener("click", (e) => {
 
 // ---------- Menu contextuel d'un hôte ----------
 
+const MENUS_CONTEXTUELS = ["host-context", "rdp-context", "folder-context", "sftp-context"];
+
 function closeAllContextMenus() {
-  for (const id of ["host-context", "rdp-context", "folder-context"]) $(id).classList.remove("open");
+  for (const id of MENUS_CONTEXTUELS) $(id).classList.remove("open");
+}
+
+/** Rend un menu contextuel utilisable au clavier, après Maj+F10.
+ *
+ *  Le menu s'ouvrait mais le focus restait sur la ligne : les flèches
+ *  continuaient de déplacer la sélection *derrière* le menu resté ouvert,
+ *  Entrée relançait la connexion par-dessus, et Échap ne fermait rien — seul un
+ *  clic de souris en sortait, ce qui annulait la raison d'être du raccourci.
+ *
+ *  Le focus revient à l'élément d'où l'on vient, comme pour les modales. */
+function ouvrirMenuAuClavier(menu: HTMLElement, origine: HTMLElement): void {
+  const items = [...menu.querySelectorAll<HTMLElement>("[data-act]")].filter((i) => !i.hidden);
+  if (items.length === 0) return;
+  for (const i of items) i.tabIndex = -1;
+  items[0].focus();
+  const surTouche = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      fermer();
+      return;
+    }
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const pas = e.key === "ArrowDown" ? 1 : -1;
+      items[(i + pas + items.length) % items.length].focus();
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      const choisi = items[i] ?? items[0];
+      fermer();
+      choisi.click();
+    } else if (e.key === "Tab") {
+      // Une tabulation sort du menu : on le referme plutôt que de laisser un
+      // menu ouvert sans focus dedans.
+      fermer();
+    }
+  };
+  function fermer() {
+    menu.removeEventListener("keydown", surTouche, true);
+    menu.classList.remove("open");
+    if (origine.isConnected) origine.focus();
+  }
+  menu.addEventListener("keydown", surTouche, true);
 }
 /**
  * Positionne un menu contextuel en le gardant dans la fenêtre.
@@ -3572,7 +3698,15 @@ async function connectRdpSaved(h: RdpHostT) {
     if (!rep) return;
     pw = rep.password;
     if (rep.remember && pw) {
-      await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw }).catch(() => {});
+      const memorise = await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw })
+        .then(() => true)
+        .catch(() => false);
+      // Une fois au trousseau, le secret n'a plus aucune raison de continuer sa
+      // route : `rdp_open` le relira côté natif. Il séjournait sinon dans
+      // `rdpSessions[id].target.password` toute la vie de l'onglet — le
+      // confinement ne valait donc que pour un bureau déjà mémorisé, pas pour
+      // la connexion où l'on coche « mémoriser ».
+      if (memorise) pw = "";
     }
   }
   await openRdp({ host: h.host, port: h.port, user: h.user, password: pw, hostId: h.id, name: h.name });
@@ -3582,8 +3716,7 @@ function openRdpMenu(h: RdpHostT, e: MouseEvent) {
   closeAllContextMenus();
   const m = $("rdp-context");
   m.dataset.id = h.id;
-  m.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
-  m.style.top = `${Math.min(e.clientY, window.innerHeight - 160)}px`;
+  placerMenu(m, e);
   m.classList.add("open");
 }
 window.addEventListener("click", () => $("rdp-context").classList.remove("open"));
@@ -3825,8 +3958,7 @@ function openFolderMenu(path: string, e: MouseEvent) {
   closeAllContextMenus();
   const m = $("folder-context");
   m.dataset.path = path;
-  m.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
-  m.style.top = `${Math.min(e.clientY, window.innerHeight - 160)}px`;
+  placerMenu(m, e);
   m.classList.add("open");
 }
 window.addEventListener("click", () => $("folder-context").classList.remove("open"));

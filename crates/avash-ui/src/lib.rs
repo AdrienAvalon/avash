@@ -18,6 +18,7 @@ pub fn run() {
         .manage(commands::SessionStore {
             inner: Mutex::new(HashMap::new()),
             annules: Mutex::new(std::collections::HashSet::new()),
+            en_cours: Mutex::new(std::collections::HashSet::new()),
         })
         .manage(commands::TunnelStore {
             inner: Mutex::new(HashMap::new()),

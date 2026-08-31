@@ -51,11 +51,17 @@ fn sidecar_path() -> Option<std::path::PathBuf> {
             // En dev : le sidecar est un projet séparé. Depuis target/release/,
             // remonter jusqu'à la racine du dépôt.
             if let Some(root) = dir.parent().and_then(std::path::Path::parent) {
-                // En dev : le sidecar est un projet séparé. `root` vient de
-                // current_exe(), donc absolu — pas du répertoire courant.
-                let devside = root.join("rdp-sidecar/target/release").join(&nom);
-                if devside.exists() {
-                    return Some(devside);
+                // En dev seulement : le sidecar est un projet séparé. `root`
+                // vient de current_exe(), donc absolu. En release ce chemin
+                // n'a rien à faire là : pour une installation dans
+                // ~/.local/bin il désignerait ~/rdp-sidecar/target/release/,
+                // un emplacement imprévu à qui l'on écrit le mot de passe.
+                #[cfg(debug_assertions)]
+                {
+                    let devside = root.join("rdp-sidecar/target/release").join(&nom);
+                    if devside.exists() {
+                        return Some(devside);
+                    }
                 }
             }
         }
@@ -93,6 +99,14 @@ pub async fn rdp_open(
     } else {
         password
     };
+    // L'adresse vient du front et arrive telle quelle jusqu'à la clé du fichier
+    // d'empreintes. `RdpHost::validate` ne la voyait qu'à l'enregistrement : une
+    // connexion manuelle, ou un rdp.yaml écrit par une version antérieure, la
+    // contournait entièrement — et une espace dans l'adresse suffit à casser
+    // `rdp_known_hosts`, donc à désarmer le TOFU en silence.
+    avash::rdphost::RdpHost::new("", &host, port.unwrap_or(3389), &user, width, height)
+        .validate()
+        .map_err(|e| format!("{e:#}"))?;
     let Some(bin) = sidecar_path() else {
         return Err(
             "Le processus RDP (avash-rdp) est introuvable à côté de l'application. \

@@ -65,9 +65,18 @@ mod tests {
         assert_eq!(account_id("deploy", "srv", 2222), "deploy@srv:2222");
     }
 
+    /// Le garde du mot de passe vide doit être vérifié SUR SON MESSAGE.
+    ///
+    /// Un simple `is_err()` passait pour la mauvaise raison : sans trousseau —
+    /// le cas de l'intégration continue — `entry()` échoue de toute façon, et
+    /// supprimer le garde laissait le test vert.
     #[test]
     fn save_refuse_un_mot_de_passe_vide() {
-        assert!(save("avash-test-vide", "").is_err());
+        let e = save("avash-test-vide", "").unwrap_err().to_string();
+        assert!(
+            e.contains("Mot de passe vide"),
+            "refusé pour la mauvaise raison : {e}"
+        );
     }
 
     #[test]
@@ -76,9 +85,18 @@ mod tests {
         assert!(load("avash-entree-qui-n-existe-pas-xyz").is_none());
     }
 
+    /// Idempotence : oublier deux fois ne doit pas échouer.
+    ///
+    /// Le test n'affirmait rien — le `Result` était jeté — et n'appelait
+    /// qu'une fois, alors que c'est le second appel qui exerce le bras
+    /// `Err(NoEntry) => Ok(())`. Il ne pouvait échouer que sur une panique.
     #[test]
     fn forget_ne_se_plaint_pas_sur_une_entree_absente() {
-        // Idempotence : oublier deux fois ne doit pas echouer.
-        let _ = forget("avash-entree-qui-n-existe-pas-xyz");
+        let compte = "avash-entree-qui-n-existe-pas-xyz";
+        assert!(forget(compte).is_ok(), "premier oubli");
+        assert!(
+            forget(compte).is_ok(),
+            "second oubli : l'absence n'est pas une erreur"
+        );
     }
 }

@@ -31,6 +31,17 @@ pub struct SessionStore {
     /// snippet « toutes les sessions » partait donc sur un serveur dont
     /// l'utilisateur avait fermé l'onglet.
     pub annules: Mutex<std::collections::HashSet<u64>>,
+    /// Connexions réellement en cours d'établissement.
+    ///
+    /// `pty_close` notait une annulation dès qu'il ne trouvait rien à retirer —
+    /// y compris quand il n'y avait jamais eu de connexion en vol. Fermer un
+    /// onglet dont la connexion avait échoué laissait donc son identifiant dans
+    /// `annules`, définitivement. Or le front renumérote ses onglets à partir
+    /// de 1 à chaque rechargement de fenêtre : un onglet ultérieur héritait de
+    /// cet identifiant, se connectait pour de bon, et se voyait répondre
+    /// « connexion annulée » — figé, sans reconnexion possible. Le trou était
+    /// simplement passé de l'autre côté.
+    pub en_cours: Mutex<std::collections::HashSet<u64>>,
 }
 
 pub struct SessionHandle {
@@ -330,8 +341,34 @@ async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &m
     }
 }
 
-/// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
-#[tauri::command]
+/// Enregistre la session, ou signale qu'on l'a annulée entre-temps.
+///
+/// Le test d'annulation et l'insertion se font **sous le même verrou**.
+/// Séparés, un `pty_close` pouvait se glisser entre les deux : il ne trouvait
+/// rien à retirer, notait l'annulation, et l'insertion qui suivait laissait une
+/// session SSH pleinement établie sans onglet — vivante jusqu'à l'arrêt de
+/// l'application, et toujours listée par `open_sessions`, si bien qu'un snippet
+/// « toutes les sessions » partait sur un serveur dont l'onglet était fermé.
+/// `pty_close` prend les verrous dans le même ordre.
+fn enregistrer_session(
+    state: &tauri::State<'_, SessionStore>,
+    id: u64,
+    handle: SessionHandle,
+) -> Result<(), String> {
+    let evicted = {
+        let mut inner = state.inner.lock().unwrap();
+        state.en_cours.lock().unwrap().remove(&id);
+        if state.annules.lock().unwrap().remove(&id) {
+            return Err(CONNEXION_ANNULEE.to_owned());
+        }
+        inner.insert(id, handle)
+    };
+    // L'évincé est libéré hors du verrou : le lâcher ferme ses canaux et
+    // termine son pump.
+    drop(evicted);
+    Ok(())
+}
+
 /// Établit la session SSH et son canal PTY. Extrait d'`open_on_target` pour que
 /// tous ses chemins d'échec passent par un seul point de nettoyage.
 async fn etablir(
@@ -350,6 +387,7 @@ async fn etablir(
     Ok((session, pty))
 }
 
+/// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
 async fn open_on_target(
     app: AppHandle,
     state: &tauri::State<'_, SessionStore>,
@@ -362,6 +400,7 @@ async fn open_on_target(
     const COALESCE_MS: u64 = 8;
     const FLUSH_BYTES: usize = 16 * 1024;
 
+    state.en_cours.lock().unwrap().insert(id);
     let (mut session, pty) = match etablir(&target, cols, rows).await {
         Ok(v) => v,
         Err(e) => {
@@ -371,6 +410,8 @@ async fn open_on_target(
             // fenêtre, la session qui héritait de cet identifiant se connectait
             // puis se voyait répondre « annulée » — onglet figé sur
             // « connexion en cours », sans message ni reconnexion possible.
+            let mut en_cours = state.en_cours.lock().unwrap();
+            en_cours.remove(&id);
             state.annules.lock().unwrap().remove(&id);
             return Err(e);
         }
@@ -400,32 +441,17 @@ async fn open_on_target(
     // n'enregistre rien : lâcher `input`/`resize` ferme les canaux, le pump
     // s'arrête et la session SSH se referme d'elle-même.
     let epoch = SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
-    // Le test d'annulation et l'insertion se font **sous le même verrou**.
-    // Séparés, un `pty_close` pouvait se glisser entre les deux : il ne
-    // trouvait rien à retirer, notait l'annulation, et l'insertion qui suivait
-    // laissait une session SSH pleinement établie sans onglet — vivante jusqu'à
-    // l'arrêt de l'application, et toujours listée par `open_sessions`, si bien
-    // qu'un snippet « toutes les sessions » partait sur un serveur dont
-    // l'onglet était fermé. `pty_close` prend les verrous dans le même ordre.
-    let evicted = {
-        let mut inner = state.inner.lock().unwrap();
-        if state.annules.lock().unwrap().remove(&id) {
-            return Err(CONNEXION_ANNULEE.to_owned());
-        }
-        inner.insert(
-            id,
-            SessionHandle {
-                epoch,
-                input,
-                resize,
-                sftp: Mutex::new(None),
-                target,
-            },
-        )
-    };
-    if let Some(old) = evicted {
-        drop(old);
-    }
+    enregistrer_session(
+        state,
+        id,
+        SessionHandle {
+            epoch,
+            input,
+            resize,
+            sftp: Mutex::new(None),
+            target,
+        },
+    )?;
 
     // Pump out → event front ; la session vit dans le pump.
     //
@@ -625,10 +651,11 @@ pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result
     let handle = {
         let mut inner = state.inner.lock().unwrap();
         let h = inner.remove(&id);
-        if h.is_none() {
-            // Rien à fermer : soit l'onglet était déjà clos, soit sa connexion
-            // est encore en cours. On note l'annulation pour qu'`open_on_target`
-            // la voie en arrivant, plutôt que d'abandonner une session vivante.
+        // On ne note l'annulation que si une connexion est RÉELLEMENT en cours.
+        // Sans cette condition, fermer un onglet dont la connexion avait déjà
+        // échoué semait un identifiant qui figeait, après rechargement de la
+        // fenêtre, l'onglet qui en héritait.
+        if h.is_none() && state.en_cours.lock().unwrap().contains(&id) {
             state.annules.lock().unwrap().insert(id);
         }
         h

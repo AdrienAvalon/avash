@@ -23,7 +23,13 @@ export const RDP_PORT = 33899;
 export const SSH_PORT = 2223;
 // Serveurs locaux (RDP + sshd) désactivés en CI : le sshd non-root et les certs
 // de test ne s'y prêtent pas. Les specs qui en dépendent sont retirées de la liste.
-const LOCAL_SERVERS = !process.env.E2E_NO_RDP;
+export const LOCAL_SERVERS = !process.env.E2E_NO_RDP;
+
+// Les hôtes réellement semés, selon que les serveurs locaux tournent ou non.
+// Exporté pour que les specs raisonnent sur le semage plutôt que de le
+// réénoncer : `isolation.spec.js` affirmait « db-1, test-ssh, web-1 » alors que
+// la CI ne sème pas `test-ssh` — la garde d'isolation ne pouvait qu'y échouer.
+export const HOTES_SEMES = LOCAL_SERVERS ? ["db-1", "test-ssh", "web-1"] : ["db-1", "web-1"];
 
 function seedSandbox() {
   const ssh = join(sandbox, ".ssh");
@@ -70,18 +76,17 @@ function startSshd() {
 
 export const config = {
   runner: "local",
-  specs: LOCAL_SERVERS
-    ? ["./specs/**/*.spec.js"]
-    : [ // CI : uniquement les flux sans serveur local. Cette liste est
-        // énumérative par nécessité — elle avait pris du retard sur specs/, et
-        // quatre scénarios pourtant sans serveur (accessibilité, clavier,
-        // isolation du bac à sable, réglages) ne tournaient plus qu'en local.
-        "./specs/smoke.spec.js", "./specs/hosts.spec.js", "./specs/folders.spec.js",
-        "./specs/modals.spec.js", "./specs/hosts-move.spec.js",
-        "./specs/snippets.spec.js", "./specs/tunnels.spec.js",
-        "./specs/a11y.spec.js", "./specs/clavier.spec.js",
-        "./specs/isolation.spec.js", "./specs/prefs.spec.js",
-        "./specs/liste-clavier.spec.js",
+  specs: ["./specs/**/*.spec.js"],
+  // On DÉSIGNE ce qui exige un serveur local, plutôt que d'énumérer ce qui n'en
+  // exige pas : la liste énumérative prenait du retard à chaque spec ajoutée —
+  // cinq scénarios pourtant sans serveur ne tournaient plus qu'en local. Une
+  // nouvelle spec sans serveur tourne désormais en CI d'office.
+  exclude: LOCAL_SERVERS
+    ? []
+    : [
+        "./specs/ssh.spec.js", "./specs/sftp.spec.js",
+        "./specs/rdp.spec.js", "./specs/rdp-reconnect.spec.js",
+        "./specs/rdp-clipboard.spec.js",
       ],
   maxInstances: 1,
   capabilities: [

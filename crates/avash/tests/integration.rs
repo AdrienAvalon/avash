@@ -38,9 +38,25 @@ impl russh::server::Handler for TestSshSession {
 
     async fn auth_publickey(
         &mut self,
-        _user: &str,
+        user: &str,
         _key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
+        // Un serveur qui accepte tout le monde ne peut pas exercer les chemins
+        // d'échec : le marqueur PASSWORD_REQUIRED, sur lequel repose toute la
+        // relance de saisie côté interface, n'était produit par aucun test.
+        // L'utilisateur « refuse » sert précisément à cela.
+        if user == "refuse" {
+            return Ok(Auth::reject());
+        }
+        Ok(Auth::Accept)
+    }
+
+    async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        // « refuse » n'accepte qu'un mot de passe précis : de quoi distinguer
+        // « il en faut un » de « celui-ci est mauvais ».
+        if user == "refuse" && password != "le-bon" {
+            return Ok(Auth::reject());
+        }
         Ok(Auth::Accept)
     }
 
@@ -282,6 +298,8 @@ struct TestSftpSession {
     coupure_en_lecture: bool,
     /// Le chemin ouvert sert le fichier de démonstration, à décalage honoré.
     gros_fichier: bool,
+    /// Le chemin ouvert annonce plus d'octets qu'il n'en sert.
+    tronque: bool,
 }
 
 // Les methodes du trait Handler de russh-sftp sont declarees
@@ -305,6 +323,10 @@ impl russh_sftp::server::Handler for TestSftpSession {
     ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
         self.coupure_en_lecture = filename.contains("coupure");
         self.gros_fichier = filename.contains("gros");
+        // « tronque » annonce la taille du gros fichier mais n'en sert que le
+        // premier quart : c'est le cas du journal en rotation, que huit lectures
+        // concurrentes rendent bien plus probable qu'une lecture séquentielle.
+        self.tronque = filename.contains("tronque");
         async move {
             // Deux chemins réservés pour exercer les échecs, que le reste du
             // mock accepte trop volontiers : « introuvable » échoue à
@@ -331,6 +353,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
         let done = std::mem::replace(&mut self.file_read_done, true);
         let coupure = self.coupure_en_lecture;
         let gros = self.gros_fichier;
+        let tronque = self.tronque;
         async move {
             if done && coupure {
                 // La liaison tombe après le premier bloc.
@@ -341,10 +364,15 @@ impl russh_sftp::server::Handler for TestSftpSession {
             // serveur qui lui rend toujours le même bloc.
             if gros {
                 let debut = usize::try_from(offset).unwrap_or(usize::MAX);
-                if debut >= GROS_FICHIER.len() {
+                let servi = if tronque {
+                    GROS_FICHIER.len() / 4
+                } else {
+                    GROS_FICHIER.len()
+                };
+                if debut >= servi {
                     return Err(StatusCode::Eof);
                 }
-                let fin = (debut + len as usize).min(GROS_FICHIER.len());
+                let fin = (debut + len as usize).min(servi);
                 return Ok(russh_sftp::protocol::Data {
                     id,
                     data: GROS_FICHIER[debut..fin].to_vec(),
@@ -595,8 +623,19 @@ fn temp_key_path() -> std::path::PathBuf {
     path
 }
 
-fn test_auth() -> avash::ssh::ClientAuth {
+/// `HOME` n'est posé qu'une fois, et toujours sur la même valeur.
+///
+/// `set_var` porte sur tout le processus : l'appeler depuis chaque test — ils
+/// s'exécutent en parallèle — est une mutation concurrente, même quand la
+/// valeur ne change pas. Le crate a un verrou pour cela (`testutil`), mais un
+/// garde ne se tient pas à travers un `.await` ; poser la variable une seule
+/// fois, avant tout test, règle la question sans verrou.
+static HOME_POSE: std::sync::LazyLock<()> = std::sync::LazyLock::new(|| {
     std::env::set_var("HOME", virtual_home());
+});
+
+fn test_auth() -> avash::ssh::ClientAuth {
+    std::sync::LazyLock::force(&HOME_POSE);
     avash::ssh::ClientAuth {
         user: "testuser".into(),
         key_path: Some(temp_key_path()),
@@ -1146,6 +1185,107 @@ async fn un_telechargement_en_bandes_rend_le_fichier_a_l_octet_pres() {
     );
 
     let _ = std::fs::remove_file(&local);
+    sftp.close().await.unwrap();
+}
+
+/// Sans mot de passe, un refus doit porter le marqueur que l'interface guette.
+///
+/// C'est lui qui déclenche la demande de saisie puis la nouvelle tentative :
+/// sans marqueur, l'utilisateur voit un échec sec et sans recours. Le serveur
+/// de test acceptait jusqu'ici n'importe qui, si bien qu'aucun test Rust ne
+/// produisait ce marqueur.
+#[tokio::test]
+async fn un_refus_sans_mot_de_passe_porte_le_marqueur_attendu() {
+    let port = spawn_test_sshd().await;
+    let _home = virtual_home();
+    let mut auth = test_auth();
+    auth.user = "refuse".into();
+    auth.password = None;
+
+    let issue = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth).await;
+    let Err(e) = issue else {
+        panic!("un refus doit remonter")
+    };
+    let e = e.to_string();
+    assert!(
+        e.contains(avash::ssh::PASSWORD_REQUIRED),
+        "l'interface ne saura pas qu'il faut demander un mot de passe : {e}"
+    );
+}
+
+/// Avec un mauvais mot de passe, le message doit dire l'échec — et surtout PAS
+/// porter le marqueur, sans quoi l'interface redemanderait indéfiniment.
+#[tokio::test]
+async fn un_mauvais_mot_de_passe_ne_porte_pas_le_marqueur() {
+    let port = spawn_test_sshd().await;
+    let _home = virtual_home();
+    let mut auth = test_auth();
+    auth.user = "refuse".into();
+    auth.password = Some("mauvais".into());
+
+    let issue = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth).await;
+    let Err(e) = issue else {
+        panic!("un mauvais mot de passe doit remonter")
+    };
+    let e = e.to_string();
+    assert!(
+        !e.contains(avash::ssh::PASSWORD_REQUIRED),
+        "marqueur en trop : {e}"
+    );
+    assert!(
+        e.contains("Authentification échouée"),
+        "message inattendu : {e}"
+    );
+}
+
+/// Le bon mot de passe passe : sans ce cas, les deux tests ci-dessus
+/// pourraient passer sur un serveur qui refuse tout, quoi qu'on lui envoie.
+#[tokio::test]
+async fn le_bon_mot_de_passe_est_accepte() {
+    let port = spawn_test_sshd().await;
+    let _home = virtual_home();
+    let mut auth = test_auth();
+    auth.user = "refuse".into();
+    auth.password = Some("le-bon".into());
+
+    assert!(avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .is_ok());
+}
+
+/// Un serveur qui annonce plus qu'il ne sert ne doit pas produire un « succès ».
+///
+/// Les bandes écrivent à des décalages disjoints : si les dernières tombent sur
+/// une fin de fichier prématurée, le `.part` contient les premières données,
+/// **des zéros au milieu**, et se voyait promu sur la cible, transfert annoncé
+/// réussi. Le chemin séquentiel, lui, ne pouvait que tronquer — jamais trouer.
+#[tokio::test]
+async fn un_fichier_plus_court_que_promis_ne_passe_pas_pour_un_succes() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    let local = std::env::temp_dir().join(format!("avash-troue-{}.bin", std::process::id()));
+    let _ = std::fs::remove_file(&local);
+
+    let issue = sftp
+        .download_with("/srv/gros-tronque.bin", &local, |_, _| {})
+        .await;
+
+    let Err(e) = issue else {
+        panic!("un fichier incomplet ne doit pas être un succès")
+    };
+    assert!(
+        e.to_string().contains("Transfert incomplet"),
+        "message inattendu : {e}"
+    );
+    assert!(
+        !local.exists(),
+        "la cible ne doit pas exister : {}",
+        local.display()
+    );
+    let partiel = local.with_extension("bin.part");
+    assert!(!partiel.exists(), "un .part orphelin est resté");
+
     sftp.close().await.unwrap();
 }
 

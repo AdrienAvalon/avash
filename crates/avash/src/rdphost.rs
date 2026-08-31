@@ -99,7 +99,13 @@ pub fn load_hosts_from(path: &Path) -> Result<Vec<RdpHost>> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    serde_yaml::from_str(&text).with_context(|| format!("{} est illisible", path.display()))
+    let tous: Vec<RdpHost> =
+        serde_yaml::from_str(&text).with_context(|| format!("{} est illisible", path.display()))?;
+    // Un fichier écrit par une version antérieure à la validation d'adresse — ou
+    // édité à la main — peut contenir une adresse à espace ou à saut de ligne.
+    // La laisser passer casserait la clé du fichier d'empreintes RDP, donc le
+    // TOFU, sans que rien ne le signale. Mieux vaut écarter l'entrée.
+    Ok(tous.into_iter().filter(|h| h.validate().is_ok()).collect())
 }
 
 /// Ecriture atomique : un plantage en cours d'ecriture ne tronque pas le fichier.

@@ -3,6 +3,8 @@
 // — un fichier qui crée un dossier ou déplace un hôte fausse les suivants.
 // Ce scénario est le garde-fou de cette propriété.
 
+import { HOTES_SEMES } from "../wdio.conf.js";
+
 describe("Isolation entre fichiers de tests", () => {
   it("l'état de départ est celui semé, sans reste des autres scénarios", async () => {
     // Attendre que la liste soit peuplée avant de juger de son contenu.
@@ -20,7 +22,9 @@ describe("Isolation entre fichiers de tests", () => {
 
     // Le harnais ne sème qu'un seul dossier : « prod » (il contient web-1).
     expect(dossiers.sort()).toEqual(["prod"]);
-    // Et trois hôtes : web-1, db-1 et l'hôte SSH réellement joignable.
-    expect(hotes.sort()).toEqual(["db-1", "test-ssh", "web-1"]);
+    // Et les hôtes semés — `test-ssh` n'existe que si le sshd local tourne.
+    // L'attendu est dérivé du semage : le réénoncer ici l'avait déjà rendu faux
+    // en intégration continue, où ce troisième hôte n'est pas semé.
+    expect(hotes.sort()).toEqual([...HOTES_SEMES].sort());
   });
 });

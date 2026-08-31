@@ -296,10 +296,15 @@
     .host .info { min-width: 0; flex: 1; display: flex; flex-direction: row; align-items: baseline; gap: 6px; }
     /* flex:none + nowrap sans overflow : un alias long écrasait l'adresse puis
        débordait de la barre latérale, coupé net et sans « … » pour le dire. */
-    .host .alias { flex: 0 1 auto; min-width: 0; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* min-width : sans plancher, les deux badges (« rebond » et le compteur de
+       tunnels, tous deux flex:none) réduisaient l'alias à trois caractères sur
+       les hôtes les plus configurés — précisément ceux qu'on reconnaît le moins
+       à leur adresse. L'adresse cède la place la première ; elle est de toute
+       façon dans l'infobulle. */
+    .host .alias { flex: 0 1 auto; min-width: 7ch; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .host .meta { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .host .jumptag {
-      flex: none; margin-left: 2px; font-size: 10px; color: var(--accent-soft);
+      flex: none; font-size: 10px; color: var(--accent-soft);
       font-family: var(--mono); border: 1px solid var(--accent-soft);
       border-radius: 6px; padding: 0 5px; opacity: .85;
     }
@@ -308,6 +313,7 @@
       color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent);
       padding: 1px 6px; border-radius: 6px;
     }
+    .host:focus-visible, .folder-row:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
     .host-empty { padding: 14px 12px; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
     .host-empty p { margin: 0 0 6px; }
     .host-empty .sub { opacity: .8; }

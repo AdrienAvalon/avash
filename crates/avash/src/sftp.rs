@@ -96,11 +96,6 @@ impl SftpHandle {
         mut progress: impl FnMut(u64, u64),
     ) -> Result<u64> {
         let total = self.sftp.metadata(remote).await.map_or(0, |m| m.len());
-        let mut remote_file = self
-            .sftp
-            .open(remote)
-            .await
-            .with_context(|| format!("Ouverture distant {remote}"))?;
         let partiel = chemin_partiel(local);
         // Taille connue et fichier assez gros : on lit en bandes parallèles.
         if total > (2 * CHUNK) as u64 {
@@ -120,6 +115,14 @@ impl SftpHandle {
                 }
             };
         }
+        // Le descripteur distant n'est ouvert qu'ici : sur le chemin en bandes,
+        // il l'était pour rien — un aller-retour d'ouverture et de fermeture de
+        // plus, sur le chemin même qu'on cherche à raccourcir.
+        let mut remote_file = self
+            .sftp
+            .open(remote)
+            .await
+            .with_context(|| format!("Ouverture distant {remote}"))?;
         let mut local_file = tokio::fs::File::create(&partiel)
             .await
             .with_context(|| format!("Création local {}", partiel.display()))?;
@@ -217,6 +220,18 @@ impl SftpHandle {
         for issue in issues {
             issue?;
         }
+        // Une bande qui tombe sur une fin de fichier prématurée sort de sa
+        // boucle sans erreur : le fichier distant a rétréci en cours de route —
+        // un journal en rotation, par exemple, ce que huit lectures concurrentes
+        // rendent bien plus probable qu'une lecture séquentielle. Sans ce
+        // contrôle, le `.part` — écrit à des décalages disjoints — contenait des
+        // **zéros au milieu** et était promu sur la cible, transfert annoncé
+        // réussi. Le chemin séquentiel, lui, ne pouvait que tronquer.
+        anyhow::ensure!(
+            fait == total,
+            "Transfert incomplet : {fait} octets reçus sur {total} annoncés \
+             (le fichier distant a changé pendant le transfert)."
+        );
         Ok(fait)
     }
 

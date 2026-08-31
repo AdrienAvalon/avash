@@ -242,7 +242,16 @@ fn build_config(a: &Args) -> connector::Config {
             password: a.pass.clone(),
         },
         domain,
-        enable_tls: true,
+        // `enable_tls` annonce PROTOCOL_SSL au serveur, ce qui — la
+        // documentation d'ironrdp le dit mot pour mot — revient à **accepter le
+        // repli de NLA vers TLS seul**. Un serveur qui répond « SSL » voyait
+        // alors CredSSP sauté (connection.rs : « CredSSP is disabled, skipping
+        // NLA ») et le mot de passe partait dans le Client Info PDU, sans
+        // authentification mutuelle. C'est précisément au premier contact —
+        // le seul moment où le TOFU ne protège pas — que cela coûte le plus.
+        // En n'annonçant que HYBRID, un serveur incapable de NLA fait échouer
+        // la négociation, ce qui est le bon comportement.
+        enable_tls: false,
         enable_credssp: true,
         keyboard_type: KeyboardType::IbmEnhanced,
         keyboard_subtype: 0,
@@ -339,16 +348,30 @@ fn empreinte(der: &[u8]) -> String {
 }
 
 /// Fichier des empreintes mémorisées, à côté du reste de la configuration.
-fn chemin_empreintes() -> std::path::PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+///
+/// Sans répertoire de configuration, on **échoue** au lieu de retomber sur le
+/// répertoire courant : y semer un fichier de confiance le rendrait inopérant
+/// au prochain lancement depuis ailleurs — chaque serveur redeviendrait un
+/// premier contact, en silence.
+fn chemin_empreintes() -> anyhow::Result<std::path::PathBuf> {
+    Ok(dirs::config_dir()
+        .context("répertoire de configuration introuvable (HOME/XDG_CONFIG_HOME)")?
         .join("avash")
-        .join("rdp_known_hosts")
+        .join("rdp_known_hosts"))
 }
 
 /// Empreinte mémorisée pour `hote:port`, s'il y en a une.
 fn empreinte_memorisee(cle: &str) -> Option<String> {
-    let contenu = std::fs::read_to_string(chemin_empreintes()).ok()?;
+    let contenu = std::fs::read_to_string(chemin_empreintes().ok()?).ok()?;
+    chercher_empreinte(&contenu, cle)
+}
+
+/// Cherche l'empreinte de `cle` dans le contenu d'un fichier d'empreintes.
+///
+/// Séparée de la lecture pour être exerçable : c'est ici que se joue la
+/// différence entre « ce serveur est connu » et « premier contact », donc entre
+/// refuser un imposteur et l'accepter.
+fn chercher_empreinte(contenu: &str, cle: &str) -> Option<String> {
     contenu.lines().find_map(|l| {
         let (h, e) = l.split_once(' ')?;
         (h == cle).then(|| e.trim().to_owned())
@@ -356,20 +379,49 @@ fn empreinte_memorisee(cle: &str) -> Option<String> {
 }
 
 /// Mémorise l'empreinte d'un hôte au premier contact.
-fn memoriser_empreinte(cle: &str, emp: &str) -> Result<()> {
-    let chemin = chemin_empreintes();
-    if let Some(parent) = chemin.parent() {
-        std::fs::create_dir_all(parent)?;
+fn memoriser_empreinte(cle: &str, empreinte: &str) -> anyhow::Result<()> {
+    let chemin = chemin_empreintes()?;
+    if let Some(dir) = chemin.parent() {
+        std::fs::create_dir_all(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
     }
     let mut contenu = std::fs::read_to_string(&chemin).unwrap_or_default();
     if !contenu.is_empty() && !contenu.ends_with('\n') {
         contenu.push('\n');
     }
-    contenu.push_str(&format!("{cle} {emp}\n"));
-    std::fs::write(&chemin, contenu)?;
+    contenu.push_str(&format!("{cle} {empreinte}\n"));
+
+    // Écriture atomique, comme le fait le cœur pour ses propres fichiers. Le
+    // sidecar ne dépend pas du crate `avash`, la fonction n'y était donc pas —
+    // alors que c'est ce fichier-ci qui compte le plus : le perdre ramène TOUS
+    // les serveurs à « premier contact », et le TOFU cesse de protéger sans que
+    // rien ne le signale. Une lecture-modification-écriture non atomique perdait
+    // aussi l'empreinte d'un premier contact concurrent.
+    let tmp = chemin.with_extension(format!("tmp{}", std::process::id()));
+    {
+        use std::io::Write as _;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut f = options.open(&tmp)?;
+        f.write_all(contenu.as_bytes())?;
+        f.sync_all()?;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &chemin) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&chemin, std::fs::Permissions::from_mode(0o600));
     }
     Ok(())
@@ -929,6 +981,84 @@ mod tests_certificat {
             VerdictCert::Change {
                 attendue: "aa".into()
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_taille {
+    use super::taille_sure;
+
+    /// C'est le serveur qui confirme la résolution, et rien ne l'oblige à
+    /// reprendre celle demandée. `DecodedImage::new` alloue largeur × hauteur × 4
+    /// d'un bloc : 17 Gio pour un 65535×65535 annoncé, rejouable à volonté par
+    /// renégociation. Ce plafond n'avait aucun test — et les tests du sidecar ne
+    /// tournaient nulle part, ce qui n'aurait rien changé.
+    #[test]
+    fn une_resolution_deraisonnable_est_refusee() {
+        for (w, h) in [(0, 1), (1, 0), (0, 0), (8193, 1), (1, 8193), (65535, 65535)] {
+            assert!(
+                taille_sure(w, h).is_err(),
+                "résolution acceptée alors qu'elle ne devrait pas : {w}x{h}"
+            );
+        }
+    }
+
+    #[test]
+    fn les_resolutions_courantes_passent() {
+        for (w, h) in [(1, 1), (1920, 1080), (3440, 1440), (8192, 8192)] {
+            assert_eq!(taille_sure(w, h).unwrap(), (w, h), "{w}x{h} refusée à tort");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_fichier_empreintes {
+    use super::chercher_empreinte;
+
+    /// Ne rien trouver vaut « premier contact », donc acceptation et
+    /// mémorisation : toute entrée que la recherche rate revient à désarmer le
+    /// TOFU pour cet hôte, en silence. Ces cas-là méritaient un test.
+    #[test]
+    fn une_entree_presente_est_retrouvee() {
+        let contenu = "a:3389 aaaa\nsrv.exemple:3389 bbbb\nz:3389 cccc\n";
+        assert_eq!(
+            chercher_empreinte(contenu, "srv.exemple:3389").as_deref(),
+            Some("bbbb")
+        );
+        // Dernière ligne sans saut de ligne final.
+        assert_eq!(chercher_empreinte("x:1 dd", "x:1").as_deref(), Some("dd"));
+    }
+
+    #[test]
+    fn un_fichier_vide_ou_abime_ne_fait_pas_trouver_n_importe_quoi() {
+        for contenu in ["", "\n\n", "ligne-sans-espace\n", "  \n"] {
+            assert_eq!(chercher_empreinte(contenu, "srv:3389"), None, "{contenu:?}");
+        }
+    }
+
+    #[test]
+    fn une_cle_voisine_ne_correspond_pas() {
+        let contenu = "srv.exemple:3389 bbbb\n";
+        for cle in [
+            "srv.exemple:3390",
+            "srv.exemple",
+            "srv.exemple:33890",
+            "rv.exemple:3389",
+        ] {
+            assert_eq!(chercher_empreinte(contenu, cle), None, "{cle}");
+        }
+    }
+
+    /// Deux entrées pour le même hôte : c'est la première qui fait foi, et elle
+    /// doit être trouvée — sans quoi une ligne ajoutée en fin de fichier
+    /// masquerait l'empreinte d'origine.
+    #[test]
+    fn la_premiere_entree_fait_foi() {
+        let contenu = "srv:3389 originale\nsrv:3389 ajoutee\n";
+        assert_eq!(
+            chercher_empreinte(contenu, "srv:3389").as_deref(),
+            Some("originale")
         );
     }
 }

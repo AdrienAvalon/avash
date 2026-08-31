@@ -80,6 +80,18 @@ jobs:
       - name: Rust — tests
         run: cargo test --workspace --all-targets
 
+      # Le sidecar RDP est HORS du workspace : `--workspace` ne le voit pas, et
+      # ce job se contentait jusqu'ici de le COMPILER. Ses tests — dont ceux du
+      # TOFU de certificat, le garde-fou qui empêche d'accepter n'importe quel
+      # serveur RDP — ne s'exécutaient donc nulle part. Ils passaient, mais
+      # personne ne l'aurait su s'ils avaient cessé de passer.
+      - name: Processus RDP — format, clippy, tests
+        working-directory: rdp-sidecar
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
       # Absent jusqu'ici du CI, et le sidecar RDP n'était audité nulle part
       # alors qu'il est compilé et livré dans le bundle.
       - name: Rust — audit des dépendances
@@ -148,8 +160,10 @@ jobs:
         working-directory: e2e
         run: npm ci
 
-      # E2E_NO_RDP : on saute le scénario RDP (certs de test non versionnés,
-      # handshake CredSSP peu adapté au headless). Les flux UI, eux, sont couverts.
-      - name: E2E — suite (hors RDP)
+      # E2E_NO_RDP : on écarte les scénarios qui exigent un serveur local (sshd
+      # non-root, certs de test non versionnés). La liste des exclusions vit
+      # dans wdio.conf.js — elle était auparavant une énumération de ce qui
+      # tourne, qui prenait du retard à chaque spec ajoutée.
+      - name: E2E — suite (hors serveurs locaux)
         working-directory: e2e
         run: E2E_NO_RDP=1 xvfb-run -a npm test

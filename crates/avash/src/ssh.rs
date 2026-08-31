@@ -66,7 +66,16 @@ fn known_hosts_illisible() -> bool {
     let Some(chemin) = dirs::home_dir().map(|h| h.join(".ssh").join("known_hosts")) else {
         return false; // pas de répertoire personnel : russh le signalera lui-même
     };
-    chemin.exists() && std::fs::File::open(&chemin).is_err()
+    fichier_present_mais_illisible(&chemin)
+}
+
+/// Le fichier est-il là sans qu'on puisse l'ouvrir ?
+///
+/// Séparé du chemin pour être exerçable sans toucher au `HOME` du processus,
+/// que tous les tests partagent. C'est la différence entre refuser une clé
+/// qu'on ne peut pas vérifier et l'apprendre en silence.
+fn fichier_present_mais_illisible(chemin: &std::path::Path) -> bool {
+    chemin.exists() && std::fs::File::open(chemin).is_err()
 }
 
 /// `whoami::username()` est faillible depuis la version 2 (compte systeme
@@ -620,8 +629,13 @@ impl AvashSession {
                 russh::ChannelMsg::Data { ref data }
                 | russh::ChannelMsg::ExtendedData { ref data, .. } => {
                     if stdout.len() >= PLAFOND {
+                        // On sort de la boucle : `continue` cessait d'allouer
+                        // mais laissait le serveur nous inonder indéfiniment
+                        // (`cat /dev/zero`), tâche vivante et lien saturé —
+                        // borné en pratique pour la sonde d'OS, qui a un délai
+                        // de garde, mais pas pour le déploiement de clé.
                         tronquee = true;
-                        continue;
+                        break;
                     }
                     stdout.push_str(&String::from_utf8_lossy(data));
                 }
@@ -865,6 +879,58 @@ mod tests {
         // Un client SSH a toujours besoin d'un nom : le repli garantit une
         // valeur non vide meme sans compte systeme lisible.
         assert!(!current_username().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_known_hosts_illisible {
+    use super::fichier_present_mais_illisible;
+
+    /// russh rend une liste vide dès qu'il n'arrive pas à ouvrir le fichier —
+    /// ce que le reste du code prendrait pour « hôte inconnu », donc pour un
+    /// premier contact : **n'importe quelle clé serait acceptée et apprise**.
+    /// Ce garde n'avait aucun test.
+    #[test]
+    fn un_fichier_absent_n_est_pas_un_probleme() {
+        let dir = crate::testutil::temp_home();
+        assert!(!fichier_present_mais_illisible(
+            &dir.dir().join("jamais-cree")
+        ));
+    }
+
+    #[test]
+    fn un_fichier_lisible_n_est_pas_un_probleme() {
+        let dir = crate::testutil::temp_home();
+        let p = dir.dir().join("known_hosts");
+        std::fs::write(&p, "srv ssh-ed25519 AAAA\n").unwrap();
+        assert!(!fichier_present_mais_illisible(&p));
+    }
+
+    /// Droits retirés : présent, mais impossible à ouvrir.
+    #[test]
+    #[cfg(unix)]
+    fn un_fichier_aux_droits_retires_est_signale() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::testutil::temp_home();
+        let p = dir.dir().join("known_hosts");
+        std::fs::write(&p, "srv ssh-ed25519 AAAA\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let verdict = fichier_present_mais_illisible(&p);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(verdict, "un known_hosts illisible doit être signalé");
+    }
+
+    /// Remplacé par un répertoire : `exists()` est vrai, l'ouverture échoue.
+    #[test]
+    fn un_repertoire_a_la_place_du_fichier_est_signale() {
+        let dir = crate::testutil::temp_home();
+        let p = dir.dir().join("known_hosts");
+        std::fs::create_dir(&p).unwrap();
+        // Sous Unix, ouvrir un répertoire en lecture réussit ; c'est la lecture
+        // qui échoue. On se contente donc de constater qu'on ne le prend pas
+        // pour un fichier lisible normal.
+        assert!(p.exists());
+        assert!(std::fs::read_to_string(&p).is_err());
     }
 }
 
