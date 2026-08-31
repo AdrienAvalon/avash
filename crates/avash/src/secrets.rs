@@ -85,18 +85,29 @@ mod tests {
         assert!(load("avash-entree-qui-n-existe-pas-xyz").is_none());
     }
 
-    /// Idempotence : oublier deux fois ne doit pas échouer.
+    /// Idempotence : une entrée absente n'est pas une erreur.
     ///
-    /// Le test n'affirmait rien — le `Result` était jeté — et n'appelait
-    /// qu'une fois, alors que c'est le second appel qui exerce le bras
-    /// `Err(NoEntry) => Ok(())`. Il ne pouvait échouer que sur une panique.
+    /// Le test n'affirmait rien — le `Result` était jeté — et n'appelait qu'une
+    /// fois, alors que c'est le bras `Err(NoEntry) => Ok(())` qui est visé.
+    ///
+    /// Il ne peut pas exiger `is_ok()` sans condition : sans démon de trousseau
+    /// — le cas de l'intégration continue — `entry()` échoue avant même
+    /// d'atteindre ce bras, et l'échec est alors LÉGITIME. Ce qu'on affirme,
+    /// c'est que « pas d'entrée » ne remonte jamais comme une erreur : le seul
+    /// échec toléré est l'inaccessibilité du trousseau lui-même.
     #[test]
     fn forget_ne_se_plaint_pas_sur_une_entree_absente() {
         let compte = "avash-entree-qui-n-existe-pas-xyz";
-        assert!(forget(compte).is_ok(), "premier oubli");
-        assert!(
-            forget(compte).is_ok(),
-            "second oubli : l'absence n'est pas une erreur"
-        );
+        match forget(compte) {
+            // Trousseau présent : le second appel doit passer aussi.
+            Ok(()) => assert!(forget(compte).is_ok(), "l'absence n'est pas une erreur"),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("Trousseau inaccessible"),
+                    "seule l'absence de trousseau est un échec acceptable ici : {msg}"
+                );
+            }
+        }
     }
 }
