@@ -31,3 +31,6 @@ dirs = "6"
 lto = true
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+ironrdp-session = { path = "vendor/ironrdp-session" }

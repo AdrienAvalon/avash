@@ -117,7 +117,16 @@ export const config = {
     // cf. rdp.spec/rdp-reconnect.spec) : pas de serveur partagé à coupler.
     tauriDriver = spawn("tauri-driver", [], {
       stdio: [null, process.stdout, process.stderr],
-      env: { ...process.env, HOME: sandbox, XDG_CONFIG_HOME: join(sandbox, ".config") },
+      // AVASH_HOME en plus de HOME/XDG_CONFIG_HOME : sous Windows, l'API qui
+      // donne le répertoire de configuration interroge le shell et ignore les
+      // deux autres. Sans cette variable, la suite y écrirait dans les fichiers
+      // RÉELS de l'utilisateur — config SSH et fichier de confiance RDP.
+      env: {
+        ...process.env,
+        HOME: sandbox,
+        AVASH_HOME: sandbox,
+        XDG_CONFIG_HOME: join(sandbox, ".config"),
+      },
     });
   },
   // Avant CHAQUE fichier de spécifications : on remet le bac à sable dans son

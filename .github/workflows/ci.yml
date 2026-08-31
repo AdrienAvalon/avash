@@ -96,6 +96,7 @@ jobs:
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
           cargo test
+          cargo test -p ironrdp-session
 
       # Absent jusqu'ici du CI, et le sidecar RDP n'était audité nulle part
       # alors qu'il est compilé et livré dans le bundle.

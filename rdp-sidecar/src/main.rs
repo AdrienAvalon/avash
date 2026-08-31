@@ -382,12 +382,28 @@ fn empreinte(der: &[u8]) -> String {
 
 /// Fichier des empreintes mémorisées, à côté du reste de la configuration.
 ///
+/// Répertoire de configuration, `AVASH_HOME` faisant foi s'il est posé.
+///
+/// Le cœur honore déjà cette variable ; ce processus, non — et l'écart ne se
+/// voyait pas sous Linux, où `config_dir()` suit `XDG_CONFIG_HOME` que le bac à
+/// sable des tests pose déjà. Sous Windows, `config_dir()` interroge le shell
+/// et ignore aussi bien `HOME` que `XDG_CONFIG_HOME` : la suite bout en bout y
+/// aurait écrit dans le fichier de confiance RÉEL de l'utilisateur, y semant
+/// des serveurs de test et, pire, l'exposant à voir une empreinte légitime
+/// écrasée par celle d'un serveur jetable.
+fn repertoire_configuration() -> Option<std::path::PathBuf> {
+    if let Some(home) = std::env::var_os("AVASH_HOME") {
+        return Some(std::path::PathBuf::from(home).join(".config"));
+    }
+    dirs::config_dir()
+}
+
 /// Sans répertoire de configuration, on **échoue** au lieu de retomber sur le
 /// répertoire courant : y semer un fichier de confiance le rendrait inopérant
 /// au prochain lancement depuis ailleurs — chaque serveur redeviendrait un
 /// premier contact, en silence.
 fn chemin_empreintes() -> anyhow::Result<std::path::PathBuf> {
-    Ok(dirs::config_dir()
+    Ok(repertoire_configuration()
         .context("répertoire de configuration introuvable (HOME/XDG_CONFIG_HOME)")?
         .join("avash")
         .join("rdp_known_hosts"))
@@ -1159,6 +1175,27 @@ mod tests_fichier_empreintes {
     /// Deux entrées pour le même hôte : c'est la première qui fait foi, et elle
     /// doit être trouvée — sans quoi une ligne ajoutée en fin de fichier
     /// masquerait l'empreinte d'origine.
+    #[test]
+    fn avash_home_detourne_le_fichier_de_confiance() {
+        // Sans cela, la suite bout en bout sous Windows écrirait dans le
+        // fichier réel de l'utilisateur : `config_dir()` y ignore HOME.
+        let bac = std::env::temp_dir().join(format!("avash-rdp-{}", std::process::id()));
+        let precedent = std::env::var_os("AVASH_HOME");
+        unsafe { std::env::set_var("AVASH_HOME", &bac) };
+        let sous_bac = crate::chemin_empreintes().expect("un chemin");
+        unsafe {
+            match precedent {
+                Some(v) => std::env::set_var("AVASH_HOME", v),
+                None => std::env::remove_var("AVASH_HOME"),
+            }
+        }
+        assert!(
+            sous_bac.starts_with(&bac),
+            "le fichier de confiance doit suivre AVASH_HOME, or il pointe sur {sous_bac:?}"
+        );
+        assert!(sous_bac.ends_with("rdp_known_hosts"));
+    }
+
     #[test]
     fn la_premiere_entree_fait_foi() {
         let contenu = "srv:3389 originale\nsrv:3389 ajoutee\n";

@@ -7,6 +7,19 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **L'affichage RDP partait en biais sur les serveurs xrdp.** RDP autorise un
+  bitmap plus large que le rectangle où il se pose ; xrdp s'en sert, en
+  annonçant par exemple 340 pixels pour un rectangle de 337. Le décodeur
+  d'IronRDP écrivait à la largeur du bitmap puis relisait à celle du rectangle :
+  chaque ligne glissait de la différence, et l'image se cisaillait en diagonale.
+  Le chemin non compressé retirait bien ce remplissage, les chemins compressés
+  non. Correctif porté dans `rdp-sidecar/vendor/`, à retirer quand l'amont
+  corrigera.
+
+- Le processus RDP honore `AVASH_HOME` comme le cœur. Sous Windows, l'API qui
+  donne le répertoire de configuration ignore `HOME` et `XDG_CONFIG_HOME` : la
+  suite bout en bout y aurait écrit dans le fichier de confiance RDP réel.
+
 ## [0.3.2] - 2026-08-31
 
 Six correctifs, dont trois trouvés en confrontant le code à de vraies machines
