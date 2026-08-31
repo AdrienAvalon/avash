@@ -1,0 +1,16 @@
+# xrdp + XFCE : le bureau léger, celui qui a révélé le cisaillement et le clavier.
+FROM debian:12-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xrdp xorgxrdp xfce4 xfce4-terminal dbus-x11 x11-utils \
+      locales sudo procps \
+ && sed -i 's/# fr_FR.UTF-8/fr_FR.UTF-8/' /etc/locale.gen && locale-gen \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -s /bin/bash essai && echo 'essai:essai-mot-de-passe' | chpasswd \
+ && echo 'xfce4-session' > /home/essai/.xsession && chown essai: /home/essai/.xsession
+# NLA n'est pas configuré ici : ce conteneur joue le serveur qui REFUSE NLA,
+# le cas SLED-15. Le second conteneur jouera celui qui l'exige.
+RUN sed -i 's/^security_layer=.*/security_layer=tls/' /etc/xrdp/xrdp.ini \
+ && sed -i 's/^crypt_level=.*/crypt_level=high/' /etc/xrdp/xrdp.ini
+EXPOSE 3389
+CMD ["/bin/sh","-c","/usr/sbin/xrdp-sesman && exec /usr/sbin/xrdp -n"]

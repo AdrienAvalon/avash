@@ -20,6 +20,48 @@ place l'environnement, lancer les tests et proposer des changements.
   Sur d'autres distributions, installe les paquets équivalents
   (`webkit2gtk-4.1`, `gtk3`, `libayatana-appindicator`, `librsvg`, `patchelf`).
 
+### Outillage de diagnostic (recommandé)
+
+Rien de tout cela n'est nécessaire pour compiler ; tout l'est pour **chercher**
+un défaut plutôt que le deviner. Chaque outil ci-dessous a servi au moins une
+fois à trancher une question qu'aucun raisonnement n'aurait tranchée.
+
+| Outil | Ce qu'il permet |
+|---|---|
+| `podman` ou `docker` | le parc RDP local (voir [tests-parc](../tests-parc/README.md)) |
+| `python3-numpy`, `python3-pil` | le détecteur de cisaillement d'image |
+| `freerdp` (`xfreerdp3`) | un client de référence, pour comparer notre rendu au sien |
+| `tcpdump`, `tshark` | lire le flux quand le protocole ment |
+| `strace` | voir où un processus se bloque vraiment |
+| `perf` | profiler à l'échantillonnage, sans instrumenter |
+| `hyperfine` | mesurer un temps d'exécution sans se raconter d'histoires |
+| `cargo-deny` | licences, dépendances en joker, sources inconnues |
+| `cargo-audit` | vulnérabilités déclarées |
+| `cargo-nextest` | exécution des tests plus lisible et plus rapide |
+
+```bash
+# Arch / CachyOS
+sudo pacman -S --needed podman freerdp tcpdump wireshark-cli \
+  xorg-server-xvfb hyperfine python-numpy python-pillow
+cargo install cargo-audit cargo-deny cargo-nextest --locked
+```
+
+### Traces du processus RDP
+
+Le processus RDP sait raconter toute la séquence de connexion. C'est ce qui a
+permis de voir qu'une connexion réputée bloquée sur NLA était en réalité
+suspendue bien plus loin, dans la détection automatique du réseau.
+
+```bash
+AVASH_RDP_TRACE=ironrdp_connector=debug rdp-sidecar/target/release/avash-rdp \
+  --host … -u … -p … --shot /tmp/ecran.png
+```
+
+**Ces traces contiennent le mot de passe en clair** — la requête CredSSP le
+porte encodé en UTF-16, lisible tel quel. C'est pourquoi elles ne s'activent pas
+sur `RUST_LOG`, que beaucoup exportent globalement, mais sur une variable qui
+n'appartient qu'à nous. Relis avant de coller quoi que ce soit.
+
 ## Installation
 
 ```bash
@@ -81,15 +123,20 @@ La porte qualité complète est le script `check.sh` à la racine :
   `test`, `fmt` et `clippy`. Ils ne s'exécutaient nulle part pendant des
   semaines — `cargo test --workspace` ne le voit pas, et l'intégration continue
   se contentait de le compiler ;
-- `cargo audit` sur **les deux** `Cargo.lock` (si `cargo-audit` est installé) ;
+- pour les **correctifs portés sur IronRDP** (`rdp-sidecar/vendor`) : leurs
+  tests propres, sans quoi un correctif pourrait être défait en silence lors
+  d'une montée de version ;
+- `cargo audit` sur **les deux** `Cargo.lock` (si `cargo-audit` est installé),
+  et `cargo deny` sur les deux également : licences, dépendances en joker,
+  sources hors du registre officiel — trois portes qu'`audit` ne regarde pas ;
 - pour le front : la garde `scripts/guard.sh`, ESLint typé, `tsc --noEmit`,
   Vitest, puis le build Vite ;
 - au build release enfin : la construction du processus RDP **avant** celle
   d'`avash-ui`, qui en dépend par `externalBin`.
 
 > **Toute crate ajoutée hors du workspace doit être branchée explicitement sur
-> les trois portes** — `check.sh`, le hook de pré-commit et
-> `.github/workflows/ci.yml`. Aucune ne la verra autrement.
+> les quatre portes** — `check.sh`, le hook de pré-commit,
+> `.github/workflows/ci.yml` et `.gitlab-ci.yml`. Aucune ne la verra autrement.
 
 Le hook `pre-commit` reprend l'essentiel : garde, format, clippy, tests Rust,
 tests du processus RDP, et les trois vérifications rapides du front (`tsc`,
@@ -108,6 +155,45 @@ npm test                # toute la suite
 
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
 et le détail des 35 scénarios.
+
+### Conformité RDP : le niveau qui manquait
+
+Les tests unitaires vérifient nos fonctions. La suite bout en bout vérifie
+l'interface. Entre les deux vivait un angle mort : le **dialogue réel avec un
+serveur RDP**. Les trois défauts de la 0.3.3 y logeaient tous, et tous ont été
+signalés par l'usage plutôt que par la machine.
+
+```bash
+scripts/parc-rdp.sh up tous        # xrdp + XFCE (3390) et xrdp + GNOME (3391)
+scripts/conformite-rdp.sh tous
+scripts/parc-rdp.sh down
+
+# ou intégré à la porte complète
+scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
+```
+
+Trois contrôles, un par défaut rencontré : la connexion aboutit, l'image n'est
+pas cisaillée, la disposition clavier annoncée n'est pas zéro. Voir
+[tests-parc/README.md](tests-parc/README.md).
+
+## Exécuteur GitLab
+
+Le dépôt est poussé sur GitHub **et** sur GitLab, mais seul GitHub vérifiait
+quoi que ce soit : GitLab recevait chaque poussée sans rien contrôler. Une
+chaîne équivalente vit désormais dans `.gitlab-ci.yml` — reste à lui donner un
+exécuteur, sans quoi les travaux resteront en attente :
+
+```bash
+# Sur la machine qui hébergera l'exécuteur
+sudo pacman -S gitlab-runner        # ou le paquet de ta distribution
+sudo gitlab-runner register \
+  --url https://gitlab.avalon-network.com \
+  --executor docker \
+  --docker-image rust:1-bookworm \
+  --docker-privileged            # requis par le travail de conformité RDP (dind)
+```
+
+Le jeton d'inscription se prend dans **Paramètres → CI/CD → Runners** du projet.
 
 ## Style de code
 

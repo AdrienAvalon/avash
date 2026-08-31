@@ -1,0 +1,40 @@
+# cargo-deny : ce que cargo-audit ne dit pas.
+#
+# `cargo audit` ne regarde que les vulnérabilités déclarées. Trois angles morts
+# restaient ouverts, et le projet en embarque désormais du code tiers modifié
+# (rdp-sidecar/vendor) : raison de plus pour les fermer.
+
+[advisories]
+ignore = [
+  # RUSTSEC-2023-0071 : rsa, canal auxiliaire Marvin. Atteint par une dépendance
+  # transitive de russh que nous n'employons pas pour du RSA privé.
+  "RUSTSEC-2023-0071",
+]
+
+[licenses]
+# Refuser par défaut, autoriser explicitement : une licence inattendue doit
+# arrêter la chaîne, pas passer inaperçue.
+allow = [
+  # La nôtre. avash et avash-ui sont sous AGPL : sans cette ligne, le projet se
+  # refuserait lui-même.
+  "AGPL-3.0-or-later",
+  "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",
+  "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "MPL-2.0", "CC0-1.0",
+  "Unlicense", "BSL-1.0",
+  # webpki-root-certs : les certificats racines de Mozilla.
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+# Une dépendance en « * » rend la construction imprévisible — sauf pour les
+# dépendances de CHEMIN internes au dépôt, qui n'ont pas de version à porter.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Le seul dépôt git admis serait déclaré ici ; il n'y en a aucun aujourd'hui.
+allow-git = []

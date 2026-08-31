@@ -1,0 +1,14 @@
+# xrdp + GNOME : toolkit et rendu différents de XFCE — c'est justement la
+# diversité de rendu qui fait apparaître les défauts de décodage.
+FROM debian:12-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xrdp xorgxrdp gnome-session gnome-shell gnome-terminal dbus-x11 \
+      x11-utils locales sudo procps \
+ && sed -i 's/# fr_FR.UTF-8/fr_FR.UTF-8/' /etc/locale.gen && locale-gen \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -s /bin/bash essai && echo 'essai:essai-mot-de-passe' | chpasswd \
+ && printf 'export GNOME_SHELL_SESSION_MODE=classic\ngnome-session --session=gnome-classic\n' > /home/essai/.xsession \
+ && chown essai: /home/essai/.xsession
+EXPOSE 3389
+CMD ["/bin/sh","-c","/usr/sbin/xrdp-sesman && exec /usr/sbin/xrdp -n"]

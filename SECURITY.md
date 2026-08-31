@@ -267,3 +267,37 @@ l'endroit d'où l'on lit des clés mérite d'être connue, pas cachée.
 Avash **ne collecte et n'envoie aucune donnée d'usage**. Les seules connexions
 réseau sont celles que tu inities (SSH, RDP, SFTP, tunnels) et, si tu cliques
 sur la pastille de version, la vérification du manifeste de mise à jour Tauri.
+
+### Les traces de diagnostic contiennent le mot de passe
+
+Le processus RDP sait raconter la séquence de connexion — c'est ce qui a permis
+de localiser une connexion qui restait suspendue. Ces traces **contiennent le
+mot de passe en clair** : la requête CredSSP le transporte encodé en UTF-16,
+lisible tel quel dans la sortie.
+
+Deux décisions en découlent :
+
+- elles ne s'activent **pas** sur `RUST_LOG`, que beaucoup exportent
+  globalement, mais sur `AVASH_RDP_TRACE`, qui n'appartient qu'à nous. Ce qui
+  sert à trouver un défaut ne doit pas s'allumer par accident ;
+- leur activation affiche un avertissement sur la sortie d'erreur, pour que
+  personne ne colle une trace dans un ticket sans l'avoir relue.
+
+### Chaîne d'approvisionnement : au-delà des vulnérabilités déclarées
+
+`cargo audit` ne voit que ce qui est déclaré dans la base RustSec. Trois autres
+portes restaient ouvertes, et le projet embarque désormais du code tiers modifié
+(`rdp-sidecar/vendor`), ce qui rend la question plus vive :
+
+- **licences** — une dépendance transitive sous une licence incompatible
+  arrivait sans que rien ne le signale ;
+- **dépendances en joker** (`version = "*"`) — elles rendent la construction non
+  reproductible : deux compilations du même commit peuvent embarquer des codes
+  différents ;
+- **sources** — une dépendance tirée d'ailleurs que le registre officiel doit
+  être un choix explicite, jamais une surprise.
+
+`cargo deny check licenses bans sources` couvre les trois, sur les **deux**
+arbres de dépendances (workspace et processus RDP), dans `check.sh` comme dans
+les deux chaînes d'intégration continue. La politique est dans `deny.toml`, et
+chaque exception y est justifiée en clair.

@@ -7,6 +7,26 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Outillage — combler l'angle mort qui a laissé passer trois défauts
+
+- **Parc RDP local** (`tests-parc/`) : de vrais serveurs xrdp en conteneur, avec
+  deux bureaux (XFCE et GNOME) parce qu'ils ne dessinent pas de la même façon.
+  Trois contrôles, un par défaut réellement rencontré : la connexion aboutit,
+  l'image n'est pas cisaillée, la disposition clavier annoncée n'est pas zéro.
+  Vérifié : en désactivant le correctif porté, le parc reproduit le
+  cisaillement et le détecteur le voit.
+- **Intégration continue GitLab** (`.gitlab-ci.yml`) : jusqu'ici GitLab recevait
+  chaque poussée sans rien vérifier. La chaîne reprend celle de GitHub. Il
+  manque un exécuteur, voir CONTRIBUTING.md.
+- **`cargo deny`** sur les deux arbres de dépendances : licences, dépendances en
+  joker, sources hors registre — trois portes qu'`audit` ne regarde pas.
+  `publish = false` sur les trois crates : rien n'est destiné à crates.io.
+- **Traces du processus RDP** sur `AVASH_RDP_TRACE`, et non `RUST_LOG` : elles
+  contiennent le mot de passe en clair, elles ne doivent pas s'allumer par
+  accident.
+- Les correctifs portés sur IronRDP ont leurs tests exécutés par les quatre
+  portes : sans cela, une montée de version pourrait les défaire en silence.
+
 - **Une connexion RDP pouvait rester suspendue en pleine séquence, après une
   authentification réussie.** La détection automatique des caractéristiques
   réseau attend des résultats de mesure de bande passante ; IronRDP ne les

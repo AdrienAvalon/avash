@@ -247,9 +247,51 @@ Le dernier indicateur est le seul qui compte vraiment. Les autres servent à le 
 
 ---
 
+## La leçon du 31 août : trois défauts, zéro test capable de les voir
+
+En une soirée, trois défauts RDP ont été corrigés — image cisaillée sur xrdp,
+clavier interprété en QWERTY, connexion suspendue sans fin. **Tous les trois ont
+été signalés par Adrien en utilisant avash. Aucun n'était visible depuis les
+tests**, dont la suite était pourtant à 295 cas et entièrement verte.
+
+Ce n'était pas un manque de tests, mais un manque de **niveau** de test :
+
+| Ce qu'on avait | Ce que cela voit | Ce que cela ne voit pas |
+|---|---|---|
+| tests unitaires | nos fonctions, isolément | ce que le serveur envoie vraiment |
+| tests d'intégration SSH | un vrai serveur SSH | rien du côté RDP |
+| suite bout en bout | l'interface, ses onglets, ses modales | le contenu de l'image RDP |
+
+Entre les deux vivait le seul endroit où ces défauts logeaient : **le dialogue
+réel avec un serveur RDP**. Trois conséquences pratiques :
+
+1. **Un parc de vrais serveurs xrdp** (`tests-parc/`), en conteneur, avec deux
+   bureaux — XFCE et GNOME — parce que la diversité de rendu est ce qui fait
+   sortir les défauts de décodage.
+2. **Regarder l'image, pas seulement le code de retour.** Une image cisaillée
+   reste plausible : ni somme de contrôle, ni moyenne de pixels ne l'auraient
+   vue. Il a fallu un détecteur qui cherche la bonne propriété.
+3. **Éprouver l'oracle lui-même.** Le détecteur n'a de valeur que parce qu'on a
+   vérifié qu'il distingue franchement une image cisaillée d'une image saine, en
+   désactivant le correctif exprès. Un test qui ne peut pas échouer ne protège
+   rien — cela vaut aussi pour l'instrument de mesure.
+
+Et une constatation d'ordre différent : **GitLab ne vérifiait rien**. Le dépôt y
+était poussé à chaque fois, mais seule la chaîne GitHub contrôlait quoi que ce
+soit. Un miroir sans garde-fou est un endroit où une régression peut dormir.
+
 ## Règles de travail
 
 Apprises en construisant le projet, coûteuses à réapprendre :
+
+- **Ne jamais annuler un travail non commité avec `git checkout`.** Fait deux
+  fois, et rattrapé la seconde uniquement grâce à une sauvegarde faite quelques
+  minutes plus tôt. Pour défaire une modification temporaire (un contrôle
+  négatif, par exemple) : copier le fichier avant, restaurer la copie après.
+- **Vérifier un binaire compilé sur ses littéraux, jamais sur ses noms de
+  fonctions.** Le profil release pose `strip = true` : les symboles n'y sont
+  plus. Un contrôle cherchant des noms de fonctions a annoncé « correctifs
+  absents » alors qu'ils étaient bien là.
 
 - **Le binaire embarque le front.** Après toute modification de `web/`, faire
   `vite build` *puis* `cargo build --release` — sinon l'application testée conserve

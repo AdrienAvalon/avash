@@ -238,3 +238,41 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Client SFTP (dont bandes parallèles) | `crates/avash/src/sftp.rs` |
 | Validation qualité | `check.sh`, `scripts/guard.sh` |
 | Tests de bout en bout | `e2e/` |
+
+## Correctifs portés sur IronRDP
+
+`rdp-sidecar/vendor/` contient deux crates d'IronRDP copiés, avec **un seul
+changement chacun**. Ce n'est pas un fork de confort : ce sont deux défauts qui
+touchent tout client IronRDP parlant à xrdp, et qui rendaient avash inutilisable
+contre des serveurs légitimes.
+
+| Crate | Défaut | Symptôme |
+|---|---|---|
+| `ironrdp-session` | le remplissage de fin de ligne n'est pas retiré dans les chemins compressés | image cisaillée en diagonale |
+| `ironrdp-connector` | la mesure de bande passante n'est jamais renvoyée | connexion suspendue sans fin |
+
+Chacun a ses propres tests, exécutés par `check.sh`, le hook de pré-commit et
+les deux chaînes d'intégration : sans cela, une montée de version pourrait les
+défaire en silence. `rdp-sidecar/vendor/README.md` dit quoi, pourquoi, et quand
+les retirer.
+
+## Le parc RDP local
+
+Trois défauts RDP ont été signalés par l'usage et par lui seul. Les tests
+unitaires vérifiaient nos fonctions ; la suite bout en bout vérifiait
+l'interface. Entre les deux : le dialogue réel avec un serveur RDP, que rien
+n'éprouvait.
+
+`tests-parc/` monte de vrais serveurs xrdp en conteneur, avec **deux bureaux** —
+XFCE et GNOME. Ils ne dessinent pas de la même façon, et c'est cette diversité
+qui fait sortir les défauts de décodage : le cisaillement n'apparaît que lorsque
+le serveur complète ses tuiles à un multiple de quatre.
+
+Le détecteur d'image (`tests-parc/detecteur-cisaillement.py`) mérite un mot. Une
+image cisaillée reste *plausible* : bonnes couleurs, bonne disposition générale.
+Ni une somme de contrôle, ni une moyenne de pixels, ni une comparaison de taille
+ne l'auraient vue. Le détecteur cherche autre chose : dans une image
+d'interface, deux lignes voisines se superposent au mieux avec un décalage nul ;
+sous cisaillement, l'alignement optimal devient une constante non nulle. Mesuré
+sur de vraies captures, la séparation est franche — `+0` sur 100 % des lignes
+quand c'est sain, `-2` sur 96 % quand ça ne l'est pas.

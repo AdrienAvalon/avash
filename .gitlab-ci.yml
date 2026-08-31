@@ -1,0 +1,119 @@
+# Chaîne d'intégration GitLab.
+#
+# Elle reprend, étape pour étape, celle de GitHub (.github/workflows/ci.yml).
+# Jusqu'ici GitLab recevait chaque poussée sans rien vérifier : le miroir était
+# un dépôt de sauvegarde, pas un garde-fou. Deux dépôts, une seule chaîne qui
+# contrôle, cela veut dire qu'une régression pouvait y dormir.
+#
+# ATTENTION : ce projet n'a aucun exécuteur (« runner ») enregistré. Sans lui,
+# les travaux resteront en attente. Voir CONTRIBUTING.md, section « Exécuteur
+# GitLab », pour en déclarer un.
+
+stages: [verifier, eprouver]
+
+variables:
+  CARGO_TERM_COLOR: "always"
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+
+default:
+  image: rust:1-bookworm
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths: [".cargo/registry", ".cargo/git", "target"]
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev
+        libayatana-appindicator3-dev librsvg2-dev patchelf nodejs npm
+
+# --- Front d'abord : la compilation de avash-ui exige web/dist ------------
+front:
+  stage: verifier
+  script:
+    - ./scripts/guard.sh          # restes de mise au point
+    - cd web && npm ci
+    - npx eslint main.ts filters.ts prefs.ts
+    - npx tsc --noEmit
+    - npx vitest run
+    - npx vite build
+  artifacts:
+    paths: ["web/dist"]
+    expire_in: 1 day
+
+# --- Cœur et interface ----------------------------------------------------
+rust:
+  stage: verifier
+  needs: ["front"]
+  script:
+    # Le processus RDP est déclaré en ressource embarquée : son binaire doit
+    # exister AVANT toute compilation de avash-ui.
+    - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+    - mkdir -p crates/avash-ui/binaries
+    - cp rdp-sidecar/target/release/avash-rdp crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
+    - cargo fmt --all --check
+    - cargo clippy --workspace --all-targets -- -D warnings
+    # clippy ne compile qu'en debug : un bloc sous cfg(debug_assertions) peut
+    # laisser une variable inutilisée en release sans que rien ne le signale.
+    - cargo clippy --workspace --release -- -D warnings
+    - cargo test --workspace --all-targets
+    - cargo build --release -p avash-ui
+
+# --- Processus RDP : hors espace de travail, donc invisible de --workspace --
+processus-rdp:
+  stage: verifier
+  script:
+    - cd rdp-sidecar
+    - cargo fmt --check
+    - cargo clippy --all-targets -- -D warnings
+    - cargo test
+    # Les correctifs portés sur IronRDP ont leurs propres tests : sans ces deux
+    # lignes, ils pourraient être défaits sans que rien ne le dise.
+    - cargo test -p ironrdp-session
+    - cargo test -p ironrdp-connector
+
+# --- Chaîne d'approvisionnement ------------------------------------------
+dependances:
+  stage: verifier
+  script:
+    - cargo install cargo-audit cargo-deny --locked
+    - cargo audit --ignore RUSTSEC-2023-0071
+    - cargo audit --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
+    - cargo deny check licenses bans sources
+    - cargo deny --manifest-path rdp-sidecar/Cargo.toml check licenses bans sources
+  allow_failure: false
+
+# --- Bout en bout : l'application réelle, sans affichage ------------------
+bout-en-bout:
+  stage: eprouver
+  needs: ["front"]
+  script:
+    - apt-get install -y -qq webkit2gtk-driver xvfb
+    - cargo install tauri-driver --locked
+    - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+    - mkdir -p crates/avash-ui/binaries
+    - cp rdp-sidecar/target/release/avash-rdp crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
+    - cargo build --release -p avash-ui
+    - cd e2e && npm ci
+    # E2E_NO_RDP écarte les scénarios exigeant un serveur local.
+    - E2E_NO_RDP=1 xvfb-run -a npm test
+
+# --- Conformité RDP : de VRAIS serveurs xrdp -----------------------------
+# Les trois défauts RDP de la 0.3.3 — image cisaillée, clavier en QWERTY,
+# connexion suspendue — ont été signalés par l'usage. Aucun n'était visible
+# depuis les tests. Ce travail est le seul qui les aurait vus.
+conformite-rdp:
+  stage: eprouver
+  image: docker:27
+  services: ["docker:27-dind"]
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache bash python3 py3-numpy py3-pillow curl build-base
+    - curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    - . "$HOME/.cargo/env"
+  script:
+    - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+    - ./scripts/parc-rdp.sh up tous
+    - ./scripts/conformite-rdp.sh tous
+  after_script:
+    - ./scripts/parc-rdp.sh down || true

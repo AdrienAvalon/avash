@@ -3,6 +3,10 @@ name = "avash-ui"
 version = "0.3.3"
 license = "AGPL-3.0-or-later"
 edition = "2021"
+# Application, pas bibliothèque : rien n'est publié sur crates.io. Le dire
+# empêche une publication par mégarde, et lève l'avertissement de cargo-deny
+# sur la dépendance de chemin interne.
+publish = false
 description = "Avash GUI — native shell (Tauri 2)"
 
 [lib]

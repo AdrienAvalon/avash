@@ -107,6 +107,16 @@ jobs:
           cargo audit --ignore RUSTSEC-2023-0071
           cargo audit --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
 
+      # cargo-audit ne voit que les vulnérabilités déclarées. cargo-deny ferme
+      # trois autres portes que rien ne surveillait : une licence inattendue
+      # arrivant par une dépendance transitive, une dépendance en joker qui rend
+      # la construction imprévisible, une source hors du registre officiel.
+      - name: Rust — licences, jokers et sources
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check licenses bans sources
+          cargo deny --manifest-path rdp-sidecar/Cargo.toml check licenses bans sources
+
       - name: Rust — build release
         run: cargo build --release -p avash-ui
 
@@ -189,3 +199,42 @@ jobs:
       - name: E2E — suite (hors serveurs locaux)
         working-directory: e2e
         run: E2E_NO_RDP=1 xvfb-run -a npm test
+
+  # Conformité RDP contre de VRAIS serveurs xrdp.
+  #
+  # Ce job existe parce que les trois défauts RDP de la version 0.3.3 — image
+  # cisaillée, clavier en QWERTY, connexion suspendue sans fin — ont tous été
+  # signalés par l'usage, et qu'AUCUN n'était visible depuis les tests. Les
+  # tests unitaires vérifiaient nos fonctions, la suite bout en bout vérifiait
+  # l'interface ; entre les deux se trouvait le seul endroit où ces défauts
+  # vivaient, le dialogue réel avec un serveur RDP.
+  #
+  # XFCE et GNOME sont éprouvés tous les deux : ils ne dessinent pas pareil, et
+  # c'est cette diversité qui fait sortir les défauts de décodage.
+  conformite-rdp:
+    name: Conformité RDP (xrdp réels, XFCE + GNOME)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Outils du détecteur d'image
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-numpy python3-pil
+
+      - name: Construire le processus RDP
+        run: cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+
+      # docker est présent d'origine sur les exécuteurs ; parc-rdp.sh prend
+      # podman s'il existe, docker sinon.
+      - name: Démarrer le parc (XFCE et GNOME)
+        run: ./scripts/parc-rdp.sh up tous
+
+      - name: Conformité
+        run: ./scripts/conformite-rdp.sh tous
+
+      - name: Arrêter le parc
+        if: always()
+        run: ./scripts/parc-rdp.sh down

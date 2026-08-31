@@ -145,14 +145,39 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 | Cœur (`crates/avash`) | 115 | parseur `~/.ssh/config`, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques |
 | Intégration | 24 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP, tunnels, rebonds `ProxyJump` |
 | Interface (`crates/avash-ui`) | 34 | commandes Tauri, décodage UTF-8 en flux, verrous clavier |
-| Processus RDP | 9 | empreinte du serveur, fichier des empreintes, plafond de résolution |
+| Processus RDP | 16 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests |
+| Correctifs portés sur IronRDP | 8 | remplissage des tuiles bitmap, mesure de bande passante (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
 | Front (Vitest) | 78 | logique pure : arborescence, filtres, scancodes, mappage souris, réglages |
 | Bout en bout (WebdriverIO) | 35 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
-qui ne voient pas le même code — ESLint typé, `cargo audit` sur les deux arbres
-de dépendances, et une garde qui interdit les motifs dangereux (voir
-[CONTRIBUTING.md](CONTRIBUTING.md)).
+qui ne voient pas le même code — ESLint typé, `cargo audit` et `cargo deny` sur
+les deux arbres de dépendances, et une garde qui interdit les motifs dangereux
+(voir [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+### Conformité RDP : de vrais serveurs, pas des simulacres
+
+Trois défauts RDP corrigés en 0.3.3 — image cisaillée en diagonale, clavier
+interprété en QWERTY, connexion suspendue sans fin — ont **tous** été signalés
+par l'usage, et **aucun** n'était visible depuis les tests. Les tests unitaires
+vérifiaient nos fonctions, la suite bout en bout vérifiait l'interface ; entre
+les deux se trouvait le seul endroit où ces défauts vivaient : le dialogue réel
+avec un serveur RDP.
+
+Un parc de serveurs xrdp en conteneur comble ce vide, avec deux bureaux — XFCE
+et GNOME — parce qu'ils ne dessinent pas de la même façon, et que c'est cette
+diversité qui fait sortir les défauts de décodage.
+
+```bash
+scripts/parc-rdp.sh up tous        # XFCE sur 3390, GNOME sur 3391
+scripts/conformite-rdp.sh tous     # connexion, image, clavier
+scripts/parc-rdp.sh down
+```
+
+Le détecteur de cisaillement est lui-même éprouvé : en désactivant le correctif
+porté, il annonce `CISAILLÉE décalage=-2 (96% des lignes)` ; correctif remis,
+`saine décalage=+0 (100%)`. Détails dans
+[tests-parc/README.md](tests-parc/README.md).
 
 Une règle tient lieu de discipline : **un nouveau test doit avoir été vu
 échouer**. On débranche ce qu'il couvre et on vérifie qu'il tombe — un test qui
@@ -162,6 +187,9 @@ ne peut pas échouer ne protège rien.
 ./check.sh              # tout valider
 ./check.sh --quick      # sans le build release
 cd e2e && npm test      # tests bout en bout (ouvre des fenêtres)
+
+# conformité RDP contre de vrais serveurs xrdp
+scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
 ```
 
 ## Architecture
@@ -179,6 +207,8 @@ communique par WebSocket binaire local. Détails dans
 - [SECURITY.md](SECURITY.md) — signaler une vulnérabilité, modèle de sécurité
 - [docs/architecture.md](docs/architecture.md) — architecture technique
 - [docs/journal-de-bord.md](docs/journal-de-bord.md) — journal de développement (archive)
+- [tests-parc/README.md](tests-parc/README.md) — parc RDP local et conformité
+- [rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md) — correctifs portés sur IronRDP
 
 ## Licence
 

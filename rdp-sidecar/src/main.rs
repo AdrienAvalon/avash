@@ -803,9 +803,17 @@ async fn connect(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    if std::env::var_os("RUST_LOG").is_some() {
+    // Traces de diagnostic, sur une variable À NOUS et non sur RUST_LOG : beaucoup
+    // l'exportent globalement, et ces traces contiennent le mot de passe en clair
+    // — la requête CredSSP le porte encodé en UTF-16, lisible tel quel. Ce qui a
+    // servi à trouver un défaut ne doit pas s'activer par accident.
+    if let Some(filtre) = std::env::var_os("AVASH_RDP_TRACE").and_then(|v| v.into_string().ok()) {
+        eprintln!(
+            "avash-rdp : traces actives. ATTENTION, elles contiennent le mot de \
+             passe en clair — ne les collez nulle part sans les avoir relues."
+        );
         tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_env_filter(tracing_subscriber::EnvFilter::new(filtre))
             .with_writer(std::io::stderr)
             .init();
     }

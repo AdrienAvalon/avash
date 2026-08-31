@@ -803,7 +803,7 @@ fn respond_to_connect_time_autodetect(
                 .take()
                 .map(|d| u32::try_from(d.elapsed().as_millis()).unwrap_or(u32::MAX))
                 .unwrap_or(0);
-            let byte_count = std::mem::take(bw_octets);
+            let byte_count = mem::take(bw_octets);
             let response = AutoDetectRspPdu::new(AutoDetectResponse::BandwidthMeasureResults {
                 sequence_number,
                 response_type: BW_RESULTS_CONNECT_TIME,

@@ -70,6 +70,28 @@ else
   printf '  \033[33m~\033[0m %s\n' "audit securite (cargo-audit absent)"
 fi
 
+# cargo-audit ne voit que les vulnerabilites declarees. cargo-deny ferme trois
+# autres portes, qu'aucun outil ne surveillait : une licence inattendue arrivant
+# par une dependance transitive, une dependance en joker qui rend la
+# construction imprevisible, et une source hors du registre officiel.
+#   cargo install cargo-deny --locked
+if cargo deny --version >/dev/null 2>&1; then
+  run "licences et sources"  "$ROOT"    cargo deny check licenses bans sources
+  run "licences (RDP)"       "$SIDECAR" cargo deny check licenses bans sources
+else
+  printf '  \033[33m~\033[0m %s\n' "licences et sources (cargo-deny absent)"
+fi
+
+# Conformite RDP contre de VRAIS serveurs xrdp, en conteneur. Hors du passage
+# par defaut : demarrer le parc coute une minute et exige podman. Mais c'est le
+# seul controle qui aurait vu les trois defauts de la 0.3.3 — image cisaillee,
+# clavier en QWERTY, connexion suspendue. Aucun test en memoire ne les voyait.
+#   ./scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 ./check.sh
+if [ -n "${CONFORMITE_RDP:-}" ]; then
+  step "Conformite RDP (serveurs xrdp reels)"
+  run "conformite"         "$ROOT" ./scripts/conformite-rdp.sh "${PARC:-xfce}"
+fi
+
 step "Front (avash-web)"
 run "garde"              "$ROOT" ./scripts/guard.sh
 run "lint"               "$WEB" npx eslint main.ts filters.ts
