@@ -781,6 +781,52 @@ fn frame_msg(image: &DecodedImage, r: &ironrdp::pdu::geometry::InclusiveRectangl
     m
 }
 
+/// Le serveur a-t-il mis fin à la session après nous avoir authentifiés ?
+///
+/// Deux formes pour un même événement, et c'est ce qui a trompé Adrien :
+///
+/// - le serveur envoie un *Disconnect Provider Ultimatum* et nous le lisons ;
+/// - il coupe la connexion TCP, et c'est le système qui nous le dit —
+///   « connection reset by peer » sous Unix, **os error 10054** sous Windows,
+///   qui ne ressemble à rien pour qui le lit.
+///
+/// Le second cas affichait un code brut là où le premier expliquait. Même
+/// cause, même message.
+fn session_close_par_le_serveur(texte: &str) -> bool {
+    texte.contains("disconnect provider ultimatum") || est_coupure(texte)
+}
+
+/// La connexion a-t-elle été coupée brutalement, sans réponse ?
+///
+/// Sous Windows cela remonte en `os error 10054` (WSAECONNRESET), un code brut
+/// qui ne dit rien à qui le lit. Sous Unix, `os error 104`. Une fermeture nette
+/// en cours de lecture donne, elle, une fin de flux inattendue.
+fn coupure_brutale(e: &connector::ConnectorError) -> bool {
+    let mut texte = format!("{e} {e:?}");
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    while let Some(c) = source {
+        texte.push(' ');
+        texte.push_str(&c.to_string());
+        source = c.source();
+    }
+    est_coupure(&texte)
+}
+
+/// Le pair a-t-il coupé sans rien dire ?
+///
+/// Windows remonte `os error 10054` (WSAECONNRESET), Unix `os error 104`. Ces
+/// codes bruts ne disent rien à qui les reçoit — c'est exactement ce qu'Adrien a
+/// vu en tentant un RDP vers un Windows.
+fn est_coupure(texte: &str) -> bool {
+    texte.contains("os error 10054")
+        || texte.contains("os error 104")
+        || texte.contains("connection reset")
+        || texte.contains("Connection reset")
+        || texte.contains("unexpected end of file")
+        || texte.contains("early eof")
+        || texte.contains("custom error")
+}
+
 async fn connect(
     a: &Args,
     clip_backend: ClipBackend,
@@ -817,6 +863,27 @@ async fn connect(
             anyhow::bail!(
                 "{NLA_INDISPONIBLE} Ce serveur n'accepte pas l'authentification \
                  réseau (NLA) et exige un simple canal TLS."
+            );
+        }
+        // Coupure brutale pendant la négociation. Windows la remonte comme
+        // « os error 10054 », qui ne dit rien à personne — Adrien l'a reçue tel
+        // quel. Un serveur qui ferme sans répondre est le plus souvent un
+        // serveur qui ne sait pas faire ce qu'on lui demande : ici, NLA. On pose
+        // donc la même question que pour un refus explicite, en disant
+        // clairement ce qu'on sait et ce qu'on ignore.
+        Err(e) if !a.sans_nla && coupure_brutale(&e) => {
+            anyhow::bail!(
+                "{NLA_INDISPONIBLE} Ce serveur a fermé la connexion sans répondre \
+                 à la négociation. C'est le comportement de serveurs qui n'acceptent \
+                 pas l'authentification réseau (NLA) — mais un pare-feu ou un service \
+                 qui n'est pas du RDP donneraient la même chose."
+            );
+        }
+        Err(e) if coupure_brutale(&e) => {
+            anyhow::bail!(
+                "Ce serveur a fermé la connexion sans répondre. Vérifiez que le \
+                 service RDP écoute bien sur ce port et qu'aucun pare-feu ne s'y \
+                 oppose."
             );
         }
         Err(e) => return Err(e).context("début de connexion"),
@@ -873,7 +940,7 @@ async fn connect(
             texte.push_str(&c.to_string());
             source = c.source();
         }
-        if texte.contains("disconnect provider ultimatum") {
+        if session_close_par_le_serveur(&texte) {
             anyhow::anyhow!(
                 "Le serveur a accepté vos identifiants puis a mis fin à la session \
                  avant de l'ouvrir. L'authentification n'est pas en cause : c'est \
@@ -1256,7 +1323,21 @@ async fn main() -> Result<()> {
                 }
             }
             read = framed.read_pdu() => {
-                let (action, payload) = read.context("lecture PDU")?;
+                let (action, payload) = read.map_err(|e| {
+                    // Même événement, même message : une coupure en pleine session
+                    // affichait le code brut du système. Voir
+                    // session_close_par_le_serveur.
+                    let t = format!("{e} {e:?}");
+                    if session_close_par_le_serveur(&t) {
+                        anyhow::anyhow!(
+                            "Le serveur a fermé la connexion. Si cela se produit \
+                             juste après l'ouverture, c'est que la session ne \
+                             démarre pas de son côté ; son journal le dira."
+                        )
+                    } else {
+                        anyhow::Error::new(e).context("lecture PDU")
+                    }
+                })?;
                 if let Some(m) = magneto.as_mut() {
                     m.ajouter(action, &payload);
                 }
@@ -1671,5 +1752,72 @@ mod tests_entrees_hostiles {
     #[test]
     fn un_message_vide_ne_produit_rien() {
         assert!(input_ops(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_fin_de_session {
+    use super::session_close_par_le_serveur;
+
+    #[test]
+    fn l_ultimatum_est_reconnu() {
+        assert!(session_close_par_le_serveur(
+            "decode error other (received disconnect provider ultimatum)"
+        ));
+    }
+
+    #[test]
+    fn la_coupure_tcp_windows_est_reconnue() {
+        // 10054 = WSAECONNRESET. Le même événement que l'ultimatum, mais vu par
+        // le système : c'est le code brut qu'Adrien a reçu sous Windows.
+        assert!(session_close_par_le_serveur(
+            "lecture PDU: Une connexion existante a dû être fermée (os error 10054)"
+        ));
+    }
+
+    #[test]
+    fn la_coupure_tcp_unix_est_reconnue() {
+        assert!(session_close_par_le_serveur(
+            "lecture PDU: Connection reset by peer (os error 104)"
+        ));
+    }
+
+    #[test]
+    fn une_erreur_sans_rapport_ne_l_est_pas() {
+        // Sans quoi tout échec porterait un message rassurant et faux.
+        assert!(!session_close_par_le_serveur(
+            "InvalidToken: CredSSP server returned an error status; status is STATUS_LOGON_FAILURE"
+        ));
+        assert!(!session_close_par_le_serveur(
+            "connexion TCP à 10.0.0.1:3389: timed out"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests_coupure {
+    use super::est_coupure;
+
+    #[test]
+    fn le_code_windows_est_reconnu() {
+        // 10054 = WSAECONNRESET : le code brut qu'un utilisateur reçoit sans
+        // pouvoir en rien conclure.
+        assert!(est_coupure(
+            "début de connexion: Une connexion existante a dû être fermée (os error 10054)"
+        ));
+    }
+
+    #[test]
+    fn le_code_unix_et_la_fin_de_flux_sont_reconnus() {
+        assert!(est_coupure("Connection reset by peer (os error 104)"));
+        assert!(est_coupure("unexpected end of file"));
+    }
+
+    #[test]
+    fn un_echec_ordinaire_ne_l_est_pas() {
+        // Sans quoi un mauvais mot de passe proposerait de renoncer à NLA.
+        assert!(!est_coupure("STATUS_LOGON_FAILURE"));
+        assert!(!est_coupure("connexion TCP à 10.0.0.1:3389: timed out"));
+        assert!(!est_coupure("Le certificat de 10.0.0.1:3389 a changé."));
     }
 }

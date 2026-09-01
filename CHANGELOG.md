@@ -7,6 +7,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.4.1] - 2026-09-01
+
+- **« os error 10054 » remplacé par une phrase utile.** Un serveur RDP qui ferme
+  la connexion sans répondre donnait ce code brut sous Windows (`WSAECONNRESET`,
+  `os error 104` sous Unix), que rien ne permettait d'interpréter. avash dit
+  maintenant ce qu'il sait — le serveur a coupé sans répondre — et ce qu'il
+  ignore : cela ressemble à un serveur qui n'accepte pas NLA, mais un pare-feu
+  ou un service qui n'est pas du RDP donneraient la même chose. La voie « sans
+  NLA » est proposée, comme pour un refus explicite.
+- La même coupure survenant *pendant* une session est reconnue et expliquée au
+  lieu d'afficher le code système.
+
 - Le message affiché quand un serveur accepte les identifiants puis met fin à la
   session ne suppose plus de cause. Il dit ce qui est établi — l'authentification
   a réussi, la session ne démarre pas côté serveur — et renvoie au journal qui,
