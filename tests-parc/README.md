@@ -35,7 +35,7 @@ Ou intégré à la vérification complète :
 |---|---|---|
 | `xfce` | 3390 | xrdp + XFCE, refuse NLA — le cas SLED-15 |
 | `gnome` | 3391 | xrdp + GNOME, autre toolkit donc autre rendu |
-| `ssh` | 2222 | sshd qui **refuse** `password` et n'accepte que `keyboard-interactive` |
+| `ssh` | 2222 | sshd qui **refuse** `password` et n'accepte que `keyboard-interactive`, et sert aussi SFTP |
 
 Le serveur SSH mérite un mot : c'est le comportement d'un hôte joint à un
 annuaire, où SSSD répond par une conversation PAM. avash n'avait pas ce repli,
@@ -68,6 +68,10 @@ n'apparaît que lorsque le serveur complète ses tuiles à un multiple de quatre
    donnerait exactement autant de rectangles que de trames.
 5. **Le repli SSH clavier-interactif aboutit**, contre un serveur qui refuse la
    méthode `password`.
+6. **SFTP fait l'aller-retour à l'octet près** — dépôt, relecture, comparaison,
+   effacement, puis vérification que le fichier effacé ne se télécharge plus.
+   Les tests d'intégration parlent à un serveur monté en mémoire, c'est-à-dire à
+   notre propre compréhension du protocole ; ici, c'est un vrai OpenSSH.
 
 ## Ce détecteur est-il sérieux ?
 
@@ -109,3 +113,22 @@ Trois usages, et le troisième est le plus important :
 Campagne longue à la demande :
 
     AVASH_FUZZ_TOURS=6000 cargo test un_serveur_hostile --manifest-path rdp-sidecar/Cargo.toml
+
+## Ce que ce parc ne couvre PAS
+
+Autant le dire que le découvrir plus tard.
+
+- **GNOME Remote Desktop.** Le conteneur `gnome` est un *xrdp qui sert un bureau
+  GNOME* — ce n'est pas la même chose. GNOME Remote Desktop est un serveur RDP à
+  part entière : c'est lui qui exige EGFX et redirige vers la session de
+  l'utilisateur, et c'est contre lui qu'avash a échoué le plus longtemps.
+  Tentative faite, sans succès : son démon n'ouvre aucun port sans compositeur
+  ni sortie virtuelle, donc sans session GNOME complète. Ce qui reste : un test
+  qui garde le drapeau EGFX annoncé (`tests_capacites_precoces`), et le parc
+  réel d'Adrien pour la vérification de bout en bout.
+- **La lecture du flux RDP au fil.** `tcpdump` et `tshark` sont installés mais
+  RDP est chiffré dès la négociation : ils ne montrent que du TLS. C'est le
+  **magnétoscope** qui joue ce rôle — il capture au niveau des PDU décodés,
+  après TLS, et rejoue hors ligne.
+- **Windows.** Aucun serveur RDP Windows dans le parc ; la conformité repose là
+  encore sur les machines réelles.

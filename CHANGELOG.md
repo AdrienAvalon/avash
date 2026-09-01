@@ -7,6 +7,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- Le parc éprouve désormais **SFTP contre un vrai OpenSSH** : dépôt, relecture à
+  l'octet près, effacement. Les tests d'intégration parlaient à un serveur monté
+  en mémoire, c'est-à-dire à notre propre compréhension du protocole.
+- Un test garde le drapeau EGFX annoncé. GNOME Remote Desktop ne peut pas être
+  mis en conteneur — son démon n'ouvre aucun port sans session GNOME complète —
+  et cette limite est écrite noir sur blanc plutôt que découverte plus tard.
+
 - **GNOME Remote Desktop : la connexion aboutit enfin.** Ces serveurs exigent que
   le client annonce le pipeline graphique ; sans ce drapeau, ils ferment la
   connexion avant même d'envoyer `ServerDemandActive`, sans la moindre

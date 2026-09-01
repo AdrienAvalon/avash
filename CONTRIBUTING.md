@@ -173,10 +173,14 @@ scripts/parc-rdp.sh down
 scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
 ```
 
-Cinq contrôles, un par défaut rencontré : la connexion RDP aboutit, l'image
-n'est pas cisaillée, les trames ne renvoient pas un plein écran pour deux
-poussières, la disposition clavier annoncée n'est pas zéro, et le repli SSH
-`keyboard-interactive` fonctionne contre un serveur qui refuse `password`.
+Six contrôles, un par défaut rencontré : la connexion RDP aboutit, l'image n'est
+pas cisaillée, les trames ne renvoient pas un plein écran pour deux poussières,
+la disposition clavier annoncée n'est pas zéro, le repli SSH
+`keyboard-interactive` fonctionne contre un serveur qui refuse `password`, et
+SFTP fait l'aller-retour à l'octet près.
+
+Ce que le parc **ne** couvre pas — GNOME Remote Desktop, Windows, la lecture du
+flux RDP au fil — est dit sans détour dans
 Voir [tests-parc/README.md](tests-parc/README.md).
 
 ## Exécuteur GitLab

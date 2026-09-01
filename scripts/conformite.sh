@@ -11,6 +11,7 @@
 # SSH :
 #   4. le repli clavier-interactif   — un compte de domaine ne pouvait pas se
 #      connecter, faute de ce repli ; signalé depuis Windows, pas par les tests
+#   5. SFTP de bout en bout        — dépôt, relecture à l'octet près, effacement
 #
 # Usage : scripts/conformite.sh [xfce|gnome|ssh|tous]
 set -euo pipefail
@@ -90,13 +91,14 @@ eprouver() { # nom  port
 }
 
 eprouver_ssh() { # port
-  echo "▸ ssh clavier-interactif (127.0.0.1:$1)"
+  echo "▸ ssh (127.0.0.1:$1)"
   # Ce serveur REFUSE la méthode « password » : seul le repli peut aboutir.
-  if cargo run -q -p avash --example ssh_conformite -- "$1" essai 'essai-mot-de-passe'; then
-    :
-  else
-    echecs=$((echecs+1))
-  fi
+  cargo run -q -p avash --example ssh_conformite -- "$1" essai 'essai-mot-de-passe' \
+    || echecs=$((echecs+1))
+  # SFTP contre un VRAI OpenSSH : les tests d'intégration parlent à un serveur
+  # monté en mémoire, c'est-à-dire à notre propre compréhension du protocole.
+  cargo run -q -p avash --example sftp_conformite -- "$1" essai 'essai-mot-de-passe' \
+    || echecs=$((echecs+1))
 }
 
 quoi="${1:-xfce}"

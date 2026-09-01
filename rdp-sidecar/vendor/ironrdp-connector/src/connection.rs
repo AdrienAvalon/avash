@@ -818,6 +818,36 @@ fn respond_to_connect_time_autodetect(
     }
 }
 
+/// Capacités annoncées dans les données de base du client.
+///
+/// Extrait en fonction pour être testable : le drapeau du pipeline graphique
+/// n'est pas un détail décoratif, et rien ne le protégeait.
+fn drapeaux_precoces(max_color_depth: u32) -> ironrdp_pdu::gcc::ClientEarlyCapabilityFlags {
+    use ironrdp_pdu::gcc::ClientEarlyCapabilityFlags as F;
+    let mut d = F::VALID_CONNECTION_TYPE
+        | F::SUPPORT_ERR_INFO_PDU
+        | F::STRONG_ASYMMETRIC_KEYS
+        | F::SUPPORT_NET_CHAR_AUTODETECT
+        | F::SUPPORT_SKIP_CHANNELJOIN
+        // GNOME Remote Desktop EXIGE que le client annonce le pipeline
+        // graphique : sans ce drapeau, il ferme la connexion avant même
+        // d'envoyer ServerDemandActive, et le client ne voit qu'une
+        // désactivation suivie d'une coupure — sans la moindre explication.
+        //
+        // L'annoncer ne change rien pour les serveurs qui n'en ont pas besoin :
+        // Windows Server 2025, un autre Windows et un xrdp rendent leur image
+        // exactement comme avant. Un serveur ne bascule sur EGFX que si le
+        // client ouvre aussi le canal dynamique correspondant.
+        | F::SUPPORT_DYN_VC_GFX_PROTOCOL;
+
+    // TODO(#136): support for ClientEarlyCapabilityFlags::SUPPORT_STATUS_INFO_PDU
+
+    if max_color_depth == 32 {
+        d |= F::WANT_32_BPP_SESSION;
+    }
+    d
+}
+
 #[allow(single_use_lifetimes)] // anonymous lifetimes in `impl Trait` are unstable
 fn create_gcc_blocks<'a>(
     config: &Config,
@@ -878,34 +908,7 @@ fn create_gcc_blocks<'a>(
                 serial_number: Some(0),
                 high_color_depth: Some(high_color_depth),
                 supported_color_depths: Some(supported_color_depths),
-                early_capability_flags: {
-                    let mut early_capability_flags = ClientEarlyCapabilityFlags::VALID_CONNECTION_TYPE
-                        | ClientEarlyCapabilityFlags::SUPPORT_ERR_INFO_PDU
-                        | ClientEarlyCapabilityFlags::STRONG_ASYMMETRIC_KEYS
-                        | ClientEarlyCapabilityFlags::SUPPORT_NET_CHAR_AUTODETECT
-                        | ClientEarlyCapabilityFlags::SUPPORT_SKIP_CHANNELJOIN
-                        // GNOME Remote Desktop EXIGE que le client annonce le
-                        // pipeline graphique : sans ce drapeau, il ferme la
-                        // connexion avant même d'envoyer ServerDemandActive, et
-                        // le client ne voit qu'une désactivation suivie d'une
-                        // coupure — sans la moindre explication. Vérifié : avec
-                        // le drapeau, la connexion aboutit.
-                        //
-                        // L'annoncer ne change rien pour les serveurs qui n'en
-                        // ont pas besoin : Windows Server 2025, un autre
-                        // Windows et un xrdp rendent leur image exactement comme
-                        // avant. Un serveur ne bascule sur EGFX que si le client
-                        // ouvre aussi le canal dynamique correspondant.
-                        | ClientEarlyCapabilityFlags::SUPPORT_DYN_VC_GFX_PROTOCOL;
-
-                    // TODO(#136): support for ClientEarlyCapabilityFlags::SUPPORT_STATUS_INFO_PDU
-
-                    if max_color_depth == 32 {
-                        early_capability_flags |= ClientEarlyCapabilityFlags::WANT_32_BPP_SESSION;
-                    }
-
-                    Some(early_capability_flags)
-                },
+                early_capability_flags: Some(drapeaux_precoces(max_color_depth)),
                 dig_product_id: Some(config.dig_product_id.clone()),
                 connection_type: Some(ConnectionType::Lan),
                 server_selected_protocol: Some(selected_protocol),
@@ -1094,5 +1097,35 @@ mod tests_autodetect {
         respond_to_connect_time_autodetect(arret, 1006, 1007, &mut out, &mut debut, &mut octets).unwrap();
         assert_eq!(octets, 0, "le compteur est remis à zéro après la réponse");
         assert!(!out.filled().is_empty(), "une réponse doit avoir été écrite");
+    }
+}
+
+#[cfg(test)]
+mod tests_capacites_precoces {
+    use super::drapeaux_precoces;
+    use ironrdp_pdu::gcc::ClientEarlyCapabilityFlags as F;
+
+    /// Ce drapeau n'est pas un détail : sans lui, GNOME Remote Desktop ferme la
+    /// connexion avant d'envoyer `ServerDemandActive`, sans un mot. Il a fallu
+    /// des heures, et une recherche sur le web, pour l'identifier.
+    ///
+    /// GNOME Remote Desktop ne peut pas être mis en conteneur — il lui faut un
+    /// compositeur et une sortie virtuelle, donc une session GNOME entière. Le
+    /// parc ne peut donc pas rejouer ce serveur. Ce test garde au moins la
+    /// propriété qui compte : que nous continuions à l'annoncer.
+    #[test]
+    fn le_pipeline_graphique_est_toujours_annonce() {
+        for profondeur in [8, 16, 24, 32] {
+            assert!(
+                drapeaux_precoces(profondeur).contains(F::SUPPORT_DYN_VC_GFX_PROTOCOL),
+                "sans ce drapeau, GNOME Remote Desktop referme la connexion sans explication"
+            );
+        }
+    }
+
+    #[test]
+    fn le_32_bits_n_est_demande_qu_en_32_bits() {
+        assert!(drapeaux_precoces(32).contains(F::WANT_32_BPP_SESSION));
+        assert!(!drapeaux_precoces(24).contains(F::WANT_32_BPP_SESSION));
     }
 }

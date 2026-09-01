@@ -199,7 +199,7 @@ empêchait tout compte de domaine de se connecter.
 
 ```bash
 scripts/parc-rdp.sh up tous        # XFCE 3390, GNOME 3391, sshd 2222
-scripts/conformite.sh tous         # connexion, image, trafic, clavier, repli SSH
+scripts/conformite.sh tous         # connexion, image, trafic, clavier, SSH, SFTP
 scripts/parc-rdp.sh down
 ```
 
