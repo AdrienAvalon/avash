@@ -293,7 +293,10 @@ Ce qu'il faudrait, dans l'ordre :
 1. ouvrir le canal dynamique et échanger les capacités (`CAPS_ADVERTISE` /
    `CAPS_CONFIRM`) ;
 2. suivre la redirection : rouvrir une connexion en replaçant le jeton de
-   routage dans la requête X.224 — le décodeur est déjà écrit et testé ;
+   routage dans la requête X.224 — le décodeur est déjà écrit et testé. Le
+   serveur fournit aussi des **identifiants à usage unique** qu'il faut employer
+   à la place de ceux de l'utilisateur : c'est ainsi que GNOME remet la
+   connexion du démon système au démon de la session ([SUSE][suse2]) ;
 3. gérer les surfaces (`CREATE_SURFACE`, `MAP_SURFACE_TO_OUTPUT`,
    `WIRE_TO_SURFACE_1/2`) et les recopier dans l'image ;
 4. accuser les trames, faute de quoi le serveur cesse d'en envoyer.
@@ -377,3 +380,5 @@ Décisions prises, à ne pas rouvrir sans raison nouvelle :
   versionnable ; y ajouter un compte en ligne ajouterait une surface d'attaque.
 - **TypeScript 7** tant que `typescript-eslint` ne le prend pas en charge : il
   désactiverait le lint typé, qui a déjà attrapé des bugs réels.
+
+[suse2]: https://www.suse.com/c/headless-remote-sessions-in-gnome-part-2/

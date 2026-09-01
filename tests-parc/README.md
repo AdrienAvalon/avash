@@ -133,11 +133,56 @@ Autant le dire que le découvrir plus tard.
 - **Windows.** Aucun serveur RDP Windows dans le parc ; la conformité repose là
   encore sur les machines réelles.
 
+## GNOME Remote Desktop : l'architecture, enfin comprise
+
+Documentée par SUSE — l'éditeur de la SLED du parc réel — dans
+[Headless remote sessions in GNOME][suse2]. Elle explique tout ce qu'on
+observait sans le comprendre.
+
+Le mode « headless » repose sur **deux démons** :
+
+1. un **démon système** qui écoute sur le port RDP et ne montre aucun bureau ;
+2. un **démon de transfert**, lancé par GDM dans une session d'écran de
+   connexion, auquel le premier remet la connexion.
+
+Et le transfert se fait précisément par le **PDU de redirection** que nous avons
+décodé. Le client reçoit :
+
+- un jeton de routage (`Cookie: msts=…`) ;
+- des **identifiants à usage unique**, engendrés au hasard — ce qui explique le
+  nom d'utilisateur incompréhensible qu'on avait lu (`69<;349v]V"0bW8<`) ;
+- un certificat X.509 pour vérifier le serveur d'arrivée.
+
+Le client doit alors **se déconnecter et se reconnecter** en présentant le jeton,
+avec les identifiants à usage unique.
+
+### Ce que cela implique pour avash
+
+Deux morceaux, dans cet ordre :
+
+1. **Suivre la redirection** : rouvrir une connexion avec le jeton de routage
+   dans la requête X.224 et les identifiants reçus. Le décodage est déjà écrit
+   et testé ; il manque la boucle de reconnexion.
+2. **EGFX**, sans quoi l'écran resterait vide même une fois redirigé.
+
+### Pourquoi le conteneur a échoué
+
+J'essayais le mauvais mode. Le mode `--headless` d'un démon utilisateur ne sert
+pas à cela : c'est le mode **système**, avec GDM, qui écoute et redirige. Sans
+GDM, le démon annonce « RDP server started » et ne se lie à rien — ce qui est
+exactement ce qu'on observait.
+
+Un conteneur reproduisant cette architecture demanderait donc GDM, systemd et
+une session complète. C'est possible, ce n'est pas petit.
+
+[suse2]: https://www.suse.com/c/headless-remote-sessions-in-gnome-part-2/
+
 ## Chantier : GNOME Remote Desktop en conteneur
 
 `Containerfile.grd.chantier` et `demarrer-grd.sh.chantier` sont **inachevés** —
 le suffixe est là pour qu'on ne les prenne pas pour un serveur du parc. Ils
-représentent ce qui a été obtenu, et où ça bloque.
+visaient le mode utilisateur, qui n'est pas le bon (voir ci-dessus) ; ils
+restent utiles pour la partie compositeur.
 
 Ce qui marche :
 
@@ -148,18 +193,11 @@ Ce qui marche :
   appartenir au compte ;
 - le démon GRD démarre et annonce « RDP server started ».
 
-Ce qui bloque :
-
-    [ERROR][com.freerdp.crypto] - [x509_utils_from_pem]: BIO_new failed for certificate
-    RDP server certificate is invalid.
-
-`grdctl rdp set-tls-cert` refuse le certificat, et sans certificat le serveur ne
-se lie à aucun port. Le fichier est pourtant un PEM valide, lisible par le compte
-qui l'utilise. Essais infructueux : déplacer le certificat de `/etc` vers le
-répertoire personnel, restreindre les droits de la clé, désactiver la
-négociation de port, poser le certificat après le démarrage du démon. Curieux :
-la même commande lancée à la main dans un conteneur déjà démarré a fonctionné
-une fois.
+Le message « RDP server certificate is invalid » était une **fausse piste** :
+GRD calcule bien l'empreinte du certificat, l'erreur vient de la validation de
+la paire tant que la clé n'est pas encore posée. Une fois les deux en place, le
+message disparaît — et le serveur ne se lie toujours pas, parce que le mode
+utilisateur n'est pas celui qui écoute.
 
 Tant que ce point n'est pas levé, la vérification contre GNOME Remote Desktop
 repose sur les machines réelles, et le drapeau EGFX est gardé par

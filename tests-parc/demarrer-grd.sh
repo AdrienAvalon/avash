@@ -34,8 +34,8 @@ exec setpriv --reuid="$UID_E" --regid="$GID_E" --init-groups env \
     /usr/libexec/gnome-remote-desktop-daemon --headless &
     DEMON=$!
     sleep 3
-    grdctl --headless rdp set-tls-cert /home/essai/cert.pem
-    grdctl --headless rdp set-tls-key /home/essai/key.pem
+    grdctl --headless rdp set-tls-cert /home/essai/.local/share/gnome-remote-desktop/tls.crt
+    grdctl --headless rdp set-tls-key /home/essai/.local/share/gnome-remote-desktop/tls.key
     grdctl --headless rdp enable
     grdctl --headless status || true
     wait "$DEMON"
