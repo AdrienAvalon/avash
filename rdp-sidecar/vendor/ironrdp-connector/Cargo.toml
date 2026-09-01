@@ -47,7 +47,12 @@ qoiz = ["ironrdp-pdu/qoiz"]
 [lib]
 name = "ironrdp_connector"
 path = "src/lib.rs"
-test = false
+# Réactivé : les correctifs portés dans ce paquet vendorisé — décalage des
+# tuiles, redirection de serveur, capacités précoces — sont couverts par des
+# tests écrits ici, que ce « false » hérité du dépôt amont empêchait de
+# s'exécuter. Ni en local ni en intégration continue : ils passaient pour verts
+# sans jamais tourner.
+test = true
 doctest = false
 
 [dependencies.ironrdp-core]

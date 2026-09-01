@@ -86,7 +86,7 @@ Le parc reproduit donc le défaut réel, et le détecteur le distingue francheme
 ## Le magnétoscope : rejouer un serveur disparu
 
 `enregistrements/*.rec` contiennent le **dialogue authentique** de serveurs
-xrdp, capturé une fois puis figé. `avash-rdp --rejouer <fichier>` le repasse
+réels — deux xrdp et un GNOME Remote Desktop —, capturé une fois puis figé. `avash-rdp --rejouer <fichier>` le repasse
 dans le décodeur, sans réseau, sans TLS, sans NLA.
 
     scripts/parc-rdp.sh up xfce
@@ -107,8 +107,11 @@ Trois usages, et le troisième est le plus important :
    celui qu'il avait fallu un signalement d'utilisateur pour découvrir.
 3. **Le fuzzing part de trafic réel.** Muter des octets au hasard ne franchit
    jamais les premières validations. Muter un enregistrement authentique atteint
-   le décodeur d'images — et y a trouvé **deux façons pour un serveur de faire
+   le décodeur d'images — et y a trouvé **quatre façons pour un serveur de faire
    tomber le client**, corrigées depuis (voir `rdp-sidecar/vendor/README.md`).
+   Les deux dernières se trouvent sur le chemin graphique, dans la
+   décompression ZGFX et la conversion des couleurs : c'est en étendant la
+   campagne à l'enregistrement GNOME Remote Desktop qu'elles sont sorties.
 
 Campagne longue à la demande :
 
@@ -123,15 +126,20 @@ Autant le dire que le découvrir plus tard.
   part entière : c'est lui qui exige EGFX et redirige vers la session de
   l'utilisateur, et c'est contre lui qu'avash a échoué le plus longtemps.
   Tentative faite, sans succès : son démon n'ouvre aucun port sans compositeur
-  ni sortie virtuelle, donc sans session GNOME complète. Ce qui reste : un test
-  qui garde le drapeau EGFX annoncé (`tests_capacites_precoces`), et le parc
-  réel d'Adrien pour la vérification de bout en bout.
+  ni sortie virtuelle, donc sans session GNOME complète. Ce qui reste : le
+  rejeu d'une session réelle enregistrée, qui couvre tout le décodage hors
+  ligne, et le parc réel d'Adrien pour la vérification de bout en bout — TLS,
+  redirection et RDSTLS compris, qu'un enregistrement ne rejoue pas.
 - **La lecture du flux RDP au fil.** `tcpdump` et `tshark` sont installés mais
   RDP est chiffré dès la négociation : ils ne montrent que du TLS. C'est le
   **magnétoscope** qui joue ce rôle — il capture au niveau des PDU décodés,
   après TLS, et rejoue hors ligne.
 - **Windows.** Aucun serveur RDP Windows dans le parc ; la conformité repose là
-  encore sur les machines réelles.
+  encore sur les machines réelles. C'est la raison pour laquelle le canal
+  graphique est refusé par défaut et n'est accordé qu'aux serveurs qui ont
+  montré n'avoir que celui-là : faute de pouvoir éprouver ici ce qu'un Windows
+  enverrait dessus, on ne le lui propose pas. Vérifié sur deux Windows du parc
+  réel, image par image, contre la version publiée précédente.
 
 ## GNOME Remote Desktop : l'architecture, enfin comprise
 
@@ -156,14 +164,27 @@ décodé. Le client reçoit :
 Le client doit alors **se déconnecter et se reconnecter** en présentant le jeton,
 avec les identifiants à usage unique.
 
-### Ce que cela implique pour avash
+### Ce que cela impliquait pour avash — et qui est fait
 
-Deux morceaux, dans cet ordre :
+Deux morceaux, dans cet ordre, tous deux en place depuis la 0.5.0 :
 
 1. **Suivre la redirection** : rouvrir une connexion avec le jeton de routage
-   dans la requête X.224 et les identifiants reçus. Le décodage est déjà écrit
-   et testé ; il manque la boucle de reconnexion.
-2. **EGFX**, sans quoi l'écran resterait vide même une fois redirigé.
+   dans la requête X.224 et les identifiants reçus, puis mener l'échange RDSTLS
+   qui seul sait les consommer.
+2. **EGFX**, sans quoi l'écran resterait vide même une fois redirigé — avec le
+   codec RemoteFX Progressive, seul retenu par ces serveurs quand le client
+   n'annonce pas H.264.
+
+Une leçon de mise au point vaut d'être notée. Notre annonce de capacités
+graphiques portait l'identifiant `0x0011` au lieu de `0x0012` : c'est celui de
+`CacheImportReply`. Le message était donc parfaitement formé, et le serveur le
+lisait sans broncher — il parlait simplement d'autre chose. Faute de recevoir
+des capacités, GRD attendait dix secondes puis fermait la session sur
+`BadCapabilities`, une erreur qui désignait la bonne famille de problème et la
+mauvaise cause. Ce qui a tranché : capturer une session **FreeRDP** — le client
+que Remmina emploie, et qui réussit — puis la déchiffrer et comparer nos octets
+aux siens. La méthode vaut mieux que le correctif : quand un serveur reste muet
+sans expliquer pourquoi, on met à côté un client qui, lui, obtient une réponse.
 
 ### Pourquoi le conteneur a échoué
 
@@ -200,5 +221,10 @@ message disparaît — et le serveur ne se lie toujours pas, parce que le mode
 utilisateur n'est pas celui qui écoute.
 
 Tant que ce point n'est pas levé, la vérification contre GNOME Remote Desktop
-repose sur les machines réelles, et le drapeau EGFX est gardé par
-`tests_capacites_precoces` dans le connecteur porté.
+repose sur les machines réelles — mais plus seulement. Une session réelle est
+**enregistrée au magnétoscope** dans `enregistrements/gnome-remote-desktop.rec`
+et rejouée à chaque `cargo test` : le canal graphique s'ouvre, le flux
+RemoteFX Progressive est décodé, et l'empreinte du rendu est figée. Une
+régression du décodage se voit donc sans réseau ni serveur, comme pour `xfce` et
+`gnome`. Le même enregistrement alimente le fuzzing par mutation, qui y a déjà
+trouvé deux paniques déclenchables à distance.

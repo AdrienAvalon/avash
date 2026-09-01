@@ -5,6 +5,8 @@ web/dist/
 # Artefacts de release (générés par scripts/release.sh)
 dist-release/
 rdp-sidecar/target/
+# Les paquets IronRDP portés se compilent aussi seuls (verifier-portes.sh).
+rdp-sidecar/vendor/*/target/
 test-rdp-server/target/
 test-rdp-server/*.pem
 crates/avash-ui/binaries/

@@ -49,10 +49,10 @@ run "clippy (release)"   "$ROOT" cargo clippy --workspace --release -- -D warnin
 step "Processus RDP (hors workspace)"
 run "compilation"        "$SIDECAR" cargo check --all-targets
 run "tests"              "$SIDECAR" cargo test
-# Le correctif porté sur ironrdp-session (cf. rdp-sidecar/vendor/README.md) a ses
-# propres tests : sans cette ligne, il pourrait être défait sans que rien ne le dise.
-run "correctif porté"    "$SIDECAR" cargo test -p ironrdp-session
-run "correctif porté 2"  "$SIDECAR" cargo test -p ironrdp-connector
+# Les correctifs portés (cf. rdp-sidecar/vendor/README.md) ont leurs propres
+# tests. Le script compte ceux qui s'exécutent : ces commandes ont longtemps
+# réussi sans rien lancer, les manifestes vendorisés portant « test = false ».
+run "correctifs portés"  "$SIDECAR" ./verifier-portes.sh
 run "format"             "$SIDECAR" cargo fmt --check
 run "clippy"             "$SIDECAR" cargo clippy --all-targets -- -D warnings
 # Vulnerabilites connues des dependances. cargo-audit s'installe avec

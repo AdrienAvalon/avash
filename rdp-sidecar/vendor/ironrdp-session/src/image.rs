@@ -200,6 +200,34 @@ impl DecodedImage {
         self.height
     }
 
+    /// Peint un rectangle de pixels RGBA venus du canal graphique (EGFX).
+    ///
+    /// Le pipeline graphique décode dans ses propres surfaces, hors de cette
+    /// image ; il faut donc un moyen d'y reporter le résultat. Le rectangle est
+    /// rogné sur les bords de l'image plutôt que refusé : le serveur raisonne en
+    /// tuiles de 64 pixels et déborde légitimement d'une surface dont les côtés
+    /// n'en sont pas des multiples.
+    ///
+    /// Ne fait rien si le format de l'image n'est pas RGBA sur 32 bits.
+    pub fn peindre_rgba(&mut self, x: u16, y: u16, largeur: u16, hauteur: u16, pixels: &[u8]) {
+        if self.pixel_format != PixelFormat::RgbA32 || x >= self.width || y >= self.height {
+            return;
+        }
+        let bpp = self.bytes_per_pixel();
+        let stride = self.stride();
+        let largeur = usize::from(largeur.min(self.width - x));
+        let hauteur = usize::from(hauteur.min(self.height - y));
+        for ligne in 0..hauteur {
+            let src = ligne * usize::from(largeur) * bpp;
+            let dst = (usize::from(y) + ligne) * stride + usize::from(x) * bpp;
+            let n = largeur * bpp;
+            if src + n > pixels.len() || dst + n > self.data.len() {
+                return;
+            }
+            self.data[dst..dst + n].copy_from_slice(&pixels[src..src + n]);
+        }
+    }
+
     /// Returns `true` if the rectangle fits entirely within the image bounds.
     ///
     /// Vérifie aussi que les bords sont DANS L'ORDRE. `width()` et `height()`

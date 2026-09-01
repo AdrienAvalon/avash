@@ -65,10 +65,11 @@ processus-rdp:
     - cargo fmt --check
     - cargo clippy --all-targets -- -D warnings
     - cargo test
-    # Les correctifs portés sur IronRDP ont leurs propres tests : sans ces deux
-    # lignes, ils pourraient être défaits sans que rien ne le dise.
-    - cargo test -p ironrdp-session
-    - cargo test -p ironrdp-connector
+    # Les correctifs portés sur IronRDP ont leurs propres tests. Ces lignes
+    # existaient déjà et ne lançaient RIEN : les manifestes vendorisés portaient
+    # « test = false », hérité de l'amont, et quatorze tests passaient pour verts
+    # sans jamais tourner. On compte donc ce qui s'exécute.
+    - ./verifier-portes.sh
 
 # --- Chaîne d'approvisionnement ------------------------------------------
 dependances:

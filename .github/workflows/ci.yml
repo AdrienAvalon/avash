@@ -90,14 +90,18 @@ jobs:
       # TOFU de certificat, le garde-fou qui empêche d'accepter n'importe quel
       # serveur RDP — ne s'exécutaient donc nulle part. Ils passaient, mais
       # personne ne l'aurait su s'ils avaient cessé de passer.
+      # Les paquets IronRDP portés déclaraient `test = false`, hérité de l'amont :
+      # les deux lignes ci-dessous ne lançaient RIEN, et les quatorze tests qui
+      # couvrent nos propres correctifs passaient pour verts sans jamais tourner.
+      # Le manifeste est corrigé ; verifier-portes.sh compte ce qui s'exécute
+      # réellement, faute de quoi la même panne serait de nouveau invisible.
       - name: Processus RDP — format, clippy, tests
         working-directory: rdp-sidecar
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
           cargo test
-          cargo test -p ironrdp-session
-          cargo test -p ironrdp-connector
+          ./verifier-portes.sh
 
       # Absent jusqu'ici du CI, et le sidecar RDP n'était audité nulle part
       # alors qu'il est compilé et livré dans le bundle.

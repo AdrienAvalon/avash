@@ -30,6 +30,7 @@ vingtaine de mégaoctets et démarre en une fraction de seconde.
 **Connexions**
 - **SSH** — terminal complet (xterm.js), plusieurs sessions en onglets, `ProxyJump` en chaîne
 - **RDP** — bureaux distants intégrés (IronRDP), redimensionnement natif : le bureau distant s'adapte réellement à la fenêtre, sans zoom d'image
+- **Windows, xrdp et GNOME Remote Desktop** — y compris les serveurs qui redirigent la connexion vers une autre session (RDSTLS) et ne dessinent que par le canal graphique (MS-RDPEGFX, RemoteFX Progressive)
 - **SFTP** — panneau de fichiers distants : parcourir, envoyer, télécharger, renommer, supprimer
 - **Tunnels SSH** — locaux (`-L`), distants (`-R`) et SOCKS (`-D`), avec leur état en direct
 
@@ -138,17 +139,17 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 
 ## Qualité
 
-**295 tests** couvrent le projet, tous exécutés à chaque commit :
+**368 tests** couvrent le projet, tous exécutés à chaque commit :
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
-| Cœur (`crates/avash`) | 115 | parseur `~/.ssh/config`, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques |
-| Intégration | 24 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP, tunnels, rebonds `ProxyJump` |
+| Cœur (`crates/avash`) | 117 | parseur `~/.ssh/config`, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques |
+| Intégration | 28 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP, tunnels, rebonds `ProxyJump` |
 | Interface (`crates/avash-ui`) | 34 | commandes Tauri, décodage UTF-8 en flux, verrous clavier |
-| Processus RDP | 33 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, magnétoscope, rejeu d'enregistrements réels, fuzzing par mutation |
-| Correctifs portés sur IronRDP | 8 | remplissage des tuiles bitmap, mesure de bande passante (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
+| Processus RDP | 56 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique et codec RemoteFX Progressive, magnétoscope, rejeu d'enregistrements réels, fuzzing par mutation |
+| Correctifs portés sur IronRDP | 14 | remplissage des tuiles bitmap, mesure de bande passante, redirection de serveur, capacités précoces (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
 | Front (Vitest) | 78 | logique pure : arborescence, filtres, scancodes, mappage souris, réglages |
-| Bout en bout (WebdriverIO) | 38 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** |
+| Bout en bout (WebdriverIO) | 41 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
 qui ne voient pas le même code — ESLint typé, `cargo audit` et `cargo deny` sur

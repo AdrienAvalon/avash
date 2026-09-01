@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 
 use crate::{
     Config, ConnectionFinalizationSequence, ConnectorError, ConnectorErrorExt as _, ConnectorResult, DesktopSize,
-    Sequence, State, Written, general_err, reason_err,
+    Sequence, State, Written, general_err,
 };
 
 /// Represents the Capability Exchange and Connection Finalization phases
@@ -147,28 +147,21 @@ impl Sequence for ConnectionActivationSequence {
                 //
                 // The decoded PDU is intentionally discarded: the DeactivateAll body carries
                 // no payload we need during initial activation.
-                if matches!(
-                    share_control_ctx.pdu,
-                    rdp::headers::ShareControlPdu::ServerDeactivateAll(_)
-                ) {
-                    debug!(
-                        "Skipping Server Deactivate All PDU received during Capabilities Exchange, awaiting Server Demand Active"
-                    );
+                // Entre le Deactivate All et le Demand Active, un serveur a le
+                // droit de glisser d'autres PDU : informations de session,
+                // disposition des moniteurs, code d'erreur. GNOME Remote Desktop
+                // le fait systématiquement après une redirection. Un client réel
+                // les ignore et continue d'attendre ; s'en formaliser fermait la
+                // session juste avant qu'elle ne devienne utilisable.
+                let nom = share_control_ctx.pdu.as_short_name();
+                let rdp::headers::ShareControlPdu::ServerDemandActive(server_demand_active) =
+                    share_control_ctx.pdu
+                else {
+                    debug!(pdu = nom, "Ignoré pendant l'échange de capacités, on attend le Server Demand Active");
                     self.state = ConnectionActivationState::CapabilitiesExchange;
                     return Ok(Written::Nothing);
-                }
-
-                let capability_sets = if let rdp::headers::ShareControlPdu::ServerDemandActive(server_demand_active) =
-                    share_control_ctx.pdu
-                {
-                    server_demand_active.pdu.capability_sets
-                } else {
-                    return Err(reason_err!(
-                        "ConnectionActivation::CapabilitiesExchange",
-                        "unexpected Share Control PDU during capabilities exchange: got {} (expected Server Demand Active PDU)",
-                        share_control_ctx.pdu.as_short_name(),
-                    ));
                 };
+                let capability_sets = server_demand_active.pdu.capability_sets;
 
                 for c in &capability_sets {
                     if let CapabilitySet::General(g) = c {

@@ -60,7 +60,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
+mod egfx;
 mod magnetoscope;
+mod progressif;
 
 /// Presse-papiers local partagé (texte), alimenté par le front, servi au serveur.
 type LocalClip = std::sync::Arc<std::sync::Mutex<Option<String>>>;
@@ -557,6 +559,15 @@ fn repertoire_configuration() -> Option<std::path::PathBuf> {
 /// répertoire courant : y semer un fichier de confiance le rendrait inopérant
 /// au prochain lancement depuis ailleurs — chaque serveur redeviendrait un
 /// premier contact, en silence.
+/// Où l'on note les serveurs qui n'ont que le canal graphique pour dessiner.
+fn chemin_canal_graphique() -> Option<std::path::PathBuf> {
+    Some(
+        repertoire_configuration()?
+            .join("avash")
+            .join("rdp_canal_graphique"),
+    )
+}
+
 fn chemin_empreintes() -> anyhow::Result<std::path::PathBuf> {
     Ok(repertoire_configuration()
         .context("répertoire de configuration introuvable (HOME/XDG_CONFIG_HOME)")?
@@ -967,9 +978,12 @@ async fn connect(
     a: &Args,
     clip_backend: ClipBackend,
     redirection: Option<&ironrdp::session::redirection::Redirection>,
+    graphique: egfx::Politique,
 ) -> Result<(
     connector::ConnectionResult,
     ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
+    egfx::CanalPartage,
+    egfx::FilePartagee,
 )> {
     let tcp = TcpStream::connect((a.host.as_str(), a.port))
         .await
@@ -978,13 +992,19 @@ async fn connect(
     tcp.set_nodelay(true).ok();
     let client_addr = tcp.local_addr()?;
     let mut framed = ironrdp_tokio::TokioFramed::new(tcp);
+    let (egfx, canal_egfx, file_egfx) = egfx::Egfx::nouveau();
     // Canal Display Control (DVC) : permet le redimensionnement natif du
     // bureau distant (le serveur re-rend à la nouvelle résolution).
+    let mut dvc = DrdynvcClient::new()
+        .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new())));
+    // Le canal graphique n'est offert qu'aux serveurs qui ont montré n'en avoir
+    // pas d'autre : l'accepter suffit à faire taire un serveur Windows. Voir
+    // `egfx::Politique`.
+    if graphique == egfx::Politique::Accepter {
+        dvc.attach_dynamic_channel(egfx);
+    }
     let mut connector = connector::ClientConnector::new(build_config(a, redirection), client_addr)
-        .with_static_channel(
-            DrdynvcClient::new()
-                .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new()))),
-        )
+        .with_static_channel(dvc)
         // Canal CLIPRDR : presse-papiers partagé poste <-> bureau distant (texte).
         .with_static_channel(CliprdrClient::new(Box::new(clip_backend)));
     let should_upgrade = match ironrdp_tokio::connect_begin(&mut framed, &mut connector).await {
@@ -1114,7 +1134,7 @@ async fn connect(
             anyhow::Error::new(e).context("fin de la séquence de connexion")
         }
     })?;
-    Ok((result, framed))
+    Ok((result, framed, canal_egfx, file_egfx))
 }
 
 #[tokio::main]
@@ -1155,8 +1175,43 @@ async fn main() -> Result<()> {
     // Bornée à trois tours : une chaîne de redirections sans fin serait un
     // serveur mal configuré, ou hostile.
     let mut redirection: Option<Box<ironrdp::session::redirection::Redirection>> = None;
-    for _ in 0..3 {
-        match executer(&args, redirection.take()).await? {
+    let mut poste: Option<Poste> = None;
+    let memoire = chemin_canal_graphique();
+    let cle = format!("{}:{}", args.host, args.port);
+    let mut graphique = egfx::Politique::pour(&cle, memoire.as_deref());
+    // Quatre tours suffisent au pire cas connu : connexion, redirection, reprise
+    // avec le canal graphique, redirection de nouveau. La marge est là pour ne
+    // pas transformer un serveur inhabituel en échec ; la borne, pour qu'un
+    // serveur qui redirige en rond ne nous y entraîne pas.
+    for _ in 0..6 {
+        let dessine = std::sync::atomic::AtomicBool::new(false);
+        let issue = executer(&args, redirection.take(), &mut poste, graphique, &dessine).await;
+        // Une session qui se termine sans avoir affiché la moindre image, alors
+        // qu'on lui refusait le canal graphique, désigne un serveur qui n'a que
+        // celui-là. GNOME Remote Desktop ne patiente même pas : son pipeline ne
+        // pouvant s'ouvrir, il raccroche aussitôt. Reprendre est la seule
+        // réponse juste — et la seule qui n'exige pas de deviner à l'avance à
+        // quelle famille de serveur on parle.
+        let issue = match issue {
+            Ok(Suite::Fini) | Err(_)
+                if graphique == egfx::Politique::Observer
+                    && !dessine.load(std::sync::atomic::Ordering::Relaxed) =>
+            {
+                Ok(Suite::ReprendreAvecGraphique)
+            }
+            autre => autre,
+        };
+        match issue? {
+            Suite::ReprendreAvecGraphique => {
+                eprintln!(
+                    "egfx : ce serveur ne dessine pas par le chemin classique, \
+                     reprise avec le canal graphique"
+                );
+                if let Some(m) = memoire.as_deref() {
+                    egfx::memoriser(&cle, m);
+                }
+                graphique = egfx::Politique::Accepter;
+            }
             Suite::Fini => return Ok(()),
             Suite::Rediriger(r) => {
                 eprintln!(
@@ -1176,7 +1231,21 @@ async fn main() -> Result<()> {
 }
 
 /// Ce qu'une session a donné.
+/// Le poste de travail côté interface : l'écoute locale et le client accepté.
+///
+/// Il survit aux reconnexions RDP. Une redirection de serveur rétablit la
+/// session distante par en dessous ; l'interface, elle, garde le même port, le
+/// même jeton et la même WebSocket, et n'a rien à réapprendre.
+struct Poste {
+    _listener: TcpListener,
+    sink: futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, Message>,
+    stream: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>,
+}
+
 enum Suite {
+    /// Rien n'a été dessiné : ce serveur n'a probablement que le canal
+    /// graphique, qu'il faut lui offrir — donc se reconnecter.
+    ReprendreAvecGraphique,
     /// La session s'est terminée normalement.
     Fini,
     /// Le serveur nous renvoie ailleurs ; il faut tout refaire avec ce qu'il donne.
@@ -1186,6 +1255,9 @@ enum Suite {
 async fn executer(
     args: &Args,
     redirection: Option<Box<ironrdp::session::redirection::Redirection>>,
+    poste: &mut Option<Poste>,
+    graphique: egfx::Politique,
+    dessine: &std::sync::atomic::AtomicBool,
 ) -> Result<Suite> {
     let local_text: LocalClip = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel::<ClipReq>();
@@ -1202,9 +1274,9 @@ async fn executer(
     // mais ne mène jamais l'échange CredSSP à son terme — TLS est monté, les
     // données circulent, et rien n'aboutit. L'utilisateur voit un onglet figé.
     const DELAI_CONNEXION: Duration = Duration::from_secs(25);
-    let (result, mut framed) = match tokio::time::timeout(
+    let (result, mut framed, canal_egfx, file_egfx) = match tokio::time::timeout(
         DELAI_CONNEXION,
-        connect(args, clip_backend, redirection.as_deref()),
+        connect(args, clip_backend, redirection.as_deref(), graphique),
     )
     .await
     {
@@ -1232,6 +1304,9 @@ async fn executer(
     let canal_clip = result
         .static_channels
         .get_channel_id_by_type::<CliprdrClient>();
+    if std::env::var_os("AVASH_EGFX_TRACE").is_some() {
+        eprintln!("canaux statiques : dvc={canal_dvc:?} clip={canal_clip:?} io={io_channel_id} user={user_channel_id}");
+    }
     let mut active = ActiveStageBuilder {
         static_channels: result.static_channels,
         user_channel_id: result.user_channel_id,
@@ -1275,50 +1350,68 @@ async fn executer(
             &mut framed,
             &path,
             magneto.as_mut(),
+            &Graphique {
+                canal: &canal_egfx,
+                file: &file_egfx,
+                politique: graphique,
+                dessine,
+            },
         )
         .await;
     }
 
     // Serveur WebSocket local : un seul client (Avash), jeton obligatoire.
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .context("écoute WebSocket")?;
-    let port = listener.local_addr()?.port();
-    let token = format!("{:016x}", rand::random::<u64>());
-    // Annonce le point de connexion à Avash.
-    let mut out = tokio::io::stdout();
-    out.write_all(format!("{port} {token}\n").as_bytes())
-        .await?;
-    out.flush().await?;
+    // Établi au premier passage seulement : une redirection de serveur rappelle
+    // cette fonction, et rouvrir un port neuf laisserait l'interface parler dans
+    // le vide, attachée à l'ancien.
+    if poste.is_none() {
+        // Serveur WebSocket local : un seul client (Avash), jeton obligatoire.
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .context("écoute WebSocket")?;
+        let port = listener.local_addr()?.port();
+        let token = format!("{:016x}", rand::random::<u64>());
+        // Annonce le point de connexion à Avash.
+        let mut out = tokio::io::stdout();
+        out.write_all(format!("{port} {token}\n").as_bytes())
+            .await?;
+        out.flush().await?;
 
-    // On boucle sur les connexions au lieu d'en accepter une seule. Le port est
-    // ouvert avant même que l'interface n'en soit avertie : n'importe quel
-    // processus local — ou une page web, les WebSocket n'étant pas soumises à
-    // la politique d'origine pour *établir* la connexion — pouvait s'y
-    // présenter le premier. Un message quelconque faisait quitter le sidecar,
-    // détruisant une session RDP déjà authentifiée (TLS + NLA refaits) ; une
-    // connexion TCP laissée sans poignée de main WebSocket consommait la seule
-    // place d'`accept` et l'interface n'arrivait jamais à se connecter.
-    // Le jeton (64 bits) reste hors de portée : c'était un déni de service, pas
-    // un détournement. On rejette maintenant l'intrus et on attend le suivant,
-    // avec un délai de garde par tentative pour qu'un client muet ne bloque pas
-    // la file.
-    const DELAI_POIGNEE: Duration = Duration::from_secs(10);
-    let (mut sink, mut stream) = loop {
-        let (tcp, _) = listener.accept().await.context("acceptation WebSocket")?;
-        tcp.set_nodelay(true).ok();
-        let Ok(Ok(ws)) =
-            tokio::time::timeout(DELAI_POIGNEE, tokio_tungstenite::accept_async(tcp)).await
-        else {
-            continue; // poignée de main absente ou trop lente : au suivant
+        // On boucle sur les connexions au lieu d'en accepter une seule. Le port est
+        // ouvert avant même que l'interface n'en soit avertie : n'importe quel
+        // processus local — ou une page web, les WebSocket n'étant pas soumises à
+        // la politique d'origine pour *établir* la connexion — pouvait s'y
+        // présenter le premier. Un message quelconque faisait quitter le sidecar,
+        // détruisant une session RDP déjà authentifiée (TLS + NLA refaits) ; une
+        // connexion TCP laissée sans poignée de main WebSocket consommait la seule
+        // place d'`accept` et l'interface n'arrivait jamais à se connecter.
+        // Le jeton (64 bits) reste hors de portée : c'était un déni de service, pas
+        // un détournement. On rejette maintenant l'intrus et on attend le suivant,
+        // avec un délai de garde par tentative pour qu'un client muet ne bloque pas
+        // la file.
+        const DELAI_POIGNEE: Duration = Duration::from_secs(10);
+        let (sink, stream) = loop {
+            let (tcp, _) = listener.accept().await.context("acceptation WebSocket")?;
+            tcp.set_nodelay(true).ok();
+            let Ok(Ok(ws)) =
+                tokio::time::timeout(DELAI_POIGNEE, tokio_tungstenite::accept_async(tcp)).await
+            else {
+                continue; // poignée de main absente ou trop lente : au suivant
+            };
+            let (sink, mut stream) = ws.split();
+            // Premier message du client = le jeton (sinon on refuse ce client-là).
+            match tokio::time::timeout(DELAI_POIGNEE, stream.next()).await {
+                Ok(Some(Ok(Message::Binary(t)))) if t == token.as_bytes() => break (sink, stream),
+                _ => continue,
+            }
         };
-        let (sink, mut stream) = ws.split();
-        // Premier message du client = le jeton (sinon on refuse ce client-là).
-        match tokio::time::timeout(DELAI_POIGNEE, stream.next()).await {
-            Ok(Some(Ok(Message::Binary(t)))) if t == token.as_bytes() => break (sink, stream),
-            _ => continue,
-        }
-    };
+        *poste = Some(Poste {
+            _listener: listener,
+            sink,
+            stream,
+        });
+    }
+    let Poste { sink, stream, .. } = poste.as_mut().expect("poste établi juste au-dessus");
 
     // CONNECTED [1][w][h]
     let mut hello = vec![1u8];
@@ -1341,6 +1434,9 @@ async fn executer(
     // 1080p) que personne ne regardait. En pause, on accumule le rectangle sale
     // sans rien émettre ; le retour au premier plan demande un REFRESH.
     let mut en_pause = false;
+    // Le serveur dessine-t-il par le chemin classique ? Voir ATTENTE_EGFX.
+    let mut dessin_classique = false;
+    let mut silence: Option<Instant> = None;
     let mut last_send = Instant::now();
     // Métriques (fenêtre ~1 s) : fps, débit, latence de bout en bout.
     let (mut stat_frames, mut stat_bytes): (u32, u64) = (0, 0);
@@ -1368,6 +1464,45 @@ async fn executer(
                 }
             }
         };
+    }
+
+    // Récolte les trames décodées par le canal graphique et les peint dans
+    // l'image. EGFX décode dans ses propres surfaces : sans ce report, la
+    // session est parfaitement fonctionnelle et l'écran reste noir.
+    #[allow(clippy::items_after_statements)]
+    macro_rules! peindre_egfx {
+        () => {{
+            let sortie = std::mem::take(&mut *file_egfx.lock().unwrap());
+            if let Some((nl, nh)) = sortie.taille {
+                if (nl, nh) != (image.width(), image.height()) {
+                    image = DecodedImage::new(PixelFormat::RgbA32, nl, nh);
+                    dirty.clear();
+                    awaiting_ack = false;
+                    let mut hello = vec![1u8];
+                    hello.extend_from_slice(&nl.to_le_bytes());
+                    hello.extend_from_slice(&nh.to_le_bytes());
+                    sink.send(Message::Binary(hello))
+                        .await
+                        .context("nouvelle taille")?;
+                }
+            }
+            if !sortie.trames.is_empty() {
+                dessine.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            for t in sortie.trames {
+                image.peindre_rgba(t.x, t.y, t.largeur, t.hauteur, &t.pixels);
+                ajouter_rect(
+                    &mut dirty,
+                    &InclusiveRectangle {
+                        left: t.x,
+                        top: t.y,
+                        right: t.x.saturating_add(t.largeur).saturating_sub(1),
+                        bottom: t.y.saturating_add(t.hauteur).saturating_sub(1),
+                    },
+                );
+            }
+            flush_dirty!();
+        }};
     }
 
     // Envoie au serveur les messages d'un canal statique (ici CLIPRDR).
@@ -1469,6 +1604,30 @@ async fn executer(
                 }
             }
             _ = tick.tick() => {
+                // Annonce des capacités graphiques, une fois le canal ouvert et
+                // dans une écriture qui lui est propre (voir `egfx::start`).
+                // Deux issues selon ce que le serveur nous a laissé faire. Si
+                // le canal graphique est ouvert, il ne reste qu'à annoncer nos
+                // capacités — dans une écriture qui lui soit propre. S'il ne
+                // l'est pas et que rien n'a été dessiné, c'est que ce serveur
+                // n'a que celui-là : il faut reprendre en le lui accordant.
+                const ATTENTE_EGFX: Duration = Duration::from_secs(4);
+                if !dessin_classique {
+                    let depuis = *silence.get_or_insert_with(Instant::now);
+                    if egfx::canal_ouvert(&canal_egfx).is_some() {
+                        if let Some((id, pdu)) = egfx::annonce_a_emettre(&canal_egfx) {
+                            eprintln!("egfx : annonce des capacités sur le canal {id}");
+                            let bytes = active
+                                .process_svc_processor_messages(egfx::lot_dvc(id, pdu)?)
+                                .context("encodage egfx")?;
+                            framed.write_all(&bytes).await.context("écriture egfx")?;
+                        }
+                    } else if graphique == egfx::Politique::Observer
+                        && depuis.elapsed() >= ATTENTE_EGFX
+                    {
+                        return Ok(Suite::ReprendreAvecGraphique);
+                    }
+                }
                 // Un ACK perdu ne doit pas geler l'écran : au-delà du délai, on
                 // considère la webview libre et on renvoie l'état courant.
                 if awaiting_ack && last_send.elapsed() > ACK_TIMEOUT {
@@ -1547,10 +1706,14 @@ async fn executer(
                 if let Some(m) = magneto.as_mut() {
                     m.ajouter(action, &payload);
                 }
-                for o in active.process(&mut image, action, &payload)? {
+                let sorties = active.process(&mut image, action, &payload)?;
+                peindre_egfx!();
+                for o in sorties {
                     match o {
                         ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await.context("écriture réponse")?,
                         ActiveStageOutput::GraphicsUpdate(rect) => {
+                            dessin_classique = true;
+                            dessine.store(true, std::sync::atomic::Ordering::Relaxed);
                             ajouter_rect(&mut dirty, &rect);
                             flush_dirty!();
                         }
@@ -1595,23 +1758,70 @@ async fn executer(
     Ok(Suite::Fini)
 }
 
+/// Ce qu'il faut savoir du canal graphique pendant une session.
+struct Graphique<'a> {
+    canal: &'a egfx::CanalPartage,
+    file: &'a egfx::FilePartagee,
+    politique: egfx::Politique,
+    /// Une image, une seule, a-t-elle été affichée ? C'est ce qui décide s'il
+    /// faut reprendre la connexion en accordant le canal.
+    dessine: &'a std::sync::atomic::AtomicBool,
+}
+
 async fn run_shot(
     active: &mut ActiveStage,
     image: &mut DecodedImage,
     framed: &mut ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
     path: &str,
     mut magneto: Option<&mut magnetoscope::Enregistreur>,
+    g: &Graphique<'_>,
 ) -> Result<Suite> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    while let Ok(Ok((action, payload))) = tokio::time::timeout_at(deadline, framed.read_pdu()).await
+    // Deux fenêtres, selon ce que le serveur donne. Un serveur qui a commencé à
+    // dessiner a tout dit en cinq secondes ; un serveur muet est peut-être un
+    // pipeline graphique, qu'il faut laisser venir.
+    let debut = tokio::time::Instant::now();
+    let mut dessin_classique = false;
+    let mut silence: Option<tokio::time::Instant> = None;
+    while let Ok(Ok((action, payload))) = tokio::time::timeout_at(
+        debut
+            + if g.dessine.load(std::sync::atomic::Ordering::Relaxed) {
+                Duration::from_secs(5)
+            } else {
+                Duration::from_secs(12)
+            },
+        framed.read_pdu(),
+    )
+    .await
     {
         if let Some(m) = magneto.as_mut() {
             m.ajouter(action, &payload);
         }
         let mut done = false;
+        // Même règle que dans la boucle de session (voir ATTENTE_EGFX).
+        if !dessin_classique {
+            let depuis = *silence.get_or_insert_with(tokio::time::Instant::now);
+            if egfx::canal_ouvert(g.canal).is_some() {
+                if let Some((id, pdu)) = egfx::annonce_a_emettre(g.canal) {
+                    let bytes = active.process_svc_processor_messages(egfx::lot_dvc(id, pdu)?)?;
+                    framed.write_all(&bytes).await.context("annonce egfx")?;
+                }
+            } else if g.politique == egfx::Politique::Observer
+                && depuis.elapsed() >= Duration::from_secs(4)
+            {
+                return Ok(Suite::ReprendreAvecGraphique);
+            }
+        }
+        for t in std::mem::take(&mut *g.file.lock().unwrap()).trames {
+            g.dessine.store(true, std::sync::atomic::Ordering::Relaxed);
+            image.peindre_rgba(t.x, t.y, t.largeur, t.hauteur, &t.pixels);
+        }
         for o in active.process(image, action, &payload)? {
             match o {
                 ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await?,
+                ActiveStageOutput::GraphicsUpdate(_) => {
+                    dessin_classique = true;
+                    g.dessine.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 ActiveStageOutput::Terminate(_) => done = true,
                 // Même chemin que la session interactive : suivre la redirection
                 // plutôt que de s'arrêter dessus.

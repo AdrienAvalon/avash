@@ -260,7 +260,11 @@ pub fn rejouer(e: &Enregistrement, tolerant: bool) -> Result<Resume> {
     let mut image = DecodedImage::new(PixelFormat::RgbA32, e.entete.largeur, e.entete.hauteur);
     // Mêmes canaux, même ordre que la session réelle : drdynvc puis cliprdr.
     let mut canaux = ironrdp::svc::StaticChannelSet::new();
-    canaux.insert(ironrdp::dvc::DrdynvcClient::new());
+    // Le canal graphique en fait partie : c'est le seul chemin par lequel GNOME
+    // Remote Desktop dessine, et sans lui un enregistrement de ce serveur
+    // rejouerait sur un écran noir sans que rien ne le signale.
+    let (egfx, _canal, file) = crate::egfx::Egfx::nouveau();
+    canaux.insert(ironrdp::dvc::DrdynvcClient::new().with_dynamic_channel(egfx));
     canaux.insert(ironrdp::cliprdr::CliprdrClient::new(Box::new(
         PressePapiersMuet,
     )));
@@ -295,6 +299,10 @@ pub fn rejouer(e: &Enregistrement, tolerant: bool) -> Result<Resume> {
                     if matches!(s, ActiveStageOutput::GraphicsUpdate(_)) {
                         r.rectangles += 1;
                     }
+                }
+                for t in std::mem::take(&mut *file.lock().unwrap()).trames {
+                    image.peindre_rgba(t.x, t.y, t.largeur, t.hauteur, &t.pixels);
+                    r.rectangles += 1;
                 }
             }
             Err(err) => match action {
@@ -449,6 +457,10 @@ mod tests_enregistrements_reels {
     const ATTENDUES: &[(&str, u64)] = &[
         ("xfce", 0xdf04_a5d7_14c2_a784),
         ("gnome", 0xe260_e3e2_7f26_bdf4),
+        // GNOME Remote Desktop : tout passe par le canal graphique et le codec
+        // RemoteFX Progressive. C'est la seule couverture hors ligne de ce
+        // chemin — le parc conteneurisé ne sait pas encore monter un GRD.
+        ("gnome-remote-desktop", 0x44fd_e714_c1d2_750e),
     ];
 
     fn chemin(nom: &str) -> String {
@@ -489,7 +501,14 @@ mod tests_enregistrements_reels {
     /// d'images, là où vivent les vrais défauts.
     #[test]
     fn un_serveur_hostile_ne_fait_pas_tomber_le_client() {
-        let base = lire(&chemin("xfce")).unwrap();
+        // Les deux chemins de décodage, car ils ne partagent presque rien :
+        // « xfce » emprunte les mises à jour classiques, « gnome-remote-desktop »
+        // le canal graphique et RemoteFX Progressive, dont l'analyseur lit des
+        // longueurs et des indices de tuile fournis par le serveur.
+        let bases: Vec<_> = ["xfce", "gnome-remote-desktop"]
+            .iter()
+            .map(|n| lire(&chemin(n)).unwrap())
+            .collect();
         let mut graine: u64 = 0x9e37_79b9_7f4a_7c15;
         let mut alea = || {
             graine ^= graine << 13;
@@ -504,7 +523,8 @@ mod tests_enregistrements_reels {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(150);
-        for _ in 0..tours {
+        for tour in 0..tours {
+            let base = &bases[tour % bases.len()];
             let mut mute = super::Enregistrement {
                 entete: base.entete,
                 pdus: base.pdus.clone(),

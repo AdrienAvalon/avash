@@ -79,6 +79,21 @@ Corrigé en deux endroits — la garde elle-même, et le rejet en amont dans le
 traitement des mises à jour — parce que la largeur est parfois calculée avant
 d'atteindre la garde.
 
+## Deux paniques de plus sur le chemin graphique
+
+Le fuzzing par mutation, étendu à un enregistrement GNOME Remote Desktop, a
+montré qu'un flux corrompu pouvait arrêter le processus depuis deux endroits :
+la décompression ZGFX (`ironrdp-graphics`, indexation d'une fenêtre glissante)
+et la conversion YCbCr (la caisse `yuv`, arithmétique sur des coefficients hors
+plage). Ces deux paquets ne sont pas portés ici ; le sidecar isole donc les
+appels, et une image illisible reste une image illisible au lieu de couper
+toutes les sessions ouvertes.
+
+Ce n'est pas une correction en amont mais un confinement, assumé comme tel :
+patcher trois bibliothèques tierces pour un décodeur de pixels serait
+disproportionné, et le confinement se teste (`progressif.rs`, campagne de
+fuzzing).
+
 ## GNOME Remote Desktop ferme sans rien dire
 
 Deux changements liés, dans `ironrdp-connector/src/connection.rs` et
@@ -118,11 +133,33 @@ Ce qu'un vrai serveur envoie :
     RedirFlags = 0x0001c016
     LoadBalanceInfo (25 o) = "Cookie: msts=2464288595\r\n"
 
-avash sait donc lire la demande, mais pas encore la suivre — et surtout, il ne
-saurait rien afficher ensuite : ces serveurs n'envoient leurs images que par
-EGFX, dont IronRDP n'a que les **codecs** (`zgfx`, `progressive`, `clearcodec`)
-et aucune couche protocole. Le canal `Microsoft::Windows::RDS::Graphics`
-n'existe nulle part dans la bibliothèque. Plutôt qu'un écran vide, avash le dit.
+avash lit la demande **et la suit** depuis la 0.5.0 : reconnexion avec le jeton
+de routage, puis échange RDSTLS avec les identifiants à usage unique — seul
+mécanisme que ces identifiants acceptent. La couche protocole EGFX, absente
+d'IronRDP, est écrite dans le sidecar (`egfx.rs`, `progressif.rs`) ; la
+bibliothèque n'en fournissait que les **codecs** (`zgfx`, `progressive`,
+`clearcodec`).
+
+### Tolérer ce qui s'intercale avant la réactivation
+
+Dans `ironrdp-connector/src/connection_activation.rs`. Après une redirection,
+GNOME Remote Desktop glisse d'autres PDU entre le *Deactivate All* et le *Server
+Demand Active* attendu — informations de session, disposition des moniteurs,
+code d'erreur. IronRDP ne tolérait que le *Deactivate All* et refusait le reste
+avec « unexpected Share Control PDU », ce qui fermait la session juste avant
+qu'elle ne devienne utilisable. Un client réel les ignore et continue
+d'attendre ; c'est ce que fait le paquet porté, en journalisant ce qu'il écarte.
+
+C'est ce correctif qui a rendu lisible le vrai message du serveur : un
+`ServerSetErrorInfo(BadCapabilities)`, jusque-là englouti par le refus.
+
+### Les tests du paquet porté ne s'exécutaient pas
+
+`test = false` dans les `Cargo.toml` vendorisés, hérité du dépôt amont. Les
+quatorze tests écrits ici — décalage des tuiles, redirection, capacités
+précoces, autodétection — passaient pour verts sans jamais tourner, ni en local
+ni en intégration continue, y compris derrière les lignes `cargo test -p
+ironrdp-session` du fichier de CI, qui ne lançaient rien. Réactivé.
 
 ## `ironrdp-connector` — la connexion reste suspendue sans fin
 

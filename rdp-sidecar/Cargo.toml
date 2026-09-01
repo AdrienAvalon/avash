@@ -1,6 +1,6 @@
 [package]
 name = "avash-rdp"
-version = "0.4.3"
+version = "0.5.0"
 edition = "2021"
 # Application, pas bibliothèque : rien n'est publié sur crates.io. Le dire
 # empêche une publication par mégarde, et lève l'avertissement de cargo-deny

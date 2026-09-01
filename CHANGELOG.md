@@ -7,14 +7,64 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
-- **avash suit désormais les redirections de serveur, RDSTLS compris.** GNOME
-  Remote Desktop remet la connexion d'un démon à l'autre par une redirection,
-  avec un jeton de routage et des identifiants à usage unique que seul RDSTLS
-  sait consommer. La séquence complète est implémentée : décodage du PDU,
-  reconnexion avec le jeton, échange RDSTLS. Vérifié contre un vrai serveur —
-  la session s'établit.
-- Il reste EGFX pour **voir** quelque chose : ces serveurs n'envoient leurs
-  images que par ce canal. La connexion aboutit, l'écran reste vide.
+## [0.5.0] - 2026-09-01
+
+- **avash affiche enfin les bureaux GNOME Remote Desktop.** SLED 16 se connecte,
+  s'affiche et se redimensionne. Trois défauts se cachaient l'un derrière
+  l'autre, et chacun masquait le suivant.
+
+  - **Les redirections de serveur sont suivies, RDSTLS compris.** Ces serveurs
+    remettent la connexion d'un démon à l'autre par une redirection portant un
+    jeton de routage et des identifiants à usage unique, que seul RDSTLS sait
+    consommer.
+
+  - **Le canal graphique (MS-RDPEGFX) est ouvert et son flux décodé.** Ces
+    serveurs ne dessinent que par là. Notre annonce de capacités portait
+    l'identifiant `0x0011` — celui de `CacheImportReply` — au lieu de `0x0012` :
+    un message parfaitement formé, mais qui parlait d'autre chose. Le serveur
+    l'ignorait, attendait dix secondes, puis fermait la session sur un
+    `BadCapabilities` désignant la mauvaise cause. Trouvé en comparant nos
+    octets à ceux de FreeRDP sur une capture déchiffrée.
+
+  - **Le codec RemoteFX Progressive est implémenté** (`progressif.rs`) : c'est
+    celui que ces serveurs retiennent dès lors que le client n'annonce pas
+    H.264. Les tuiles sont décodées, rognées sur les bords de la surface, et
+    reportées à l'écran.
+
+  - **Le redimensionnement suit.** Redimensionner la fenêtre d'avash fait
+    re-rendre le bureau distant à la nouvelle taille, comme sur un serveur
+    Windows : le serveur répond par un `ResetGraphics` que le client applique à
+    son image et annonce à l'interface.
+
+- **Le canal graphique s'apprend serveur par serveur.** Un serveur Windows
+  dessine par le chemin classique dès l'activation, et **le seul fait
+  d'accepter le canal graphique le fait taire** : il tient alors pour acquis que
+  le client dessinera par là, et bascule sur des codecs que nous ne décodons
+  pas. L'écran deviendrait noir là où il fonctionnait — vérifié, puis corrigé.
+  Le client refuse donc le canal par défaut ; si la session se termine sans
+  qu'une image ait été affichée, il se reconnecte en l'acceptant et le retient
+  dans `~/.config/avash/rdp_canal_graphique`. La reconnexion ne se paie qu'une
+  fois par serveur. `AVASH_EGFX=toujours` ou `jamais` tranche à la main.
+
+- **Une redirection ne coupe plus l'interface.** Le processus RDP rouvrait un
+  serveur WebSocket que l'application ne suivait pas : la session distante se
+  rétablissait dans le vide.
+
+- **Deux paniques déclenchables à distance sont fermées.** Le fuzzing par
+  mutation, étendu au chemin graphique, a montré qu'un flux corrompu pouvait
+  arrêter le processus depuis la décompression ZGFX comme depuis la conversion
+  des couleurs — donc couper toutes les sessions ouvertes, pas seulement la
+  sienne. Une image illisible reste une image illisible.
+
+- **Quatorze tests ne s'exécutaient nulle part.** Les paquets IronRDP
+  vendorisés portaient `test = false`, hérité du dépôt amont : les tests
+  couvrant nos propres correctifs — décalage des tuiles, redirection, capacités
+  précoces — passaient pour verts sans jamais tourner, ni en local ni en
+  intégration continue.
+
+- Une session GNOME Remote Desktop réelle est **enregistrée au magnétoscope** et
+  son rendu figé par empreinte. C'est la seule couverture hors ligne de ce
+  chemin, le parc conteneurisé ne sachant toujours pas monter un tel serveur.
 
 ## [0.4.3] - 2026-09-01
 

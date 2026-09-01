@@ -207,6 +207,28 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
   un vrai `sshd`, mais un binaire final plus léger (~2 Mo de moins).
 - **RDP via IronRDP** dans un sidecar, avec le canal **Display Control (DVC)**
   pour le redimensionnement natif et **CLIPRDR** pour le presse-papiers.
+- **Le canal graphique (MS-RDPEGFX) s'apprend, il ne se devine pas.** Deux
+  familles de serveurs coexistent : celles qui dessinent par les mises à jour
+  classiques dès l'activation — Windows, xrdp — et celles qui ne dessinent que
+  par le pipeline graphique — GNOME Remote Desktop. Se tromper coûte cher des
+  deux côtés, et le piège n'est pas où on l'attend : **le seul fait d'accepter
+  le canal fait taire un serveur Windows**, qui tient dès lors pour acquis que
+  le client dessinera par là. Il ne suffit donc pas de retenir son annonce de
+  capacités ; il faut refuser le canal lui-même. Le client refuse par défaut,
+  observe, et si la session se termine sans qu'une seule image ait été affichée,
+  se reconnecte en l'acceptant — puis l'inscrit dans
+  `~/.config/avash/rdp_canal_graphique`, à côté des empreintes de certificats.
+  La reconnexion ne se paie qu'une fois par serveur. `AVASH_EGFX=toujours` ou
+  `jamais` tranche à la main.
+
+  Aucun signe ne permettrait de décider à l'avance. La redirection de session,
+  tentante — c'est par elle que GNOME Remote Desktop passe —, se retrouve aussi
+  devant une ferme Windows, où l'accepter produirait un écran noir.
+- **Un seul codec graphique : RemoteFX Progressive.** C'est celui que les
+  serveurs retiennent quand le client n'annonce pas H.264, et n'annoncer que la
+  version 8 des capacités revient précisément à le demander. Décoder H.264
+  supposerait une dépendance à un décodeur vidéo, pour un gain nul sur des
+  bureaux de travail.
 - **Vérification des clés d'hôte TOFU** stricte, des deux côtés. Côté SSH, la
   décision est prise par `juger_cle_hote` sur les clés enregistrées, et **non**
   par le booléen de `check_known_hosts` : celui-ci confond « algorithme
@@ -254,6 +276,9 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Commandes Tauri | `crates/avash-ui/src/commands.rs` |
 | Lancement du sidecar RDP | `crates/avash-ui/src/rdp.rs` |
 | Sidecar RDP (protocole, IronRDP) | `rdp-sidecar/src/main.rs` |
+| Canal graphique RDP (MS-RDPEGFX) | `rdp-sidecar/src/egfx.rs` |
+| Codec RemoteFX Progressive | `rdp-sidecar/src/progressif.rs` |
+| Magnétoscope (capture et rejeu) | `rdp-sidecar/src/magnetoscope.rs` |
 | Front (application) | `web/main.ts` |
 | Front (logique pure testable) | `web/filters.ts` |
 | Front (réglages persistants) | `web/prefs.ts` |
