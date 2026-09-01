@@ -265,6 +265,17 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
   fenêtre était saccadé : WebKitGTK réallouait ses tampons GPU à chaque image du
   geste (42 % du temps dans le noyau, mesuré au profileur). Sans compositing
   accéléré, la part noyau retombe à 19 % et le débit RDP est inchangé.
+- **`--disable-gpu-compositing` sous Windows, en session distante seulement.**
+  Symétrique du point précédent, pour un autre symptôme : avash affiché à
+  travers un RDP (un poste piloté à distance, ou un avash Windows imbriqué dans
+  un autre) montrait des carrés noirs fugaces là où WebView2 compose par le GPU
+  — vignettes vidéo, canvas, aperçus d'onglet. La surface GPU est virtualisée
+  par le protocole RDP : la tuile arrive parfois avant son contenu et se voit un
+  instant en noir, d'autant plus longtemps que la session est imbriquée.
+  `main()` interroge `GetSystemMetrics(SM_REMOTESESSION)` (FFI directe vers
+  user32, aucune caisse ajoutée) et, en session distante, pose la composition
+  logicielle via `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`. Sur un écran physique,
+  rien ne change. La variable posée à la main reste prioritaire.
 - **Secrets dans le trousseau du système** (`keyring`), jamais en clair sur le
   disque ; mot de passe RDP passé au sidecar par stdin.
 - **Build release optimisé** : `opt-level = 3`, LTO, `codegen-units = 1`,

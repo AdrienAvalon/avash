@@ -17,5 +17,47 @@ fn main() {
         unsafe { std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1") };
     }
 
+    // Même mesure côté Windows, mais bornée à un cas précis : avash affiché À
+    // TRAVERS une session RDP (un poste piloté à distance, ou — le cas qui l'a
+    // révélé — un avash Windows ouvert dans un avash Windows). WebView2 y compose
+    // par le GPU, dont la surface est virtualisée par le protocole RDP : les
+    // tuiles fraîchement peintes par le GPU (vignettes vidéo, canvas, aperçus
+    // d'onglet) arrivent parfois AVANT que leur contenu ne soit poussé, et se
+    // voient un instant en NOIR. Le pipeline classique les transmet fidèlement,
+    // et la double latence d'un RDP imbriqué les fait durer assez pour qu'on les
+    // remarque. `--disable-gpu-compositing` bascule la composition en logiciel :
+    // plus de surface GPU virtualisée, donc plus de carrés noirs — sans toucher
+    // au rendu local (SM_REMOTESESSION est faux sur un écran physique).
+    //
+    // On n'écrase pas une valeur déjà posée : qui veut trancher à la main garde
+    // la main. WebView2 ajoute cette variable à ses arguments par défaut.
+    #[cfg(target_os = "windows")]
+    if session_distante() && std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
+        // SAFETY: exécuté avant tout démarrage de fil d'exécution ou de WebView2.
+        unsafe {
+            std::env::set_var(
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                "--disable-gpu-compositing",
+            )
+        };
+    }
+
     avash_ui_lib::run();
+}
+
+/// Vrai quand le processus s'exécute dans une session RDP (Terminal Services),
+/// et non sur un écran physique. `GetSystemMetrics(SM_REMOTESESSION)` renvoie
+/// une valeur non nulle exactement dans ce cas — c'est le test que Microsoft
+/// documente pour distinguer les deux, plus fiable qu'un reniflage de variables
+/// d'environnement. FFI directe vers user32 : une seule fonction, aucune caisse
+/// supplémentaire à embarquer.
+#[cfg(target_os = "windows")]
+fn session_distante() -> bool {
+    // SM_REMOTESESSION, cf. MS-RDPBCGR / winuser.h.
+    const SM_REMOTESESSION: i32 = 0x1000;
+    extern "system" {
+        fn GetSystemMetrics(n_index: i32) -> i32;
+    }
+    // SAFETY: GetSystemMetrics est sans effet de bord et sans paramètre pointeur.
+    unsafe { GetSystemMetrics(SM_REMOTESESSION) != 0 }
 }

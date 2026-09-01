@@ -5,6 +5,22 @@ Toutes les modifications notables d'Avash sont consignées dans ce fichier.
 Le format s'inspire de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/),
 et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+- **Plus de carrés noirs quand avash est piloté à travers une session RDP.**
+  Vu surtout dans le cas où un avash Windows en pilotait un autre dans une
+  session RDP imbriquée : des vignettes vidéo, un canvas ou un aperçu d'onglet
+  apparaissaient un instant en noir. WebView2 compose ces tuiles par le GPU,
+  dont la surface est virtualisée par le protocole RDP ; la tuile peinte arrive
+  parfois avant son contenu, et la double latence d'un RDP imbriqué la fait
+  durer assez pour qu'on la remarque. Sous Windows, quand `GetSystemMetrics(SM_REMOTESESSION)`
+  indique une session distante, avash bascule la composition de WebView2 en
+  logiciel (`--disable-gpu-compositing`) — exactement l'analogue du
+  `WEBKIT_DISABLE_COMPOSITING_MODE` déjà posé sous Linux. Aucun effet sur un
+  écran physique, où le GPU sert normalement. La variable
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` reste prioritaire pour qui veut
+  trancher à la main.
+
 ## [0.6.0] - 2026-09-01
 
 - **Le canal graphique fonctionne aussi avec Windows.** Éprouvé contre deux
