@@ -27,6 +27,15 @@ const HORS_PERIMETRE = new Set([
 // les valeurs sombres et claires — #8d96ab → #737c91 → #5a6478. On mesurait
 // PENDANT la transition CSS. Un audit de contraste doit lire un état stable,
 // sinon il invente des violations qui n'existent dans aucune image affichée.
+// `expect(ids).toEqual([])` ne dit que le nom de la règle. Le détail partait
+// dans un `console.log` que le journal de l'intégration continue n'a pas
+// retenu : une violation apparue là-bas, et nulle part ailleurs, restait donc
+// indéchiffrable. On met le rapport DANS l'assertion.
+const AUCUNE = "aucune violation";
+function rapport(violations) {
+  return violations.length ? raconter(violations) : AUCUNE;
+}
+
 async function figerLesAnimations() {
   await browser.execute(() => {
     let s = document.getElementById("axe-fige");
@@ -72,8 +81,7 @@ describe("Audit d'accessibilité (axe-core)", () => {
   it("la vue principale ne présente aucune violation", async () => {
     await $("#host-list").waitForExist({ timeout: 15000 });
     const violations = await auditer(null);
-    if (violations.length) console.log(`\n${raconter(violations)}`);
-    expect(violations.map((v) => v.id)).toEqual([]);
+    expect(rapport(violations)).toBe(AUCUNE);
   });
 
   // Le thème clair était PIRE que le sombre — 2,45:1 contre 3,15:1 — et aucun
@@ -113,16 +121,31 @@ describe("Audit d'accessibilité (axe-core)", () => {
       if (sombre) break;
       await bouton.click();
     }
-    if (violations.length) console.log(`\n${raconter(violations)}`);
-    expect(violations.map((v) => v.id)).toEqual([]);
+    expect(rapport(violations)).toBe(AUCUNE);
   });
 
   it("la boîte de connexion manuelle ne présente aucune violation", async () => {
+    // Le gel ne peut pas être hérité du test précédent : ce test doit tenir
+    // seul. Une modale s'ouvre sur deux animations — `fade` sur le fond,
+    // `pop` sur la boîte — et pendant ces 180 ms le texte se compose sur un
+    // fond encore translucide. axe y lit un contraste qui n'existe dans aucune
+    // image affichée. C'est la troisième fois que cet instrument ment avant que
+    // le style ne soit stable ; sur l'exécuteur d'intégration, plus chargé que
+    // cette machine, la fenêtre est plus large.
+    await figerLesAnimations();
     await $("#manual-btn").click();
     await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const f = document.querySelector(".modal-backdrop.open");
+          return !!f && f.getAnimations().length === 0
+            && getComputedStyle(f).opacity === "1";
+        }),
+      { timeout: 5000, timeoutMsg: "la modale s'anime encore" },
+    );
     const violations = await auditer("#manual-modal");
     await browser.keys("Escape");
-    if (violations.length) console.log(`\n${raconter(violations)}`);
-    expect(violations.map((v) => v.id)).toEqual([]);
+    expect(rapport(violations)).toBe(AUCUNE);
   });
 });
