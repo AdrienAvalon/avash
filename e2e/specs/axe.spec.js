@@ -97,6 +97,15 @@ describe("Audit d'accessibilité (axe-core)", () => {
     expect(
       await browser.execute(() => document.documentElement.getAttribute("data-theme")),
     ).toBe("light");
+    // Changer de thème redessine la liste d'hôtes. Auditer pendant ce redessin
+    // relève des couleurs transitoires et fabrique des violations imaginaires —
+    // c'est la troisième fois que l'instrument ment avant le style. On attend
+    // que la liste soit repeuplée, et on regèle par sécurité.
+    await browser.waitUntil(
+      async () => (await $$("#host-list .host")).length > 0,
+      { timeout: 5000, timeoutMsg: "la liste d'hôtes n'est pas revenue après la bascule" },
+    );
+    await figerLesAnimations();
     const violations = await auditer(null);
     for (let i = 0; i < 4; i++) {
       const sombre = await browser.execute(

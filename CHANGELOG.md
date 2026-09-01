@@ -7,6 +7,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- Le message affiché quand un serveur accepte les identifiants puis met fin à la
+  session ne suppose plus de cause. Il dit ce qui est établi — l'authentification
+  a réussi, la session ne démarre pas côté serveur — et renvoie au journal qui,
+  lui, sait pourquoi.
+- L'audit d'accessibilité attend que la liste soit redessinée après une bascule
+  de thème avant de mesurer. Sans cela il relevait des couleurs transitoires.
+
 ## [0.4.0] - 2026-09-01
 
 Une capacité nouvelle — enregistrer le dialogue d'un serveur pour le rejouer —

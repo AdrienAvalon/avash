@@ -877,8 +877,9 @@ async fn connect(
             anyhow::anyhow!(
                 "Le serveur a accepté vos identifiants puis a mis fin à la session \
                  avant de l'ouvrir. L'authentification n'est pas en cause : c'est \
-                 côté serveur que la session ne démarre pas (compte sans session \
-                 autorisée, service de session en échec, ou poste déjà occupé)."
+                 côté serveur que la session ne démarre pas, et il ne dit pas \
+                 pourquoi. Sur un hôte Linux, son journal le dira — \
+                 /var/log/xrdp-sesman.log."
             )
         } else {
             anyhow::Error::new(e).context("fin de la séquence de connexion")
