@@ -382,12 +382,41 @@ fn disposition_detectee() -> u32 {
     0
 }
 
-fn build_config(a: &Args) -> connector::Config {
+/// Extrait la valeur d'un jeton de routage.
+///
+/// Le serveur envoie le jeton complet — `Cookie: msts=2464288595\r\n` — tandis
+/// que la bibliothèque ajoute elle-même le préfixe et le terminateur. Le passer
+/// tel quel produisait `Cookie: msts=Cookie: msts=…`, que le serveur refusait
+/// en fermant la connexion sans un mot.
+fn valeur_du_jeton(brut: &[u8]) -> String {
+    String::from_utf8_lossy(brut)
+        .trim_end_matches(['\r', '\n'])
+        .trim_start_matches("Cookie: msts=")
+        .to_owned()
+}
+
+fn build_config(
+    a: &Args,
+    redirection: Option<&ironrdp::session::redirection::Redirection>,
+) -> connector::Config {
     let (username, domain) = split_credentials(&a.user, a.domain.as_deref());
     connector::Config {
-        credentials: Credentials::UsernamePassword {
-            username,
-            password: a.pass.clone(),
+        // Après une redirection, le serveur impose SES identifiants — engendrés
+        // pour l'occasion — et non ceux de l'utilisateur. C'est ainsi que GNOME
+        // remet la connexion d'un démon à l'autre.
+        credentials: match redirection {
+            Some(r) if r.utilisateur.is_some() => Credentials::UsernamePassword {
+                username: r.utilisateur.clone().unwrap_or_default(),
+                password: r
+                    .mot_de_passe
+                    .as_ref()
+                    .map(|o| String::from_utf8_lossy(o).into_owned())
+                    .unwrap_or_default(),
+            },
+            _ => Credentials::UsernamePassword {
+                username,
+                password: a.pass.clone(),
+            },
         },
         domain,
         // `enable_tls` annonce PROTOCOL_SSL au serveur, ce qui — la
@@ -423,7 +452,12 @@ fn build_config(a: &Args) -> connector::Config {
         client_dir: "C:\\Windows\\System32\\mstscax.dll".to_owned(),
         platform: MajorPlatformType::UNIX,
         enable_server_pointer: false,
-        request_data: None,
+        // Le jeton de routage réoriente la connexion vers la bonne session ;
+        // sans lui, le serveur nous renverrait à l'accueil, indéfiniment.
+        request_data: redirection
+            .and_then(|r| r.jeton.as_deref())
+            .map(valeur_du_jeton)
+            .map(ironrdp::pdu::nego::NegoRequestData::routing_token),
         autologon: false,
         enable_audio_playback: false,
         compression_type: None,
@@ -835,9 +869,104 @@ fn est_coupure(texte: &str) -> bool {
         || texte.contains("custom error")
 }
 
+/// Version et types de PDU RDSTLS (MS-RDPBCGR 2.2.17).
+const RDSTLS_VERSION_1: u16 = 0x0001;
+const RDSTLS_TYPE_CAPABILITIES: u16 = 0x0001;
+const RDSTLS_TYPE_AUTHREQ: u16 = 0x0002;
+const RDSTLS_TYPE_AUTHRSP: u16 = 0x0004;
+const RDSTLS_DATA_PASSWORD_CREDS: u16 = 0x0001;
+
+/// Traduit le verdict du serveur d'arrivée.
+///
+/// Ces identifiants sont engendrés par le serveur lui-même et n'ont qu'un
+/// usage : un refus ne vient donc jamais d'une faute de frappe de
+/// l'utilisateur, et le message ne doit pas le lui laisser croire.
+fn verdict_rdstls(code: u32) -> String {
+    let raison = match code {
+        0x0000_0005 => "le compte n'a pas le droit d'accéder à ce serveur",
+        0x0000_052e => "le serveur d'arrivée ne reconnaît pas les identifiants transmis",
+        0x0000_0530 => "le compte est soumis à des plages horaires",
+        0x0000_0532 => "le mot de passe du compte a expiré",
+        0x0000_0533 => "le compte est désactivé",
+        0x0000_0773 => "le mot de passe du compte doit être changé",
+        0x0000_0775 => "le compte est verrouillé",
+        _ => "raison inconnue",
+    };
+    format!(
+        "Le serveur d'arrivée a refusé la redirection : {raison} (code {code:#010x}). \
+         Ces identifiants sont engendrés par le serveur lui-même : ce n'est pas une \
+         erreur de saisie, mais un désaccord entre ses deux démons — ou une \
+         redirection expirée."
+    )
+}
+
+/// Authentification RDSTLS (MS-RDPBCGR 2.2.17), après la montée TLS.
+///
+/// C'est le protocole des connexions **redirigées**. Le serveur d'arrivée
+/// n'attend ni CredSSP ni TLS simple : il veut qu'on lui réémette, tels quels,
+/// les champs que la redirection nous a remis — identifiant de redirection,
+/// nom d'utilisateur, domaine et mot de passe. Ce dernier est chiffré par clé
+/// publique ; le client ne le déchiffre pas, il le transporte.
+///
+/// Sans cet échange, la séquence se poursuit puis le serveur met fin à la
+/// session — ce qui ressemble à s'y méprendre à un refus de session.
+async fn rdstls_authentifier<S>(
+    flux: &mut S,
+    r: &ironrdp::session::redirection::Redirection,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    /// Longueur sur 16 bits, puis les octets tels quels.
+    fn champ(m: &mut Vec<u8>, v: Option<&Vec<u8>>) {
+        let v = v.map_or(&[][..], Vec::as_slice);
+        m.extend_from_slice(&u16::try_from(v.len()).unwrap_or(0).to_le_bytes());
+        m.extend_from_slice(v);
+    }
+
+    // Le serveur parle le premier : il annonce ses capacités. Huit octets —
+    // Version, PduType, DataType, VersionsPrises — et non six comme on pourrait
+    // le déduire d'une lecture rapide de la spécification. Vérifié sur le fil.
+    let mut capacites = [0u8; 8];
+    flux.read_exact(&mut capacites)
+        .await
+        .context("capacités RDSTLS")?;
+    let type_capacites = u16::from_le_bytes([capacites[2], capacites[3]]);
+    anyhow::ensure!(
+        type_capacites == RDSTLS_TYPE_CAPABILITIES,
+        "Réponse RDSTLS inattendue : type {type_capacites}, capacités attendues."
+    );
+
+    let mut m = Vec::with_capacity(256);
+    m.extend_from_slice(&RDSTLS_VERSION_1.to_le_bytes());
+    m.extend_from_slice(&RDSTLS_TYPE_AUTHREQ.to_le_bytes());
+    m.extend_from_slice(&RDSTLS_DATA_PASSWORD_CREDS.to_le_bytes());
+    champ(&mut m, r.guid.as_ref());
+    champ(&mut m, r.utilisateur_brut.as_ref());
+    champ(&mut m, r.domaine_brut.as_ref());
+    champ(&mut m, r.mot_de_passe.as_ref());
+    flux.write_all(&m).await.context("envoi RDSTLS")?;
+    flux.flush().await.ok();
+
+    // Verdict : Version, PduType, DataType, puis le code sur quatre octets.
+    let mut rep = [0u8; 10];
+    flux.read_exact(&mut rep).await.context("réponse RDSTLS")?;
+    let type_reponse = u16::from_le_bytes([rep[2], rep[3]]);
+    anyhow::ensure!(
+        type_reponse == RDSTLS_TYPE_AUTHRSP,
+        "Réponse RDSTLS inattendue : type {type_reponse}, verdict attendu."
+    );
+    let code = u32::from_le_bytes([rep[6], rep[7], rep[8], rep[9]]);
+    anyhow::ensure!(code == 0, "{}", verdict_rdstls(code));
+    Ok(())
+}
+
 async fn connect(
     a: &Args,
     clip_backend: ClipBackend,
+    redirection: Option<&ironrdp::session::redirection::Redirection>,
 ) -> Result<(
     connector::ConnectionResult,
     ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
@@ -851,7 +980,7 @@ async fn connect(
     let mut framed = ironrdp_tokio::TokioFramed::new(tcp);
     // Canal Display Control (DVC) : permet le redimensionnement natif du
     // bureau distant (le serveur re-rend à la nouvelle résolution).
-    let mut connector = connector::ClientConnector::new(build_config(a), client_addr)
+    let mut connector = connector::ClientConnector::new(build_config(a, redirection), client_addr)
         .with_static_channel(
             DrdynvcClient::new()
                 .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new()))),
@@ -897,25 +1026,26 @@ async fn connect(
         Err(e) => return Err(e).context("début de connexion"),
     };
     let initial = framed.into_inner_no_leftover();
-    let (upgraded_stream, cert) = ironrdp_tls::upgrade(initial, &a.host).await.map_err(|e| {
-        // Le serveur a accepté la négociation, puis rompu pendant TLS.
-        // Sous Windows cela remonte en « os error 10054 », un code brut que
-        // rien ne permet d'interpréter — signalé par Adrien sur un Windows
-        // Server. Renoncer à NLA n'y changerait rien : ce repli passe lui
-        // aussi par TLS. Le message doit donc envoyer chercher ailleurs.
-        if est_coupure(&chaine_des_causes(&e)) {
-            anyhow::anyhow!(
-                "Ce serveur a accepté la négociation puis a rompu la connexion \
+    let (mut upgraded_stream, cert) =
+        ironrdp_tls::upgrade(initial, &a.host).await.map_err(|e| {
+            // Le serveur a accepté la négociation, puis rompu pendant TLS.
+            // Sous Windows cela remonte en « os error 10054 », un code brut que
+            // rien ne permet d'interpréter — signalé par Adrien sur un Windows
+            // Server. Renoncer à NLA n'y changerait rien : ce repli passe lui
+            // aussi par TLS. Le message doit donc envoyer chercher ailleurs.
+            if est_coupure(&chaine_des_causes(&e)) {
+                anyhow::anyhow!(
+                    "Ce serveur a accepté la négociation puis a rompu la connexion \
                      pendant l'établissement du canal chiffré. C'est le plus souvent \
                      un certificat RDP absent ou abîmé côté serveur, ou une couche \
                      de sécurité réglée sur « RDP » au lieu de « SSL ». Renoncer à \
                      l'authentification réseau n'y changerait rien : ce repli passe \
                      lui aussi par TLS."
-            )
-        } else {
-            anyhow::Error::new(e).context("passage TLS")
-        }
-    })?;
+                )
+            } else {
+                anyhow::Error::new(e).context("passage TLS")
+            }
+        })?;
     let pubkey = server_public_key(&cert)?;
 
     // TOFU sur le certificat, AVANT CredSSP : c'est CredSSP qui transmet les
@@ -935,6 +1065,14 @@ async fn connect(
                  rdp_known_hosts."
             );
         }
+    }
+
+    // Connexion redirigée : l'authentification RDSTLS vient ici, APRÈS la
+    // vérification du certificat — elle transporte des identifiants, et les
+    // livrer à un serveur non vérifié annulerait la protection qu'on vient
+    // d'appliquer.
+    if let Some(r) = redirection {
+        rdstls_authentifier(&mut upgraded_stream, r).await?;
     }
 
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
@@ -1009,6 +1147,46 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let args = parse_args()?;
+    // Une redirection oblige à tout refaire : nouvelle connexion TCP, nouvelle
+    // négociation, en présentant cette fois le jeton de routage. GNOME Remote
+    // Desktop s'en sert pour remettre le client du démon système au démon de la
+    // session ; sans cette boucle, on décode la demande sans pouvoir y répondre.
+    //
+    // Bornée à trois tours : une chaîne de redirections sans fin serait un
+    // serveur mal configuré, ou hostile.
+    let mut redirection: Option<Box<ironrdp::session::redirection::Redirection>> = None;
+    for _ in 0..3 {
+        match executer(&args, redirection.take()).await? {
+            Suite::Fini => return Ok(()),
+            Suite::Rediriger(r) => {
+                eprintln!(
+                    "redirection : jeton de {} octets, identifiants {}",
+                    r.jeton.as_ref().map_or(0, Vec::len),
+                    if r.utilisateur.is_some() {
+                        "fournis"
+                    } else {
+                        "absents"
+                    }
+                );
+                redirection = Some(r);
+            }
+        }
+    }
+    anyhow::bail!("Le serveur nous redirige sans fin : trois tours ont suffi à le montrer.")
+}
+
+/// Ce qu'une session a donné.
+enum Suite {
+    /// La session s'est terminée normalement.
+    Fini,
+    /// Le serveur nous renvoie ailleurs ; il faut tout refaire avec ce qu'il donne.
+    Rediriger(Box<ironrdp::session::redirection::Redirection>),
+}
+
+async fn executer(
+    args: &Args,
+    redirection: Option<Box<ironrdp::session::redirection::Redirection>>,
+) -> Result<Suite> {
     let local_text: LocalClip = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel::<ClipReq>();
     // Actif par défaut — parité avec les autres clients RDP ; l'interface
@@ -1024,20 +1202,24 @@ async fn main() -> Result<()> {
     // mais ne mène jamais l'échange CredSSP à son terme — TLS est monté, les
     // données circulent, et rien n'aboutit. L'utilisateur voit un onglet figé.
     const DELAI_CONNEXION: Duration = Duration::from_secs(25);
-    let (result, mut framed) =
-        match tokio::time::timeout(DELAI_CONNEXION, connect(&args, clip_backend)).await {
-            Ok(r) => r?,
-            Err(_) if !args.sans_nla => anyhow::bail!(
-                "{NLA_INDISPONIBLE} L'authentification réseau (NLA) n'a pas abouti \
+    let (result, mut framed) = match tokio::time::timeout(
+        DELAI_CONNEXION,
+        connect(args, clip_backend, redirection.as_deref()),
+    )
+    .await
+    {
+        Ok(r) => r?,
+        Err(_) if !args.sans_nla => anyhow::bail!(
+            "{NLA_INDISPONIBLE} L'authentification réseau (NLA) n'a pas abouti \
              en {} s. Certains serveurs annoncent NLA sans savoir le mener à \
              bien — c'est le cas de plusieurs versions de xrdp.",
-                DELAI_CONNEXION.as_secs()
-            ),
-            Err(_) => anyhow::bail!(
-                "Le serveur n'a pas répondu en {} s.",
-                DELAI_CONNEXION.as_secs()
-            ),
-        };
+            DELAI_CONNEXION.as_secs()
+        ),
+        Err(_) => anyhow::bail!(
+            "Le serveur n'a pas répondu en {} s.",
+            DELAI_CONNEXION.as_secs()
+        ),
+    };
     let (w, h) = taille_sure(result.desktop_size.width, result.desktop_size.height)?;
     let activation_factory = result.activation_factory;
     eprintln!("connecté : {w}x{h}");
@@ -1372,31 +1554,8 @@ async fn main() -> Result<()> {
                             ajouter_rect(&mut dirty, &rect);
                             flush_dirty!();
                         }
-                        ActiveStageOutput::Terminate(_) => return Ok(()),
-                        ActiveStageOutput::Redirection(r) => {
-                            // Le serveur nous renvoie vers la session de
-                            // l'utilisateur. C'est ce que fait GNOME Remote
-                            // Desktop : la connexion initiale sert d'accueil,
-                            // puis il redirige. Nous savons lire cette demande —
-                            // jeton de routage compris — mais pas encore la
-                            // suivre, et surtout pas afficher ce qui viendrait
-                            // après : ces serveurs n'envoient les images que par
-                            // le canal graphique EGFX, qu'IronRDP n'implémente
-                            // pas. Le dire plutôt que d'afficher un écran vide.
-                            eprintln!(
-                                "redirection : session={} drapeaux={:#010x} adresse={:?} jeton={} octets",
-                                r.session_id,
-                                r.drapeaux,
-                                r.adresse,
-                                r.jeton.as_ref().map_or(0, Vec::len)
-                            );
-                            anyhow::bail!(
-                                "Ce serveur redirige vers une autre session et n'envoie ses images \
-                                 que par le canal graphique « Graphics Pipeline » (EGFX), qu'avash \
-                                 ne sait pas encore lire. C'est le fonctionnement de GNOME Remote \
-                                 Desktop. La connexion aboutit, mais l'écran resterait vide."
-                            );
-                        }
+                        ActiveStageOutput::Terminate(_) => return Ok(Suite::Fini),
+                        ActiveStageOutput::Redirection(r) => return Ok(Suite::Rediriger(r)),
                         ActiveStageOutput::DeactivateAll => {
                             // Le serveur a accepté le changement de résolution : dérouler
                             // la séquence désactivation/réactivation pour renégocier.
@@ -1433,7 +1592,7 @@ async fn main() -> Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(Suite::Fini)
 }
 
 async fn run_shot(
@@ -1442,7 +1601,7 @@ async fn run_shot(
     framed: &mut ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
     path: &str,
     mut magneto: Option<&mut magnetoscope::Enregistreur>,
-) -> Result<()> {
+) -> Result<Suite> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while let Ok(Ok((action, payload))) = tokio::time::timeout_at(deadline, framed.read_pdu()).await
     {
@@ -1454,13 +1613,9 @@ async fn run_shot(
             match o {
                 ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await?,
                 ActiveStageOutput::Terminate(_) => done = true,
-                // Même verdict que le chemin interactif : sans cela, la capture
-                // annonçait « connecté » et rendait une image vide.
-                ActiveStageOutput::Redirection(_) => anyhow::bail!(
-                    "Ce serveur redirige vers une autre session et n'envoie ses images que \
-                     par le canal graphique « Graphics Pipeline » (EGFX), qu'avash ne sait \
-                     pas encore lire."
-                ),
+                // Même chemin que la session interactive : suivre la redirection
+                // plutôt que de s'arrêter dessus.
+                ActiveStageOutput::Redirection(r) => return Ok(Suite::Rediriger(r)),
                 _ => {}
             }
         }
@@ -1476,7 +1631,7 @@ async fn run_shot(
     .context("image invalide")?;
     buf.save(path)?;
     eprintln!("capture : {path}");
-    Ok(())
+    Ok(Suite::Fini)
 }
 
 #[cfg(test)]
@@ -1516,7 +1671,7 @@ mod tests_negociation {
     #[test]
     fn par_defaut_seul_nla_est_annonce() {
         let a = parse_args_de(&["--host", "x", "-u", "u"], "p").unwrap();
-        let c = build_config(&a);
+        let c = build_config(&a, None);
         assert!(
             !c.enable_tls,
             "SSL annoncé : le repli de NLA vers TLS redevient possible"
@@ -1531,7 +1686,7 @@ mod tests_negociation {
     #[test]
     fn sans_nla_annonce_les_deux_sans_renoncer_a_nla() {
         let a = parse_args_de(&["--host", "x", "-u", "u", "--sans-nla"], "p").unwrap();
-        let c = build_config(&a);
+        let c = build_config(&a, None);
         assert!(c.enable_tls);
         assert!(
             c.enable_credssp,
@@ -1874,5 +2029,61 @@ mod tests_coupure {
         assert!(!est_coupure("STATUS_LOGON_FAILURE"));
         assert!(!est_coupure("connexion TCP à 10.0.0.1:3389: timed out"));
         assert!(!est_coupure("Le certificat de 10.0.0.1:3389 a changé."));
+    }
+}
+
+#[cfg(test)]
+mod tests_jeton {
+    use super::valeur_du_jeton;
+
+    #[test]
+    fn le_prefixe_et_le_terminateur_sont_retires() {
+        // Ce que GNOME Remote Desktop envoie réellement.
+        assert_eq!(
+            valeur_du_jeton(b"Cookie: msts=2464288595\r\n"),
+            "2464288595"
+        );
+    }
+
+    #[test]
+    fn une_valeur_deja_nue_passe_telle_quelle() {
+        assert_eq!(valeur_du_jeton(b"2464288595"), "2464288595");
+    }
+
+    #[test]
+    fn un_jeton_vide_ne_panique_pas() {
+        assert_eq!(valeur_du_jeton(b""), "");
+        assert_eq!(valeur_du_jeton(b"Cookie: msts=\r\n"), "");
+    }
+}
+
+#[cfg(test)]
+mod tests_rdstls {
+    use super::verdict_rdstls;
+
+    #[test]
+    fn les_codes_connus_sont_traduits() {
+        assert!(verdict_rdstls(0x0000_052e).contains("ne reconnaît pas les identifiants"));
+        assert!(verdict_rdstls(0x0000_0775).contains("verrouillé"));
+    }
+
+    #[test]
+    fn un_code_inconnu_reste_lisible() {
+        let m = verdict_rdstls(0x0000_dead);
+        assert!(m.contains("raison inconnue"));
+        assert!(
+            m.contains("0x0000dead"),
+            "le code brut doit rester consultable : {m}"
+        );
+    }
+
+    #[test]
+    fn le_message_decharge_l_utilisateur() {
+        // Ces identifiants sont engendrés par le serveur : accuser une faute de
+        // frappe enverrait chercher au mauvais endroit.
+        assert!(
+            verdict_rdstls(0x0000_052e).contains("pas une \u{fffd}rreur de saisie")
+                || verdict_rdstls(0x0000_052e).contains("erreur de saisie")
+        );
     }
 }

@@ -20,6 +20,12 @@ pub struct Redirection {
     /// Mot de passe fourni par le serveur. **Jamais journalisé.**
     pub mot_de_passe: Option<Vec<u8>>,
     pub fqdn: Option<String>,
+    /// Identifiant unique de la connexion redirigée.
+    pub guid: Option<Vec<u8>>,
+    /// Les mêmes champs, **tels quels**. RDSTLS les réémet octet pour octet —
+    /// UTF-16 et terminateur nul compris — et non sous leur forme décodée.
+    pub utilisateur_brut: Option<Vec<u8>>,
+    pub domaine_brut: Option<Vec<u8>>,
 }
 
 const LB_TARGET_NET_ADDRESS: u32 = 0x0000_0001;
@@ -28,6 +34,9 @@ const LB_USERNAME: u32 = 0x0000_0004;
 const LB_DOMAIN: u32 = 0x0000_0008;
 const LB_PASSWORD: u32 = 0x0000_0010;
 const LB_TARGET_FQDN: u32 = 0x0000_0100;
+const LB_TARGET_NETBIOS_NAME: u32 = 0x0000_0200;
+const LB_CLIENT_TSV_URL: u32 = 0x0000_1000;
+const LB_REDIRECTION_GUID: u32 = 0x0000_8000;
 
 /// Lit un champ « longueur puis données », en restant dans les bornes.
 fn champ<'a>(o: &'a [u8], i: &mut usize) -> Option<&'a [u8]> {
@@ -81,16 +90,31 @@ pub fn decoder(charge: &[u8]) -> Option<Redirection> {
         r.jeton = champ(charge, &mut i).map(<[u8]>::to_vec);
     }
     if r.drapeaux & LB_USERNAME != 0 {
-        r.utilisateur = champ(charge, &mut i).map(utf16);
+        let brut = champ(charge, &mut i).map(<[u8]>::to_vec);
+        r.utilisateur = brut.as_deref().map(utf16);
+        r.utilisateur_brut = brut;
     }
     if r.drapeaux & LB_DOMAIN != 0 {
-        r.domaine = champ(charge, &mut i).map(utf16);
+        let brut = champ(charge, &mut i).map(<[u8]>::to_vec);
+        r.domaine = brut.as_deref().map(utf16);
+        r.domaine_brut = brut;
     }
     if r.drapeaux & LB_PASSWORD != 0 {
         r.mot_de_passe = champ(charge, &mut i).map(<[u8]>::to_vec);
     }
     if r.drapeaux & LB_TARGET_FQDN != 0 {
         r.fqdn = champ(charge, &mut i).map(utf16);
+    }
+    // L'ordre des champs est celui de la spécification, pas celui des drapeaux :
+    // sauter un champ présent décalerait tous les suivants.
+    if r.drapeaux & LB_TARGET_NETBIOS_NAME != 0 {
+        champ(charge, &mut i);
+    }
+    if r.drapeaux & LB_CLIENT_TSV_URL != 0 {
+        champ(charge, &mut i);
+    }
+    if r.drapeaux & LB_REDIRECTION_GUID != 0 {
+        r.guid = champ(charge, &mut i).map(<[u8]>::to_vec);
     }
     Some(r)
 }

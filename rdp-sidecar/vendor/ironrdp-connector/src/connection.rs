@@ -304,6 +304,18 @@ impl Sequence for ClientConnector {
                     security_protocol.insert(nego::SecurityProtocol::SSL);
                 }
 
+                // Un jeton de routage signifie que nous suivons une redirection.
+                // Le serveur d'arrivée n'attend alors ni CredSSP ni TLS simple,
+                // mais RDSTLS : c'est ce protocole qui sait consommer le mot de
+                // passe chiffré par clé publique que la redirection nous a remis.
+                // Sans cette annonce, le serveur ferme sans répondre.
+                if matches!(
+                    self.config.request_data,
+                    Some(nego::NegoRequestData::RoutingToken(_))
+                ) {
+                    security_protocol.insert(nego::SecurityProtocol::RDSTLS);
+                }
+
                 if self.config.enable_credssp {
                     // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/902b090b-9cb3-4efc-92bf-ee13373371e3
                     // The spec is stating that `PROTOCOL_SSL` "SHOULD" also be set when using `PROTOCOL_HYBRID`.

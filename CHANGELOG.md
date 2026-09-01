@@ -7,6 +7,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **avash suit désormais les redirections de serveur, RDSTLS compris.** GNOME
+  Remote Desktop remet la connexion d'un démon à l'autre par une redirection,
+  avec un jeton de routage et des identifiants à usage unique que seul RDSTLS
+  sait consommer. La séquence complète est implémentée : décodage du PDU,
+  reconnexion avec le jeton, échange RDSTLS. Vérifié contre un vrai serveur —
+  la session s'établit.
+- Il reste EGFX pour **voir** quelque chose : ces serveurs n'envoient leurs
+  images que par ce canal. La connexion aboutit, l'écran reste vide.
+
 ## [0.4.3] - 2026-09-01
 
 - **`os error 10054` couvrait un second cas, non traité.** Une coupure pendant
