@@ -31,7 +31,8 @@ front:
   script:
     - ./scripts/guard.sh          # restes de mise au point
     - cd web && npm ci
-    - npx eslint main.ts filters.ts prefs.ts
+    - npm audit --audit-level=high   # le front est le périmètre de confiance réel
+    - npx eslint main.ts filters.ts prefs.ts icons.ts collage.ts
     - npx tsc --noEmit
     - npx vitest run
     - npx vite build
@@ -76,10 +77,10 @@ dependances:
   stage: verifier
   script:
     - cargo install cargo-audit cargo-deny --locked
-    - cargo audit --ignore RUSTSEC-2023-0071
-    - cargo audit --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
-    - cargo deny check licenses bans sources
-    - cargo deny --manifest-path rdp-sidecar/Cargo.toml check licenses bans sources
+    - cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0429
+    - cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
+    - cargo deny check advisories licenses bans sources
+    - cargo deny --manifest-path rdp-sidecar/Cargo.toml check advisories licenses bans sources
   allow_failure: false
 
 # --- Bout en bout : l'application réelle, sans affichage ------------------

@@ -61,11 +61,11 @@ if cargo audit --version >/dev/null 2>&1; then
   # On echoue sur les vulnerabilites, pas sur les avertissements
   # « unmaintained » : ils viennent tous de la pile GTK que Tauri embarque,
   # hors de notre controle.
-  run "audit securite"     "$ROOT" cargo audit --ignore RUSTSEC-2023-0071
+  run "audit securite"     "$ROOT" cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0429
   # Le sidecar RDP est hors du workspace (conflit de versions pre-publication
   # entre IronRDP et russh) mais il est COMPILE ET LIVRE : son Cargo.lock doit
   # etre audite lui aussi, sans quoi ses dependances ne sont jamais regardees.
-  run "audit sidecar RDP"  "$ROOT" cargo audit --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
+  run "audit sidecar RDP"  "$ROOT" cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
 else
   printf '  \033[33m~\033[0m %s\n' "audit securite (cargo-audit absent)"
 fi
@@ -76,8 +76,8 @@ fi
 # construction imprevisible, et une source hors du registre officiel.
 #   cargo install cargo-deny --locked
 if cargo deny --version >/dev/null 2>&1; then
-  run "licences et sources"  "$ROOT"    cargo deny check licenses bans sources
-  run "licences (RDP)"       "$SIDECAR" cargo deny check licenses bans sources
+  run "licences et sources"  "$ROOT"    cargo deny check advisories licenses bans sources
+  run "licences (RDP)"       "$SIDECAR" cargo deny check advisories licenses bans sources
 else
   printf '  \033[33m~\033[0m %s\n' "licences et sources (cargo-deny absent)"
 fi
@@ -94,7 +94,7 @@ fi
 
 step "Front (avash-web)"
 run "garde"              "$ROOT" ./scripts/guard.sh
-run "lint"               "$WEB" npx eslint main.ts filters.ts
+run "lint"               "$WEB" npx eslint main.ts filters.ts prefs.ts icons.ts collage.ts
 run "typage"             "$WEB" npx tsc --noEmit
 run "tests"              "$WEB" npx vitest run
 run "build"              "$WEB" npx vite build

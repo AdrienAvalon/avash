@@ -1951,6 +1951,10 @@ fn lock_bits_from_leds(racine: &std::path::Path) -> Option<u8> {
 #[cfg(windows)]
 fn lock_bits() -> Option<u8> {
     // Bit de poids faible de GetKeyState : état de bascule de la touche.
+    // `#[link]` explicite : ne pas dépendre du hasard qu'une autre caisse du
+    // graphe lie déjà user32 — sinon la panne serait une erreur d'édition de
+    // liens à la release, pas une erreur de compilation.
+    #[link(name = "user32")]
     unsafe extern "system" {
         fn GetKeyState(virtual_key: i32) -> i16;
     }

@@ -9,10 +9,23 @@
 # (rdp-sidecar/vendor) : raison de plus pour les fermer.
 
 [advisories]
+# cargo-deny 0.20 dénie d'office les vulnérabilités ET les défauts de sûreté
+# (« unsound » : comportement indéfini atteignable) — c'est exactement ce qu'on
+# veut, et c'est pour cela qu'on ajoute enfin « check advisories » à la chaîne.
+# « unmaintained = workspace » ne signale que nos dépendances directes non
+# maintenues, pas les transitives : toute la pile GTK que Tauri embarche l'est,
+# hors de notre contrôle, et l'imposer arrêterait la chaîne sur du code qu'on ne
+# peut pas changer.
+unmaintained = "workspace"
 ignore = [
   # RUSTSEC-2023-0071 : rsa, canal auxiliaire Marvin. Atteint par une dépendance
   # transitive de russh que nous n'employons pas pour du RSA privé.
   "RUSTSEC-2023-0071",
+  # RUSTSEC-2024-0429 : glib, itérateurs VariantStrIter non sûrs. Dépendance
+  # TRANSITIVE de la pile GTK de Tauri (avash-ui), pas de notre code ; on ne peut
+  # ni la retirer ni la corriger — le correctif remontera par Tauri. Nommée ici
+  # explicitement pour que le blocage « unsound » reste actif sur TOUT le reste.
+  "RUSTSEC-2024-0429",
 ]
 
 [licenses]

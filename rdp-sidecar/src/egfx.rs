@@ -23,6 +23,13 @@ use ironrdp::pdu::PduResult;
 use crate::progressif;
 use crate::surface::{Cache, Surface, Zone};
 
+/// Trace du canal graphique : évaluée une seule fois, pas à chaque PDU. `var_os`
+/// prend le verrou global de l'environnement et parcourt `environ` ; l'appeler
+/// des centaines de fois par trame (un PDU par tuile) pour un drapeau qui ne
+/// change jamais était un coût fixe inutile sur le chemin chaud.
+static TRACE: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("AVASH_EGFX_TRACE").is_some());
+
 /// Nom du canal, imposé par la spécification.
 pub const CHANNEL_NAME: &str = "Microsoft::Windows::RDS::Graphics";
 
@@ -93,7 +100,18 @@ pub fn nom_pdu(id: u16) -> &'static str {
     }
 }
 
-/// Un PDU EGFX, en-tête retiré.
+/// Convertit une image BGRA (ordre du protocole RDP) en RGBA opaque, en une
+/// allocation dimensionnée d'avance. `flat_map(...).collect()` repartait d'un
+/// tampon vide et doublait sa capacité pour une sortie pourtant connue à l'octet
+/// près — plusieurs mégaoctets recopiés en trop sur une image plein écran.
+fn bgra_vers_rgba(bgra: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(bgra.len());
+    for p in bgra.as_chunks::<4>().0 {
+        rgba.extend_from_slice(&[p[2], p[1], p[0], 0xFF]);
+    }
+    rgba
+}
+
 /// Accusé de réception d'une trame (MS-RDPEGFX 2.2.2.13).
 ///
 /// Sans lui, le serveur considère que le client n'arrive plus à suivre et cesse
@@ -144,6 +162,7 @@ fn inspecter_progressif(flux: &[u8]) {
     }
 }
 
+/// Un PDU EGFX, en-tête retiré.
 #[derive(Debug)]
 pub struct Pdu {
     pub id: u16,
@@ -458,12 +477,7 @@ impl Egfx {
                     clair.decode(donnees, zone.largeur, zone.hauteur)
                 }));
                 match issue {
-                    Ok(Ok(v)) if v.len() >= l * h * 4 => v[..l * h * 4]
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .flat_map(|p| [p[2], p[1], p[0], 0xFF])
-                        .collect(),
+                    Ok(Ok(v)) if v.len() >= l * h * 4 => bgra_vers_rgba(&v[..l * h * 4]),
                     Ok(Err(e)) => {
                         eprintln!("egfx : ClearCodec refusé : {e}");
                         return;
@@ -502,12 +516,9 @@ impl Egfx {
             // Non compressé : les octets arrivent dans l'ordre du protocole,
             // B, G, R puis un octet de remplissage. Les recopier tels quels
             // donnerait une image aux rouges et bleus inversés.
-            CODEC_NON_COMPRESSE if donnees.len() >= l * h * 4 => donnees[..l * h * 4]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .flat_map(|p| [p[2], p[1], p[0], 0xFF])
-                .collect(),
+            CODEC_NON_COMPRESSE if donnees.len() >= l * h * 4 => {
+                bgra_vers_rgba(&donnees[..l * h * 4])
+            }
             _ => {
                 eprintln!("egfx : codec {codec:#06x} non pris en charge, image ignorée");
                 return;
@@ -717,7 +728,7 @@ impl DvcProcessor for Egfx {
         let mut reponses: Vec<DvcMessage> = Vec::new();
         for p in decouper(&clair) {
             *self.vus.entry(p.id).or_insert(0) += 1;
-            if std::env::var_os("AVASH_EGFX_TRACE").is_some() {
+            if *TRACE {
                 let tete: String = p
                     .charge
                     .iter()
@@ -974,6 +985,83 @@ mod tests {
         let trames = std::mem::take(&mut file.lock().unwrap().trames);
         assert_eq!(trames.len(), 1);
         assert_eq!(trames[0].pixels[..4], [0x30, 0x20, 0x10, 0xFF]);
+    }
+
+    #[test]
+    fn reset_graphics_suit_la_nouvelle_taille_et_ecarte_l_absurde() {
+        // Le magnétoscope rejoue des sessions à taille fixe : ce chemin — la
+        // réponse du serveur à un redimensionnement — n'y est jamais exercé.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        // 1920 x 1200 (u32 little-endian).
+        e.traiter(&pdu(
+            super::CMD_RESET_GRAPHICS,
+            &[128, 7, 0, 0, 176, 4, 0, 0],
+        ));
+        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        // Une dimension nulle est ignorée : l'ancienne taille demeure.
+        e.traiter(&pdu(super::CMD_RESET_GRAPHICS, &[0, 0, 0, 0, 176, 4, 0, 0]));
+        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        // Au-delà de 65535, try_from échoue : pas de panique, taille inchangée.
+        e.traiter(&pdu(super::CMD_RESET_GRAPHICS, &[0, 0, 1, 0, 0, 0, 1, 0]));
+        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+    }
+
+    #[test]
+    fn end_frame_accuse_la_trame_et_incremente_le_compteur() {
+        // L'accusé de fin de trame n'était couvert par rien : un format erroné
+        // fait cesser le serveur d'envoyer des images (session figée après N
+        // trames), sans erreur visible.
+        let (mut e, _canal, _file) = super::Egfx::nouveau();
+        let a = e
+            .traiter(&pdu(super::CMD_END_FRAME, &[5, 0, 0, 0]))
+            .expect("EndFrame doit produire un accusé");
+        assert_eq!(a.len(), 20);
+        assert_eq!(
+            u16::from_le_bytes([a[0], a[1]]),
+            super::CMD_FRAME_ACKNOWLEDGE
+        );
+        assert_eq!(&a[12..16], &[5, 0, 0, 0], "identifiant de trame renvoyé");
+        assert_eq!(&a[16..20], &[1, 0, 0, 0], "première trame décodée");
+        let b = e
+            .traiter(&pdu(super::CMD_END_FRAME, &[9, 0, 0, 0]))
+            .expect("EndFrame doit produire un accusé");
+        assert_eq!(&b[12..16], &[9, 0, 0, 0]);
+        assert_eq!(&b[16..20], &[2, 0, 0, 0], "compteur incrémenté");
+    }
+
+    #[test]
+    fn surface_vers_surface_recopie_vers_plusieurs_points() {
+        // SurfaceToSurface (défilement matériel, très employé par Windows) n'avait
+        // aucun test, alors qu'il a la même forme de bug que le cache : n rectangles
+        // lus par décalage, zone source extraite une fois.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        // Deux surfaces 8x4.
+        e.traiter(&pdu(0x0009, &[0, 0, 8, 0, 4, 0, 0x20])); // surface 0 (source)
+        e.traiter(&pdu(0x0009, &[1, 0, 8, 0, 4, 0, 0x20])); // surface 1 (cible)
+                                                            // Un carré rouge 2x2 en 0,0 sur la surface 0.
+        e.traiter(&pdu(
+            0x0004,
+            &[
+                0, 0, /* B G R X */ 0, 0, 255, 0, 1, 0, 0, 0, 0, 0, 2, 0, 2, 0,
+            ],
+        ));
+        file.lock().unwrap().trames.clear();
+        // src=0, dst=1, bords [0,0,2,2], 2 destinations : (4,0) et (6,2).
+        let mut c = vec![0, 0, 1, 0]; // src, dst
+        c.extend_from_slice(&[0, 0, 0, 0, 2, 0, 2, 0]); // bords
+        c.extend_from_slice(&[2, 0]); // n = 2
+        c.extend_from_slice(&[4, 0, 0, 0]); // (4,0)
+        c.extend_from_slice(&[6, 0, 2, 0]); // (6,2)
+        e.traiter(&pdu(super::CMD_SURFACE_TO_SURFACE, &c));
+        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        assert_eq!(trames.len(), 2, "deux destinations, deux zones peintes");
+        assert_eq!((trames[0].x, trames[0].y), (4, 0));
+        assert_eq!((trames[1].x, trames[1].y), (6, 2));
+        assert_eq!(
+            trames[0].pixels[..4],
+            [255, 0, 0, 255],
+            "le rouge a survécu"
+        );
     }
 
     #[test]

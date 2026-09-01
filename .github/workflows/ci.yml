@@ -39,6 +39,13 @@ jobs:
         working-directory: web
         run: npm ci
 
+      # La chaîne Rust est auditée (cargo audit + deny) ; le front, périmètre de
+      # confiance réel (une dépendance npm hostile exécute du code dans la webview),
+      # ne l'était pas. On échoue sur une vulnérabilité « high » ou pire.
+      - name: Front — audit des dépendances
+        working-directory: web
+        run: npm audit --audit-level=high
+
       # Garde anti-etourderie : bloque les restes de mise au point (harnais de test,
       # debugger, dialogues natifs confirm()/prompt() inoperants sous WebKitGTK).
       - name: Front — garde
@@ -46,7 +53,7 @@ jobs:
 
       - name: Front — lint (ESLint typé)
         working-directory: web
-        run: npx eslint main.ts filters.ts
+        run: npx eslint main.ts filters.ts prefs.ts icons.ts collage.ts
 
       - name: Front — typage
         working-directory: web
@@ -108,8 +115,8 @@ jobs:
       - name: Rust — audit des dépendances
         run: |
           cargo install cargo-audit --locked
-          cargo audit --ignore RUSTSEC-2023-0071
-          cargo audit --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
+          cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0429
+          cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
 
       # cargo-audit ne voit que les vulnérabilités déclarées. cargo-deny ferme
       # trois autres portes que rien ne surveillait : une licence inattendue
@@ -118,8 +125,8 @@ jobs:
       - name: Rust — licences, jokers et sources
         run: |
           cargo install cargo-deny --locked
-          cargo deny check licenses bans sources
-          cargo deny --manifest-path rdp-sidecar/Cargo.toml check licenses bans sources
+          cargo deny check advisories licenses bans sources
+          cargo deny --manifest-path rdp-sidecar/Cargo.toml check advisories licenses bans sources
 
       - name: Rust — build release
         run: cargo build --release -p avash-ui
@@ -153,6 +160,20 @@ jobs:
         run: |
           cargo check --all-targets
           cargo test
+
+      # avash-ui n'était bâti QUE lors d'une release : tout le code spécifique
+      # Windows — session_distante(), arguments_webview2(), les FFI user32 — n'était
+      # jamais compilé ni testé par la CI. Une faute de frappe dans un extern ou un
+      # #[link] cassé n'apparaissait qu'au moment de publier. On le compile et on le
+      # teste ici. Le build-script de Tauri exige la présence du binaire du sidecar ;
+      # un fichier vide suffit à un check/test (l'embarquage n'a lieu qu'au bundle).
+      - name: Interface — compilation et tests (dont le code Windows)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path crates/avash-ui/binaries | Out-Null
+          New-Item -ItemType File -Force -Path crates/avash-ui/binaries/avash-rdp-x86_64-pc-windows-msvc.exe | Out-Null
+          cargo check -p avash-ui --all-targets
+          cargo test -p avash-ui --lib --bin avash-ui
 
   e2e:
     name: E2E (app réelle, headless)

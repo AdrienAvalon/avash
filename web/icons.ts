@@ -39,7 +39,10 @@ const P: Record<string, string> = {
 };
 
 /** Renvoie une icône SVG inline. `cls` s'ajoute à la classe `ic-svg`. */
-export function ic(name: keyof typeof P | string, cls = ""): string {
+// `string & {}` accepte n'importe quelle chaîne tout en gardant l'autocomplétion
+// des clés connues (idiome TS) : sans lui, `keyof typeof P` serait absorbé par
+// `string` et le lint le signalerait comme doublon.
+export function ic(name: keyof typeof P | (string & {}), cls = ""): string {
   const body = P[name] ?? P.file;
   return `<svg class="ic-svg ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 }
