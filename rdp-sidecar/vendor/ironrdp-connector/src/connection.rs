@@ -822,7 +822,7 @@ fn respond_to_connect_time_autodetect(
 ///
 /// Extrait en fonction pour être testable : le drapeau du pipeline graphique
 /// n'est pas un détail décoratif, et rien ne le protégeait.
-fn drapeaux_precoces(max_color_depth: u32) -> ironrdp_pdu::gcc::ClientEarlyCapabilityFlags {
+fn drapeaux_precoces(max_color_depth: u32) -> gcc::ClientEarlyCapabilityFlags {
     use ironrdp_pdu::gcc::ClientEarlyCapabilityFlags as F;
     let mut d = F::VALID_CONNECTION_TYPE
         | F::SUPPORT_ERR_INFO_PDU
@@ -855,7 +855,7 @@ fn create_gcc_blocks<'a>(
     static_channels: impl Iterator<Item = &'a StaticVirtualChannel>,
 ) -> ConnectorResult<gcc::ClientGccBlocks> {
     use ironrdp_pdu::gcc::{
-        ClientCoreData, ClientCoreOptionalData, ClientEarlyCapabilityFlags, ClientGccBlocks, ClientNetworkData,
+        ClientCoreData, ClientCoreOptionalData, ClientGccBlocks, ClientNetworkData,
         ClientSecurityData, ColorDepth, ConnectionType, EncryptionMethod, HighColorDepth, MonitorOrientation,
         RdpVersion, SecureAccessSequence, SupportedColorDepths,
     };
