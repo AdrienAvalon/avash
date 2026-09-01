@@ -132,3 +132,35 @@ Autant le dire que le découvrir plus tard.
   après TLS, et rejoue hors ligne.
 - **Windows.** Aucun serveur RDP Windows dans le parc ; la conformité repose là
   encore sur les machines réelles.
+
+## Chantier : GNOME Remote Desktop en conteneur
+
+`Containerfile.grd.chantier` et `demarrer-grd.sh.chantier` sont **inachevés** —
+le suffixe est là pour qu'on ne les prenne pas pour un serveur du parc. Ils
+représentent ce qui a été obtenu, et où ça bloque.
+
+Ce qui marche :
+
+- `mutter --headless --virtual-monitor 1280x800` démarre et crée sa sortie
+  (`Added virtual monitor Meta-0`). Il lui faut `/tmp/.X11-unix` inscriptible,
+  faute de quoi il meurt sur Xwayland ;
+- PipeWire et WirePlumber tournent ; `~/.local/state` doit exister et
+  appartenir au compte ;
+- le démon GRD démarre et annonce « RDP server started ».
+
+Ce qui bloque :
+
+    [ERROR][com.freerdp.crypto] - [x509_utils_from_pem]: BIO_new failed for certificate
+    RDP server certificate is invalid.
+
+`grdctl rdp set-tls-cert` refuse le certificat, et sans certificat le serveur ne
+se lie à aucun port. Le fichier est pourtant un PEM valide, lisible par le compte
+qui l'utilise. Essais infructueux : déplacer le certificat de `/etc` vers le
+répertoire personnel, restreindre les droits de la clé, désactiver la
+négociation de port, poser le certificat après le démarrage du démon. Curieux :
+la même commande lancée à la main dans un conteneur déjà démarré a fonctionné
+une fois.
+
+Tant que ce point n'est pas levé, la vérification contre GNOME Remote Desktop
+repose sur les machines réelles, et le drapeau EGFX est gardé par
+`tests_capacites_precoces` dans le connecteur porté.

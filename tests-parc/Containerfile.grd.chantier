@@ -1,0 +1,33 @@
+# GNOME Remote Desktop — le serveur RDP de GNOME, à ne pas confondre avec un
+# xrdp qui servirait un bureau GNOME.
+#
+# C'est lui qui exige EGFX et redirige vers la session de l'utilisateur : la
+# classe de serveurs contre laquelle avash a échoué le plus longtemps, et que le
+# parc ne savait pas reproduire.
+#
+# La difficulté : GRD n'est qu'un pont vers un compositeur. Sans mutter, son
+# démon démarre, se configure, annonce le port… et n'écoute jamais. Il faut donc
+# un mutter « headless » avec une sortie virtuelle, et PipeWire pour transporter
+# les images.
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      gnome-remote-desktop mutter \
+      pipewire pipewire-pulse wireplumber \
+      dbus dbus-x11 dbus-system-bus-common \
+      openssl ca-certificates util-linux procps xwayland \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -s /bin/bash essai && echo 'essai:essai-mot-de-passe' | chpasswd
+# La clé privée doit appartenir au compte qui la lit et n'être lisible que par
+# lui : GRD refuse un certificat dont la clé traîne en lecture pour tous, et se
+# contente alors d'un « RDP server certificate is invalid » sans se lier.
+# Certificat dans le répertoire personnel du compte : depuis /etc, grdctl le
+# refusait (« BIO_new failed for certificate »).
+RUN openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 \
+      -subj "/CN=grd-essai" -keyout /home/essai/key.pem -out /home/essai/cert.pem 2>/dev/null \
+ && chown essai:essai /home/essai/key.pem /home/essai/cert.pem \
+ && chmod 600 /home/essai/key.pem && chmod 644 /home/essai/cert.pem
+COPY demarrer-grd.sh /usr/local/bin/demarrer-grd.sh
+RUN chmod +x /usr/local/bin/demarrer-grd.sh
+EXPOSE 3389
+CMD ["/usr/local/bin/demarrer-grd.sh"]
