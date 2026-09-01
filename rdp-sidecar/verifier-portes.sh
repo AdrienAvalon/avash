@@ -5,10 +5,16 @@
 # amont : les commandes de vérification s'exécutaient sans rien lancer, et les
 # tests couvrant nos correctifs passaient pour verts sans jamais tourner. Une
 # commande qui réussit sans rien faire est pire qu'une commande absente.
+#
+# Chaque paquet est éprouvé depuis SON répertoire, et non par `cargo test -p`
+# depuis le processus RDP : `ironrdp-pdu` a des dépendances de développement et
+# n'appartient pas à cet espace de travail, ce que cargo refuse en silence
+# quand la commande vient de l'extérieur.
 set -euo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for p in ironrdp-session ironrdp-connector; do
-  n=$(cargo test -p "$p" 2>&1 | grep -oP '^test result: ok\. \K\d+' \
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vendor"
+for p in ironrdp-session ironrdp-connector ironrdp-pdu; do
+  n=$(cd "$p" && cargo test 2>&1 | grep -oP '^test result: ok\. \K\d+' \
       | awk '{s+=$1} END {print s+0}')
   [ "$n" -ge 1 ] || { echo "aucun test exécuté pour $p" >&2; exit 1; }
+  echo "  $p : $n tests"
 done

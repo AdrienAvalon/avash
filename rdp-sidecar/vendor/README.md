@@ -189,3 +189,40 @@ connexion** —, puis réponse avec le délai et le volume.
 Après ce correctif, la séquence franchit la licence et atteint l'échange de
 capacités. Sur ce serveur-là elle échoue ensuite pour une raison qui lui est
 propre, mais elle échoue **en le disant**, au lieu de rester pendue.
+
+## `ironrdp-pdu` — ClearCodec refuse toute image d'un vrai serveur
+
+Dans `src/codecs/clearcodec/bands.rs`. Le décodeur d'une barre verticale courte
+(SHORT_VBAR_CACHE_MISS, [MS-RDPEGFX] 2.2.4.1.1.2.1.1.3) lisait ses deux champs
+dans l'ordre inverse de la spécification :
+
+```rust
+let y_on  = first_word >> 6;      // bits 13:6 — faux
+let y_off = first_word & 0x3F;    // bits 5:0  — faux
+```
+
+alors que `shortVBarYOn` occupe les huit bits de poids faible et
+`shortVBarYOff` les six suivants. La conséquence n'était pas un rendu
+approximatif : `yOn` sur huit bits dépasse presque toujours `yOff` sur six, et
+le contrôle de cohérence juste en dessous rejetait **chaque** image. Or
+ClearCodec est le codec par lequel Windows envoie l'essentiel de son dessin sur
+le canal graphique — aucun bureau Windows ne s'y affichait.
+
+Ce qui a rendu le défaut durable : le test amont qui couvre cette fonction
+composait son mot d'entrée avec la même formule que le décodeur. Il vérifiait
+donc la cohérence du code avec lui-même, jamais avec le protocole, et passait au
+vert pendant que le codec refusait tout. Il compose maintenant le mot comme le
+fait FreeRDP — vérifié sur son source — et échouerait si l'ordre revenait.
+
+Trouvé en forçant le canal graphique (`AVASH_EGFX=toujours`) contre deux
+serveurs Windows réels, puis en comparant l'erreur à l'implémentation de
+référence.
+
+### Les tests de ce paquet non plus ne s'exécutaient pas
+
+Même `test = false` hérité de l'amont que pour les deux autres paquets portés,
+et **trois cent soixante-treize** tests concernés. Réactivé. Le compte est
+vérifié par `verifier-portes.sh`, qui éprouve chaque paquet depuis son propre
+répertoire : `cargo test -p` refuse en silence un paquet qui a des dépendances
+de développement sans appartenir à l'espace de travail — exactement le cas de
+celui-ci.

@@ -224,11 +224,19 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
   Aucun signe ne permettrait de décider à l'avance. La redirection de session,
   tentante — c'est par elle que GNOME Remote Desktop passe —, se retrouve aussi
   devant une ferme Windows, où l'accepter produirait un écran noir.
-- **Un seul codec graphique : RemoteFX Progressive.** C'est celui que les
-  serveurs retiennent quand le client n'annonce pas H.264, et n'annoncer que la
-  version 8 des capacités revient précisément à le demander. Décoder H.264
-  supposerait une dépendance à un décodeur vidéo, pour un gain nul sur des
-  bureaux de travail.
+- **Trois codecs graphiques, pas H.264.** RemoteFX Progressive — en tuiles
+  simples chez GNOME Remote Desktop, affiné par paliers de qualité chez
+  Windows —, ClearCodec, et le non compressé. Le client annonce toutes les
+  versions de capacités jusqu'à la 10.7 mais y pose `AVC_DISABLED` : décoder
+  H.264 supposerait une dépendance à un décodeur vidéo, pour un gain nul sur des
+  bureaux de travail. Sans ce drapeau, un serveur qui retiendrait l'une de ces
+  versions enverrait de la vidéo illisible et l'écran resterait vide.
+
+- **Le pipeline graphique est complet côté commandes** : surfaces, cache de
+  surfaces, remplissages unis, recopies entre surfaces, rattachement à une
+  sortie, accusés de trame. Le cache n'est pas un raffinement : Windows y
+  puise plus de six cents fois pour une seule ouverture de session, et
+  l'ignorer laisse un écran où tout ce qui se répète manque.
 - **Vérification des clés d'hôte TOFU** stricte, des deux côtés. Côté SSH, la
   décision est prise par `juger_cle_hote` sur les clés enregistrées, et **non**
   par le booléen de `check_known_hosts` : celui-ci confond « algorithme
@@ -278,6 +286,7 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Sidecar RDP (protocole, IronRDP) | `rdp-sidecar/src/main.rs` |
 | Canal graphique RDP (MS-RDPEGFX) | `rdp-sidecar/src/egfx.rs` |
 | Codec RemoteFX Progressive | `rdp-sidecar/src/progressif.rs` |
+| Surfaces et cache du canal graphique | `rdp-sidecar/src/surface.rs` |
 | Magnétoscope (capture et rejeu) | `rdp-sidecar/src/magnetoscope.rs` |
 | Front (application) | `web/main.ts` |
 | Front (logique pure testable) | `web/filters.ts` |

@@ -7,11 +7,15 @@
 //! les tuiles, faire la transformée en ondelettes inverse, et reporter le tout
 //! dans une surface.
 //!
-//! Seules les tuiles `simple` sont traitées. Les tuiles `first`/`upgrade`
-//! appartiennent au mode progressif par paliers de qualité, que GNOME Remote
-//! Desktop n'utilise pas ; les rencontrer est signalé plutôt que deviné.
+//! Les trois formes de tuile sont traitées. GNOME Remote Desktop n'envoie que
+//! des tuiles `simple` ; Windows, lui, affine ses images par paliers de qualité
+//! — une tuile `first` grossière, puis des `upgrade` qui ajoutent des bits de
+//! précision aux coefficients déjà reçus. Sans elles, le bureau s'affiche avec
+//! des trous exactement là où le serveur comptait revenir.
 
 use anyhow::{Context, Result};
+
+use crate::surface::{Surface, Zone};
 use ironrdp::graphics::color_conversion::{ycbcr_to_rgba, YCbCrBuffer};
 use ironrdp::graphics::{dwt, dwt_extrapolate, progressive};
 use ironrdp::pdu::codecs::rfx::progressive::{
@@ -23,34 +27,31 @@ use ironrdp::pdu::codecs::rfx::progressive::{
 const COTE: usize = 64;
 const COEFFS: usize = progressive::COEFFICIENTS_PER_COMPONENT;
 
-/// Une surface du canal graphique : une image RGBA que le serveur remplit par
-/// tuiles et que l'on reporte ensuite à l'écran.
-#[derive(Debug)]
-pub struct Surface {
-    pub largeur: u16,
-    pub hauteur: u16,
-    pub pixels: Vec<u8>,
+/// L'état d'une tuile entre deux paliers de qualité.
+///
+/// Les coefficients sont conservés dans le domaine des fréquences : la
+/// transformée en ondelettes inverse les détruirait, or le palier suivant
+/// travaille dessus. On la fait donc sur une copie.
+struct EtatTuile {
+    coefficients: [Vec<i16>; 3],
+    signes: [Vec<i8>; 3],
+    /// Quantificateur progressif du palier précédent, par composante.
+    quant: [ComponentCodecQuant; 3],
 }
 
-impl Surface {
-    #[must_use]
-    pub fn nouvelle(largeur: u16, hauteur: u16) -> Self {
+impl Default for EtatTuile {
+    fn default() -> Self {
         Self {
-            largeur,
-            hauteur,
-            pixels: vec![0; usize::from(largeur) * usize::from(hauteur) * 4],
+            coefficients: [vec![0; COEFFS], vec![0; COEFFS], vec![0; COEFFS]],
+            signes: [vec![0; COEFFS], vec![0; COEFFS], vec![0; COEFFS]],
+            quant: [ComponentCodecQuant::LOSSLESS; 3],
         }
     }
 }
 
-/// Rectangle touché par une trame, en pixels de la surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Zone {
-    pub x: u16,
-    pub y: u16,
-    pub largeur: u16,
-    pub hauteur: u16,
-}
+/// Nombre de tuiles dont on garde l'état. Un écran 4K en compte un peu plus de
+/// deux mille ; au-delà, c'est un serveur qui invente des coordonnées.
+const TUILES_MAX: usize = 4096;
 
 /// Tampons de travail, réutilisés d'une tuile à l'autre.
 ///
@@ -62,6 +63,8 @@ pub struct Decodeur {
     signes: Vec<i8>,
     temp: Vec<i16>,
     tuile: Vec<u8>,
+    /// État par tuile, indexé par sa position dans la grille.
+    etats: std::collections::BTreeMap<(u16, u16), EtatTuile>,
 }
 
 impl Default for Decodeur {
@@ -71,6 +74,7 @@ impl Default for Decodeur {
             signes: vec![0; COEFFS],
             temp: vec![0; COEFFS],
             tuile: vec![0; COTE * COTE * 4],
+            etats: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -82,6 +86,14 @@ impl std::fmt::Debug for Decodeur {
 }
 
 impl Decodeur {
+    /// Referme le contexte d'affinage : les tuiles en cours n'ont plus de suite.
+    ///
+    /// Les garder ferait appliquer un palier d'amélioration à des coefficients
+    /// qui ne sont plus ceux de l'image à l'écran.
+    pub fn oublier_tuiles(&mut self) {
+        self.etats.clear();
+    }
+
     /// Décode un flux progressif dans `surface` et rend les zones modifiées.
     ///
     /// Le décodage proprement dit est isolé derrière `catch_unwind`. Les
@@ -124,40 +136,109 @@ impl Decodeur {
         zones: &mut Vec<Zone>,
     ) -> Result<()> {
         let extrapoler = region.uses_reduce_extrapolate();
+        let quant = |i: u8| -> Result<ComponentCodecQuant> {
+            region
+                .quant_vals
+                .get(usize::from(i))
+                .copied()
+                .context("indice de quantification hors table")
+        };
+        // Le palier de qualité désigne un jeu de quantificateurs progressifs.
+        // Son absence n'est pas une erreur : une tuile simple n'en a pas.
+        let palier = |q: u8| -> [ComponentCodecQuant; 3] {
+            region
+                .quant_prog_vals
+                .get(usize::from(q))
+                .map_or([ComponentCodecQuant::LOSSLESS; 3], |p| {
+                    [p.y_quant, p.cb_quant, p.cr_quant]
+                })
+        };
+
         for tuile in &region.tiles {
-            let ProgressiveTile::Simple(t) = tuile else {
-                anyhow::bail!(
-                    "Le serveur envoie des tuiles progressives par paliers, que nous ne \
-                     décodons pas encore."
-                );
+            let (x_idx, y_idx) = match tuile {
+                ProgressiveTile::Simple(t) => (t.x_idx, t.y_idx),
+                ProgressiveTile::First(t) => (t.x_idx, t.y_idx),
+                ProgressiveTile::Upgrade(t) => (t.x_idx, t.y_idx),
             };
-            let quant = |i: u8| -> Result<&ComponentCodecQuant> {
-                region
-                    .quant_vals
-                    .get(usize::from(i))
-                    .context("indice de quantification hors table")
-            };
-            for (n, (donnees, idx)) in [
-                (t.y_data, t.quant_idx_y),
-                (t.cb_data, t.quant_idx_cb),
-                (t.cr_data, t.quant_idx_cr),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                progressive::decode_first_pass(
-                    donnees,
-                    quant(idx)?,
-                    // Pas de palier de qualité sur une tuile simple : le
-                    // quantificateur progressif neutre laisse les coefficients
-                    // tels que le premier passage les a produits.
-                    &ComponentCodecQuant::LOSSLESS,
-                    extrapoler,
-                    &mut self.composantes[n],
-                    &mut self.signes,
-                )
-                .map_err(|e| anyhow::anyhow!("{e}"))
-                .context("premier passage d'une composante")?;
+            match tuile {
+                ProgressiveTile::Simple(t) => {
+                    let bases = [
+                        quant(t.quant_idx_y)?,
+                        quant(t.quant_idx_cb)?,
+                        quant(t.quant_idx_cr)?,
+                    ];
+                    let flux = [t.y_data, t.cb_data, t.cr_data];
+                    for n in 0..3 {
+                        progressive::decode_first_pass(
+                            flux[n],
+                            &bases[n],
+                            &ComponentCodecQuant::LOSSLESS,
+                            extrapoler,
+                            &mut self.composantes[n],
+                            &mut self.signes,
+                        )
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                        .context("premier passage d'une composante")?;
+                    }
+                }
+                ProgressiveTile::First(t) => {
+                    // Premier palier : on décode ET on garde l'état, car les
+                    // paliers suivants viendront s'y ajouter.
+                    let bases = [
+                        quant(t.quant_idx_y)?,
+                        quant(t.quant_idx_cb)?,
+                        quant(t.quant_idx_cr)?,
+                    ];
+                    let prog = palier(t.quality);
+                    let flux = [t.y_data, t.cb_data, t.cr_data];
+                    if self.etats.len() >= TUILES_MAX && !self.etats.contains_key(&(x_idx, y_idx)) {
+                        anyhow::bail!(
+                            "Trop de tuiles en cours d'affinage : {} .",
+                            self.etats.len()
+                        );
+                    }
+                    let etat = self.etats.entry((x_idx, y_idx)).or_default();
+                    for n in 0..3 {
+                        progressive::decode_first_pass(
+                            flux[n],
+                            &bases[n],
+                            &prog[n],
+                            extrapoler,
+                            &mut etat.coefficients[n],
+                            &mut etat.signes[n],
+                        )
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                        .context("premier palier d'une composante")?;
+                        etat.quant[n] = prog[n];
+                        self.composantes[n].copy_from_slice(&etat.coefficients[n]);
+                    }
+                }
+                ProgressiveTile::Upgrade(t) => {
+                    // Palier suivant : sans le premier, il n'y a rien à affiner.
+                    let Some(etat) = self.etats.get_mut(&(x_idx, y_idx)) else {
+                        continue;
+                    };
+                    let prog = palier(t.quality);
+                    let srl = [t.y_srl_data, t.cb_srl_data, t.cr_srl_data];
+                    let brut = [t.y_raw_data, t.cb_raw_data, t.cr_raw_data];
+                    for n in 0..3 {
+                        progressive::decode_upgrade_pass(
+                            srl[n],
+                            brut[n],
+                            &etat.quant[n],
+                            &prog[n],
+                            extrapoler,
+                            &mut etat.coefficients[n],
+                            &mut etat.signes[n],
+                        );
+                        etat.quant[n] = prog[n];
+                        self.composantes[n].copy_from_slice(&etat.coefficients[n]);
+                    }
+                }
+            }
+            // La transformée détruit les coefficients : elle ne travaille donc
+            // que sur la copie de travail, jamais sur l'état conservé.
+            for n in 0..3 {
                 if extrapoler {
                     dwt_extrapolate::decode(&mut self.composantes[n], &mut self.temp);
                 } else {
@@ -175,7 +256,7 @@ impl Decodeur {
             )
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context("conversion YCbCr")?;
-            if let Some(z) = reporter(&self.tuile, t.x_idx, t.y_idx, surface) {
+            if let Some(z) = reporter(&self.tuile, x_idx, y_idx, surface) {
                 zones.push(z);
             }
         }

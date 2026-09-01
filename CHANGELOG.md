@@ -7,6 +7,54 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le canal graphique fonctionne aussi avec Windows.** Éprouvé contre deux
+  serveurs réels — un contrôleur de domaine et un hôte RDP —, dont le bureau
+  s'affiche désormais intégralement par ce chemin. Il fallait pour cela quatre
+  choses que la 0.5.0 n'avait pas :
+
+  - **ClearCodec**, que Windows emploie pour l'essentiel de son dessin. Le
+    décodeur d'IronRDP lisait `shortVBarYOn` et `shortVBarYOff` dans l'ordre
+    inverse de la spécification : `yOn` sur huit bits dépassant presque toujours
+    `yOff` sur six, le contrôle de cohérence rejetait *chaque* image. Le paquet
+    `ironrdp-pdu` est donc porté à son tour. Le test amont qui couvrait cette
+    fonction encodait le même défaut — son attente était dérivée de la même
+    lecture inversée — et passait donc au vert pendant que le codec refusait
+    tout.
+
+  - **Le cache de surfaces**, que Windows sollicite massivement : six cent
+    quarante et une reprises pour dix-huit dépôts sur une seule ouverture de
+    session. Le compteur de points de destination est un entier seize bits ; lu
+    sur huit, il valait presque toujours zéro et le bureau s'affichait troué.
+
+  - **Le progressif affiné par paliers de qualité** (`TILE_FIRST` puis
+    `TILE_UPGRADE`), là où GNOME Remote Desktop se contente de tuiles simples.
+    L'état de chaque tuile est conservé dans le domaine des fréquences, la
+    transformée en ondelettes travaillant sur une copie.
+
+  - **Les remplissages unis et les recopies entre surfaces**, plus le
+    rattachement de surface à une sortie mise à l'échelle.
+
+- **Le processus RDP annonce ses capacités même face à un serveur muet.** La
+  boucle de capture n'écrivait qu'à la réception d'un PDU ; un serveur Windows
+  qui attend le canal graphique n'envoie plus rien du tout, et l'annonce ne
+  partait jamais. Le silence est précisément le moment où il faut parler.
+
+- Une session Windows réelle est **enregistrée au magnétoscope**. Avec celle de
+  GNOME Remote Desktop, elle couvre hors ligne les deux moitiés disjointes du
+  décodeur graphique, et alimente le fuzzing par mutation.
+
+- **Trois cent soixante-treize tests supplémentaires ne s'exécutaient nulle
+  part** : `ironrdp-pdu` portait lui aussi « test = false ». Le garde-fou
+  éprouve maintenant les trois paquets portés depuis leur propre répertoire —
+  `cargo test -p` refuse en silence un paquet qui a des dépendances de
+  développement sans appartenir à l'espace de travail.
+
+- **L'audit d'accessibilité auditait une modale encore en mouvement.** Il
+  héritait du gel des animations posé par le test précédent, et mesurait le
+  contraste d'un texte composé sur un fond translucide. Le détail de la
+  violation, jusque-là confié à un `console.log` que le journal d'intégration
+  continue ne retenait pas, est désormais porté par l'assertion.
+
 ## [0.5.0] - 2026-09-01
 
 - **avash affiche enfin les bureaux GNOME Remote Desktop.** SLED 16 se connecte,

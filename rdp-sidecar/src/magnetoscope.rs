@@ -458,9 +458,15 @@ mod tests_enregistrements_reels {
         ("xfce", 0xdf04_a5d7_14c2_a784),
         ("gnome", 0xe260_e3e2_7f26_bdf4),
         // GNOME Remote Desktop : tout passe par le canal graphique et le codec
-        // RemoteFX Progressive. C'est la seule couverture hors ligne de ce
-        // chemin — le parc conteneurisé ne sait pas encore monter un GRD.
+        // RemoteFX Progressive, en tuiles simples.
+        //
+        // Windows emprunte le même canal mais rien d'autre du même chemin :
+        // ClearCodec, cache de surfaces, remplissages unis, et un progressif
+        // affiné par paliers de qualité. Deux enregistrements, deux moitiés
+        // disjointes du décodeur — et le parc conteneurisé n'en héberge aucun
+        // des deux.
         ("gnome-remote-desktop", 0x44fd_e714_c1d2_750e),
+        ("windows-egfx", 0x92dc_087e_677a_53d4),
     ];
 
     fn chemin(nom: &str) -> String {
@@ -502,10 +508,12 @@ mod tests_enregistrements_reels {
     #[test]
     fn un_serveur_hostile_ne_fait_pas_tomber_le_client() {
         // Les deux chemins de décodage, car ils ne partagent presque rien :
-        // « xfce » emprunte les mises à jour classiques, « gnome-remote-desktop »
-        // le canal graphique et RemoteFX Progressive, dont l'analyseur lit des
-        // longueurs et des indices de tuile fournis par le serveur.
-        let bases: Vec<_> = ["xfce", "gnome-remote-desktop"]
+        // « xfce » emprunte les mises à jour classiques ; « gnome-remote-desktop »
+        // le canal graphique et RemoteFX Progressive en tuiles simples ;
+        // « windows-egfx » ClearCodec, le cache de surfaces et le progressif
+        // affiné par paliers. Chacun lit des longueurs, des indices de tuile et
+        // des emplacements de cache fournis par le serveur.
+        let bases: Vec<_> = ["xfce", "gnome-remote-desktop", "windows-egfx"]
             .iter()
             .map(|n| lire(&chemin(n)).unwrap())
             .collect();

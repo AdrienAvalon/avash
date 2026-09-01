@@ -63,6 +63,7 @@ use tokio_tungstenite::tungstenite::Message;
 mod egfx;
 mod magnetoscope;
 mod progressif;
+mod surface;
 
 /// Presse-papiers local partagé (texte), alimenté par le front, servi au serveur.
 type LocalClip = std::sync::Arc<std::sync::Mutex<Option<String>>>;
@@ -1353,7 +1354,6 @@ async fn executer(
             &Graphique {
                 canal: &canal_egfx,
                 file: &file_egfx,
-                politique: graphique,
                 dessine,
             },
         )
@@ -1758,11 +1758,23 @@ async fn executer(
     Ok(Suite::Fini)
 }
 
+/// L'annonce de capacités graphiques à écrire, s'il y en a une.
+///
+/// Rendue prête à l'emploi : le PDU est déjà encadré pour le canal statique.
+fn annonce_egfx(active: &mut ActiveStage, g: &Graphique<'_>) -> Result<Option<(u32, Vec<u8>)>> {
+    let Some((id, pdu)) = egfx::annonce_a_emettre(g.canal) else {
+        return Ok(None);
+    };
+    let bytes = active
+        .process_svc_processor_messages(egfx::lot_dvc(id, pdu)?)
+        .context("encodage egfx")?;
+    Ok(Some((id, bytes)))
+}
+
 /// Ce qu'il faut savoir du canal graphique pendant une session.
 struct Graphique<'a> {
     canal: &'a egfx::CanalPartage,
     file: &'a egfx::FilePartagee,
-    politique: egfx::Politique,
     /// Une image, une seule, a-t-elle été affichée ? C'est ce qui décide s'il
     /// faut reprendre la connexion en accordant le canal.
     dessine: &'a std::sync::atomic::AtomicBool,
@@ -1780,36 +1792,40 @@ async fn run_shot(
     // dessiner a tout dit en cinq secondes ; un serveur muet est peut-être un
     // pipeline graphique, qu'il faut laisser venir.
     let debut = tokio::time::Instant::now();
-    let mut dessin_classique = false;
-    let mut silence: Option<tokio::time::Instant> = None;
-    while let Ok(Ok((action, payload))) = tokio::time::timeout_at(
-        debut
+    // Lecture par courtes attentes plutôt qu'en un seul long blocage : un
+    // serveur Windows qui attend le canal graphique n'envoie plus rien du tout,
+    // et l'annonce de capacités — émise dans le corps de cette boucle — ne
+    // partait jamais. Le silence est précisément le moment où il faut parler.
+    loop {
+        let limite = debut
             + if g.dessine.load(std::sync::atomic::Ordering::Relaxed) {
                 Duration::from_secs(5)
             } else {
                 Duration::from_secs(12)
-            },
-        framed.read_pdu(),
-    )
-    .await
-    {
+            };
+        if tokio::time::Instant::now() >= limite {
+            break;
+        }
+        let lu = tokio::time::timeout(Duration::from_millis(200), framed.read_pdu()).await;
+        let (action, payload) = match lu {
+            Ok(Ok(v)) => v,
+            Ok(Err(_)) => break,
+            Err(_) => {
+                // Rien n'est venu : on repasse quand même par l'entretien du
+                // canal graphique ci-dessous, puis on attend de nouveau.
+                if let Some((id, pdu)) = annonce_egfx(active, g)? {
+                    framed.write_all(&pdu).await.context("annonce egfx")?;
+                    let _ = id;
+                }
+                continue;
+            }
+        };
         if let Some(m) = magneto.as_mut() {
             m.ajouter(action, &payload);
         }
         let mut done = false;
-        // Même règle que dans la boucle de session (voir ATTENTE_EGFX).
-        if !dessin_classique {
-            let depuis = *silence.get_or_insert_with(tokio::time::Instant::now);
-            if egfx::canal_ouvert(g.canal).is_some() {
-                if let Some((id, pdu)) = egfx::annonce_a_emettre(g.canal) {
-                    let bytes = active.process_svc_processor_messages(egfx::lot_dvc(id, pdu)?)?;
-                    framed.write_all(&bytes).await.context("annonce egfx")?;
-                }
-            } else if g.politique == egfx::Politique::Observer
-                && depuis.elapsed() >= Duration::from_secs(4)
-            {
-                return Ok(Suite::ReprendreAvecGraphique);
-            }
+        if let Some((_, pdu)) = annonce_egfx(active, g)? {
+            framed.write_all(&pdu).await.context("annonce egfx")?;
         }
         for t in std::mem::take(&mut *g.file.lock().unwrap()).trames {
             g.dessine.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1819,7 +1835,6 @@ async fn run_shot(
             match o {
                 ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await?,
                 ActiveStageOutput::GraphicsUpdate(_) => {
-                    dessin_classique = true;
                     g.dessine.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 ActiveStageOutput::Terminate(_) => done = true,

@@ -86,7 +86,8 @@ Le parc reproduit donc le défaut réel, et le détecteur le distingue francheme
 ## Le magnétoscope : rejouer un serveur disparu
 
 `enregistrements/*.rec` contiennent le **dialogue authentique** de serveurs
-réels — deux xrdp et un GNOME Remote Desktop —, capturé une fois puis figé. `avash-rdp --rejouer <fichier>` le repasse
+réels — deux xrdp, un GNOME Remote Desktop et un Windows Server —, capturé une
+fois puis figé. `avash-rdp --rejouer <fichier>` le repasse
 dans le décodeur, sans réseau, sans TLS, sans NLA.
 
     scripts/parc-rdp.sh up xfce
@@ -130,16 +131,22 @@ Autant le dire que le découvrir plus tard.
   rejeu d'une session réelle enregistrée, qui couvre tout le décodage hors
   ligne, et le parc réel d'Adrien pour la vérification de bout en bout — TLS,
   redirection et RDSTLS compris, qu'un enregistrement ne rejoue pas.
+
+  Une remarque de méthode, née d'une erreur : « le parc ne couvre pas X » et
+  « X n'est pas vérifiable » sont deux affirmations différentes, et confondre
+  la seconde avec la première a failli faire passer pour une limite de fond ce
+  qui n'était qu'une limite du parc conteneurisé. Les machines réelles sont un
+  moyen de vérification à part entière.
 - **La lecture du flux RDP au fil.** `tcpdump` et `tshark` sont installés mais
   RDP est chiffré dès la négociation : ils ne montrent que du TLS. C'est le
   **magnétoscope** qui joue ce rôle — il capture au niveau des PDU décodés,
   après TLS, et rejoue hors ligne.
-- **Windows.** Aucun serveur RDP Windows dans le parc ; la conformité repose là
-  encore sur les machines réelles. C'est la raison pour laquelle le canal
-  graphique est refusé par défaut et n'est accordé qu'aux serveurs qui ont
-  montré n'avoir que celui-là : faute de pouvoir éprouver ici ce qu'un Windows
-  enverrait dessus, on ne le lui propose pas. Vérifié sur deux Windows du parc
-  réel, image par image, contre la version publiée précédente.
+- **Windows.** Aucun serveur RDP Windows *conteneurisé*. La vérification passe
+  par deux machines réelles — un contrôleur de domaine et un hôte RDP —, et une
+  session de l'une d'elles est enregistrée dans
+  `enregistrements/windows-egfx.rec`, rejouée à chaque `cargo test`. Le canal
+  graphique reste néanmoins refusé par défaut aux serveurs qui dessinent par le
+  chemin classique : ce chemin fonctionne et il est éprouvé de longue date.
 
 ## GNOME Remote Desktop : l'architecture, enfin comprise
 

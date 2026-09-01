@@ -21,6 +21,7 @@ use ironrdp::dvc::{DvcMessage, DvcProcessor};
 use ironrdp::pdu::PduResult;
 
 use crate::progressif;
+use crate::surface::{Cache, Surface, Zone};
 
 /// Nom du canal, imposé par la spécification.
 pub const CHANNEL_NAME: &str = "Microsoft::Windows::RDS::Graphics";
@@ -46,6 +47,14 @@ const CMD_CACHE_IMPORT_REPLY: u16 = 0x0011;
 /// RemoteFX Progressive : le seul codec que nous décodions, et celui que GNOME
 /// Remote Desktop retient dès lors que le client n'annonce pas H.264.
 const CODEC_CAPROGRESSIVE: u16 = 0x0009;
+/// ClearCodec : celui que Windows emploie pour l'essentiel de son dessin sur le
+/// canal graphique. Il s'appuie sur des caches — glyphes et barres verticales —
+/// qui vivent d'une image à l'autre : le décodeur doit durer toute la session,
+/// sinon une image sur deux devient illisible.
+const CODEC_CLEARCODEC: u16 = 0x0008;
+/// Codec planaire de RDP 6, employé pour de petites zones.
+const CODEC_PLANAIRE: u16 = 0x000A;
+const CODEC_NON_COMPRESSE: u16 = 0x0000;
 const CMD_CAPS_ADVERTISE: u16 = 0x0012;
 const CMD_CAPS_CONFIRM: u16 = 0x0013;
 const CMD_MAP_SURFACE_TO_WINDOW: u16 = 0x0014;
@@ -166,28 +175,46 @@ pub fn decouper(o: &[u8]) -> Vec<Pdu> {
 }
 
 /// Versions de capacités annoncées (MS-RDPEGFX 2.2.3).
+/// Versions de capacités graphiques (MS-RDPEGFX 2.2.3), de la plus récente à la
+/// plus ancienne — l'ordre dans lequel les serveurs les examinent.
+///
+/// Les drapeaux disent ce que nous savons faire, et surtout ce que nous ne
+/// savons pas : `AVC_DISABLED` sur toutes les versions 10 et suivantes, faute
+/// de décodeur H.264. Sans lui, un serveur qui accepte l'une de ces versions
+/// enverrait de la vidéo que nous ne saurions pas lire. La 8.1 n'a rien à
+/// désactiver : on se contente de ne pas y annoncer `AVC420_ENABLED`.
+///
+/// La 10.1 est la seule dont le champ de drapeaux n'en est pas un — la
+/// spécification y place un champ réservé, que les serveurs ignorent.
+const CAPS_FLAG_SMALL_CACHE: u32 = 0x0000_0002;
+const CAPS_FLAG_AVC_DISABLED: u32 = 0x0000_0020;
 const CAPVERSION_8: u32 = 0x0008_0004;
+const VERSIONS: &[(u32, u32)] = &[
+    (0x000A_0701, CAPS_FLAG_AVC_DISABLED | CAPS_FLAG_SMALL_CACHE), // 10.7
+    (0x000A_0600, CAPS_FLAG_AVC_DISABLED | CAPS_FLAG_SMALL_CACHE), // 10.6
+    (0x000A_0502, CAPS_FLAG_AVC_DISABLED | CAPS_FLAG_SMALL_CACHE), // 10.5
+    (0x000A_0400, CAPS_FLAG_AVC_DISABLED | CAPS_FLAG_SMALL_CACHE), // 10.4
+    (0x000A_0301, CAPS_FLAG_AVC_DISABLED),                         // 10.3
+    (0x000A_0200, CAPS_FLAG_AVC_DISABLED | CAPS_FLAG_SMALL_CACHE), // 10.2
+    (0x000A_0100, 0),                                              // 10.1
+    (0x000A_0002, CAPS_FLAG_AVC_DISABLED | CAPS_FLAG_SMALL_CACHE), // 10.0
+    (0x0008_0105, CAPS_FLAG_SMALL_CACHE),                          // 8.1
+    (CAPVERSION_8, CAPS_FLAG_SMALL_CACHE),                         // 8.0
+];
 
 /// Annonce de capacités du canal graphique (MS-RDPEGFX 2.2.2.1).
-///
-/// Un seul jeu, la version 8. GNOME Remote Desktop retient la plus récente
-/// version qu'il connaît parmi celles annoncées ; s'arrêter à la 8 revient à
-/// demander RemoteFX Progressive, le seul codec que nous décodions — les
-/// versions 10 et suivantes ouvriraient la porte à H.264, que nous ne savons pas
-/// lire, et il faudrait alors le refuser explicitement par un drapeau.
 ///
 /// Rien n'est compressé ici : contrairement au sens serveur → client, le serveur
 /// lit ce canal sans passer par ZGFX (`rdpgfx_server_receive_pdu` attaque
 /// directement l'en-tête). Un segment ZGFX en tête ferait lire n'importe quoi.
 pub fn caps_advertise() -> Vec<u8> {
-    let corps = {
-        let mut c = Vec::new();
-        c.extend_from_slice(&1u16.to_le_bytes()); // un seul jeu
-        c.extend_from_slice(&CAPVERSION_8.to_le_bytes());
-        c.extend_from_slice(&4u32.to_le_bytes()); // longueur des données
-        c.extend_from_slice(&0u32.to_le_bytes()); // aucun drapeau
-        c
-    };
+    let mut corps = Vec::with_capacity(2 + VERSIONS.len() * 12);
+    corps.extend_from_slice(&u16::try_from(VERSIONS.len()).unwrap_or(0).to_le_bytes());
+    for (version, drapeaux) in VERSIONS {
+        corps.extend_from_slice(&version.to_le_bytes());
+        corps.extend_from_slice(&4u32.to_le_bytes()); // longueur des données
+        corps.extend_from_slice(&drapeaux.to_le_bytes());
+    }
     let mut m = Vec::with_capacity(corps.len() + 8);
     m.extend_from_slice(&CMD_CAPS_ADVERTISE.to_le_bytes());
     m.extend_from_slice(&0u16.to_le_bytes()); // drapeaux
@@ -287,7 +314,10 @@ pub type FilePartagee = std::sync::Arc<std::sync::Mutex<Sortie>>;
 pub struct Egfx {
     canal: CanalPartage,
     file: FilePartagee,
-    surfaces: std::collections::BTreeMap<u16, progressif::Surface>,
+    surfaces: std::collections::BTreeMap<u16, Surface>,
+    cache: Cache,
+    planaire: ironrdp::graphics::rdp6::BitmapStreamDecoder,
+    clair: ironrdp::graphics::clearcodec::ClearCodecDecoder,
     /// Origine à l'écran de chaque surface (MapSurfaceToOutput).
     origines: std::collections::BTreeMap<u16, (u16, u16)>,
     decodeur: progressif::Decodeur,
@@ -325,8 +355,7 @@ impl Egfx {
                     u16::from_le_bytes([c[2], c[3]]),
                     u16::from_le_bytes([c[4], c[5]]),
                 );
-                self.surfaces
-                    .insert(id, progressif::Surface::nouvelle(l, h));
+                self.surfaces.insert(id, Surface::nouvelle(l, h));
             }
             CMD_DELETE_SURFACE if c.len() >= 2 => {
                 let id = u16::from_le_bytes([c[0], c[1]]);
@@ -356,7 +385,22 @@ impl Egfx {
                     }
                 }
             }
+            CMD_WIRE_TO_SURFACE_1 if c.len() > 17 => self.wire_to_surface_1(c),
             CMD_WIRE_TO_SURFACE_2 if c.len() > 13 => self.decoder_surface(c),
+            CMD_SOLIDFILL if c.len() >= 8 => self.solid_fill(c),
+            CMD_SURFACE_TO_SURFACE if c.len() >= 14 => self.surface_vers_surface(c),
+            CMD_SURFACE_TO_CACHE if c.len() >= 20 => self.surface_vers_cache(c),
+            CMD_CACHE_TO_SURFACE if c.len() >= 6 => self.cache_vers_surface(c),
+            CMD_DELETE_ENCODING_CONTEXT => self.decodeur.oublier_tuiles(),
+            CMD_EVICT_CACHE_ENTRY if c.len() >= 2 => {
+                self.cache.oublier(u16::from_le_bytes([c[0], c[1]]));
+            }
+            // Une fenêtre distante n'a pas de sens ici : avash affiche la
+            // sortie, pas les fenêtres individuelles du bureau. On ignore
+            // sciemment, plutôt que de peindre à une origine inventée.
+            CMD_MAP_SURFACE_TO_WINDOW
+            | CMD_MAP_SURFACE_TO_SCALED_WINDOW
+            | CMD_MAP_SURFACE_TO_SCALED_OUTPUT => {}
             CMD_END_FRAME if c.len() >= 4 => {
                 let trame = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
                 self.trames_decodees = self.trames_decodees.wrapping_add(1);
@@ -365,6 +409,207 @@ impl Egfx {
             _ => {}
         }
         None
+    }
+
+    /// Publie une zone modifiée d'une surface vers la boucle d'affichage.
+    fn publier(&mut self, id: u16, zones: &[Zone]) {
+        let Some(surface) = self.surfaces.get(&id) else {
+            return;
+        };
+        let (ox, oy) = self.origines.get(&id).copied().unwrap_or((0, 0));
+        let mut sortie = self.file.lock().unwrap();
+        for z in zones {
+            let Some((z, pixels)) = surface.extraire(*z) else {
+                continue;
+            };
+            sortie.trames.push(Trame {
+                x: ox.saturating_add(z.x),
+                y: oy.saturating_add(z.y),
+                largeur: z.largeur,
+                hauteur: z.hauteur,
+                pixels,
+            });
+        }
+    }
+
+    /// Image posée directement sur une surface (MS-RDPEGFX 2.2.2.1).
+    ///
+    /// C'est par là que Windows envoie l'essentiel : `codecId` vaut 0x0008, le
+    /// codec planaire de RDP 6, qu'IronRDP sait décoder. Le non compressé est
+    /// accepté aussi — un serveur y recourt pour de très petites zones.
+    fn wire_to_surface_1(&mut self, c: &[u8]) {
+        let id = u16::from_le_bytes([c[0], c[1]]);
+        let codec = u16::from_le_bytes([c[2], c[3]]);
+        let Some(zone) = Zone::depuis_bords(&c[5..13]) else {
+            return;
+        };
+        let n = u32::from_le_bytes([c[13], c[14], c[15], c[16]]) as usize;
+        let Some(donnees) = c.get(17..17 + n) else {
+            return;
+        };
+        let Some(surface) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+        let (l, h) = (usize::from(zone.largeur), usize::from(zone.hauteur));
+        let rgba = match codec {
+            CODEC_CLEARCODEC => {
+                let clair = &mut self.clair;
+                let issue = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    clair.decode(donnees, zone.largeur, zone.hauteur)
+                }));
+                match issue {
+                    Ok(Ok(v)) if v.len() >= l * h * 4 => v[..l * h * 4]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .flat_map(|p| [p[2], p[1], p[0], 0xFF])
+                        .collect(),
+                    Ok(Err(e)) => {
+                        eprintln!("egfx : ClearCodec refusé : {e}");
+                        return;
+                    }
+                    _ => {
+                        eprintln!("egfx : ClearCodec illisible ({n} o)");
+                        return;
+                    }
+                }
+            }
+            CODEC_PLANAIRE => {
+                let mut rgb = Vec::new();
+                // Le décodeur planaire indexe ses plans à partir de longueurs
+                // portées par le flux : on l'isole, comme les autres.
+                let planaire = &mut self.planaire;
+                let issue = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    planaire.decode_bitmap_stream_to_rgb24(donnees, &mut rgb, l, h)
+                }));
+                match &issue {
+                    Ok(Err(e)) => eprintln!("egfx : planaire refusé : {e}"),
+                    Err(_) => eprintln!("egfx : planaire a paniqué"),
+                    Ok(Ok(())) if rgb.len() < l * h * 3 => {
+                        eprintln!("egfx : planaire court : {} octets pour {l}x{h}", rgb.len())
+                    }
+                    Ok(Ok(())) => {}
+                }
+                if !matches!(issue, Ok(Ok(()))) || rgb.len() < l * h * 3 {
+                    return;
+                }
+                let mut v = Vec::with_capacity(l * h * 4);
+                for p in rgb.as_chunks::<3>().0.iter().take(l * h) {
+                    v.extend_from_slice(&[p[0], p[1], p[2], 0xFF]);
+                }
+                v
+            }
+            // Non compressé : les octets arrivent dans l'ordre du protocole,
+            // B, G, R puis un octet de remplissage. Les recopier tels quels
+            // donnerait une image aux rouges et bleus inversés.
+            CODEC_NON_COMPRESSE if donnees.len() >= l * h * 4 => donnees[..l * h * 4]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [p[2], p[1], p[0], 0xFF])
+                .collect(),
+            _ => {
+                eprintln!("egfx : codec {codec:#06x} non pris en charge, image ignorée");
+                return;
+            }
+        };
+        let zone = surface.ecrire(zone, &rgba, l * 4);
+        if let Some(z) = zone {
+            self.publier(id, &[z]);
+        }
+    }
+
+    /// Rectangles d'une seule couleur (MS-RDPEGFX 2.2.2.4).
+    fn solid_fill(&mut self, c: &[u8]) {
+        let id = u16::from_le_bytes([c[0], c[1]]);
+        // RDPGFX_COLOR32 se lit B, G, R, puis un octet ignoré ; nos surfaces
+        // sont en RGBA, et opaques.
+        let couleur = [c[4], c[3], c[2], 0xFF];
+        let n = usize::from(u16::from_le_bytes([c[6], c[7]]));
+        let Some(surface) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+        let mut zones = Vec::new();
+        for i in 0..n {
+            let d = 8 + i * 8;
+            let Some(bords) = c.get(d..d + 8) else { break };
+            if let Some(z) = Zone::depuis_bords(bords).and_then(|z| surface.remplir(z, couleur)) {
+                zones.push(z);
+            }
+        }
+        self.publier(id, &zones);
+    }
+
+    /// Recopie d'une surface vers une autre (MS-RDPEGFX 2.2.2.5).
+    fn surface_vers_surface(&mut self, c: &[u8]) {
+        let src = u16::from_le_bytes([c[0], c[1]]);
+        let dst = u16::from_le_bytes([c[2], c[3]]);
+        let Some(zone) = Zone::depuis_bords(&c[4..12]) else {
+            return;
+        };
+        let Some((zone, pixels)) = self.surfaces.get(&src).and_then(|s| s.extraire(zone)) else {
+            return;
+        };
+        let n = usize::from(u16::from_le_bytes([c[12], c[13]]));
+        let Some(surface) = self.surfaces.get_mut(&dst) else {
+            return;
+        };
+        let mut zones = Vec::new();
+        for i in 0..n {
+            let d = 14 + i * 4;
+            let Some(p) = c.get(d..d + 4) else { break };
+            let cible = Zone {
+                x: u16::from_le_bytes([p[0], p[1]]),
+                y: u16::from_le_bytes([p[2], p[3]]),
+                largeur: zone.largeur,
+                hauteur: zone.hauteur,
+            };
+            if let Some(z) = surface.ecrire(cible, &pixels, usize::from(zone.largeur) * 4) {
+                zones.push(z);
+            }
+        }
+        self.publier(dst, &zones);
+    }
+
+    /// Dépôt d'un morceau de surface dans le cache (MS-RDPEGFX 2.2.2.6).
+    fn surface_vers_cache(&mut self, c: &[u8]) {
+        let id = u16::from_le_bytes([c[0], c[1]]);
+        let emplacement = u16::from_le_bytes([c[10], c[11]]);
+        let Some(zone) = Zone::depuis_bords(&c[12..20]) else {
+            return;
+        };
+        if let Some((z, pixels)) = self.surfaces.get(&id).and_then(|s| s.extraire(zone)) {
+            self.cache
+                .deposer(emplacement, z.largeur, z.hauteur, pixels);
+        }
+    }
+
+    /// Reprise d'un morceau depuis le cache (MS-RDPEGFX 2.2.2.7).
+    fn cache_vers_surface(&mut self, c: &[u8]) {
+        let emplacement = u16::from_le_bytes([c[0], c[1]]);
+        let id = u16::from_le_bytes([c[2], c[3]]);
+        let n = usize::from(u16::from_le_bytes([c[4], c[5]]));
+        let Some((largeur, hauteur, pixels)) = self.cache.lire(emplacement).cloned() else {
+            return;
+        };
+        let Some(surface) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+        let mut zones = Vec::new();
+        for i in 0..n {
+            let d = 6 + i * 4;
+            let Some(p) = c.get(d..d + 4) else { break };
+            let cible = Zone {
+                x: u16::from_le_bytes([p[0], p[1]]),
+                y: u16::from_le_bytes([p[2], p[3]]),
+                largeur,
+                hauteur,
+            };
+            if let Some(z) = surface.ecrire(cible, &pixels, usize::from(largeur) * 4) {
+                zones.push(z);
+            }
+        }
+        self.publier(id, &zones);
     }
 
     fn decoder_surface(&mut self, c: &[u8]) {
@@ -570,15 +815,28 @@ mod tests {
             m.len(),
             "la longueur annoncée doit couvrir le PDU entier"
         );
-        assert_eq!(
-            u16::from_le_bytes([m[8], m[9]]),
-            1,
-            "un seul jeu de capacités"
-        );
-        assert_eq!(
-            u32::from_le_bytes([m[10], m[11], m[12], m[13]]),
-            CAPVERSION_8,
-            "la version 8 est la seule dont GNOME Remote Desktop ne relit pas les drapeaux"
+        let jeux = usize::from(u16::from_le_bytes([m[8], m[9]]));
+        assert_eq!(longueur, 10 + jeux * 12, "un jeu fait douze octets");
+        // Aucune version 10 ou plus ne doit être annoncée sans avoir désactivé
+        // H.264 : un serveur qui la retiendrait enverrait de la vidéo que nous
+        // ne savons pas décoder, et l'écran resterait vide.
+        for i in 0..jeux {
+            let d = 10 + i * 12;
+            let version = u32::from_le_bytes([m[d], m[d + 1], m[d + 2], m[d + 3]]);
+            let drapeaux = u32::from_le_bytes([m[d + 8], m[d + 9], m[d + 10], m[d + 11]]);
+            if version >= 0x000A_0002 && version != 0x000A_0100 {
+                assert!(
+                    drapeaux & 0x0000_0020 != 0,
+                    "la version {version:#010x} annoncée sans AVC_DISABLED"
+                );
+            }
+        }
+        assert!(
+            (0..jeux).any(|i| {
+                let d = 10 + i * 12;
+                u32::from_le_bytes([m[d], m[d + 1], m[d + 2], m[d + 3]]) == CAPVERSION_8
+            }),
+            "la version 8 reste annoncée : c'est celle des serveurs les plus anciens"
         );
     }
 
@@ -654,5 +912,81 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dossier);
+    }
+
+    /// Fabrique un PDU du canal graphique à partir de sa charge utile.
+    fn pdu(id: u16, charge: &[u8]) -> super::Pdu {
+        super::Pdu {
+            id,
+            charge: charge.to_vec(),
+        }
+    }
+
+    #[test]
+    fn le_cache_de_surfaces_depose_puis_repose_a_plusieurs_endroits() {
+        // Le compteur de points de destination est un entier SEIZE bits. Lu sur
+        // huit, il valait presque toujours zéro : le serveur déposait dans le
+        // cache et redemandait six cents fois sans que rien ne soit peint, et
+        // le bureau Windows s'affichait troué.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        // Surface 0, 8x4.
+        e.traiter(&pdu(0x0009, &[0, 0, 8, 0, 4, 0, 0x20]));
+        // Un rectangle rouge en 0,0 → 2,2.
+        e.traiter(&pdu(
+            0x0004,
+            &[
+                0, 0, /* B G R X */ 0, 0, 255, 0, /* rects */ 1, 0, 0, 0, 0, 0, 2, 0, 2,
+                0,
+            ],
+        ));
+        // Ce carré part au cache, emplacement 7.
+        let mut vers_cache = vec![0, 0]; // surfaceId
+        vers_cache.extend_from_slice(&[0; 8]); // cacheKey
+        vers_cache.extend_from_slice(&[7, 0]); // emplacement
+        vers_cache.extend_from_slice(&[0, 0, 0, 0, 2, 0, 2, 0]); // rect
+        e.traiter(&pdu(0x0006, &vers_cache));
+        file.lock().unwrap().trames.clear();
+
+        // …puis revient à DEUX endroits. Le compteur vaut 2 sur seize bits.
+        let depuis_cache = [7, 0, 0, 0, 2, 0, 4, 0, 0, 0, 6, 0, 2, 0];
+        e.traiter(&pdu(0x0007, &depuis_cache));
+        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        assert_eq!(trames.len(), 2, "deux points de destination, deux zones");
+        assert_eq!((trames[0].x, trames[0].y), (4, 0));
+        assert_eq!((trames[1].x, trames[1].y), (6, 2));
+        assert_eq!(
+            trames[0].pixels[..4],
+            [255, 0, 0, 255],
+            "le rouge a survécu"
+        );
+    }
+
+    #[test]
+    fn un_remplissage_uni_prend_la_couleur_dans_le_bon_ordre() {
+        // RDPGFX_COLOR32 se lit B, G, R : recopier tel quel donnerait un bleu
+        // là où le serveur demande un rouge.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        e.traiter(&pdu(0x0009, &[0, 0, 4, 0, 4, 0, 0x20]));
+        e.traiter(&pdu(
+            0x0004,
+            &[0, 0, 0x10, 0x20, 0x30, 0xFF, 1, 0, 0, 0, 0, 0, 4, 0, 4, 0],
+        ));
+        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        assert_eq!(trames.len(), 1);
+        assert_eq!(trames[0].pixels[..4], [0x30, 0x20, 0x10, 0xFF]);
+    }
+
+    #[test]
+    fn une_commande_pour_une_surface_inconnue_ne_fait_rien() {
+        // Tout vient du réseau : un identifiant de surface inventé ne doit ni
+        // paniquer, ni produire d'image.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        e.traiter(&pdu(
+            0x0004,
+            &[9, 9, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 4, 0],
+        ));
+        e.traiter(&pdu(0x0007, &[3, 0, 9, 9, 1, 0, 0, 0, 0, 0]));
+        e.traiter(&pdu(0x000A, &[9, 9]));
+        assert!(file.lock().unwrap().trames.is_empty());
     }
 }
