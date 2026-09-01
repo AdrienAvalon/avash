@@ -31,7 +31,7 @@ fois à trancher une question qu'aucun raisonnement n'aurait tranchée.
 | `podman` ou `docker` | le parc RDP local (voir [tests-parc](../tests-parc/README.md)) |
 | `python3-numpy`, `python3-pil` | le détecteur de cisaillement d'image |
 | `freerdp` (`xfreerdp3`) | un client de référence, pour comparer notre rendu au sien |
-| `tcpdump`, `tshark` | lire le flux quand le protocole ment |
+| `tcpdump`, `tshark` | lire le flux RDP déchiffré (voir `scripts/tracer-rdp.sh`) |
 | `strace` | voir où un processus se bloque vraiment |
 | `perf` | profiler à l'échantillonnage, sans instrumenter |
 | `hyperfine` | mesurer un temps d'exécution sans se raconter d'histoires |
@@ -46,6 +46,33 @@ sudo pacman -S --needed podman freerdp tcpdump wireshark-cli \
   xorg-server-xvfb hyperfine python-numpy python-pillow python-websockets
 cargo install cargo-audit cargo-deny cargo-nextest --locked
 ```
+
+### Lire le flux RDP en clair
+
+RDP est chiffré dès la négociation : `tcpdump` et `tshark` ne montrent que du
+TLS. Mais la pile TLS du processus honore `SSLKEYLOGFILE` — capacité présente
+depuis toujours, que personne n'avait employée. Avec les clés, `tshark` nomme
+chaque PDU :
+
+```bash
+scripts/tracer-rdp.sh 127.0.0.1 3390 essai 'essai-mot-de-passe' 15 --sans-nla
+```
+
+```
+  16    T.125    erectDomainRequest
+  19    T.125    attachUserConfirm
+  22    T.125    channelJoinConfirm 1003
+  72    RDP      RDP PDU Type: Update
+  92    RDP      Virtual Channel PDU 1004
+```
+
+C'est le complément du magnétoscope : celui-ci rejoue ce qu'on a compris, celui-là
+montre ce qui passe réellement sur le fil, en-têtes compris. La chasse au défaut
+de GNOME Remote Desktop aurait été bien plus courte avec.
+
+**Le fichier de clés déchiffre TOUTE la session**, y compris l'échange CredSSP
+qui porte le mot de passe. Le script l'écrit dans un répertoire temporaire privé
+et l'efface en sortant ; ne le conservez pas, ne le joignez à aucun rapport.
 
 ### Traces du processus RDP
 

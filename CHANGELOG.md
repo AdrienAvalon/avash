@@ -7,6 +7,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le flux RDP peut être lu en clair.** `scripts/tracer-rdp.sh` capture une
+  session et la déchiffre PDU par PDU, en s'appuyant sur `SSLKEYLOGFILE` — une
+  capacité que la pile TLS offrait depuis toujours sans que personne l'emploie.
+  Complément du magnétoscope : l'un rejoue ce qu'on a compris, l'autre montre ce
+  qui passe réellement.
+
 - Le parc éprouve désormais **SFTP contre un vrai OpenSSH** : dépôt, relecture à
   l'octet près, effacement. Les tests d'intégration parlaient à un serveur monté
   en mémoire, c'est-à-dire à notre propre compréhension du protocole.
