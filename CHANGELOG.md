@@ -7,6 +7,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.4.3] - 2026-09-01
+
+- **`os error 10054` couvrait un second cas, non traité.** Une coupure pendant
+  l'établissement du canal chiffré — après une négociation pourtant acceptée —
+  affichait encore le code brut. C'est le symptôme d'un certificat RDP absent ou
+  abîmé côté serveur, ou d'une couche de sécurité réglée sur « RDP » au lieu de
+  « SSL ». Le message le dit maintenant, et précise que renoncer à NLA n'y
+  changerait rien puisque ce repli passe lui aussi par TLS.
+
 - **Le flux RDP peut être lu en clair.** `scripts/tracer-rdp.sh` capture une
   session et la déchiffre PDU par PDU, en s'appuyant sur `SSLKEYLOGFILE` — une
   capacité que la pile TLS offrait depuis toujours sans que personne l'emploie.

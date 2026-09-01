@@ -802,14 +802,22 @@ fn session_close_par_le_serveur(texte: &str) -> bool {
 /// qui ne dit rien à qui le lit. Sous Unix, `os error 104`. Une fermeture nette
 /// en cours de lecture donne, elle, une fin de flux inattendue.
 fn coupure_brutale(e: &connector::ConnectorError) -> bool {
+    est_coupure(&chaine_des_causes(e))
+}
+
+/// Aplatit un message et toute sa chaîne de causes.
+///
+/// La phrase utile vit rarement dans l'affichage direct : elle est enfouie dans
+/// les causes. Sans ce parcours, la détection ne voit rien.
+fn chaine_des_causes(e: &(dyn std::error::Error + 'static)) -> String {
     let mut texte = format!("{e} {e:?}");
-    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    let mut source = e.source();
     while let Some(c) = source {
         texte.push(' ');
         texte.push_str(&c.to_string());
         source = c.source();
     }
-    est_coupure(&texte)
+    texte
 }
 
 /// Le pair a-t-il coupé sans rien dire ?
@@ -889,9 +897,25 @@ async fn connect(
         Err(e) => return Err(e).context("début de connexion"),
     };
     let initial = framed.into_inner_no_leftover();
-    let (upgraded_stream, cert) = ironrdp_tls::upgrade(initial, &a.host)
-        .await
-        .context("passage TLS")?;
+    let (upgraded_stream, cert) = ironrdp_tls::upgrade(initial, &a.host).await.map_err(|e| {
+        // Le serveur a accepté la négociation, puis rompu pendant TLS.
+        // Sous Windows cela remonte en « os error 10054 », un code brut que
+        // rien ne permet d'interpréter — signalé par Adrien sur un Windows
+        // Server. Renoncer à NLA n'y changerait rien : ce repli passe lui
+        // aussi par TLS. Le message doit donc envoyer chercher ailleurs.
+        if est_coupure(&chaine_des_causes(&e)) {
+            anyhow::anyhow!(
+                "Ce serveur a accepté la négociation puis a rompu la connexion \
+                     pendant l'établissement du canal chiffré. C'est le plus souvent \
+                     un certificat RDP absent ou abîmé côté serveur, ou une couche \
+                     de sécurité réglée sur « RDP » au lieu de « SSL ». Renoncer à \
+                     l'authentification réseau n'y changerait rien : ce repli passe \
+                     lui aussi par TLS."
+            )
+        } else {
+            anyhow::Error::new(e).context("passage TLS")
+        }
+    })?;
     let pubkey = server_public_key(&cert)?;
 
     // TOFU sur le certificat, AVANT CredSSP : c'est CredSSP qui transmet les
