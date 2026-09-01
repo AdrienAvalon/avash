@@ -280,6 +280,27 @@ Et une constatation d'ordre différent : **GitLab ne vérifiait rien**. Le dép�
 était poussé à chaque fois, mais seule la chaîne GitHub contrôlait quoi que ce
 soit. Un miroir sans garde-fou est un endroit où une régression peut dormir.
 
+## La prochaine frontière : le pipeline graphique (EGFX)
+
+GNOME Remote Desktop — et tout serveur qui suit le même chemin — n'envoie ses
+images que par le canal dynamique `Microsoft::Windows::RDS::Graphics`. avash
+sait désormais s'y connecter et lit la demande de redirection, mais ne peut rien
+afficher : IronRDP n'a que les **codecs** EGFX (`zgfx`, `progressive`,
+`clearcodec`), pas la couche protocole.
+
+Ce qu'il faudrait, dans l'ordre :
+
+1. ouvrir le canal dynamique et échanger les capacités (`CAPS_ADVERTISE` /
+   `CAPS_CONFIRM`) ;
+2. suivre la redirection : rouvrir une connexion en replaçant le jeton de
+   routage dans la requête X.224 — le décodeur est déjà écrit et testé ;
+3. gérer les surfaces (`CREATE_SURFACE`, `MAP_SURFACE_TO_OUTPUT`,
+   `WIRE_TO_SURFACE_1/2`) et les recopier dans l'image ;
+4. accuser les trames, faute de quoi le serveur cesse d'en envoyer.
+
+C'est un sous-système entier, pas une correction. Tant qu'il n'existe pas, avash
+nomme la limite au lieu d'afficher un écran vide.
+
 ## Règles de travail
 
 Apprises en construisant le projet, coûteuses à réapprendre :

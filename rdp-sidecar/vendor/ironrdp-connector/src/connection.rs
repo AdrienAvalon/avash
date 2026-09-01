@@ -883,7 +883,20 @@ fn create_gcc_blocks<'a>(
                         | ClientEarlyCapabilityFlags::SUPPORT_ERR_INFO_PDU
                         | ClientEarlyCapabilityFlags::STRONG_ASYMMETRIC_KEYS
                         | ClientEarlyCapabilityFlags::SUPPORT_NET_CHAR_AUTODETECT
-                        | ClientEarlyCapabilityFlags::SUPPORT_SKIP_CHANNELJOIN;
+                        | ClientEarlyCapabilityFlags::SUPPORT_SKIP_CHANNELJOIN
+                        // GNOME Remote Desktop EXIGE que le client annonce le
+                        // pipeline graphique : sans ce drapeau, il ferme la
+                        // connexion avant même d'envoyer ServerDemandActive, et
+                        // le client ne voit qu'une désactivation suivie d'une
+                        // coupure — sans la moindre explication. Vérifié : avec
+                        // le drapeau, la connexion aboutit.
+                        //
+                        // L'annoncer ne change rien pour les serveurs qui n'en
+                        // ont pas besoin : Windows Server 2025, un autre
+                        // Windows et un xrdp rendent leur image exactement comme
+                        // avant. Un serveur ne bascule sur EGFX que si le client
+                        // ouvre aussi le canal dynamique correspondant.
+                        | ClientEarlyCapabilityFlags::SUPPORT_DYN_VC_GFX_PROTOCOL;
 
                     // TODO(#136): support for ClientEarlyCapabilityFlags::SUPPORT_STATUS_INFO_PDU
 

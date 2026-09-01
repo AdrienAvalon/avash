@@ -7,6 +7,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **GNOME Remote Desktop : la connexion aboutit enfin.** Ces serveurs exigent que
+  le client annonce le pipeline graphique ; sans ce drapeau, ils ferment la
+  connexion avant même d'envoyer `ServerDemandActive`, sans la moindre
+  explication. Vérifié dans les deux sens : la connexion aboutit désormais, et
+  les serveurs qui fonctionnaient déjà rendent leur image exactement comme
+  avant.
+- **Le PDU de redirection de serveur est décodé** (MS-RDPBCGR 2.2.13.1.1), que
+  la bibliothèque rejetait. avash lit la demande — jeton de routage compris —
+  mais ne sait pas encore la suivre : ces serveurs n'envoient leurs images que
+  par EGFX, non implémenté. Plutôt qu'un écran vide, avash nomme la limite.
+
 ## [0.4.1] - 2026-09-01
 
 - **« os error 10054 » remplacé par une phrase utile.** Un serveur RDP qui ferme

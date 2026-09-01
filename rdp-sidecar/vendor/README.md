@@ -79,6 +79,51 @@ Corrigé en deux endroits — la garde elle-même, et le rejet en amont dans le
 traitement des mises à jour — parce que la largeur est parfois calculée avant
 d'atteindre la garde.
 
+## GNOME Remote Desktop ferme sans rien dire
+
+Deux changements liés, dans `ironrdp-connector/src/connection.rs` et
+`ironrdp-session/src/{x224/mod.rs, redirection.rs}`.
+
+### Le drapeau qui manquait
+
+GNOME Remote Desktop **exige** que le client annonce le pipeline graphique
+(`RNS_UD_CS_SUPPORT_DYNVC_GFX_PROTOCOL`). Sans lui, il ferme la connexion avant
+d'envoyer `ServerDemandActive` : le client ne voit qu'une désactivation suivie
+d'une coupure, sans la moindre explication. C'est exactement le symptôme
+qu'avash présentait, et qu'aucune lecture du code n'aurait expliqué — la
+réponse est venue d'une [issue du projet Haven][haven-117], trouvée en
+cherchant sur le web.
+
+Vérifié dans les deux sens : avec le drapeau, la connexion aboutit ; et son
+ajout ne change rien pour Windows Server 2025, un autre Windows et un xrdp, qui
+rendent leur image exactement comme avant. Un serveur ne bascule sur EGFX que si
+le client ouvre aussi le canal dynamique correspondant.
+
+[haven-117]: https://github.com/GlassHaven/Haven/issues/117
+
+### Le PDU de redirection, illisible
+
+IronRDP connaît le type `ServerRedirect` (0x0A) mais `ShareControlPdu::from_type`
+le rejette : « unexpected share control PDU type ». Or c'est ce qu'envoie GNOME
+Remote Desktop une fois la session ouverte, pour renvoyer le client vers la
+session de l'utilisateur.
+
+Le décodeur vit dans `ironrdp-session/src/redirection.rs`. Un détail vérifié sur
+les octets d'un vrai serveur : la charge commence **huit** octets après le début
+du PDU — six d'en-tête Share Control, puis deux de remplissage. Avec six, tous
+les champs glissaient de deux et le jeton devenait illisible.
+
+Ce qu'un vrai serveur envoie :
+
+    RedirFlags = 0x0001c016
+    LoadBalanceInfo (25 o) = "Cookie: msts=2464288595\r\n"
+
+avash sait donc lire la demande, mais pas encore la suivre — et surtout, il ne
+saurait rien afficher ensuite : ces serveurs n'envoient leurs images que par
+EGFX, dont IronRDP n'a que les **codecs** (`zgfx`, `progressive`, `clearcodec`)
+et aucune couche protocole. Le canal `Microsoft::Windows::RDS::Graphics`
+n'existe nulle part dans la bibliothèque. Plutôt qu'un écran vide, avash le dit.
+
 ## `ironrdp-connector` — la connexion reste suspendue sans fin
 
 Dans `src/connection.rs`. La détection automatique des caractéristiques réseau

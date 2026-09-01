@@ -353,6 +353,8 @@ pub enum ActiveStageOutput {
     ///
     /// [Deactivation-Reactivation Sequence]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/dfc234ce-481a-4674-9a5d-2a7bafb14432
     DeactivateAll,
+    /// Le serveur renvoie le client ailleurs (MS-RDPBCGR 2.2.13.1.1).
+    Redirection(Box<crate::redirection::Redirection>),
     /// Server Initiate Multitransport Request. The application should establish a
     /// sideband UDP transport using the provided request parameters.
     ///
@@ -390,6 +392,7 @@ impl TryFrom<x224::ProcessorOutput> for ActiveStageOutput {
                 Ok(Self::Terminate(desc))
             }
             x224::ProcessorOutput::DeactivateAll => Ok(Self::DeactivateAll),
+            x224::ProcessorOutput::Redirection(r) => Ok(Self::Redirection(r)),
             x224::ProcessorOutput::MultitransportRequest(pdu) => Ok(Self::MultitransportRequest(pdu)),
             x224::ProcessorOutput::AutoDetect(request) => Ok(Self::AutoDetect(request)),
             // GraphicsUpdate and PointerUpdate are consumed in ActiveStage::process()

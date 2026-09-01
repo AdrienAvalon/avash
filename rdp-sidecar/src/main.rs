@@ -1349,6 +1349,30 @@ async fn main() -> Result<()> {
                             flush_dirty!();
                         }
                         ActiveStageOutput::Terminate(_) => return Ok(()),
+                        ActiveStageOutput::Redirection(r) => {
+                            // Le serveur nous renvoie vers la session de
+                            // l'utilisateur. C'est ce que fait GNOME Remote
+                            // Desktop : la connexion initiale sert d'accueil,
+                            // puis il redirige. Nous savons lire cette demande —
+                            // jeton de routage compris — mais pas encore la
+                            // suivre, et surtout pas afficher ce qui viendrait
+                            // après : ces serveurs n'envoient les images que par
+                            // le canal graphique EGFX, qu'IronRDP n'implémente
+                            // pas. Le dire plutôt que d'afficher un écran vide.
+                            eprintln!(
+                                "redirection : session={} drapeaux={:#010x} adresse={:?} jeton={} octets",
+                                r.session_id,
+                                r.drapeaux,
+                                r.adresse,
+                                r.jeton.as_ref().map_or(0, Vec::len)
+                            );
+                            anyhow::bail!(
+                                "Ce serveur redirige vers une autre session et n'envoie ses images \
+                                 que par le canal graphique « Graphics Pipeline » (EGFX), qu'avash \
+                                 ne sait pas encore lire. C'est le fonctionnement de GNOME Remote \
+                                 Desktop. La connexion aboutit, mais l'écran resterait vide."
+                            );
+                        }
                         ActiveStageOutput::DeactivateAll => {
                             // Le serveur a accepté le changement de résolution : dérouler
                             // la séquence désactivation/réactivation pour renégocier.
@@ -1406,6 +1430,13 @@ async fn run_shot(
             match o {
                 ActiveStageOutput::ResponseFrame(f) => framed.write_all(&f).await?,
                 ActiveStageOutput::Terminate(_) => done = true,
+                // Même verdict que le chemin interactif : sans cela, la capture
+                // annonçait « connecté » et rendait une image vide.
+                ActiveStageOutput::Redirection(_) => anyhow::bail!(
+                    "Ce serveur redirige vers une autre session et n'envoie ses images que \
+                     par le canal graphique « Graphics Pipeline » (EGFX), qu'avash ne sait \
+                     pas encore lire."
+                ),
                 _ => {}
             }
         }

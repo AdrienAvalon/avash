@@ -18,6 +18,10 @@ pub enum ProcessorOutput {
     ResponseFrame(Vec<u8>),
     /// A graceful disconnect notification. Client should close the connection upon receiving this.
     Disconnect(DisconnectDescription),
+    /// Le serveur nous renvoie ailleurs (MS-RDPBCGR 2.2.13.1.1). Le client doit
+    /// rouvrir une connexion vers l'adresse indiquée, en replaçant le jeton de
+    /// routage dans la requête X.224.
+    Redirection(Box<crate::redirection::Redirection>),
     /// Received a [`ironrdp_pdu::rdp::headers::ServerDeactivateAll`] PDU. Client should execute the
     /// [Deactivation-Reactivation Sequence].
     ///
@@ -145,6 +149,29 @@ impl Processor {
 
     fn process_io_channel(&self, data_ctx: SendDataIndicationCtx<'_>) -> SessionResult<Vec<ProcessorOutput>> {
         debug_assert_eq!(data_ctx.channel_id, self.io_channel_id);
+
+        // Redirection de serveur : IronRDP connaît le type 0x0A mais ne sait pas
+        // le décoder, et `decode_io_channel` échoue donc sur « unexpected share
+        // control PDU type ». C'est pourtant ce qu'envoie GNOME Remote Desktop
+        // une fois la session ouverte. On l'intercepte avant.
+        let o = data_ctx.user_data;
+        if o.len() >= 6 && (u16::from_le_bytes([o[2], o[3]]) & 0x0f) == 0x0a {
+            if let Some(r) = crate::redirection::decoder(&o[8..]) {
+                debug!(
+                    session_id = r.session_id,
+                    drapeaux = format!("{:#010x}", r.drapeaux),
+                    adresse = ?r.adresse,
+                    fqdn = ?r.fqdn,
+                    utilisateur = ?r.utilisateur,
+                    jeton_octets = r.jeton.as_ref().map(Vec::len),
+                    mot_de_passe_fourni = r.mot_de_passe.is_some(),
+                    "Redirection de serveur reçue"
+                );
+                return Ok(vec![ProcessorOutput::Redirection(Box::new(r))]);
+            }
+            debug!("PDU de redirection illisible, ignoré");
+            return Ok(Vec::new());
+        }
 
         let io_channel = ironrdp_pdu::rdp::headers::decode_io_channel(data_ctx).map_err(SessionError::decode)?;
 
