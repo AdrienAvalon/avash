@@ -5,7 +5,7 @@ Toutes les modifications notables d'Avash sont consignées dans ce fichier.
 Le format s'inspire de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/),
 et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
-## [Non publié]
+## [0.6.0] - 2026-09-01
 
 - **Le canal graphique fonctionne aussi avec Windows.** Éprouvé contre deux
   serveurs réels — un contrôleur de domaine et un hôte RDP —, dont le bureau
@@ -658,7 +658,7 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.2.7...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.6.0...HEAD
 [0.2.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.0
 [0.2.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.1
 [0.2.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.2

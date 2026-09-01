@@ -4,9 +4,9 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 1er septembre 2026, après la publication de la version 0.5.0
-— celle qui ouvre le pipeline graphique RDP et rend les bureaux GNOME Remote
-Desktop enfin visibles.
+Dernière révision : 1er septembre 2026, après la publication de la version 0.6.0
+— celle qui étend le pipeline graphique RDP à Windows, après la 0.5.0 qui avait
+rendu les bureaux GNOME Remote Desktop enfin visibles.
 
 Dépôts : [GitHub](https://github.com/AdrienAvalon/avash) (public) · GitLab interne (privé).
 
