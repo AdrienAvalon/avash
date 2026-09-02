@@ -50,6 +50,9 @@
       --accent-sur-teinte: var(--accent-soft);
       --accent: #8b7cf6;
       --accent-soft: #a89bfa;
+      /* Survol d'un bouton plein : plus clair sur fond sombre, plus foncé sur
+         fond clair, pour que le texte garde son contraste (AA) dans les deux. */
+      --accent-hover: #a89bfa;
       --accent-ink: #14101f;    /* texte sur fond accent */
       --accent-glow: rgba(139,124,246,.26);
       --accent-line: rgba(139,124,246,.55);
@@ -78,7 +81,7 @@
       --card: #ffffff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
       --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
-      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff;
+      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff; --accent-hover: #5d4be0;
       --accent-glow: rgba(109,92,240,.16); --accent-line: rgba(109,92,240,.42);
       --accent-tint: rgba(109,92,240,.10);
       --ok: #1a9d5f; --warn: #b0791f; --err: #d6455a;
@@ -92,7 +95,7 @@
       --card: #ffffff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
       --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
-      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff;
+      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff; --accent-hover: #5d4be0;
       --accent-glow: rgba(109,92,240,.16); --accent-line: rgba(109,92,240,.42);
       --accent-tint: rgba(109,92,240,.10);
       --ok: #1a9d5f; --warn: #b0791f; --err: #d6455a;
@@ -496,7 +499,7 @@
       background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600;
       box-shadow: 0 2px 10px var(--accent-glow);
     }
-    .btn-primary:hover { background: var(--accent-soft); }
+    .btn-primary:hover { background: var(--accent-hover); }
     .btn-primary:active { transform: translateY(1px); }
     .btn-primary:disabled { opacity: .55; cursor: progress; }
     .btn-ghost { background: transparent; color: var(--text-dim); }
@@ -678,6 +681,15 @@
 
     /* Listes dans les modales (cles, tunnels) */
     .key-list, .tunnel-list { display: flex; flex-direction: column; gap: 6px; }
+    .import-list { display: flex; flex-direction: column; gap: 6px; max-height: 42vh; overflow: auto; }
+    .import-row { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+    .import-row.doublon { opacity: .7; }
+    .import-row .import-alias { font-weight: 600; }
+    .import-row .import-alias input { width: 14em; font: inherit; padding: 2px 6px; }
+    .import-row .import-detail { grid-column: 2; font-size: 12px; color: var(--text-dim); }
+    .import-row .import-source { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--accent-soft); margin-left: 8px; }
+    .import-row .import-remarque { grid-column: 2; font-size: 12px; color: var(--warn, #e8b765); }
+    .modal-actions-spacer { flex: 1; }
     .key-row {
       display: flex; align-items: center; gap: 10px; padding: 9px 12px;
       background: var(--card); border: 1px solid var(--border-soft); border-radius: var(--r-md); font-size: 12px;
@@ -860,6 +872,7 @@
         <button id="keys-btn" class="manual-btn" type="button" data-icon="key">Mes clés SSH</button>
         <button id="tunnels-btn" class="manual-btn" type="button" data-icon="tunnel">Tunnels</button>
         <button id="snippets-btn" class="manual-btn" type="button" data-icon="zap">Snippets</button>
+        <button id="import-btn" class="manual-btn" type="button" data-icon="download">Importer des sessions</button>
       </div>
       <div class="footer"><span>~/.ssh/config</span><span id="footer-version">avash</span></div>
       <div class="side-resize" id="side-resize"></div>
@@ -1006,6 +1019,24 @@
           <button type="submit" class="btn-primary" id="m-submit">Se connecter</button>
         </div>
       </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="import-modal">
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
+        <h2 id="import-modal-title">Importer des sessions</h2>
+        <p class="modal-hint">Depuis PuTTY ou MobaXterm. Les hôtes retenus sont écrits dans <code>~/.ssh/config</code> ; les mots de passe ne sont jamais repris.</p>
+        <p class="modal-hint" id="import-consultes"></p>
+
+        <div class="import-list" id="import-list" aria-live="polite"></div>
+        <p class="modal-hint" id="import-bilan"></p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="import-choisir">Désigner un fichier ou un dossier…</button>
+          <span class="modal-actions-spacer"></span>
+          <button type="button" class="btn-ghost" id="import-cancel">Annuler</button>
+          <button type="button" class="btn-primary" id="import-submit" disabled>Importer</button>
+        </div>
       </div>
     </div>
 

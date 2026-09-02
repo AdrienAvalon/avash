@@ -8,7 +8,7 @@
 
 [![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.6.2-8b7cf6.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-810%20verts-brightgreen.svg)](#qualité)
+[![Tests](https://img.shields.io/badge/tests-826%20verts-brightgreen.svg)](#qualité)
 
 </div>
 
@@ -38,6 +38,7 @@ vingtaine de mégaoctets et démarre en une fraction de seconde.
 - Arborescence de dossiers pour ranger hôtes SSH et bureaux RDP ensemble, par glisser-déposer
 - Étiquettes, recherche instantanée et palette de commandes (`Ctrl+K`)
 - Snippets : commandes réutilisables avec variables, envoyables sur plusieurs sessions
+- Import des sessions **PuTTY** (fichiers ou registre) et **MobaXterm** (`MobaXterm.ini`, `.mxtsessions`), dossiers compris, doublons signalés
 - **Utilisable au clavier de bout en bout** — la barre latérale se parcourt aux flèches, `Entrée` ouvre, `Maj+F10` donne le menu
 
 **Sécurité**
@@ -139,17 +140,17 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 
 ## Qualité
 
-**810 tests** couvrent le projet, tous exécutés à chaque commit :
+**826 tests** couvrent le projet, tous exécutés à chaque commit :
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
-| Cœur (`crates/avash`) | 120 | parseur `~/.ssh/config` et son **fuzzing par mutation**, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
+| Cœur (`crates/avash`) | 129 | parseur `~/.ssh/config` et son **fuzzing par mutation**, import PuTTY et MobaXterm, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
 | Intégration | 33 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP sur la session du terminal, tunnels, rebonds `ProxyJump` ; l'outil en ligne de commande exercé comme binaire |
-| Interface (`crates/avash-ui`) | 54 | commandes Tauri, magasin de sessions sur moteur factice (annulation pendant la connexion, éviction par époque), résolution des rebonds `ProxyJump`, décodage UTF-8 en flux, verrous clavier, annonce du processus RDP, variables d'environnement de la webview |
+| Interface (`crates/avash-ui`) | 58 | commandes Tauri, import de sessions, magasin de sessions sur moteur factice (annulation pendant la connexion, éviction par époque), résolution des rebonds `ProxyJump`, décodage UTF-8 en flux, verrous clavier, annonce du processus RDP, variables d'environnement de la webview |
 | Processus RDP | 86 | empreinte du serveur, fichier des empreintes, écriture atomique, plafond de résolution, négociation, identifiants et domaine, format binaire des trames, configuration après redirection, origine WebSocket, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique (surfaces, cache, ClearCodec, RemoteFX Progressive), magnétoscope, rejeu d'enregistrements réels, fuzzing par mutation |
 | Paquets IronRDP portés | 387 | nos correctifs — remplissage des tuiles, bande passante, redirection de serveur, capacités précoces, **ordre des champs de ClearCodec** — et les tests amont de `ironrdp-pdu`, qui ne s'exécutaient nulle part (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
 | Front (Vitest) | 90 | logique pure : arborescence, chemins de dossiers, filtres, scancodes, mappage souris, réglages, collage sûr |
-| Bout en bout (WebdriverIO) | 40 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
+| Bout en bout (WebdriverIO) | 43 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, import PuTTY, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
 qui ne voient pas le même code — ESLint typé, `cargo audit` et `cargo deny` sur

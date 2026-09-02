@@ -4,6 +4,7 @@
 pub(crate) mod testutil;
 
 pub mod folders;
+pub mod import;
 pub mod keys;
 pub mod osinfo;
 pub mod rdphost;

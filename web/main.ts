@@ -24,6 +24,7 @@ import { openTermSearch, setFontSize } from "./terminal-outils";
 import { setTitlebar, setupWindowControls } from "./titre";
 import { sftp, sftpOpenAt, sftpSyncButton } from "./sftp";
 import { tunnels } from "./tunnels";
+import "./import";
 
 // ---------- Arbre des hôtes (dossiers unifiés SSH + RDP) ----------
 

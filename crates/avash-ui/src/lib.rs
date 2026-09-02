@@ -51,6 +51,8 @@ pub fn run() {
             commands::sftp_remove,
             commands::sftp_rename,
             commands::host_save,
+            commands::import_scan,
+            commands::import_apply,
             commands::host_delete,
             commands::host_get,
             commands::host_update,

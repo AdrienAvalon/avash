@@ -52,6 +52,16 @@ function seedSandbox() {
   }
   writeFileSync(join(ssh, "config"), lines.join("\n"), { mode: 0o600 });
 
+  // Sessions PuTTY, telles que l'outil les range sous Unix : de quoi exercer
+  // l'import sans dépendre d'un PuTTY installé. « Default Settings » n'est pas
+  // une session et doit être ignorée ; la session série n'est pas du SSH.
+  const putty = join(sandbox, ".putty", "sessions");
+  rmSync(putty, { recursive: true, force: true });
+  mkdirSync(putty, { recursive: true, mode: 0o700 });
+  writeFileSync(join(putty, "Default%20Settings"), "HostName=\nProtocol=ssh\n");
+  writeFileSync(join(putty, "prod%20web"), "HostName=10.0.0.7\nPortNumber=2222\nUserName=adrien\nProtocol=ssh\nPublicKeyFile=/home/a/cle.ppk\n");
+  writeFileSync(join(putty, "console%20serie"), "Protocol=serial\nSerialLine=/dev/ttyUSB0\n");
+
   // État applicatif (dossiers, bureaux RDP, snippets, tunnels) : on le supprime
   // pour que chaque fichier de tests reparte du même point. Le dossier .ssh est
   // conservé : il porte la clé cliente du sshd, générée une seule fois.

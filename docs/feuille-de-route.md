@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 293 Rust (120 cœur, 33 intégration, 54 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 90 front · 40 scénarios bout en bout dans 21 fichiers, tous en intégration continue |
+| Tests | 306 Rust (129 cœur, 33 intégration, 58 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 90 front · 43 scénarios bout en bout dans 22 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
@@ -176,10 +176,18 @@ littérales rien que dans `main.ts`). Pour un dépôt public, l'anglais conditio
 l'adoption. L'approche la moins coûteuse : extraire les chaînes dans un module de
 traduction avant qu'elles ne se multiplient — le coût croît avec le temps.
 
-### 2.3 Import depuis PuTTY et MobaXterm
+### 2.3 Import depuis PuTTY et MobaXterm — **fait**
 
 Argument d'adoption le plus direct : un utilisateur qui retrouve ses connexions
-sans les ressaisir reste. Les formats sont documentés et lisibles.
+sans les ressaisir reste. Les sessions PuTTY sont lues dans `~/.putty/sessions`
+(fichiers `clé=valeur`, noms encodés en `%XX`) ou dans le registre Windows par
+`reg query` ; celles de MobaXterm dans `MobaXterm.ini` ou un export
+`.mxtsessions`, avec leur dossier. Seules les sessions SSH sont reprises ; les
+autres protocoles sont comptés et dits. Une clé `.ppk` ou un mandataire ne
+sont pas repris, et le candidat le signale. L'interface propose la liste, alias
+modifiables, un hôte déjà déclaré pour le même serveur décoché d'office, et
+écrit dans `~/.ssh/config`. Testé par parseurs (échantillons réels des deux
+formats), par les commandes, et de bout en bout sur des sessions PuTTY semées.
 
 ---
 
@@ -277,7 +285,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2 | 3 |
-| Scénarios bout en bout | 40 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 43 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |

@@ -7,6 +7,22 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Import des sessions PuTTY et MobaXterm.** Un bouton « Importer des
+  sessions » lit les sessions PuTTY (`~/.putty/sessions` sous Unix, le
+  registre sous Windows) et MobaXterm (`MobaXterm.ini` ou un export
+  `.mxtsessions`, dossiers compris), puis propose la liste : alias
+  modifiables, un hôte déjà déclaré pour le même serveur décoché d'office, les
+  clés `.ppk` et les mandataires signalés plutôt que repris en silence. Seules
+  les sessions SSH sont écrites, dans `~/.ssh/config` ; les mots de passe ne
+  sont jamais lus.
+- **Un bouton plein survolé reste lisible en thème clair.** Le survol
+  éclaircissait le fond (contraste 3,98:1 avec le texte blanc, sous le seuil
+  AA de 4,5:1) ; l'audit axe-core l'a vu le jour où le pointeur s'est trouvé
+  sur le bouton d'accueil. Le survol fonce désormais sur fond clair, éclaircit
+  sur fond sombre : 5,9:1 et plus dans les deux cas.
+- **Un plancher de débit garde le décodeur UTF-8 en flux** : une régression
+  algorithmique ferait échouer la suite, une machine chargée non.
+
 ## [0.6.2] - 2026-09-02
 
 Une version de fond, sans fonctionnalité nouvelle : le panneau SFTP cesse
