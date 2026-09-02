@@ -154,8 +154,7 @@ export const config = {
     // cf. rdp.spec/rdp-reconnect.spec) : pas de serveur partagé à coupler.
     // Sous Windows, tauri-driver s'appuie sur le pilote Edge (msedgedriver),
     // désigné par MSEDGEDRIVER — la chaîne le télécharge à la version d'Edge
-    // installée. WebView2 prend la langue du système : on lui impose le
-    // français par ses arguments additionnels, comme LANG le fait pour WebKit.
+    // installée.
     const argsPilote = WINDOWS && process.env.MSEDGEDRIVER ? ["--native-driver", process.env.MSEDGEDRIVER] : [];
     tauriDriver = spawn(WINDOWS ? "tauri-driver.exe" : "tauri-driver", argsPilote, {
       stdio: [null, process.stdout, process.stderr],
@@ -179,7 +178,11 @@ export const config = {
         // impose alors la langue avant le premier script (AVASH_LANGUE).
         AVASH_LANGUE: "fr",
         XDG_CONFIG_HOME: join(sandbox, ".config"),
-        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--lang=fr-FR",
+        // Surtout pas WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ici : sous
+        // pilotage, l'application y pose elle-même le port de débogage que le
+        // pilote Edge attend ; une valeur venue d'ici l'effaçait, et la
+        // session ne s'ouvrait jamais (« DevToolsActivePort file doesn't
+        // exist »). AVASH_LANGUE suffit pour la langue.
       },
     });
   },
