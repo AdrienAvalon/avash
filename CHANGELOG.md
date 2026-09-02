@@ -7,6 +7,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **La force des tests est mesurée par mutation.** Un premier passage de
+  `cargo mutants` sur quatre modules du cœur a laissé survivre treize mutants,
+  tous dans le calendrier de l'enregistreur, vérifié en forme mais pas en
+  valeur ; un test contre des dates connues (1970, 29 février, an 2100) les
+  tue.
 - **Trois regards extérieurs sur le dépôt et deux portes de plus.** CodeQL
   (Rust et TypeScript), gitleaks sur tout l'historique et le Scorecard de
   l'OpenSSF tournent sur GitHub, Dependabot suit les quatre arbres de

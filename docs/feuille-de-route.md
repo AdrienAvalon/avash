@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 317 Rust (138 cœur, 33 intégration, 60 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 96 front · 47 scénarios bout en bout dans 25 fichiers, tous en intégration continue |
+| Tests | 319 Rust (140 cœur, 33 intégration, 60 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 96 front · 47 scénarios bout en bout dans 25 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -256,9 +256,21 @@ sur des mesures de ce qui coûte réellement.
   commande 69 %), 66 % pour le processus RDP, dont la boucle de session et la
   capture restent hors de portée des tests unitaires. À suivre à chaque
   version.
-- **Contrôle des dépendances** : `cargo-audit` signale les vulnérabilités connues,
-  mais rien ne surveille les licences ni les dépendances abandonnées. `cargo-deny`
-  couvre les deux, et sert la conformité AGPL.
+- **Contrôle des dépendances** — **fait** : `cargo-audit` pour les
+  vulnérabilités connues, `cargo-deny` pour les licences, les jokers et les
+  sources hors registre, `npm audit` sur les deux arbres Node, Dependabot pour
+  les mises à jour, `cargo machete` de temps en temps pour les dépendances
+  déclarées sans être utilisées (cinq retirées à sa première exécution).
+- **Regards extérieurs sur le dépôt** — **fait** (02/09/2026) : CodeQL (Rust,
+  TypeScript), gitleaks sur tout l'historique, Scorecard de l'OpenSSF, chaque
+  lundi et à chaque poussée.
+- **Force des tests, mesurée par mutation.** `cargo mutants` sur un échantillon
+  de quatre modules du cœur : 42 mutants testés avant l'arrêt de l'essai, 29
+  tués, 13 survivants — tous dans l'arithmétique du calendrier de
+  l'enregistreur, que le test ne vérifiait qu'en forme. Un test contre des
+  dates connues les tue. À rejouer par lots (l'outil doit tourner en place, le
+  mode copie emporte 14 Go de compilation) sur les modules de sécurité en
+  priorité : `ssh.rs`, `keys.rs`, le parseur de configuration.
 - **Test par fuzzing** du parseur `~/.ssh/config` — **fait** (02/09/2026) : un
   test de mutation déterministe (2 000 variantes d'une configuration réaliste :
   octets retournés, troncatures, fragments de mots-clés, octets hostiles)

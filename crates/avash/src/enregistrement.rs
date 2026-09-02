@@ -72,10 +72,14 @@ fn secondes_epoque() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// `AAAAMMJJ-HHMMSS` en temps universel, sans dépendance : l'algorithme des
-/// jours civils de Howard Hinnant.
 fn horodatage_maintenant() -> String {
-    let secondes = secondes_epoque();
+    horodatage(secondes_epoque())
+}
+
+/// `AAAAMMJJ-HHMMSS` en temps universel pour un instant en secondes depuis
+/// l'époque, sans dépendance : l'algorithme des jours civils de Howard Hinnant.
+#[must_use]
+pub fn horodatage(secondes: u64) -> String {
     let jours = secondes / 86_400;
     let dans_le_jour = secondes % 86_400;
     let (heures, minutes, secs) = (
@@ -245,6 +249,16 @@ mod tests {
         assert_eq!(nom_de_fichier("../../etc", "x"), "etc-x.cast");
         assert_eq!(nom_de_fichier("", "x"), "session-x.cast");
         assert_eq!(nom_de_fichier("a\nb", "x"), "a-b-x.cast");
+        assert_eq!(
+            nom_de_fichier("a_b.c-d", "x"),
+            "a_b.c-d-x.cast",
+            "tiret, souligné, point gardés"
+        );
+        assert_eq!(
+            nom_de_fichier("a  b", "x"),
+            "a-b-x.cast",
+            "deux tirets n'en font qu'un"
+        );
     }
 
     #[test]
@@ -253,6 +267,48 @@ mod tests {
         assert_eq!(h.len(), 15, "{h}");
         assert!(h.starts_with("20"), "{h}");
         assert_eq!(&h[8..9], "-");
+    }
+
+    /// L'arithmétique du calendrier, contre des dates connues : le test de
+    /// forme ci-dessus laissait survivre treize mutants de cette fonction
+    /// (un `%` pour un `/`, un `+` pour un `-`) — cargo-mutants l'a montré.
+    #[test]
+    fn l_horodatage_donne_la_bonne_date_civile() {
+        assert_eq!(horodatage(0), "19700101-000000");
+        assert_eq!(horodatage(86_399), "19700101-235959");
+        assert_eq!(
+            horodatage(951_782_400),
+            "20000229-000000",
+            "année bissextile séculaire"
+        );
+        assert_eq!(horodatage(1_788_353_891), "20260902-125811");
+        assert_eq!(horodatage(4_102_444_799), "20991231-235959");
+        assert_eq!(
+            horodatage(4_102_444_800),
+            "21000101-000000",
+            "2100 n'est pas bissextile"
+        );
+        assert_eq!(
+            horodatage(4_107_542_400),
+            "21000301-000000",
+            "le 1er mars 2100 suit le 28 février"
+        );
+        assert_eq!(horodatage(1_709_164_800), "20240229-000000", "29 février");
+        assert_eq!(
+            horodatage(1_709_251_200),
+            "20240301-000000",
+            "lendemain du 29 février"
+        );
+    }
+
+    /// Le répertoire suit `AVASH_HOME`, comme tout le reste du cœur, et
+    /// n'est jamais vide.
+    #[test]
+    fn le_repertoire_suit_la_configuration() {
+        let garde = crate::testutil::temp_home();
+        let dir = repertoire().expect("un répertoire");
+        assert!(dir.starts_with(garde.dir()), "{}", dir.display());
+        assert!(dir.ends_with("avash/enregistrements"), "{}", dir.display());
     }
 
     /// Un enregistrement complet : en-tête v2, sortie, redimension, relecture.
