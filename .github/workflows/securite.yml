@@ -1,0 +1,69 @@
+name: Sécurité
+
+# Trois regards extérieurs, indépendants de nos propres vérifications :
+# - CodeQL lit le code (Rust, TypeScript) à la recherche des motifs connus de
+#   vulnérabilité, et publie ses constats dans l'onglet Security du dépôt ;
+# - gitleaks fouille tout l'historique à la recherche de secrets — un jeton
+#   collé dans un fichier ne doit jamais atteindre le dépôt ;
+# - Scorecard de l'OpenSSF note la posture du dépôt (revues, épinglage,
+#   permissions des workflows) et dit où elle est faible.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1" # chaque lundi : les règles évoluent, pas seulement le code
+
+permissions: read-all
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.langage }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        langage: [rust, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.langage }}
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.langage }}
+
+  secrets:
+    name: Secrets dans l'historique (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  scorecard:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: ossf/scorecard-action@v2
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scorecard.sarif

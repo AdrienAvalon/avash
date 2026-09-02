@@ -10,7 +10,7 @@ function fitActive() {
   state.sessions.get(state.active)?.fit.fit();
 }
 
-export const root = document.documentElement;
+const root = document.documentElement;
 function loadPanelPrefs() {
   try {
     const sw = localStorage.getItem("avash.side.w");

@@ -171,9 +171,11 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 | Bout en bout (WebdriverIO) | 47 | l'application réelle : connexion SSH et RDP effectives, SFTP, enregistrement asciicast, santé des hôtes, presse-papiers RDP, dossiers, import PuTTY, langue, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
-qui ne voient pas le même code — ESLint typé, `cargo audit` et `cargo deny` sur
-les deux arbres de dépendances, et une garde qui interdit les motifs dangereux
-(voir [CONTRIBUTING.md](CONTRIBUTING.md)).
+qui ne voient pas le même code — ESLint typé, stylelint, knip (code mort),
+`cargo audit`, `cargo deny` et `npm audit` sur tous les arbres de dépendances,
+et une garde qui interdit les motifs dangereux. Sur le dépôt : CodeQL,
+gitleaks, le Scorecard de l'OpenSSF et Dependabot (voir
+[CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ### Accessibilité : un juge extérieur
 

@@ -79,7 +79,7 @@ export function parentDir(path: string): string {
 }
 
 /** Marqueur pose par le backend quand seul le mot de passe manque. */
-export const PASSWORD_REQUIRED = "[AVASH_PASSWORD_REQUIRED]";
+const PASSWORD_REQUIRED = "[AVASH_PASSWORD_REQUIRED]";
 
 /** L'echec de connexion tient-il seulement a un mot de passe manquant ? */
 export function isHostKeyChanged(errorMessage: string): boolean {

@@ -1,0 +1,26 @@
+{
+  "extends": "stylelint-config-standard",
+  "overrides": [
+    {
+      "files": [
+        "*.html"
+      ],
+      "customSyntax": "postcss-html"
+    }
+  ],
+  "rules": {
+    "selector-class-pattern": null,
+    "selector-id-pattern": null,
+    "custom-property-pattern": null,
+    "declaration-block-single-line-max-declarations": null,
+    "declaration-block-no-redundant-longhand-properties": null,
+    "color-function-notation": null,
+    "alpha-value-notation": null,
+    "font-family-name-quotes": null,
+    "no-descending-specificity": null,
+    "property-no-vendor-prefix": null,
+    "value-keyword-case": null,
+    "no-duplicate-selectors": null
+  },
+  "_note": "no-duplicate-selectors est coupée à dessein : la feuille restyle certains blocs plus bas (mode compact de l'arbre, boutons à icône), et l'ordre de cascade porte du sens. declaration-* et color-* alias : la notation existante est lisible, on ne la réécrit pas."
+}

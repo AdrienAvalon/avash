@@ -181,8 +181,6 @@ dependencies = [
  "ironrdp-tokio",
  "libc",
  "rand 0.10.2",
- "serde",
- "serde_json",
  "sha2",
  "tokio",
  "tokio-tungstenite",

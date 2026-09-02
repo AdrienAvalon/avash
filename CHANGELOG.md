@@ -7,6 +7,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Trois regards extérieurs sur le dépôt et deux portes de plus.** CodeQL
+  (Rust et TypeScript), gitleaks sur tout l'historique et le Scorecard de
+  l'OpenSSF tournent sur GitHub, Dependabot suit les quatre arbres de
+  dépendances et les actions. En local, stylelint lit le CSS de la page et
+  knip cherche le code mort ; `npm audit` s'ajoute aux audits Rust. Première
+  moisson : deux modules du front (mise à jour automatique, panneaux
+  redimensionnables) n'étaient plus chargés depuis le découpage en modules —
+  chacun compilait, personne ne l'importait ; cinq dépendances déclarées mais
+  jamais utilisées retirées ; trois `word-break` dépréciés remplacés.
 - **macOS entre dans la chaîne.** Un job compile et teste le cœur, le
   processus RDP et l'interface sur `macos-latest` à chaque commit ; la
   release produit une image disque pour les Mac à puce Apple et l'archive

@@ -95,7 +95,23 @@ fi
 step "Front (avash-web)"
 run "garde"              "$ROOT" ./scripts/guard.sh
 run "lint"               "$WEB" npx eslint .
+# Le CSS vit dans index.html : stylelint le lit à travers postcss-html.
+run "lint css"           "$WEB" npx stylelint index.html
+# knip : fichiers jamais importés, exports jamais lus, dépendances jamais
+# utilisées. Il a vu deux modules décrochés par le découpage du front que ni
+# tsc ni ESLint ne pouvaient voir — chacun compilait, personne ne le chargeait.
+run "code mort"          "$WEB" npx knip
 run "typage"             "$WEB" npx tsc --noEmit
+# Les dépendances du front vivent dans la webview, celles de la suite bout en
+# bout sur la machine de développement : les deux arbres sont audités, au
+# niveau « haute » et au-delà — un avis modéré sur un outil de test ne doit
+# pas bloquer une correction, mais doit se voir.
+run "audit npm (front)"  "$WEB" npm audit --audit-level=high
+# La suite bout en bout dépend de WebdriverIO 9, dont quelques dépendances
+# transitives (extract-zip, deepmerge-ts, serialize-javascript) portent des
+# avis « haute » sans correctif en amont : ce code ne tourne que sur la
+# machine de test, jamais chez l'utilisateur. On ne bloque que sur « critique ».
+run "audit npm (e2e)"    "$ROOT/e2e" npm audit --audit-level=critical
 run "tests"              "$WEB" npx vitest run
 run "build"              "$WEB" npx vite build
 

@@ -19,4 +19,4 @@ echo "▸ pre-commit : processus RDP"
 # test front casse se commitait sans resistance et ne rougissait qu'en CI,
 # alors que le hook faisait tourner la plus lente des etapes Rust.
 echo "▸ pre-commit : front"
-(cd web && npx tsc --noEmit && npx eslint . && npx vitest run --silent)
+(cd web && npx tsc --noEmit && npx eslint . && npx stylelint index.html && npx knip && npx vitest run --silent)

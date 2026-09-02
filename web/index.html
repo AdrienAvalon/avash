@@ -14,6 +14,7 @@
       src: url("/fonts/avash-mono-regular.woff2") format("woff2");
       font-weight: 400; font-style: normal; font-display: block;
     }
+
     @font-face {
       font-family: "Avash Mono";
       src: url("/fonts/avash-mono-bold.woff2") format("woff2");
@@ -35,41 +36,47 @@
       --border-soft: #1b2030;
       --text: #e9ecf4;
       --text-dim: #8d96ab;
+
       /* 4,5:1 minimum sur --bg-soft ET sur --card. L'ancienne valeur #5b6478
          donnait 3,15:1 : mesuré par axe-core sur l'application réelle, pas
          estimé à l'œil. Teinte conservée, clarté relevée. */
       --text-faint: #7e879d;
+
       /* Part de la teinte d'hôte dans l'encre des initiales. Le reste vient de
          --text, donc la lisibilité suit le thème automatiquement. Valeurs
          choisies pour tenir 4,5:1 sur la teinte LA PIRE des 360, pas sur une
          teinte moyenne. */
       --ini-mix: 72%;
+
       /* Accent lisible SUR une pastille teintée. En sombre l'accent clair
          convient ; en clair il faut l'assombrir, sinon la pastille de version
          tombe à 2,86:1. */
       --accent-sur-teinte: var(--accent-soft);
       --accent: #8b7cf6;
       --accent-soft: #a89bfa;
+
       /* Survol d'un bouton plein : plus clair sur fond sombre, plus foncé sur
          fond clair, pour que le texte garde son contraste (AA) dans les deux. */
       --accent-hover: #a89bfa;
       --accent-ink: #14101f;    /* texte sur fond accent */
-      --accent-glow: rgba(139,124,246,.26);
-      --accent-line: rgba(139,124,246,.55);
-      --accent-tint: rgba(139,124,246,.12);
+      --accent-glow: rgb(139,124,246,.26);
+      --accent-line: rgb(139,124,246,.55);
+      --accent-tint: rgb(139,124,246,.12);
       --ok: #4ad295; --warn: #e8b765; --err: #ef6b73;
       --term-bg: #0d0f16;
       --mono: "Avash Mono", ui-monospace, monospace;
       --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
       --r-sm: 6px; --r-md: 9px; --r-lg: 14px;
-      --shadow-soft: 0 1px 2px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.22);
-      --shadow-pop: 0 18px 50px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.03) inset;
+      --shadow-soft: 0 1px 2px rgb(0,0,0,.35), 0 6px 18px rgb(0,0,0,.22);
+      --shadow-pop: 0 18px 50px rgb(0,0,0,.55), 0 0 0 1px rgb(255,255,255,.03) inset;
       --t-fast: .12s; --t-base: .16s;
       --ease: cubic-bezier(.2,.7,.2,1);
     }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
+
     /* Fenêtre en arrière-plan : on gèle les animations continues. Aucune
        raison de repeindre une mascotte que personne ne regarde. */
     body.win-blur *, body.win-blur *::before, body.win-blur *::after { animation-play-state: paused !important; }
@@ -77,38 +84,41 @@
     /* Thème clair : suit le système par défaut, forçable via data-theme. */
     @media (prefers-color-scheme: light) {
       :root:not([data-theme="dark"]) {
-      --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #ffffff;
-      --card: #ffffff; --card-hover: #eef1f6;
+      --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #fff;
+      --card: #fff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
       --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
-      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff; --accent-hover: #5d4be0;
-      --accent-glow: rgba(109,92,240,.16); --accent-line: rgba(109,92,240,.42);
-      --accent-tint: rgba(109,92,240,.10);
+      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #fff; --accent-hover: #5d4be0;
+      --accent-glow: rgb(109,92,240,.16); --accent-line: rgb(109,92,240,.42);
+      --accent-tint: rgb(109,92,240,.10);
       --ok: #1a9d5f; --warn: #b0791f; --err: #d6455a;
       --term-bg: #f6f7f9;
-      --shadow-soft: 0 1px 2px rgba(24,28,45,.06), 0 6px 18px rgba(24,28,45,.08);
-      --shadow-pop: 0 18px 50px rgba(24,28,45,.18), 0 0 0 1px rgba(24,28,45,.04) inset;
+      --shadow-soft: 0 1px 2px rgb(24,28,45,.06), 0 6px 18px rgb(24,28,45,.08);
+      --shadow-pop: 0 18px 50px rgb(24,28,45,.18), 0 0 0 1px rgb(24,28,45,.04) inset;
       }
     }
+
     :root[data-theme="light"] {
-      --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #ffffff;
-      --card: #ffffff; --card-hover: #eef1f6;
+      --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #fff;
+      --card: #fff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
       --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
-      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #ffffff; --accent-hover: #5d4be0;
-      --accent-glow: rgba(109,92,240,.16); --accent-line: rgba(109,92,240,.42);
-      --accent-tint: rgba(109,92,240,.10);
+      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #fff; --accent-hover: #5d4be0;
+      --accent-glow: rgb(109,92,240,.16); --accent-line: rgb(109,92,240,.42);
+      --accent-tint: rgb(109,92,240,.10);
       --ok: #1a9d5f; --warn: #b0791f; --err: #d6455a;
       --term-bg: #f6f7f9;
-      --shadow-soft: 0 1px 2px rgba(24,28,45,.06), 0 6px 18px rgba(24,28,45,.08);
-      --shadow-pop: 0 18px 50px rgba(24,28,45,.18), 0 0 0 1px rgba(24,28,45,.04) inset;
+      --shadow-soft: 0 1px 2px rgb(24,28,45,.06), 0 6px 18px rgb(24,28,45,.08);
+      --shadow-pop: 0 18px 50px rgb(24,28,45,.18), 0 0 0 1px rgb(24,28,45,.04) inset;
     }
     html { color-scheme: light dark; }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
+
     /* L'attribut hidden doit gagner sur tout display: fixe les champs de
        formulaire qui restaient visibles alors qu'ils etaient masques. */
     [hidden] { display: none !important; }
+
     body {
       background: var(--bg); color: var(--text); font-family: var(--sans);
       font-size: 13px; line-height: 1.4; height: 100vh; overflow: hidden;
@@ -120,16 +130,20 @@
     button { cursor: pointer; }
     :focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
     code { font-family: var(--mono); font-size: .92em; }
+
     /* Barres de defilement fines partout (WebKit). */
     ::-webkit-scrollbar { width: 9px; height: 9px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #262c3d; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
     ::-webkit-scrollbar-thumb:hover { background: #38405a; background-clip: padding-box; border: 2px solid transparent; }
+
     /* Champs nombre sans molette native : elle ne va avec rien. */
-    input[type=number] { -moz-appearance: textfield; appearance: textfield; }
-    input[type=number]::-webkit-inner-spin-button,
-    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
     .ic-svg { width: 16px; height: 16px; flex: none; display: inline-block; vertical-align: middle; }
+
     kbd {
       display: inline-block; min-width: 18px; text-align: center;
       background: var(--card); border: 1px solid var(--border); border-bottom-width: 2px;
@@ -147,17 +161,20 @@
     .rh-nw { top: 0; left: 0; width: 8px; height: 8px; cursor: nwse-resize; }
     .rh-se { bottom: 0; right: 0; width: 8px; height: 8px; cursor: nwse-resize; }
     .rh-sw { bottom: 0; left: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+
     .titlebar {
       height: 34px; flex: none; display: flex; align-items: center;
       background: var(--bg-soft); border-bottom: 1px solid var(--border-soft);
       user-select: none; -webkit-user-select: none;
     }
+
     .tb-title {
       flex: 1; display: flex; align-items: center; gap: 8px; padding-left: 12px;
       font-size: 12.5px; font-weight: 600; color: var(--text-dim); letter-spacing: .2px;
     }
     .tb-mascot { width: 16px; height: 16px; vertical-align: middle; }
     .tb-controls { display: flex; height: 100%; }
+
     .tb-btn {
       width: 46px; height: 100%; border: none; background: transparent;
       color: var(--text-dim); display: grid; place-items: center;
@@ -176,34 +193,41 @@
     }
     body.side-collapsed .sidebar { width: 0; border-right: none; }
     body.side-collapsed .sidebar > * { display: none; }
+
     /* Poignée de redimensionnement (bord droit de la barre latérale). */
     .side-resize {
       position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
       cursor: ew-resize; z-index: 30;
     }
     body.side-collapsed .side-resize { display: none; }
+
     .side-resize::after {
       content: ""; position: absolute; inset: 0 2px; background: transparent;
       transition: background var(--t-fast);
     }
     .side-resize:hover::after, body.resizing .side-resize::after { background: var(--accent-line); }
+
     /* Pas de transition pendant un glissement (évite la latence). */
     body.resizing .sidebar, body.resizing .sftp-panel { transition: none !important; }
+
     .brand {
       padding: 14px 16px 12px; display: flex; align-items: center; gap: 10px;
       font-weight: 700; font-size: 15px; letter-spacing: .1px;
     }
+
     .brand .mascot {
       width: 30px; height: 30px; display: grid; place-items: center;
-      filter: drop-shadow(0 1px 2px rgba(0,0,0,.35));
+      filter: drop-shadow(0 1px 2px rgb(0,0,0,.35));
     }
     .brand .mascot .mark { width: 27px; height: 27px; display: block; }
+
     .brand .ver {
       margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .4px;
       color: var(--accent-sur-teinte); background: var(--accent-tint);
       padding: 2px 7px; border-radius: 20px; cursor: pointer;
     }
     .brand .ver:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
     .theme-toggle {
       width: 28px; height: 28px; border-radius: 8px; border: 1px solid transparent;
       background: transparent; color: var(--text-dim); display: grid; place-items: center;
@@ -212,11 +236,13 @@
     .theme-toggle:hover { background: var(--card-hover); color: var(--text); border-color: var(--border-soft); }
     .theme-toggle .ic-svg { width: 16px; height: 16px; }
     .search-wrap { padding: 2px 12px 8px; position: relative; }
+
     .search-wrap svg {
       position: absolute; left: 22px; top: 11px; width: 14px; height: 14px;
       color: var(--text-faint); pointer-events: none;
     }
     .search-wrap kbd { position: absolute; right: 21px; top: 9px; pointer-events: none; }
+
     .search {
       width: 100%; padding: 8px 46px 8px 32px; height: 34px;
       background: var(--card); border: 1px solid var(--border-soft);
@@ -225,12 +251,14 @@
     }
     .search::placeholder { color: var(--text-faint); }
     .search:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-glow); }
+
     .section-title {
       padding: 8px 20px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .9px;
       text-transform: uppercase; color: var(--text-faint);
       display: flex; justify-content: space-between;
     }
     .tag-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 12px 8px; }
+
     /* <button> depuis qu'elles sont atteignables au clavier : la police et
        l'alignement ne s'héritent pas d'un bouton. */
     .tag-pill {
@@ -243,17 +271,20 @@
     .tag-pill.on { background: var(--accent-tint); border-color: var(--accent-line); color: var(--accent-soft); }
     .tag-pill.clear { color: var(--text-faint); }
     .host-list { flex: 1; overflow-y: auto; padding: 2px 8px 8px; }
+
     .host {
-      position: relative; padding: 7px 10px 7px 10px; border-radius: var(--r-md);
+      position: relative; padding: 7px 10px; border-radius: var(--r-md);
       cursor: pointer; display: flex; align-items: center; gap: 10px;
       border: 1px solid transparent; margin-bottom: 1px;
       transition: background var(--t-fast), border-color var(--t-fast);
     }
     .host:hover { background: var(--card-hover); }
+
     /* « Sélectionné au clic » : le cadre (curseur de sélection). Les connexions
        actives sont signalées par le voyant vert de l'avatar (.dot.live), pas par
        un second cadre — pour ne pas faire doublon. */
     .host.picked { background: var(--card-hover); border-color: var(--accent-line); }
+
     .host .avatar {
       position: relative; flex: none; width: 30px; height: 30px; border-radius: 8px;
       display: grid; place-items: center; font-family: var(--mono); font-weight: 700;
@@ -264,25 +295,31 @@
     .host .avatar .logo { font-size: 17px; line-height: 1; color: var(--hue); font-weight: 400; }
     .host .avatar.rdp { background: color-mix(in srgb, var(--accent) 22%, var(--card)); border-color: var(--accent-line); }
     .host .avatar.rdp .ic-svg { width: 16px; height: 16px; color: var(--accent-soft); }
+
     .host .avatar .dot {
       position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px;
       border-radius: 50%; border: 2px solid var(--bg-soft); display: none;
     }
+
     /* --- Arborescence des hôtes (dossiers unifiés) --- */
     .st-right { display: inline-flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; }
+
     .mini-btn {
       font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 12px; cursor: pointer;
       background: var(--card); border: 1px solid var(--border-soft); color: var(--text-dim);
       transition: color var(--t-fast), border-color var(--t-fast);
     }
     .mini-btn:hover { color: var(--text); border-color: var(--accent-line); }
+
     /* Compacité « arborescence » : les hôtes sont des lignes uniques, à la même
        hauteur que les dossiers — petite icône (sans cadre), alias + méta grisée. */
     .host { padding: 4px 8px; gap: 7px; margin-left: calc(var(--depth, 0) * 13px); }
+
     .host .avatar {
       width: 16px; height: 16px; border-radius: 4px; background: transparent; border: none;
     }
     .host .avatar .logo { font-size: 13px; }
+
     /* L'encre mêle la teinte de l'hôte à la couleur de texte du thème : la
        teinte reste reconnaissable, le contraste suit le fond. Auparavant la
        teinte brute donnait 4,44:1 en sombre et bien moins en clair. */
@@ -293,6 +330,7 @@
     .host .avatar.rdp { background: transparent; border: none; }
     .host .avatar.rdp .ic-svg { width: 14px; height: 14px; }
     .host .avatar .dot { width: 7px; height: 7px; right: -2px; bottom: -2px; border-width: 1.5px; }
+
     .folder-row {
       display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
       padding: 4px 8px; border-radius: var(--r-md); margin: 1px 0;
@@ -309,6 +347,7 @@
     .folder-row.drop-hover, .host.drop-hover { background: var(--accent-tint); border-color: var(--accent-line); color: var(--text); }
     .host.dragging { opacity: .45; }
     .move-list { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow-y: auto; margin: 6px 0 10px; }
+
     .move-row {
       text-align: left; padding: 7px 10px; border-radius: var(--r-md); cursor: pointer; font-size: 13px;
       background: var(--card); border: 1px solid var(--border-soft); color: var(--text);
@@ -317,12 +356,15 @@
     .move-row:hover { background: var(--card-hover); border-color: var(--accent-line); }
     .host .avatar .dot.live { display: block; background: var(--ok); }
     .host .avatar .dot.connecting { display: block; background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
+
     /* Santé sondée sans session : vert plein, ou rouge. Une session en cours prime. */
     .host .avatar .dot.up { display: block; background: var(--ok); opacity: .75; }
     .host .avatar .dot.down { display: block; background: var(--err); }
     .host .info { min-width: 0; flex: 1; display: flex; flex-direction: row; align-items: baseline; gap: 6px; }
+
     /* flex:none + nowrap sans overflow : un alias long écrasait l'adresse puis
        débordait de la barre latérale, coupé net et sans « … » pour le dire. */
+
     /* min-width : sans plancher, les deux badges (« rebond » et le compteur de
        tunnels, tous deux flex:none) réduisaient l'alias à trois caractères sur
        les hôtes les plus configurés — précisément ceux qu'on reconnaît le moins
@@ -330,20 +372,23 @@
        façon dans l'infobulle. */
     .host .alias { flex: 0 1 auto; min-width: 7ch; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .host .meta { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
     .host .jumptag {
       flex: none; font-size: 10px; color: var(--accent-soft);
       font-family: var(--mono); border: 1px solid var(--accent-soft);
       border-radius: 6px; padding: 0 5px; opacity: .85;
     }
+
     .host .tun {
       flex: none; font-size: 10.5px; font-family: var(--mono); font-weight: 600;
       color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent);
       padding: 1px 6px; border-radius: 6px;
     }
     .host:focus-visible, .folder-row:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
+
     .rdp-closed-diag {
       margin: 8px 0 0; padding: 8px 10px; max-width: 46ch; max-height: 8em;
-      overflow: auto; text-align: left; white-space: pre-wrap; word-break: break-word;
+      overflow: auto; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere;
       font-family: var(--mono); font-size: 10.5px; color: var(--text-dim);
       background: var(--card); border: 1px solid var(--border-soft); border-radius: var(--r-md);
     }
@@ -353,20 +398,22 @@
     .host-empty code { background: var(--card); padding: 1px 5px; border-radius: 4px; }
 
     .side-actions { padding: 8px 10px 6px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border-soft); }
+
     .manual-btn {
       display: flex; align-items: center; gap: 10px; width: 100%;
       padding: 7px 10px; border-radius: var(--r-md); text-align: left;
       background: transparent; border: 1px solid transparent; color: var(--text-dim);
       transition: background var(--t-fast), color var(--t-fast);
     }
+
     .manual-btn .ic {
       width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center;
       background: var(--card); border: 1px solid var(--border-soft); color: var(--text-dim);
       transition: color var(--t-fast), border-color var(--t-fast);
     }
-    .manual-btn:hover .ic { color: var(--accent-soft); }
     .manual-btn:hover { background: var(--card-hover); color: var(--text); }
-    .manual-btn:hover .ic { border-color: var(--accent-line); }
+    .manual-btn:hover .ic { color: var(--accent-soft); border-color: var(--accent-line); }
+
     .footer {
       padding: 8px 16px 10px; font-size: 11px; color: var(--text-faint);
       display: flex; justify-content: space-between;
@@ -374,15 +421,18 @@
 
     /* ===== Zone principale ===== */
     .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
     .tabbar {
       display: flex; align-items: stretch; gap: 6px;
       background: var(--bg-soft); border-bottom: 1px solid var(--border-soft);
       padding: 0 8px; height: 40px; min-height: 40px;
     }
+
     .tabs {
       flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 2px;
       overflow-x: auto; scrollbar-width: none;
     }
+
     .tabbar-btn {
       flex: none; align-self: center; display: flex; align-items: center; gap: 7px;
       height: 28px; padding: 0 11px 0 9px; border-radius: 8px;
@@ -398,6 +448,7 @@
     .tabs::-webkit-scrollbar { display: none; }
     .tabs .no-session { align-self: center; padding-left: 8px; font-size: 12px; color: var(--text-faint); }
     .sftp-entry.sel { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 0 0 0 1px var(--accent-line); }
+
     .tab {
       position: relative; padding: 0 10px 0 12px; font-size: 12.5px;
       color: var(--text-dim); cursor: pointer; white-space: nowrap;
@@ -405,6 +456,7 @@
       border-bottom: 2px solid transparent; margin-bottom: -1px;
       transition: color var(--t-fast), background var(--t-fast);
     }
+
     .tab::before {
       content: ""; position: absolute; inset: 6px 0; border-radius: var(--r-sm);
       background: transparent; z-index: -1; transition: background var(--t-fast);
@@ -415,11 +467,13 @@
     .tab .label { overflow: hidden; text-overflow: ellipsis; }
     .tab .state { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-faint); }
     .tab .state.connecting { background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
-    .tab .state.live { background: var(--ok); box-shadow: 0 0 6px rgba(74,210,149,.6); }
+    .tab .state.live { background: var(--ok); box-shadow: 0 0 6px rgb(74,210,149,.6); }
     .tab .state.closed { background: var(--text-faint); }
     .tab.dead .label { opacity: .55; text-decoration: line-through; }
     .tab.rec .label::before { content: "●"; color: var(--err); margin-right: 5px; font-size: 9px; vertical-align: 1px; animation: pulse 1.4s ease-in-out infinite; }
+
     @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
     .tab .close {
       opacity: 0; font-size: 12px; line-height: 1; width: 18px; height: 18px;
       border-radius: 5px; display: inline-flex; align-items: center; justify-content: center;
@@ -429,39 +483,45 @@
     .tab .close:hover { opacity: 1; background: var(--err); color: #fff; }
 
     .terminal-zone { flex: 1; position: relative; display: flex; }
+
     /* Meme fond que le theme xterm : l'espace entre la derniere ligne et le
        bord (les lignes ne tombent jamais juste) ne se voit pas. */
     .terminal-zone > #terminal { flex: 1; position: relative; min-width: 0; background: var(--term-bg); }
     .xterm-container { display: block; border-radius: 6px; }
     .rdp-container { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; }
+
     body.rdp-full .titlebar,
     body.rdp-full .sidebar,
     body.rdp-full .tabbar,
     body.rdp-full .side-resize { display: none !important; }
     body.rdp-full .app { height: 100vh; }
     .rdp-container canvas { width: 100%; height: 100%; object-fit: contain; outline: none; }
-    .rdp-closed { position: absolute; inset: 0; z-index: 6; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .55); }
+    .rdp-closed { position: absolute; inset: 0; z-index: 6; display: flex; align-items: center; justify-content: center; background: rgb(0, 0, 0, .55); }
+
     .rdp-closed-box {
       background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 12px;
-      padding: 22px 26px; text-align: center; box-shadow: 0 8px 30px rgba(0, 0, 0, .4);
+      padding: 22px 26px; text-align: center; box-shadow: 0 8px 30px rgb(0, 0, 0, .4);
     }
     .rdp-closed-box p { margin: 0 0 14px; color: var(--text); font-size: 14px; }
     .rdp-closed-actions { display: flex; gap: 10px; justify-content: center; }
+
     .rdp-hud { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
       z-index: 5; pointer-events: auto; cursor: pointer; user-select: none;
       font: 11px/1.35 ui-monospace, "Cascadia Code", monospace;
       padding: 3px 10px; border-radius: 0 0 8px 8px; color: #e4e8f0; letter-spacing: .02em;
-      background: rgba(16, 18, 24, .88); backdrop-filter: blur(4px);
-      box-shadow: 0 2px 8px rgba(0,0,0,.35); transition: opacity .2s; }
+      background: rgb(16, 18, 24, .88); backdrop-filter: blur(4px);
+      box-shadow: 0 2px 8px rgb(0,0,0,.35); transition: opacity .2s; }
     .rdp-hud:empty { display: none; }
     .rdp-hud.mini { opacity: .12; }
     .rdp-hud b { font-weight: 700; color: #eef1f6; }
     .rdp-hud .q-ok { color: #5ad18a; }
     .rdp-hud .q-mid { color: #e6c15a; }
     .rdp-hud .q-bad { color: #e57373; }
+
     /* Ne PAS forcer la hauteur de .xterm-screen : xterm la calcule d'apres
        les lignes ; la forcer a 100 % laissait une bande noire en dessous. */
     .xterm { height: 100%; }
+
     /* xterm.css peint la couche de defilement en noir pur ; sous la derniere
        ligne rendue (les lignes ne tombent jamais juste) elle apparaissait en
        bande noire. Meme couleur que le theme. */
@@ -476,18 +536,21 @@
       position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 10px; color: var(--text-dim);
       background:
-        radial-gradient(ellipse 60% 45% at 50% 42%, rgba(139,124,246,.16), transparent 70%),
+        radial-gradient(ellipse 60% 45% at 50% 42%, rgb(139,124,246,.16), transparent 70%),
         var(--bg);
     }
+
     .terminal-empty .big-logo {
       width: 208px; height: auto; margin-bottom: 4px; user-select: none;
-      filter: drop-shadow(0 16px 44px rgba(0,0,0,.5));
+      filter: drop-shadow(0 16px 44px rgb(0,0,0,.5));
       animation: rise .5s var(--ease) both;
     }
+
     @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.96) } to { opacity: 1; transform: none } }
     .terminal-empty .title { font-size: 19px; font-weight: 700; color: var(--text); letter-spacing: -.2px; }
     .terminal-empty .hint { font-size: 13px; color: var(--text-dim); }
     .empty-actions { display: flex; gap: 10px; margin-top: 14px; justify-content: center; }
+
     .shortcuts {
       display: flex; flex-wrap: wrap; gap: 6px 22px; justify-content: center;
       margin-top: 30px; font-size: 11.5px; color: var(--text-faint); max-width: 640px;
@@ -499,6 +562,7 @@
       padding: 8px 15px; border-radius: var(--r-md); border: 1px solid var(--border);
       font-weight: 500; transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast), transform var(--t-fast);
     }
+
     .btn-primary {
       background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600;
       box-shadow: 0 2px 10px var(--accent-glow);
@@ -510,6 +574,7 @@
     .btn-ghost:hover { color: var(--text); background: var(--card-hover); border-color: var(--border); }
     .btn-danger { background: var(--err); color: #fff; border-color: transparent; }
     .btn-danger:hover { filter: brightness(1.08); }
+
     /* Notifications : remplacent alert(), inopérant sous WebKitGTK et hors
        charte. Empilées en bas à droite, elles n'interrompent rien et laissent
        lire l'erreur sans perdre le contexte. */
@@ -518,18 +583,20 @@
       display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
       pointer-events: none; max-width: min(420px, calc(100vw - 32px));
     }
+
     .toast {
       pointer-events: auto; cursor: pointer;
       background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent);
-      border-radius: 8px; padding: 10px 14px; box-shadow: 0 8px 30px rgba(0,0,0,.4);
+      border-radius: 8px; padding: 10px 14px; box-shadow: 0 8px 30px rgb(0,0,0,.4);
       font-size: 13.5px; line-height: 1.45; color: var(--text);
-      animation: pop .16s var(--ease); word-break: break-word;
+      animation: pop .16s var(--ease); overflow-wrap: anywhere;
     }
     .toast.erreur  { border-left-color: var(--err); }
     .toast.succes  { border-left-color: var(--ok, #3ecf8e); }
     .toast .titre  { font-weight: 600; display: block; margin-bottom: 2px; }
     .toast .fermer { color: var(--text-dim); font-size: 11px; margin-top: 4px; display: block; }
     .confirm-msg { white-space: pre-line; color: var(--text-dim); line-height: 1.5; margin: 2px 0; }
+
     .btn-mini {
       flex: 1; padding: 6px 0; border-radius: 7px; border: 1px solid var(--border-soft);
       background: var(--card); font-size: 12px; color: var(--text);
@@ -538,6 +605,7 @@
     }
     .btn-mini .ic-svg { width: 14px; height: 14px; }
     .btn-mini:hover { border-color: var(--accent-line); background: var(--card-hover); }
+
     .tbtn {
       border: 1px solid var(--border-soft); background: transparent; color: var(--text-dim);
       border-radius: 7px; padding: 5px 9px; font-size: 12px;
@@ -551,22 +619,26 @@
 
     /* ===== Palette de commandes ===== */
     .palette-backdrop {
-      position: fixed; inset: 0; background: rgba(6,8,13,.55); backdrop-filter: blur(3px);
+      position: fixed; inset: 0; background: rgb(6,8,13,.55); backdrop-filter: blur(3px);
       display: none; z-index: 50; align-items: flex-start; justify-content: center; padding-top: 12vh;
     }
     .palette-backdrop.open { display: flex; }
+
     .palette {
       width: min(580px, 90vw); background: var(--panel); border: 1px solid var(--border);
       border-radius: var(--r-lg); box-shadow: var(--shadow-pop); overflow: hidden;
       animation: pop .14s var(--ease);
     }
+
     @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.985) } to { opacity: 1; transform: none } }
+
     .palette input {
       width: 100%; padding: 15px 18px; background: transparent; border: none; outline: none;
       font-size: 15px; border-bottom: 1px solid var(--border-soft);
     }
     .palette input::placeholder { color: var(--text-faint); }
     .palette .results { max-height: 340px; overflow-y: auto; padding: 6px; }
+
     .palette .item {
       padding: 9px 12px; border-radius: var(--r-md); cursor: pointer;
       display: flex; align-items: center; gap: 10px; font-size: 13.5px;
@@ -577,12 +649,14 @@
 
     /* ===== Modales ===== */
     .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(6,8,13,.62); backdrop-filter: blur(3px);
+      position: fixed; inset: 0; background: rgb(6,8,13,.62); backdrop-filter: blur(3px);
       display: none; align-items: center; justify-content: center; z-index: 50;
       animation: fade var(--t-base) ease;
     }
     .modal-backdrop.open { display: flex; }
+
     @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+
     .modal {
       background: var(--panel); border: 1px solid var(--border);
       border-radius: var(--r-lg); padding: 22px 24px; width: 400px;
@@ -590,33 +664,39 @@
       box-shadow: var(--shadow-pop); animation: pop .18s var(--ease);
     }
     .modal-wide { width: 500px; max-height: 84vh; overflow-y: auto; }
+
     /* Une modale trop haute defile ; elle ne comprime pas ses blocs (un
        <details> a overflow:hidden se ferait rogner, bouton compris). */
     .modal > * { flex-shrink: 0; }
     .modal h2 { font-size: 16px; font-weight: 700; letter-spacing: -.1px; }
     .modal-hint { margin: -8px 0 2px; font-size: 12px; color: var(--text-dim); line-height: 1.45; }
     .modal label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-dim); }
-    .modal input:not([type=checkbox]):not([type=radio]), .modal select {
+
+    .modal input:not([type="checkbox"], [type="radio"]), .modal select {
       background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
       padding: 8px 11px; height: 36px; color: var(--text); font-size: 13px;
       transition: border-color var(--t-base), box-shadow var(--t-base);
     }
     .modal input::placeholder { color: var(--text-faint); }
+
     .modal select {
       -webkit-appearance: none; appearance: none; padding-right: 32px; cursor: pointer;
       background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238d96ab' stroke-width='2.2' stroke-linecap='round'><path d='m6 9 6 6 6-6'/></svg>");
       background-repeat: no-repeat; background-position: right 10px center; background-size: 14px;
     }
     .modal label > span:first-child .field-hint { margin-left: 4px; }
+
     .modal input:focus, .modal select:focus {
       outline: none; border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-glow);
     }
     .modal code { background: var(--card); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+
     /* Interrupteur segmente : les radios deviennent des pastilles. */
     .auth-switch {
       display: flex; gap: 3px; padding: 3px; border-radius: var(--r-md);
       background: var(--bg); border: 1px solid var(--border-soft);
     }
+
     .auth-switch .radio {
       flex: 1; flex-direction: row; align-items: center; justify-content: center; gap: 6px;
       padding: 6px 8px; border-radius: 7px; cursor: pointer; color: var(--text-dim);
@@ -629,6 +709,7 @@
     .modal .check { flex-direction: row; align-items: center; gap: 9px; color: var(--text); cursor: pointer; }
     .modal .check input { width: 15px; height: 15px; margin: 0; }
     .field-hint { font-size: 11px; color: var(--text-faint); }
+
     .modal textarea {
       background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
       padding: 9px 11px; color: var(--text); font-family: var(--mono); font-size: 12.5px;
@@ -638,6 +719,7 @@
 
     /* ===== Snippets ===== */
     .snippet-list { display: flex; flex-direction: column; gap: 6px; }
+
     .snippet-row {
       display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
       padding: 9px 12px; border-radius: var(--r-md); background: var(--card);
@@ -649,25 +731,29 @@
     .snippet-row .scmd { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .snippet-row .sacts { display: flex; gap: 4px; }
     .snippet-empty { color: var(--text-dim); font-size: 12px; padding: 6px 2px; }
+
     .send-preview {
       margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--bg);
       border: 1px solid var(--border-soft); font-family: var(--mono); font-size: 12px;
-      color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow-y: auto;
+      color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 140px; overflow-y: auto;
     }
     .send-section { font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--text-faint); margin-bottom: 6px; }
     #send-vars { display: flex; flex-direction: column; gap: 8px; }
     #send-vars:empty { display: none; }
     .send-targets { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
+
     .send-targets label {
       flex-direction: row; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 7px;
       background: var(--card); border: 1px solid var(--border-soft); color: var(--text); cursor: pointer; font-size: 12.5px;
     }
     .send-targets label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-tint); }
     .send-targets input { margin: 0; }
+
     .modal-error {
       margin: 0; padding: 8px 10px; border-radius: 7px; font-size: 12px; white-space: pre-wrap; line-height: 1.45;
       background: color-mix(in srgb, var(--err) 12%, transparent); border: 1px solid color-mix(in srgb, var(--err) 40%, transparent); color: #ff9a9a;
     }
+
     .modal-ok {
       margin: 0; padding: 8px 10px; border-radius: 7px; font-size: 12px;
       background: color-mix(in srgb, var(--ok) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); color: #8ee0ac;
@@ -694,6 +780,7 @@
     .import-row .import-source { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--accent-soft); margin-left: 8px; }
     .import-row .import-remarque { grid-column: 2; font-size: 12px; color: var(--warn, #e8b765); }
     .modal-actions-spacer { flex: 1; }
+
     .key-row {
       display: flex; align-items: center; gap: 10px; padding: 9px 12px;
       background: var(--card); border: 1px solid var(--border-soft); border-radius: var(--r-md); font-size: 12px;
@@ -705,6 +792,7 @@
     .key-row .kcopy:hover { color: var(--accent-soft); }
     .key-empty, .tunnel-empty { color: var(--text-dim); font-size: 12px; padding: 6px 2px; }
     .key-block { border: 1px solid var(--border-soft); border-radius: var(--r-md); padding: 0; overflow: hidden; }
+
     .key-block summary {
       cursor: pointer; padding: 10px 12px; font-size: 13px; color: var(--text); list-style: none;
       display: flex; align-items: center; gap: 8px; transition: background var(--t-fast);
@@ -716,6 +804,7 @@
     .key-block form, .key-block .modal-hint { padding: 0 12px; }
     .key-block form { display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; }
     .key-block .modal-hint { margin: 0 0 6px; }
+
     .tunnel-row {
       display: grid; grid-template-columns: 8px 1fr auto; gap: 10px; align-items: center;
       padding: 9px 12px; border-radius: var(--r-md); background: var(--card);
@@ -728,6 +817,7 @@
     .tunnel-row.dead .tdot { background: var(--err); opacity: 1; }
     .tunnel-row .tmain { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
     .tunnel-row .ttitle { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
     .tunnel-row .tflag {
       font-family: var(--mono); font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 5px;
       background: var(--accent-tint); color: var(--accent-soft); flex-shrink: 0;
@@ -744,28 +834,33 @@
       display: flex; flex-direction: column; flex-shrink: 0;
     }
     .sftp-panel.open { width: var(--sftp-w, 320px); }
+
     .sftp-resize {
       position: absolute; top: 0; left: -3px; width: 6px; height: 100%;
       cursor: ew-resize; z-index: 30; display: none;
     }
     .sftp-panel.open .sftp-resize { display: block; }
+
     .sftp-resize::after {
       content: ""; position: absolute; inset: 0 2px; background: transparent;
       transition: background var(--t-fast);
     }
     .sftp-resize:hover::after, body.resizing .sftp-resize::after { background: var(--accent-line); }
-    .sftp-head { padding: 8px 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border-soft); }
+    .sftp-head { padding: 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border-soft); }
+
     .sftp-ib {
       flex: none; width: 28px; height: 28px; border-radius: 7px; border: 1px solid transparent;
       background: transparent; color: var(--text-dim); font-size: 14px;
       transition: background var(--t-fast), color var(--t-fast);
     }
     .sftp-ib:hover { background: var(--card-hover); color: var(--text); }
+
     /* La boîte est la div qui porte role="dialog" ; le formulaire ne doit pas
        créer de boîte intermédiaire, sinon la mise en page de .modal se casse.
        role="dialog" n'est pas admis sur un <form>, dont le rôle implicite est
        « form » — signalé par axe-core. */
     #manual-form { display: contents; }
+
     .sftp-path {
       flex: 1; min-width: 0; height: 28px; padding: 0 9px; border-radius: 7px;
       background: var(--card); border: 1px solid var(--border-soft); outline: none;
@@ -774,6 +869,7 @@
     }
     .sftp-path:focus { border-color: var(--accent-line); color: var(--text); }
     .sftp-list { flex: 1; overflow-y: auto; padding: 6px; }
+
     .sftp-entry {
       padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
       display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center;
@@ -789,17 +885,20 @@
     .sftp-progress { height: 3px; margin: 0 10px; border-radius: 2px; background: var(--card); overflow: hidden; }
     .sftp-progress .bar { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
     .sftp-progress.indeterminate .bar { width: 40%; animation: slide 1s ease-in-out infinite alternate; }
+
     @keyframes slide { from { transform: translateX(-100%) } to { transform: translateX(250%) } }
+
     .sftp-status {
       padding: 6px 12px 8px; font-size: 10.5px; color: var(--text-dim); font-family: var(--mono);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .sftp-status.err { color: var(--err); white-space: normal; }
     .sftp-status.ok { color: var(--ok); }
+
     .sftp-drop {
       position: absolute; inset: 8px; z-index: 5; display: none; flex-direction: column;
       align-items: center; justify-content: center; gap: 6px; border-radius: 12px;
-      border: 2px dashed var(--accent-line); background: rgba(11,13,20,.82);
+      border: 2px dashed var(--accent-line); background: rgb(11,13,20,.82);
       color: var(--accent-soft); font-size: 13px; font-weight: 600; pointer-events: none;
     }
     .sftp-drop span { font-size: 26px; }
@@ -824,7 +923,7 @@
     .ctx-menu.open { display: block; }
     .ctx-item { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text); }
     .ctx-item:hover { background: var(--accent); color: var(--accent-ink); }
-    .ctx-item:hover .ctx-key { color: rgba(20,16,31,.7); }
+    .ctx-item:hover .ctx-key { color: rgb(20,16,31,.7); }
     .ctx-item.disabled { opacity: .4; pointer-events: none; }
     .ctx-key { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
     .ctx-sep { height: 1px; background: var(--border-soft); margin: 4px 6px; }

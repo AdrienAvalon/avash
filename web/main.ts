@@ -25,6 +25,10 @@ import { setTitlebar, setupWindowControls } from "./titre";
 import { sftp, sftpOpenAt, sftpSyncButton } from "./sftp";
 import { tunnels } from "./tunnels";
 import "./import";
+// Modules à effet : ils branchent leurs écouteurs à l'import et n'exportent
+// rien que le cœur utilise. Sans ces lignes, ils ne sont jamais chargés.
+import "./maj";
+import "./panneaux";
 import { appliquerLangue, langue, setLangue, t } from "./i18n";
 
 // ---------- Arbre des hôtes (dossiers unifiés SSH + RDP) ----------

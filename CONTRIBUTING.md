@@ -157,8 +157,12 @@ La porte qualité complète est le script `check.sh` à la racine :
 - `cargo audit` sur **les deux** `Cargo.lock` (si `cargo-audit` est installé),
   et `cargo deny` sur les deux également : licences, dépendances en joker,
   sources hors du registre officiel — trois portes qu'`audit` ne regarde pas ;
-- pour le front : la garde `scripts/guard.sh`, ESLint typé, `tsc --noEmit`,
-  Vitest, puis le build Vite ;
+- pour le front : la garde `scripts/guard.sh`, ESLint typé, stylelint sur le
+  CSS d'`index.html`, knip (fichiers jamais importés, exports jamais lus,
+  dépendances jamais utilisées — il a vu deux modules décrochés par un
+  découpage, que ni `tsc` ni ESLint ne pouvaient voir), `tsc --noEmit`,
+  Vitest, `npm audit` sur le front et sur la suite bout en bout, puis le
+  build Vite ;
 - au build release enfin : la construction du processus RDP **avant** celle
   d'`avash-ui`, qui en dépend par `externalBin`.
 
@@ -167,8 +171,17 @@ La porte qualité complète est le script `check.sh` à la racine :
 > `.github/workflows/ci.yml` et `.gitlab-ci.yml`. Aucune ne la verra autrement.
 
 Le hook `pre-commit` reprend l'essentiel : garde, format, clippy, tests Rust,
-tests du processus RDP, et les trois vérifications rapides du front (`tsc`,
-ESLint, Vitest). Il est versionné dans `scripts/hooks/` ; un clone neuf
+tests du processus RDP, et les vérifications rapides du front (`tsc`, ESLint,
+stylelint, knip, Vitest).
+
+Trois regards extérieurs tournent sur GitHub, hors de `check.sh` : **CodeQL**
+(Rust et TypeScript, constats dans l'onglet Security), **gitleaks** sur tout
+l'historique, et le **Scorecard** de l'OpenSSF sur la posture du dépôt ;
+**Dependabot** propose les mises à jour des quatre arbres de dépendances et des
+actions. Deux outils servent à la main, de temps en temps : `cargo machete`
+(dépendances déclarées mais jamais utilisées — cinq retirées le jour de sa
+première exécution) et `cargo mutants` (force des tests : un mutant qui survit
+est un test qui manque). Il est versionné dans `scripts/hooks/` ; un clone neuf
 l'active une fois pour toutes :
 
 ```bash
