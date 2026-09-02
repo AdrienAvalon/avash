@@ -11,7 +11,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
 import { partageClipboard, setPartageClipboard } from "./prefs";
 import { filterHosts, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode } from "./filters";
-import { $, type RdpHostT, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
+import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, hostSessionState, renderTagBar, terminalTheme } from "./theme";
 import { MENUS_CONTEXTUELS, openHostMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { type ManualTarget } from "./connexion-directe";
@@ -167,7 +167,8 @@ function sshHostElement(h: Host): HTMLElement {
     info.appendChild(tun);
   }
   const dot = el.querySelector(".dot") as HTMLElement;
-  dot.className = "dot " + hostSessionState(h.alias);
+  dot.className = "dot " + (hostSessionState(h.alias) || classeSante(`ssh:${h.alias}`));
+  dot.title = titreSante(`ssh:${h.alias}`);
   if (h.alias === state.pickedAlias) el.classList.add("picked");
   // L'alias peut être tronqué et les tags ne tiennent pas dans la ligne : les
   // deux se retrouvent ici, où l'on va naturellement chercher le détail.
@@ -200,7 +201,9 @@ function rdpHostElement(h: RdpHostT): HTMLElement {
   (el.querySelector(".ini") as HTMLElement).innerHTML = ic("monitor");
   // Voyant vert : une session RDP est ouverte pour cet hôte.
   const live = [...rdpSessions.values()].some((sess) => sess.hostId === h.id);
-  (el.querySelector(".dot") as HTMLElement).className = "dot" + (live ? " live" : "");
+  const dotRdp = el.querySelector(".dot") as HTMLElement;
+  dotRdp.className = "dot" + (live ? " live" : " " + classeSante(`rdp:${h.id}`));
+  dotRdp.title = titreSante(`rdp:${h.id}`);
   el.querySelector(".alias")!.textContent = h.name;
   el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
   el.title = `${h.name} · ${h.user}@${h.host}:${h.port} — ${gestesLigne()}`;
@@ -921,6 +924,38 @@ let paletteEntrees: EntreePalette[] = [];
 /** Réglages atteignables à la palette, avant la liste des hôtes.
  *  La palette est déjà le seul point d'entrée entièrement au clavier : y placer
  *  les réglages évite d'ajouter une fenêtre de préférences pour un interrupteur. */
+/** Classe du voyant selon la dernière sonde : `up`, `down`, ou rien. */
+function classeSante(cle: string): string {
+  const s = state.sante.get(cle);
+  return s ? (s.etat === "joignable" ? "up" : "down") : "";
+}
+
+function titreSante(cle: string): string {
+  const s = state.sante.get(cle);
+  if (!s) return "";
+  if (s.etat === "joignable") return t("sante-joignable", { ms: s.latence_ms });
+  return t(s.etat === "inconnu" ? "sante-inconnu" : "sante-injoignable", { raison: s.raison });
+}
+
+let santeEnCours = false;
+async function verifierSante() {
+  if (santeEnCours) return;
+  santeEnCours = true;
+  notify(t("sante-en-cours"));
+  try {
+    const r = await invoke<{ cle: string; sante: Sante }[]>("hosts_health");
+    state.sante.clear();
+    for (const { cle, sante } of r) state.sante.set(cle, sante);
+    renderHosts();
+    const up = r.filter((x) => x.sante.etat === "joignable").length;
+    notify(t("sante-bilan", { up, down: r.length - up }), up === r.length ? "succes" : "info");
+  } catch (e) {
+    notifyErreur(t("sante-impossible", { e: String(e) }));
+  } finally {
+    santeEnCours = false;
+  }
+}
+
 function commandesPalette(): EntreePalette[] {
   const actif = partageClipboard();
   const anglais = langue() === "en";
@@ -936,6 +971,12 @@ function commandesPalette(): EntreePalette[] {
         for (const s of rdpSessions.values()) if (s.ws) annoncerPartageClip(s.ws);
         notify(actif ? t("clip-plus-echange") : t("clip-echange"));
       },
+    },
+    {
+      nom: t("palette-sante"),
+      detail: t("palette-sante-detail"),
+      icone: "refresh",
+      ouvrir: () => void verifierSante(),
     },
     {
       nom: t(anglais ? "palette-langue-fr" : "palette-langue-en"),

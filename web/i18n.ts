@@ -299,6 +299,14 @@ export const FR: Record<string, string> = {
   "enregistrement-demarre": "Enregistrement en cours : {chemin}",
   "enregistrement-termine": "Enregistrement terminé : {chemin}",
   "enregistrement-impossible": "Enregistrement impossible : {e}",
+  "palette-sante": "Vérifier la santé des hôtes",
+  "palette-sante-detail": "Une connexion TCP jusqu'au port de chaque hôte, sans session",
+  "sante-en-cours": "Sonde des hôtes en cours…",
+  "sante-bilan": "Santé : {up} joignable(s), {down} injoignable(s).",
+  "sante-impossible": "Sonde impossible : {e}",
+  "sante-joignable": "Joignable en {ms} ms",
+  "sante-injoignable": "Injoignable : {raison}",
+  "sante-inconnu": "Nom inconnu : {raison}",
 };
 
 export const EN: Record<string, string> = {
@@ -590,6 +598,14 @@ export const EN: Record<string, string> = {
   "enregistrement-demarre": "Recording to {chemin}",
   "enregistrement-termine": "Recording saved: {chemin}",
   "enregistrement-impossible": "Could not record: {e}",
+  "palette-sante": "Check host health",
+  "palette-sante-detail": "A TCP connection to each host's port, without a session",
+  "sante-en-cours": "Probing hosts…",
+  "sante-bilan": "Health: {up} reachable, {down} unreachable.",
+  "sante-impossible": "Could not probe: {e}",
+  "sante-joignable": "Reachable in {ms} ms",
+  "sante-injoignable": "Unreachable: {raison}",
+  "sante-inconnu": "Unknown name: {raison}",
 };
 
 const DICOS: Record<Langue, Record<string, string>> = { fr: FR, en: EN };

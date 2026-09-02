@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 311 Rust (133 cœur, 33 intégration, 59 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 96 front · 46 scénarios bout en bout dans 24 fichiers, tous en intégration continue |
+| Tests | 317 Rust (138 cœur, 33 intégration, 60 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 96 front · 47 scénarios bout en bout dans 25 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
@@ -273,7 +273,7 @@ sur des mesures de ce qui coûte réellement.
 Par ordre de valeur décroissante :
 
 1. **Enregistrement de session** (format asciinema) — **fait** : depuis le menu du terminal, un fichier asciicast v2 par session dans le répertoire de configuration, en 0600 ; la sortie et les redimensionnements, jamais les frappes ; relu par un scénario bout en bout sur la session SSH réelle.
-2. **Santé des hôtes** — état d'accessibilité visible sans ouvrir de session.
+2. **Santé des hôtes** — **fait** : une connexion TCP jusqu'au port de chaque hôte SSH et RDP, seize à la fois, bornée à 1,5 s, lancée depuis la palette ; voyant vert ou rouge sur la ligne, latence ou raison en infobulle ; un hôte derrière un rebond n'est pas sondé. Scénario bout en bout sur le sshd local et une adresse sans route.
 3. **VNC** — complète la couverture des bureaux distants.
 4. **Port série** — utile en environnement réseau et industriel.
 5. **Transfert de fichiers par RDP** — le presse-papiers texte fonctionne, les
@@ -288,7 +288,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2 | 3 |
-| Scénarios bout en bout | 46 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 47 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |

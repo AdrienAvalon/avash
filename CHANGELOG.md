@@ -7,6 +7,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Santé des hôtes.** « Vérifier la santé des hôtes », dans la palette,
+  ouvre une connexion TCP jusqu'au port de chaque hôte SSH et RDP — seize à
+  la fois, chacune bornée à une seconde et demie — et la referme aussitôt :
+  ni authentification, ni bannière. Le voyant de la ligne passe au vert ou au
+  rouge, l'infobulle donne la latence ou la raison ; une session ouverte
+  garde la priorité sur le voyant. Un hôte derrière un rebond n'est pas
+  sondé, ce n'est pas lui qu'on joindrait en direct.
 - **Enregistrement de session au format asciicast.** Depuis le menu
   contextuel du terminal, une session s'enregistre dans un fichier asciicast
   v2 — celui d'`asciinema`, rejouable avec `asciinema play` — sous le

@@ -317,6 +317,9 @@
     .move-row:hover { background: var(--card-hover); border-color: var(--accent-line); }
     .host .avatar .dot.live { display: block; background: var(--ok); }
     .host .avatar .dot.connecting { display: block; background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
+    /* Santé sondée sans session : vert plein, ou rouge. Une session en cours prime. */
+    .host .avatar .dot.up { display: block; background: var(--ok); opacity: .75; }
+    .host .avatar .dot.down { display: block; background: var(--err); }
     .host .info { min-width: 0; flex: 1; display: flex; flex-direction: row; align-items: baseline; gap: 6px; }
     /* flex:none + nowrap sans overflow : un alias long écrasait l'adresse puis
        débordait de la barre latérale, coupé net et sans « … » pour le dire. */

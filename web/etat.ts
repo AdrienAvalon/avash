@@ -64,7 +64,15 @@ export const state = {
   tagFilter: null as string | null,
   /** Dossiers connus (registre + dérivés des hôtes), triés. */
   folders: [] as string[],
+  /** Dernière sonde de santé, par clé de ligne (`ssh:alias`, `rdp:id`). */
+  sante: new Map<string, Sante>(),
 };
+
+/** Ce qu'une sonde de santé a vu d'un hôte (voir `hosts_health`). */
+export type Sante =
+  | { etat: "joignable"; latence_ms: number }
+  | { etat: "injoignable"; raison: string }
+  | { etat: "inconnu"; raison: string };
 
 /** Dossiers repliés (persisté par machine). */
 export const collapsedFolders = new Set<string>(

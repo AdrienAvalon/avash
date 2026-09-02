@@ -56,6 +56,7 @@ pub fn run() {
             commands::enregistrement_demarrer,
             commands::enregistrement_arreter,
             commands::enregistrement_en_cours,
+            commands::hosts_health,
             commands::host_delete,
             commands::host_get,
             commands::host_update,

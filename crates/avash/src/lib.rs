@@ -9,6 +9,7 @@ pub mod import;
 pub mod keys;
 pub mod osinfo;
 pub mod rdphost;
+pub mod sante;
 pub mod secrets;
 pub mod sftp;
 pub mod snippet;
