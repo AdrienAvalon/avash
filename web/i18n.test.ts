@@ -15,7 +15,7 @@ class StockageMemoire implements Storage {
 }
 Object.defineProperty(globalThis, "localStorage", { value: new StockageMemoire(), configurable: true });
 
-const { FR, EN, t, setLangue, langue, appliquerLangue, CLE_LANGUE } = await import("./i18n");
+const { FR, EN, t, setLangue, langue, appliquerLangue, lireLangue, CLE_LANGUE } = await import("./i18n");
 
 describe("dictionnaires", () => {
   it("l'anglais couvre chaque clé du français, et rien de plus", () => {
@@ -84,5 +84,27 @@ describe("appliquerLangue()", () => {
     setLangue("fr");
     appliquerLangue();
     expect(bouton.textContent).toBe("Annuler");
+  });
+});
+
+describe("langue au premier lancement", () => {
+  beforeEach(() => localStorage.removeItem(CLE_LANGUE));
+
+  it("suit la locale du système : français pour fr*, anglais pour le reste", () => {
+    expect(lireLangue("fr-FR")).toBe("fr");
+    expect(lireLangue("fr-CA")).toBe("fr");
+    expect(lireLangue("FR")).toBe("fr");
+    expect(lireLangue("en-US")).toBe("en");
+    expect(lireLangue("de-DE")).toBe("en");
+    expect(lireLangue("")).toBe("en");
+  });
+
+  it("un choix mémorisé prime sur la locale", () => {
+    localStorage.setItem(CLE_LANGUE, "fr");
+    expect(lireLangue("de-DE")).toBe("fr");
+    localStorage.setItem(CLE_LANGUE, "en");
+    expect(lireLangue("fr-FR")).toBe("en");
+    localStorage.setItem(CLE_LANGUE, "xx");
+    expect(lireLangue("fr-FR")).toBe("fr"); // une valeur inattendue vaut « rien »
   });
 });

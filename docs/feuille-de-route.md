@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 322 Rust (143 cœur, 33 intégration, 60 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 99 front · 47 scénarios bout en bout dans 25 fichiers, tous en intégration continue |
+| Tests | 322 Rust (143 cœur, 33 intégration, 60 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 103 front · 47 scénarios bout en bout dans 25 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -182,8 +182,9 @@ extraites dans `web/i18n.ts` : le français reste la source, l'anglais couvre
 chaque clé (un test le vérifie, avec les variables et l'application à la page),
 les textes statiques portent `data-i18n`, ceux du code passent par `t()`. La
 bascule se fait dans la palette et se mémorise ; un scénario bout en bout la
-joue dans les deux sens. Le français reste la langue par défaut tant que rien
-n'est choisi.
+joue dans les deux sens. Au premier lancement, la langue suit la locale du
+système : français pour `fr*`, anglais pour le reste ; les tailles (Ko ou KB)
+et les dates (jj/mm/aa ou ISO) suivent.
 
 ### 2.3 Import depuis PuTTY et MobaXterm — **fait**
 

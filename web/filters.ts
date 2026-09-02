@@ -12,9 +12,10 @@ export type Host = {
 };
 
 /** Taille lisible : 1024 -> "1.0 Ko". */
-export function humanSize(n: number): string {
+export function humanSize(n: number, langue: "fr" | "en" = "fr"): string {
   if (!Number.isFinite(n) || n < 0) return "—";
-  if (n < 1024) return `${n} o`;
+  const octet = langue === "fr" ? "o" : "B";
+  if (n < 1024) return `${n} ${octet}`;
   const u = ["K", "M", "G", "T", "P"];
   let i = -1;
   let v = n;
@@ -22,7 +23,7 @@ export function humanSize(n: number): string {
     v /= 1024;
     i++;
   } while (v >= 1024 && i < u.length - 1);
-  return `${v.toFixed(1)} ${u[i]}o`;
+  return `${v.toFixed(1)} ${u[i]}${octet}`;
 }
 
 /**
@@ -246,12 +247,14 @@ export function sortSftpEntries(entries: SftpEntry[]): SftpEntry[] {
 }
 
 /** Date courte : aujourd'hui → « 14:07 », sinon « 12/03/26 ». */
-export function shortDate(epochSec: number | null, now = new Date()): string {
+export function shortDate(epochSec: number | null, now = new Date(), langue: "fr" | "en" = "fr"): string {
   if (!epochSec) return "";
   const d = new Date(epochSec * 1000);
   const sameDay = d.toDateString() === now.toDateString();
   const two = (n: number) => String(n).padStart(2, "0");
   if (sameDay) return `${two(d.getHours())}:${two(d.getMinutes())}`;
+  // En anglais, la forme ISO : « 03/12 » se lirait dans les deux sens.
+  if (langue === "en") return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
   return `${two(d.getDate())}/${two(d.getMonth() + 1)}/${two(d.getFullYear() % 100)}`;
 }
 

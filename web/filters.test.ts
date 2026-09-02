@@ -531,3 +531,21 @@ describe("allFolderPaths", () => {
     expect(allFolderPaths([], ["/a//b/", undefined as unknown as string])).toEqual(["a", "a/b"]);
   });
 });
+
+describe("tailles et dates selon la langue", () => {
+  it("humanSize écrit des octets en français et des bytes en anglais", () => {
+    expect(humanSize(512)).toBe("512 o");
+    expect(humanSize(512, "en")).toBe("512 B");
+    expect(humanSize(1536, "en")).toBe("1.5 KB");
+    expect(humanSize(3 * 1024 * 1024)).toBe("3.0 Mo");
+  });
+
+  it("shortDate garde jj/mm/aa en français et passe en ISO en anglais", () => {
+    const now = new Date(2026, 8, 2, 12, 0, 0);
+    const hier = Math.floor(new Date(2026, 2, 12, 9, 30).getTime() / 1000);
+    expect(shortDate(hier, now)).toBe("12/03/26");
+    expect(shortDate(hier, now, "en")).toBe("2026-03-12");
+    const aujourdhui = Math.floor(new Date(2026, 8, 2, 14, 7).getTime() / 1000);
+    expect(shortDate(aujourdhui, now, "en")).toBe("14:07");
+  });
+});

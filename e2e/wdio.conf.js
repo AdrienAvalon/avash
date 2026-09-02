@@ -141,6 +141,13 @@ export const config = {
         ...process.env,
         HOME: sandbox,
         AVASH_HOME: sandbox,
+        // La langue suit la locale au premier lancement : les scénarios
+        // affirment des textes français, la webview doit se croire en France
+        // quelle que soit la machine (la locale n'a pas à être installée,
+        // WebKit lit ces variables telles quelles).
+        LANGUAGE: "fr_FR:fr",
+        LANG: "fr_FR.UTF-8",
+        LC_ALL: "fr_FR.UTF-8",
         XDG_CONFIG_HOME: join(sandbox, ".config"),
       },
     });

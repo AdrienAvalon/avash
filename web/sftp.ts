@@ -9,7 +9,7 @@ import { humanSize, remoteJoin, parentDir, sortSftpEntries, shortDate, shellQuot
 import { $, type Session, state } from "./etat";
 import { askConfirm, askText } from "./dialogues";
 import { placerMenu } from "./menu-hote";
-import { t } from "./i18n";
+import { langue, t } from "./i18n";
 
 // ===== SFTP =====
 
@@ -36,7 +36,7 @@ function sftpProgress(done: number, total: number, label: string) {
   box.hidden = false;
   box.classList.toggle("indeterminate", total === 0);
   ($("sftp-bar") as HTMLElement).style.width = total ? `${Math.round((done / total) * 100)}%` : "";
-  sftpStatus(total ? `${label} ${humanSize(done)} / ${humanSize(total)}` : `${label} ${humanSize(done)}`);
+  sftpStatus(total ? `${label} ${humanSize(done, langue())} / ${humanSize(total, langue())}` : `${label} ${humanSize(done, langue())}`);
 }
 function sftpProgressDone() {
   $("sftp-progress").hidden = true;
@@ -88,10 +88,10 @@ async function sftpNavigate(path: string) {
       el.dataset.i = String(i); // retrouve l'entrée depuis le conteneur
       el.firstChild!.appendChild(icone(fileIconName(e.name, e.is_dir)));
       el.querySelector(".nm")!.textContent = e.name;
-      el.querySelector(".sz")!.textContent = e.is_dir ? shortDate(e.modified) : humanSize(e.size);
+      el.querySelector(".sz")!.textContent = e.is_dir ? shortDate(e.modified, new Date(), langue()) : humanSize(e.size, langue());
       el.title = e.is_dir
-        ? t("sftp-titre-dossier", { nom: e.name, date: shortDate(e.modified) || "?" })
-        : t("sftp-titre-fichier", { nom: e.name, taille: humanSize(e.size), date: shortDate(e.modified) || "?" });
+        ? t("sftp-titre-dossier", { nom: e.name, date: shortDate(e.modified, new Date(), langue()) || "?" })
+        : t("sftp-titre-fichier", { nom: e.name, taille: humanSize(e.size, langue()), date: shortDate(e.modified, new Date(), langue()) || "?" });
       lot.appendChild(el);
     });
     list.appendChild(lot);

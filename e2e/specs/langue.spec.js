@@ -17,6 +17,13 @@ describe("Langue de l'interface", () => {
     await item.click();
   }
 
+  it("se croit en France, comme le harnais le demande, et démarre en français", async () => {
+    // Le harnais pose LANG/LANGUAGE : si ce garde-fou tombe, tous les
+    // scénarios qui lisent du français tomberont avec lui, sans dire pourquoi.
+    expect(await browser.execute(() => navigator.language.toLowerCase())).toMatch(/^fr/);
+    expect(await browser.execute(() => document.documentElement.lang)).toBe("fr");
+  });
+
   it("passe en anglais depuis la palette : page, infobulles et accueil suivent", async () => {
     expect(await texte("#manual-btn")).toBe("Connexion directe");
     await commandePalette("Switch to English");

@@ -2,8 +2,8 @@
 // l'anglais doit couvrir chaque clé (un test le vérifie). Les textes statiques
 // de la page portent `data-i18n` (texte), `data-i18n-title`,
 // `data-i18n-placeholder` ou `data-i18n-aria` ; les textes produits par le code
-// passent par `t()`. La langue suit un choix explicite (mémorisé), et sinon
-// reste le français.
+// passent par `t()`. La langue suit un choix explicite (mémorisé), et sinon la
+// locale du système : français pour `fr*`, anglais pour le reste.
 
 export type Langue = "fr" | "en";
 
@@ -646,14 +646,17 @@ const DICOS: Record<Langue, Record<string, string>> = { fr: FR, en: EN };
 
 let courante: Langue = lireLangue();
 
-function lireLangue(): Langue {
+/** Le choix mémorisé s'il existe ; sinon la langue du système : français
+ *  pour une locale `fr*`, anglais pour toute autre. Un système allemand ou
+ *  japonais lit l'anglais plus sûrement que le français. */
+export function lireLangue(locale: string = typeof navigator === "undefined" ? "" : navigator.language): Langue {
   try {
     const v = localStorage.getItem(CLE_LANGUE);
     if (v === "en" || v === "fr") return v;
   } catch {
-    /* stockage indisponible : français */
+    /* stockage indisponible : on suit la locale */
   }
-  return "fr";
+  return locale.toLowerCase().startsWith("fr") ? "fr" : "en";
 }
 
 /** La langue en cours. */

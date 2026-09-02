@@ -7,7 +7,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { $ } from "./etat";
 import { humanSize, shortDate, stripHtml } from "./filters";
-import { t } from "./i18n";
+import { langue, t } from "./i18n";
 import { notify, notifyErreur } from "./notifications";
 
 type Info = { chemin: string; nom: string; octets: number; modifie: number };
@@ -27,7 +27,7 @@ function rendre(liste: Info[]) {
     row.dataset.chemin = e.chemin;
     row.innerHTML = `<span class="nom"></span><span class="meta"></span><button type="button" class="btn-ghost" data-act="copier"></button>`;
     row.querySelector(".nom")!.textContent = e.nom;
-    row.querySelector(".meta")!.textContent = `${humanSize(e.octets)} · ${shortDate(e.modifie)}`;
+    row.querySelector(".meta")!.textContent = `${humanSize(e.octets, langue())} · ${shortDate(e.modifie, new Date(), langue())}`;
     const btn = row.querySelector("button")!;
     btn.textContent = t("copier-le-chemin");
     btn.addEventListener("click", () => {

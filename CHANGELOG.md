@@ -7,6 +7,9 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **La langue suit la locale au premier lancement** : français pour un
+  système en `fr*`, anglais pour les autres, jusqu'à un choix explicite ;
+  les tailles s'écrivent en Ko ou en KB, les dates en jj/mm/aa ou en ISO.
 - **Finitions sur ce qui venait d'arriver.** L'enregistrement de session
   s'ouvre sur l'écran tel qu'il est au moment de démarrer, et non sur du
   noir ; deux enregistrements dans la même seconde ne se marchent plus
