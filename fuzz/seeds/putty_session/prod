@@ -1,0 +1,6 @@
+HostName=10.0.0.7
+PortNumber=2222
+UserName=adrien
+Protocol=ssh
+PublicKeyFile=/home/a/.ssh/id_ed25519
+TermType=xterm

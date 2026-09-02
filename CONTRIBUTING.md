@@ -223,6 +223,18 @@ chaîne joue ce sous-ensemble à chaque poussée (job `e2e-windows`).
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
 et le détail des 52 scénarios.
 
+### Fuzzing (nightly, optionnel)
+
+`fuzz/` secoue les parseurs du cœur avec cargo-fuzz ; il exige nightly, donc
+il est hors de l'espace de travail et de `check.sh`. Une fois
+`rustup toolchain install nightly` et `cargo install cargo-fuzz --locked`
+passés : `fuzz/fuzz.sh` (60 s par cible), ou plus longtemps avec `DUREE=600`.
+Une entrée qui fait paniquer atterrit dans `fuzz/artifacts/<cible>/` ; elle
+se rejoue avec `cargo +nightly fuzz run <cible> <fichier>` et mérite un test
+unitaire à côté du correctif. Toucher à un parseur (`parse_config_str`,
+`import.rs`, `enregistrement::relire`) = relancer la cible correspondante.
+Détails et invariants dans `fuzz/README.md`.
+
 ### Conformité RDP : le niveau qui manquait
 
 Les tests unitaires vérifient nos fonctions. La suite bout en bout vérifie

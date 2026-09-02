@@ -1,0 +1,4 @@
+HostName=adrien@bastion.exemple.net
+Protocol=ssh
+PublicKeyFile=C:\Users\a\cle.ppk
+ProxyMethod=5

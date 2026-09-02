@@ -354,6 +354,14 @@ arbres de dépendances (workspace et processus RDP), dans `check.sh` comme dans
 les deux chaînes d'intégration continue. La politique est dans `deny.toml`, et
 chaque exception y est justifiée en clair.
 
+**Fuzzing.** Ce que le cœur lit depuis un fichier écrit par quelqu'un d'autre
+(`~/.ssh/config`, sessions PuTTY et MobaXterm, registre, enregistrements
+asciicast) passe sous cargo-fuzz — génération guidée par la couverture, sur
+nightly — dans `fuzz/`, à chaque poussée et chaque lundi. La règle est la
+même que pour le processus RDP : aucune entrée ne doit faire paniquer, et ce
+qui est accepté doit rester cohérent (alias non vide, port non nul, rebond
+rogné). Voir `fuzz/README.md`.
+
 **Ce que dit Scorecard, et pourquoi.** L'OpenSSF Scorecard, joué chaque lundi,
 compte « 36 vulnérabilités » sur le dépôt. Ce sont les avis RustSec
 *non maintenu* de la pile GTK 3 (`atk`, `gdk-sys`, `gdkwayland-sys`… :

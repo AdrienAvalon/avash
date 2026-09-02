@@ -12,6 +12,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   `LANGUAGE` ; la variable, lue par le cœur et injectée avant le premier
   script, tranche — après un choix mémorisé, avant la locale. Le harnais
   bout en bout s'en sert sur toutes les plateformes.
+- **Fuzzing guidé par la couverture.** Un crate `fuzz/` (cargo-fuzz, nightly)
+  secoue les cinq parseurs qui lisent un fichier écrit par quelqu'un d'autre :
+  `~/.ssh/config`, session PuTTY, sortie de `reg query`, `MobaXterm.ini`,
+  asciicast. Chaque cible tourne 45 s dans le workflow Sécurité, à chaque
+  poussée et chaque lundi ; en local, `fuzz/fuzz.sh`. Deux trouvailles en
+  quelques secondes chacune. `Port 0` était lu comme un port, qu'OpenSSH
+  refuse ; il vaut désormais « pas de port », pour l'hôte comme pour un
+  rebond, et le test de mutation reçoit le fragment qui lui manquait. Et le
+  décodage des noms de session PuTTY (`prod%20web`) **paniquait** sur un `%`
+  suivi d'un caractère accentué — un simple nom de fichier dans
+  `~/.putty/sessions` faisait tomber l'import ; il travaille désormais octet
+  par octet, et n'accepte plus `%+2` comme séquence.
 - **La suite bout en bout tourne aussi sous Windows.** Edge WebDriver pilote
   l'exécutable Windows à chaque poussée, sur tout ce qui ne demande pas de
   serveur local. Corrigé pour y arriver : sous pilotage WebDriver, avash ne

@@ -219,7 +219,10 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
                     match key.as_str() {
                         "hostname" => h.hostname = Some(value),
                         "user" => h.user = Some(value),
-                        "port" => h.port = value.parse().ok(),
+                        // OpenSSH refuse « Port 0 » (« Bad port ») : le lire
+                        // comme un port menait à une connexion vouée à l'échec
+                        // sur un message opaque. Trouvé par le fuzzing.
+                        "port" => h.port = value.parse::<u16>().ok().filter(|p| *p != 0),
                         "identityfile" => h.identity_file = Some(value),
                         "proxyjump" => h.proxy_jump = Some(value),
                         _ => {}
@@ -363,9 +366,13 @@ pub fn split_proxy_jump(spec: &str) -> Vec<HopSpec> {
                 None => (None, token),
             };
             // `host:port` — on ne coupe que si la partie apres `:` est un port
-            // (evite de casser une adresse IPv6 nue, rare en ProxyJump).
+            // (evite de casser une adresse IPv6 nue, rare en ProxyJump). Zéro
+            // n'en est pas un : le morceau reste entier, et la résolution le
+            // dira introuvable plutôt que de viser le port 0.
             let (host, port) = match rest.rsplit_once(':') {
-                Some((h, p)) if !h.trim().is_empty() && p.trim().parse::<u16>().is_ok() => {
+                Some((h, p))
+                    if !h.trim().is_empty() && p.trim().parse::<u16>().is_ok_and(|p| p != 0) =>
+                {
                     (h.trim().to_string(), p.trim().parse::<u16>().ok())
                 }
                 _ => (rest.to_string(), None),
@@ -1616,6 +1623,8 @@ Host *
         "#Folder: ",
         "Port ",
         "Port 99999",
+        "Port 0",
+        ":0",
         "\n",
         "\r\n",
         "\0",
@@ -1698,6 +1707,22 @@ Host *
             hotes_vus > 0,
             "les mutations ont tué toutes les entrées : test sans portée"
         );
+    }
+
+    /// Trouvé par cargo-fuzz en quelques secondes, là où 2 000 mutations
+    /// n'avaient jamais produit « Port 0 » : OpenSSH le refuse, nous le
+    /// lisions. Un port nul n'est pas un port, ni pour l'hôte ni pour un
+    /// rebond.
+    #[test]
+    fn le_port_zero_n_est_pas_un_port() {
+        let hotes = parse_config_str("Host a\n  HostName a.local\n  Port 0\n");
+        assert_eq!(hotes.len(), 1);
+        assert_eq!(hotes[0].port, None);
+        let hops = split_proxy_jump("relais:0, autre:2200");
+        assert_eq!(hops.len(), 2);
+        assert_eq!(hops[0].host, "relais:0");
+        assert_eq!(hops[0].port, None);
+        assert_eq!(hops[1].port, Some(2200));
     }
 
     /// Les mutations sont rejouables : deux exécutions rendent la même suite.

@@ -1,0 +1,16 @@
+
+HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions
+
+HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\prod%20web
+    HostName    REG_SZ    10.0.0.7
+    PortNumber    REG_DWORD    0x8ae
+    UserName    REG_SZ    adrien
+    Protocol    REG_SZ    ssh
+    PublicKeyFile    REG_SZ    C:\Users\a\cle.ppk
+
+HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Default%20Settings
+    HostName    REG_SZ    
+
+HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\raw
+    HostName    REG_SZ    1.2.3.4
+    Protocol    REG_SZ    raw

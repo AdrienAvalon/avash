@@ -1,0 +1,5 @@
+# Corpus enrichi par libFuzzer et artefacts de plantage : locaux.
+corpus/
+artifacts/
+coverage/
+target/

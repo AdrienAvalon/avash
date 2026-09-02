@@ -1,0 +1,4 @@
+{"version": 2, "width": 80, "height": 24, "timestamp": 1756800000, "title": "prod", "env": {"TERM": "xterm-256color", "SHELL": "/bin/fish"}}
+[0.012, "o", "\u001b[?2004hadrien@prod ~> "]
+[1.5, "r", "120x40"]
+[2.25, "o", "ls\r\n"]

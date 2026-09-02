@@ -1,0 +1,57 @@
+# Fuzzing guidé par la couverture (cargo-fuzz, libFuzzer) des parseurs du cœur :
+# ce qui entre depuis un fichier que l'utilisateur, un outil tiers ou un dépôt de
+# dotfiles a écrit. Hors de l'espace de travail (nightly seulement), d'où son
+# propre `[workspace]` ; voir `fuzz/README.md`.
+[package]
+name = "avash-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+avash = { path = "../crates/avash" }
+
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "config_ssh"
+path = "fuzz_targets/config_ssh.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "putty_session"
+path = "fuzz_targets/putty_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reg_query"
+path = "fuzz_targets/reg_query.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mobaxterm_ini"
+path = "fuzz_targets/mobaxterm_ini.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "asciicast"
+path = "fuzz_targets/asciicast.rs"
+test = false
+doc = false
+bench = false

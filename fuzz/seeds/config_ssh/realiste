@@ -1,0 +1,17 @@
+# Configuration réaliste, avec ce que le parseur sait lire.
+Include ~/.ssh/conf.d/*.conf
+Host prod
+  HostName 10.0.0.7
+  User adrien
+  Port 2222
+  IdentityFile ~/.ssh/id_ed25519
+  ProxyJump bastion, relais:2200
+  #Tags: prod, web
+  #Folder: clients/acme
+Host bastion
+  HostName bastion.exemple.net
+  User rebond
+Match host *.interne
+  ProxyJump none
+Host *
+  ServerAliveInterval 30

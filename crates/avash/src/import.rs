@@ -179,15 +179,26 @@ pub fn convertir_ppk(ppk: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
 // ---------- PuTTY ----------
 
 /// Décode un nom de fichier de session `PuTTY` (`prod%20web` → `prod web`).
+///
+/// Travaille octet par octet : découper la chaîne à `i + 1..i + 3` faisait
+/// paniquer sur un `%` suivi d'un caractère multi-octets (`x%é`), c'est-à-dire
+/// sur un simple nom de fichier dans `~/.putty/sessions` — trouvé par le
+/// fuzzing. Seuls deux chiffres hexadécimaux forment une séquence ;
+/// `u8::from_str_radix` acceptait aussi `%+2`.
 #[must_use]
 pub fn decoder_nom_putty(nom: &str) -> String {
+    let chiffre = |b: u8| {
+        char::from(b)
+            .to_digit(16)
+            .and_then(|d| u8::try_from(d).ok())
+    };
     let octets = nom.as_bytes();
     let mut out = Vec::with_capacity(octets.len());
     let mut i = 0;
     while i < octets.len() {
         if octets[i] == b'%' && i + 2 < octets.len() {
-            if let Ok(v) = u8::from_str_radix(&nom[i + 1..i + 3], 16) {
-                out.push(v);
+            if let (Some(h), Some(l)) = (chiffre(octets[i + 1]), chiffre(octets[i + 2])) {
+                out.push(h * 16 + l);
                 i += 3;
                 continue;
             }
@@ -224,7 +235,7 @@ fn session_putty_depuis<'a>(
     for (k, v) in paires {
         match k {
             "HostName" => hostname = Some(v.to_string()),
-            "PortNumber" => port = v.parse::<u16>().ok(),
+            "PortNumber" => port = v.parse::<u16>().ok().filter(|p| *p != 0),
             "UserName" => user = Some(v.to_string()),
             "PublicKeyFile" => cle = Some(v.to_string()),
             "Protocol" => protocole = Some(v.to_ascii_lowercase()),
@@ -242,12 +253,22 @@ fn session_putty_depuis<'a>(
     // PuTTY accepte `user@hôte` dans le champ hôte.
     let (user, hostname) = match hostname.split_once('@') {
         Some((u, h)) if user.as_deref().is_none_or(str::is_empty) => {
-            (Some(u.to_string()), h.to_string())
+            (Some(u.to_string()).filter(|u| !u.is_empty()), h.to_string())
         }
         _ => (user, hostname),
     };
+    // « adrien@ » : un utilisateur sans hôte n'est pas une session (fuzzing).
+    if hostname.is_empty() {
+        return None;
+    }
     if mandataire.is_some_and(|m| m != 0) {
         remarques.push("Mandataire PuTTY non repris : à traduire en ProxyJump à la main.".into());
+    }
+    // Un nom qui ne laisse aucun alias (vide, blancs, « %20 » seul dans le
+    // registre) ne peut pas devenir une entrée de ~/.ssh/config (fuzzing).
+    let alias = alias_depuis_nom(nom);
+    if alias.is_empty() {
+        return None;
     }
     let mut ppk = None;
     let identity_file = cle.and_then(|c| clé_reprise(&c, &mut remarques, &mut ppk));
@@ -255,7 +276,7 @@ fn session_putty_depuis<'a>(
         source: Source::Putty,
         nom_origine: nom.to_string(),
         host: SshHost {
-            alias: alias_depuis_nom(nom),
+            alias,
             hostname: Some(hostname),
             user: user.filter(|u| !u.is_empty()),
             port: port.filter(|p| *p != 0),
@@ -374,6 +395,28 @@ fn chemin_moba(brut: &str) -> String {
     brut.replace("_CurrentDrive_", "C").trim().to_string()
 }
 
+/// Bureau RDP `MobaXterm` (`#91#`) : hôte, port, utilisateur aux mêmes places
+/// que pour une session SSH.
+fn bureau_moba(nom: &str, hostname: &str, champs: &[&str], dossier: &str) -> BureauImporte {
+    BureauImporte {
+        source: Source::MobaXterm,
+        nom_origine: nom.to_string(),
+        name: nom.to_string(),
+        host: hostname.to_string(),
+        port: champs
+            .get(2)
+            .and_then(|p| p.trim().parse::<u16>().ok())
+            .filter(|p| *p != 0)
+            .unwrap_or(3389),
+        user: champs
+            .get(3)
+            .map(|s| s.trim())
+            .unwrap_or_default()
+            .to_string(),
+        folder: dossier.to_string(),
+    }
+}
+
 /// Lit un `MobaXterm.ini` (ou un export `.mxtsessions`, même forme).
 #[must_use]
 pub fn parse_mobaxterm_ini(contenu: &str) -> Lecture {
@@ -410,25 +453,16 @@ pub fn parse_mobaxterm_ini(contenu: &str) -> Lecture {
                     continue;
                 }
                 let nom = nom.trim();
+                // Un nom vide, ou qui ne laisse aucun alias, ne peut devenir ni
+                // une entrée de ~/.ssh/config ni un bureau (fuzzing).
+                if nom.is_empty() || alias_depuis_nom(nom).is_empty() {
+                    lecture.ignorees += 1;
+                    continue;
+                }
                 if type_session == "91" {
-                    // Bureau RDP : hôte, port, utilisateur aux mêmes places.
-                    lecture.bureaux.push(BureauImporte {
-                        source: Source::MobaXterm,
-                        nom_origine: nom.to_string(),
-                        name: nom.to_string(),
-                        host: hostname.to_string(),
-                        port: champs
-                            .get(2)
-                            .and_then(|p| p.trim().parse::<u16>().ok())
-                            .filter(|p| *p != 0)
-                            .unwrap_or(3389),
-                        user: champs
-                            .get(3)
-                            .map(|s| s.trim())
-                            .unwrap_or_default()
-                            .to_string(),
-                        folder: dossier.clone(),
-                    });
+                    lecture
+                        .bureaux
+                        .push(bureau_moba(nom, hostname, &champs, &dossier));
                     continue;
                 }
                 if type_session != "109" {
@@ -527,6 +561,15 @@ mod tests {
             "un % isolé reste tel quel"
         );
         assert_eq!(decoder_nom_putty("caf%C3%A9"), "café");
+        // Trouvé par cargo-fuzz : un « % » suivi d'un caractère multi-octets
+        // faisait paniquer le découpage de chaîne. Un tel nom de fichier dans
+        // ~/.putty/sessions suffisait à faire tomber l'import.
+        assert_eq!(decoder_nom_putty("x%é"), "x%é");
+        assert_eq!(decoder_nom_putty("x%éy"), "x%éy");
+        assert_eq!(decoder_nom_putty("%\u{fffd}\u{fffd}"), "%\u{fffd}\u{fffd}");
+        // Deux chiffres hexadécimaux, rien d'autre : « %+2 » n'est pas 0x02.
+        assert_eq!(decoder_nom_putty("a%+2"), "a%+2");
+        assert_eq!(decoder_nom_putty("fin%2"), "fin%2");
     }
 
     #[test]
@@ -578,6 +621,19 @@ mod tests {
         assert!(parse_putty_session("Default Settings", "HostName=x\n").is_none());
         assert!(parse_putty_session("telnet", "HostName=x\nProtocol=telnet\n").is_none());
         assert!(parse_putty_session("vide", "Protocol=ssh\n").is_none());
+        // Trouvé par cargo-fuzz : un nom qui ne laisse aucun alias passait.
+        assert!(parse_putty_session("   ", "HostName=h.local\nProtocol=ssh\n").is_none());
+        assert!(parse_putty_session("", "HostName=h.local\n").is_none());
+        let reg = parse_reg_query(
+            "HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\   \r\n    HostName    REG_SZ    10.0.0.7\r\n",
+        );
+        assert!(reg.sessions.is_empty());
+        // Trouvé par cargo-fuzz : « user@ » passait avec un hôte vide.
+        assert!(parse_putty_session("sans-hote", "HostName=adrien@\nProtocol=ssh\n").is_none());
+        let s = parse_putty_session("sans-user", "HostName=@h.local\nPortNumber=0\n").unwrap();
+        assert_eq!(s.host.hostname.as_deref(), Some("h.local"));
+        assert_eq!(s.host.user, None);
+        assert_eq!(s.host.port, None, "port 0 n'est pas un port");
     }
 
     #[test]
@@ -708,5 +764,16 @@ mod tests {
         );
         assert!(l.sessions.is_empty());
         assert_eq!(l.ignorees, 1);
+    }
+
+    /// Trouvé par cargo-fuzz : une ligne « \r=#109#… » ou «  =#91#… » donnait
+    /// une session ou un bureau sans nom.
+    #[test]
+    fn moba_ignore_les_entrees_sans_nom() {
+        let l =
+            parse_mobaxterm_ini("[Bookmarks]\n\r=#109#0%h.local%22%u\n =#91#4%h.local%3389%u\n");
+        assert!(l.sessions.is_empty());
+        assert!(l.bureaux.is_empty());
+        assert_eq!(l.ignorees, 2);
     }
 }

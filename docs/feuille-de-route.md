@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 323 Rust (143 cœur, 33 intégration, 61 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 104 front · 52 scénarios bout en bout dans 26 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 324 Rust (144 cœur, 33 intégration, 61 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 104 front · 52 scénarios bout en bout dans 26 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -278,8 +278,15 @@ sur des mesures de ce qui coûte réellement.
   vérifie qu'aucune ne fait paniquer le parseur et que ce qu'il rend reste
   cohérent. Première trouvaille dès l'écriture : un espace collé au nom d'hôte
   d'un `ProxyJump` traversait le découpage, et le rebond devenait introuvable
-  sans que le message ne le montre. Le fuzzing avec `cargo-fuzz` (nightly,
-  couverture guidée) reste possible pour aller plus loin.
+  sans que le message ne le montre. Poursuivi le soir même avec `cargo-fuzz`
+  (nightly, couverture guidée) : cinq cibles dans `fuzz/` — config SSH,
+  session PuTTY, registre, `MobaXterm.ini`, asciicast —, jouées 45 s chacune
+  par le workflow Sécurité. Deux trouvailles en quelques secondes, là où
+  2 000 mutations n'y arrivaient pas : `Port 0` accepté, qu'OpenSSH refuse ;
+  et une panique du décodage des noms de session PuTTY sur `%` suivi d'un
+  caractère multi-octets — un nom de fichier suffisait à faire tomber
+  l'import. Le fuzzing guidé trouve ce que la mutation à graine fixe ne
+  produit pas : à garder en chaîne, et à étendre à chaque nouveau parseur.
 - **Scénarios bout en bout sous Windows** — **fait** (02/09/2026) : la même
   suite WebdriverIO, pilotée par Edge WebDriver sur l'exécutable Windows, joue
   à chaque poussée tout ce qui ne demande pas de serveur local. Elle a trouvé
