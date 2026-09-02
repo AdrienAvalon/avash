@@ -45,6 +45,54 @@ ou depuis la page des releases.
 
 Cette section décrit les protections **réellement implémentées** dans Avash.
 
+### Modèle de menace
+
+Contre qui Avash se défend, et contre qui il ne prétend pas se défendre. Les
+sections suivantes détaillent chaque protection ; celle-ci dit à quoi elles
+répondent.
+
+**Adversaires pris en compte :**
+
+- **Quelqu'un sur le chemin réseau** entre vous et le serveur, capable de lire,
+  modifier ou se substituer au serveur. Réponses : vérification de la clé
+  d'hôte SSH et de l'empreinte du certificat RDP dès le premier contact, avec
+  refus explicite au changement ; NLA exigé en RDP, sans repli silencieux vers
+  TLS seul ; aucun secret ne quitte la machine autrement que par le protocole
+  chiffré négocié.
+- **Un serveur malveillant, compromis ou simplement défaillant.** Une fois la
+  session établie, tout ce qu'il envoie est traité comme une entrée non fiable :
+  tailles bornées, rectangles rognés, décodeurs graphiques exercés par fuzzing à
+  partir de trafic réel, redirections plafonnées. Le pire qu'il puisse obtenir
+  est une session qui se ferme, jamais une écriture hors de l'image ni une
+  exécution de code.
+- **Un autre compte sur votre machine.** Fichiers d'état, empreintes, clés
+  générées et traces sont créés en 0600 dans un répertoire en 0700 ; le canal
+  entre l'interface et le processus RDP n'écoute que sur l'adresse locale, avec
+  un jeton d'une seule vie et un contrôle d'origine ; le mot de passe RDP passe
+  par l'entrée standard, jamais par la ligne de commande visible de tous.
+- **Du contenu hostile arrivant dans le terminal ou le presse-papiers.** Un
+  collage de plusieurs lignes est montré avant d'être envoyé ; la webview
+  n'exécute que le code embarqué (`default-src 'self'`, pas de contenu distant),
+  et ne dispose que des commandes déclarées dans `capabilities/default.json`.
+- **Un fichier `~/.ssh/config` édité à la main ou fourni par un tiers.** Le
+  parseur refuse ce qui injecterait une directive, et les écritures sont
+  atomiques.
+
+**Hors du modèle :**
+
+- **Un attaquant qui contrôle déjà votre compte ou la machine** (racine, autre
+  processus de votre session, débogueur). Il lit le trousseau, la mémoire et
+  l'entrée standard comme Avash le fait.
+- **Le trousseau du système lui-même.** Avash s'en remet à lui pour les mots de
+  passe ; sa protection est celle de votre session ouverte.
+- **Les traces de diagnostic RDP**, activées à la demande : elles contiennent
+  tout le trafic, mot de passe compris, et sont à traiter comme tel.
+- **Les canaux auxiliaires** (durée des opérations, taille des trames
+  chiffrées) et **l'accès physique** à une session déverrouillée.
+- **La chaîne d'approvisionnement au-delà de ce qui est vérifié** : `cargo
+  audit`, `cargo deny`, versions épinglées et attestation Sigstore des binaires
+  publiés, mais aucune revue indépendante de chaque dépendance.
+
 ### Stockage des secrets
 
 Les mots de passe ne sont **jamais écrits en clair sur le disque**, ni dans

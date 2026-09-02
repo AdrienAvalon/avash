@@ -146,6 +146,20 @@ chemin n'arrive jamais », « le serveur est honnête », « les tests tournent 
 
 ---
 
+### 1.4 Le panneau SFTP ouvre une seconde connexion SSH
+
+Chaque onglet qui déplie son panneau de fichiers rejoue la connexion complète —
+rebonds, vérification de clé d'hôte, authentification — au lieu d'ouvrir un
+canal `sftp` sur la session du terminal, que le protocole permet. Le code le
+dit et le fait proprement (course entre deux ouvertures gérée, connexion
+perdante refermée), mais cela double les ressources côté serveur, déclenche une
+seconde authentification, visible dans les journaux et parfois refusée par les
+politiques qui bornent les sessions par utilisateur, et fait dépendre le
+panneau d'un mot de passe gardé en mémoire pour le rejeu. Le remède est de
+conserver, dans la poignée de session, de quoi ouvrir un canal supplémentaire
+sur la connexion existante. Chantier de taille moyenne, à jouer contre le
+serveur SSH de test avant tout autre changement du panneau.
+
 ## Axe 2 — Élargir la portée
 
 ### 2.1 macOS
