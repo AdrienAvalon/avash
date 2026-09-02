@@ -32,7 +32,9 @@ front:
     - ./scripts/guard.sh          # restes de mise au point
     - cd web && npm ci
     - npm audit --audit-level=high   # le front est le périmètre de confiance réel
-    - npx eslint main.ts filters.ts prefs.ts icons.ts collage.ts
+    - npx eslint .                   # tous les modules, pas une liste qui prend du retard
+    - npx stylelint index.html       # le CSS vit dans la page
+    - npx knip                       # fichiers jamais importés, exports jamais lus
     - npx tsc --noEmit
     - npx vitest run
     - npx vite build
@@ -101,6 +103,7 @@ bout-en-bout:
     - openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost"
         -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
     - cd e2e && npm ci
+    - npm audit --audit-level=critical   # code de test seulement : on ne bloque que sur « critique »
     - xvfb-run -a npm test
 
 # --- Conformité RDP : de VRAIS serveurs xrdp -----------------------------

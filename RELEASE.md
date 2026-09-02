@@ -34,8 +34,9 @@ Un seul point d'entrée, qui **valide puis construit** :
 ```
 
 - `check.sh` est exécuté d'abord : format, clippy strict (debug **et** release),
-  tests (182 Rust dont 9 dans le processus RDP, 78 front), `cargo audit` sur les
-  deux arbres de dépendances. On ne publie pas du code non validé.
+  tous les tests (les compteurs à jour sont dans `README.md`), `cargo audit` et
+  `cargo deny` sur les deux arbres de dépendances, lint, typage, tests et audit
+  du front. On ne publie pas du code non validé.
 - Le **sidecar RDP** (`avash-rdp`, projet séparé hors workspace) est construit
   et déposé dans `crates/avash-ui/binaries/avash-rdp-<triple>` ; Tauri l'embarque
   via `externalBin` **à côté de l'exe** dans l'AppImage (le RDP marche donc dans

@@ -88,9 +88,12 @@ Le front vit dans `web/` (paquet `avash-web`, `type: module`) :
   `dialogues.ts` (saisie, confirmation, mot de passe, piège de focus),
   `notifications.ts`, `connexion-directe.ts`, `cles.ts`, `menu-hote.ts`,
   `dossiers.ts`, `raccourcis.ts`, `terminal-outils.ts` (zoom, recherche, menu
-  clic droit), `verrous.ts`, `titre.ts`, `maj.ts`, `panneaux.ts`. Aucune
-  variable n'est mutée d'un module à l'autre : ce qui change de main vit dans
-  l'objet `state` de `etat.ts` ;
+  clic droit), `verrous.ts`, `titre.ts`, `maj.ts`, `panneaux.ts`, `import.ts`
+  (import PuTTY et MobaXterm), `enregistrements.ts` (liste des enregistrements
+  asciicast), `i18n.ts` (dictionnaires français et anglais, `t()`, application
+  à la page), `collage.ts` (décision de collage sûr, testée sans terminal).
+  Aucune variable n'est mutée d'un module à l'autre : ce qui change de main vit
+  dans l'objet `state` de `etat.ts` ;
 - **`filters.ts`** — la logique **pure et testable** extraite du reste : arbre
   des hôtes, correspondance de recherche, scancodes clavier, mappage souris
   RDP (letterbox), lecture des verrous clavier. Couverte par `filters.test.ts` ;

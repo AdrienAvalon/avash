@@ -7,6 +7,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Les deux chaînes d'intégration lintent tout le front.** `ci.yml` et
+  `.gitlab-ci.yml` passaient ESLint sur une liste énumérée de cinq fichiers
+  — une trentaine de modules depuis le découpage — et sautaient stylelint,
+  knip et l'audit des dépendances de la suite bout en bout, que `check.sh` et
+  le hook de pré-commit jouent depuis la 0.6.2. Les deux chaînes font
+  désormais exactement ce que fait la porte locale. Une poussée qui en suit
+  une autre de près annule par ailleurs l'exécution devenue sans objet
+  (groupes de concurrence sur `ci.yml` et `securite.yml`) : les exécuteurs
+  Windows et macOS, les plus rares, vont au dernier commit. La liste des
+  modules du front dans `docs/architecture.md`, le tableau des scénarios
+  d'`e2e/README.md` et les compteurs de tests (869, dont 145 dans le cœur et
+  62 dans l'interface) sont remis à niveau.
 - **`AVASH_LANGUE` impose la langue.** Sur une machine sans la locale
   installée, la webview démarre en anglais quoi que disent `LANG` et
   `LANGUAGE` ; la variable, lue par le cœur et injectée avant le premier

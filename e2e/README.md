@@ -44,6 +44,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 | `snippets.spec.js`    | snippet : créer, lister, **supprimer** (askConfirm) |
 | `tunnels.spec.js`     | tunnel local : créer, lister, **supprimer** (askConfirm) |
 | `a11y.spec.js`        | **accessibilité** : role=dialog + titre accessible, piège de focus (Tab ne fuit pas), focus rendu au déclencheur, noms accessibles des boutons icône |
+| `axe.spec.js`         | **audit axe-core** de l'application réelle : vue principale, thème clair, boîte de connexion manuelle (voir plus bas) |
 | `isolation.spec.js`   | **garde-fou d'isolation** : chaque fichier part de l'état semé, sans reste des autres scénarios |
 | `modals.spec.js`      | « Connexion directe » ne se ferme pas au clic dehors, se ferme à Échap ; palette Ctrl+K |
 | `ssh.spec.js`         | **connexion SSH réelle** (sshd local, auth par clé) → session live |

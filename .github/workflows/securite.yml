@@ -17,6 +17,14 @@ on:
   schedule:
     - cron: "17 6 * * 1" # chaque lundi : les règles évoluent, pas seulement le code
 
+# Une poussée qui en suit une autre de près rend la précédente sans objet : on
+# annule ce qui tourne encore pour la même branche, et les exécuteurs Windows et
+# macOS — les plus rares — vont au dernier commit. Une exécution planifiée ou
+# une PR a son propre groupe.
+concurrency:
+  group: securite-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
 permissions: read-all
 
 jobs:

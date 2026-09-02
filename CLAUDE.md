@@ -64,8 +64,11 @@ ce qui n'est pas ici n'existe pas pour eux.
 ## Sécurité et secrets
 
 - Jamais de secret dans un fichier suivi, un message de commit ou un
-  commentaire. Le jeton GitHub vit dans `secrets/github.enc.yaml` (sops) et
-  sert via `git push github` ; `gh` est connecté sur cette machine.
+  commentaire. Les jetons vivent dans `secrets/github.enc.yaml` et
+  `secrets/gitlab.enc.yaml` (sops, clé age du poste) et servent via
+  `git push github` et `git push gitlab`, par l'aide d'identifiants
+  `secrets/git-credential-sops.sh` ; `gh` est connecté sur cette machine.
+  Le dépôt est poussé sur les **deux** dépôts distants.
 - Les durcissements (WebKit inspector, `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`,
   TOFU SSH et RDP, écritures atomiques 0600) sont documentés dans
   `SECURITY.md` et `docs/architecture.md` : ne pas les affaiblir sans y écrire

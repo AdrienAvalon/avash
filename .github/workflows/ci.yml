@@ -1,5 +1,13 @@
 name: CI
 
+# Une poussée qui en suit une autre de près rend la précédente sans objet : on
+# annule ce qui tourne encore pour la même branche, et les exécuteurs Windows et
+# macOS — les plus rares — vont au dernier commit. Une exécution planifiée ou
+# une PR a son propre groupe.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
 # Le jeton des jobs ne sait que lire : rien ici ne publie ni n'écrit dans le dépôt.
 permissions:
   contents: read
@@ -55,9 +63,23 @@ jobs:
       - name: Front — garde
         run: ./scripts/guard.sh
 
+      # Tous les modules, pas une liste : celle-ci avait pris du retard — cinq
+      # fichiers sur une trentaine depuis le découpage du front —, et `check.sh`
+      # comme le hook de pré-commit lintent « . » depuis la 0.6.2.
       - name: Front — lint (ESLint typé)
         working-directory: web
-        run: npx eslint main.ts filters.ts prefs.ts icons.ts collage.ts
+        run: npx eslint .
+
+      # Le CSS vit dans index.html : stylelint le lit à travers postcss-html.
+      - name: Front — lint CSS
+        working-directory: web
+        run: npx stylelint index.html
+
+      # Fichiers jamais importés, exports jamais lus, dépendances inutilisées :
+      # knip a vu deux modules décrochés que ni tsc ni ESLint ne voyaient.
+      - name: Front — code mort (knip)
+        working-directory: web
+        run: npx knip
 
       - name: Front — typage
         working-directory: web
@@ -331,6 +353,13 @@ jobs:
       - name: E2E — dépendances
         working-directory: e2e
         run: npm ci
+
+      # Ce code ne tourne que sur la machine de test, jamais chez l'utilisateur :
+      # on ne bloque que sur « critique », comme check.sh — WebdriverIO 9 traîne
+      # des avis « haute » sans correctif en amont.
+      - name: E2E — audit des dépendances
+        working-directory: e2e
+        run: npm audit --audit-level=critical
 
       # Les serveurs locaux tournent ici aussi. Sept scénarios sur vingt et un
       # — connexion SSH réelle, SFTP, les trois RDP, les onglets mixtes,
