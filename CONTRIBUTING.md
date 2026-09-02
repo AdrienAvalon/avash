@@ -232,6 +232,16 @@ La fonctionnalité `webdriver` n'entre jamais dans un binaire publié.
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
 et le détail des 52 scénarios.
 
+### Claude sur les issues et les PR
+
+Une mention `@claude` dans une issue, un commentaire ou une revue de PR
+déclenche le workflow `claude.yml` : Claude lit le dépôt et la chaîne, répond,
+propose un correctif ou résume. Chaque PR ouverte reçoit en outre une revue
+automatique en commentaires en ligne (`claude-code-review.yml`), sauf celles
+de Dependabot. Les deux tournent sur le jeton de l'abonnement Claude Code du
+mainteneur (secret `CLAUDE_CODE_OAUTH_TOKEN`) ; une PR venue d'un fork n'y a
+pas accès, et c'est voulu.
+
 ### Fuzzing (nightly, optionnel)
 
 `fuzz/` secoue les parseurs du cœur avec cargo-fuzz ; il exige nightly, donc

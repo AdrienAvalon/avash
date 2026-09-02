@@ -12,6 +12,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   `LANGUAGE` ; la variable, lue par le cœur et injectée avant le premier
   script, tranche — après un choix mémorisé, avant la locale. Le harnais
   bout en bout s'en sert sur toutes les plateformes.
+- **Claude sur le dépôt GitHub.** Deux workflows installés depuis Claude Code :
+  une mention `@claude` dans une issue ou une PR obtient une réponse, un
+  correctif ou un résumé ; chaque PR reçoit une revue automatique en
+  commentaires en ligne (les PR de Dependabot exceptées). Alignés sur les
+  règles du dépôt : actions épinglées sur leur commit, permissions minimales.
 - **Fuzzing guidé par la couverture.** Un crate `fuzz/` (cargo-fuzz, nightly)
   secoue les cinq parseurs qui lisent un fichier écrit par quelqu'un d'autre :
   `~/.ssh/config`, session PuTTY, sortie de `reg query`, `MobaXterm.ini`,
