@@ -37,6 +37,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   que le harnais lance et arrête à chaque fichier de scénarios. Jamais dans
   un binaire publié. Au passage, sous pilotage WebDriver, avash ne retire plus
   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` — hors pilotage, rien ne change.
+  Le même chemin joue la suite **sous macOS** (WKWebView), qui n'a aucun
+  pilote WebDriver : première fois que l'interface y est exercée.
 - **Régression visuelle.** Un scénario compare l'accueil sur les deux
   thèmes, la palette et la modale de connexion à des captures de référence,
   pixel à pixel ; ce que les autres scénarios ne voient pas — une marge qui

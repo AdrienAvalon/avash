@@ -171,9 +171,13 @@ de la chaîne compile le front, teste le cœur (serveur SSH en mémoire compris)
 compile et teste le processus RDP et l'interface à chaque commit ; la release
 produit l'image disque `Avash_x.y.z_aarch64.dmg` et l'archive signée que la
 mise à jour automatique télécharge, avec l'entrée `darwin-aarch64` du
-manifeste. Le trousseau natif Apple est celui de `keyring`. Ce qui manque :
-une machine pour l'éprouver en usage réel, et une notarisation (identité de
-développeur Apple) pour épargner le clic droit → Ouvrir du premier lancement.
+manifeste. Le trousseau natif Apple est celui de `keyring`. Depuis le soir du
+02/09/2026, le même job joue aussi la suite bout en bout sur WKWebView, par le
+serveur WebDriver embarqué (macOS n'a aucun pilote) : l'interface y démarre,
+s'y pilote, et ses scénarios sans serveur local y passent. Ce qui manque :
+une machine pour l'éprouver en usage réel (connexions SSH et RDP effectives),
+et une notarisation (identité de développeur Apple) pour épargner le clic
+droit → Ouvrir du premier lancement.
 
 ### 2.2 Anglais — **fait**
 
@@ -293,7 +297,8 @@ sur des mesures de ce qui coûte réellement.
   Edge WebDriver) est mort avec Edge 133, qui ne lance plus une application
   WebView2 ; l'application embarque donc, pour la suite seulement
   (`--features webdriver`), un serveur WebDriver que le harnais lance et
-  arrête à chaque fichier. Le même chemin ouvrira macOS, qui n'a aucun pilote.
+  arrête à chaque fichier. Le même chemin joue la suite sous macOS, qui n'a
+  aucun pilote : l'interface y est exercée pour la première fois.
 - **Régression visuelle** — **fait** (02/09/2026) : quatre captures de
   référence produites par la chaîne, comparées pixel à pixel à chaque passage.
 - **Accessibilité au clavier** — **fait** : boîtes de dialogue (piège de focus,

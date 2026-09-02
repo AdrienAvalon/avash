@@ -226,8 +226,9 @@ cd e2e; npm test
 Les scénarios qui exigent un serveur local (sshd, RDP de test) et l'import
 PuTTY sont écartés d'eux-mêmes ; la chaîne joue ce sous-ensemble à chaque
 poussée (job `e2e-windows`). Le même chemin se force partout avec
-`E2E_EMBARQUE=1` — utile pour vérifier le harnais sous Linux avant de pousser.
-La fonctionnalité `webdriver` n'entre jamais dans un binaire publié.
+`E2E_EMBARQUE=1` — c'est celui de macOS en chaîne, et le moyen de vérifier le
+harnais sous Linux avant de pousser. La fonctionnalité `webdriver` n'entre
+jamais dans un binaire publié.
 
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
 et le détail des 52 scénarios.

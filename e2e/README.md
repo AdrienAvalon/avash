@@ -96,7 +96,8 @@ sautés. Le job `e2e-windows` de la chaîne joue ce sous-ensemble.
 
 `E2E_EMBARQUE=1` force ce chemin sur toute plateforme (Linux compris, sur un
 binaire compilé avec la fonctionnalité) : c'est ainsi que le harnais se
-vérifie avant de pousser. Le même chemin ouvrira macOS, qui n'a aucun pilote.
+vérifie avant de pousser. C'est aussi le chemin de macOS (WKWebView), qui n'a
+aucun pilote : le job macOS de la chaîne joue le même sous-ensemble.
 
 Une limite connue : le serveur embarqué synthétise les touches en JavaScript
 (Origine et Fin non traduites, flèches gérées seulement sur des boutons radio,
