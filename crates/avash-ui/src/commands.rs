@@ -44,6 +44,17 @@ pub struct SessionStore {
     pub en_cours: Mutex<std::collections::HashSet<u64>>,
 }
 
+/// De quoi ouvrir le sous-système SFTP sur la connexion SSH de l'onglet.
+///
+/// Une fermeture plutôt que la session elle-même : le magasin n'a pas à
+/// connaître le transport, et les tests construisent une poignée sans serveur.
+pub type OuvreurSftp = std::sync::Arc<
+    dyn Fn() -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<SftpHandle, String>> + Send>,
+        > + Send
+        + Sync,
+>;
+
 pub struct SessionHandle {
     /// Identite unique de cette session (voir `SESSION_EPOCH`).
     pub epoch: u64,
@@ -51,11 +62,13 @@ pub struct SessionHandle {
     pub input: Sender<Vec<u8>>,
     /// Resize du front → `window_change` SSH
     pub resize: Sender<(u32, u32)>,
-    /// Session SFTP dédiée ouverte à la demande (lazy), par onglet.
+    /// Sous-système SFTP ouvert à la demande, par onglet, sur un canal de la
+    /// session du terminal — jamais une seconde connexion.
     pub sftp: Mutex<Option<std::sync::Arc<SftpHandle>>>,
-    /// Cible conservee pour rouvrir une session SFTP sans redemander les
-    /// identifiants a l'utilisateur.
-    pub target: Target,
+    /// Ouvre ce canal SFTP sur la session vivante.
+    pub ouvrir_sftp: OuvreurSftp,
+    /// Libelle affiche : l'alias, ou `user@hote` pour une saisie directe.
+    pub label: String,
 }
 
 /// Ou et comment se connecter.
@@ -69,8 +82,9 @@ pub struct Target {
     pub port: u16,
     pub user: String,
     pub key_path: Option<std::path::PathBuf>,
-    /// ⚠️ En memoire vive uniquement, le temps de la session. Jamais ecrit
-    /// sur disque, jamais renvoye au front, jamais journalise.
+    /// ⚠️ En memoire vive uniquement, le temps de la connexion : la cible
+    /// n'est pas conservee une fois la session etablie. Jamais ecrit sur
+    /// disque, jamais renvoye au front, jamais journalise.
     pub password: Option<String>,
     /// Libelle affiche : l'alias, ou `user@hote` pour une saisie directe.
     pub label: String,
@@ -325,11 +339,13 @@ fn is_superseded<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epoch: u64) ->
 /// Sonde le système distant et émet `host-os` (le front affiche son logo).
 /// Un canal exec à part, borné dans le temps ; la sortie du PTY s'accumule
 /// dans son propre canal pendant ce temps, rien n'est perdu.
-async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &mut AvashSession) {
-    let probe = tokio::time::timeout(
-        std::time::Duration::from_secs(4),
-        session.run(avash::osinfo::PROBE_COMMAND),
-    )
+///
+/// La session est tenue le temps de la sonde : une ouverture de panneau SFTP
+/// demandée pendant ces quelques centaines de millisecondes attend son tour.
+async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &SessionPartagee) {
+    let probe = tokio::time::timeout(std::time::Duration::from_secs(4), async {
+        session.lock().await.run(avash::osinfo::PROBE_COMMAND).await
+    })
     .await;
     if let Ok(Ok((out, _))) = probe {
         if let Some(os) = avash::osinfo::parse_probe_output(&out) {
@@ -408,6 +424,26 @@ async fn etablir(
     Ok((session, pty))
 }
 
+/// La session SSH d'un onglet, partagée entre le pump du terminal, qui la
+/// garde vivante et la ferme à la fin, et le panneau SFTP, qui y ouvre son
+/// canal. Un verrou asynchrone : on ne le tient que pour ouvrir un canal ou
+/// lancer la sonde d'OS, jamais pendant le relais des octets.
+type SessionPartagee = std::sync::Arc<tokio::sync::Mutex<AvashSession>>;
+
+/// Le canal SFTP de l'onglet s'ouvrira sur cette session-là.
+fn ouvreur_sftp(session: &SessionPartagee) -> OuvreurSftp {
+    let session = session.clone();
+    std::sync::Arc::new(move || {
+        let session = session.clone();
+        Box::pin(async move {
+            let mut garde = session.lock().await;
+            SftpHandle::open_on(&mut garde)
+                .await
+                .map_err(|e| format!("{e:#}"))
+        })
+    })
+}
+
 /// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
 async fn open_on_target(
     app: AppHandle,
@@ -422,7 +458,7 @@ async fn open_on_target(
     const FLUSH_BYTES: usize = 16 * 1024;
 
     state.en_cours.lock().unwrap().insert(id);
-    let (mut session, pty) = match etablir(&target, cols, rows).await {
+    let (session, pty) = match etablir(&target, cols, rows).await {
         Ok(v) => v,
         Err(e) => {
             // Une sortie en erreur doit oublier l'annulation éventuelle : elle
@@ -462,6 +498,10 @@ async fn open_on_target(
     // n'enregistre rien : lâcher `input`/`resize` ferme les canaux, le pump
     // s'arrête et la session SSH se referme d'elle-même.
     let epoch = SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+    // La cible — mot de passe compris — n'est pas conservée : la session
+    // établie suffit à tout ce qui suit, panneau SFTP inclus.
+    drop(target);
+    let session: SessionPartagee = std::sync::Arc::new(tokio::sync::Mutex::new(session));
     enregistrer_session(
         state,
         id,
@@ -470,7 +510,8 @@ async fn open_on_target(
             input,
             resize,
             sftp: Mutex::new(None),
-            target,
+            ouvrir_sftp: ouvreur_sftp(&session),
+            label: label.clone(),
         },
     )?;
 
@@ -551,13 +592,13 @@ async fn open_on_target(
             }
         };
         tokio::join!(
-            probe_and_emit_os(&app2, sid, label_for_event, &mut session),
+            probe_and_emit_os(&app2, sid, label_for_event, &session),
             relais
         );
         // La session distante s'est terminee (exit, coupure, kill). On ne
         // l'annonce que si cet id ne porte pas deja une session plus recente
         // (voir `is_superseded`), sinon on fermerait le nouvel onglet.
-        let _ = session.disconnect().await;
+        let _ = session.lock().await.disconnect().await;
         clore_session(&app2, sid, pump_epoch);
     });
 
@@ -602,9 +643,9 @@ pub async fn host_needs_password(alias: String) -> Result<bool, String> {
 
 /// Ouvre une session sur une adresse saisie a la main, sans `~/.ssh/config`.
 ///
-/// Le mot de passe reste en memoire vive le temps de la session : il sert a
-/// rouvrir un canal SFTP sur le meme serveur sans redemander la saisie.
-/// Il n'est ni ecrit sur disque, ni renvoye au front, ni journalise.
+/// Le mot de passe ne sert qu'a la connexion et n'est pas conserve ensuite :
+/// le panneau SFTP ouvre son canal sur la session etablie. Il n'est ni ecrit
+/// sur disque, ni renvoye au front, ni journalise.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn pty_open_manual(
@@ -699,8 +740,8 @@ pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result
 
 // ---------- SFTP ----------
 
-/// Ouvre (ou réutilise) la session SFTP d'un onglet. Retourne un Arc partagé
-/// avec le store — la garde de la session SSH vit dans le store.
+/// Ouvre (ou réutilise) le canal SFTP d'un onglet, sur la session SSH du
+/// terminal. Retourne un Arc partagé avec le store.
 async fn sftp_of(
     state: &tauri::State<'_, SessionStore>,
     id: u64,
@@ -714,27 +755,23 @@ async fn sftp_of(
             }
         }
     }
-    // Sinon : connexion dédiée puis stockage.
-    // On rejoue la meme cible : une connexion saisie a la main n'existe pas
-    // dans ~/.ssh/config, on ne peut donc pas la retrouver par son alias.
-    let target = {
+    // Sinon : un canal de plus sur la session du terminal, puis stockage. Pas
+    // de seconde connexion, donc pas de seconde authentification ni de cible à
+    // rejouer — le mot de passe n'a pas été gardé.
+    let ouvrir = {
         let store = state.inner.lock().unwrap();
         store
             .get(&id)
-            .map(|h| h.target.clone())
+            .map(|h| h.ouvrir_sftp.clone())
             .ok_or_else(|| format!("Session {id} inconnue"))?
     };
-    let session =
-        AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
-            .await
-            .map_err(|e| e.to_string())?;
-    let mut fresh = Some(SftpHandle::open(session).await.map_err(|e| e.to_string())?);
+    let mut fresh = Some(ouvrir().await?);
 
     // Course : deux commandes SFTP concurrentes sur le meme onglet ont pu, le
-    // temps de cette connexion, en ouvrir chacune une. On re-verifie et on
+    // temps de cette ouverture, en obtenir chacune un. On re-verifie et on
     // stocke atomiquement sous le verrou ; aucun `await` n'y a lieu (les gardes
-    // de Mutex ne sont pas Send). Le handle perdant est ferme ensuite, hors du
-    // verrou, sinon la session SSH dupliquee fuirait.
+    // de Mutex ne sont pas Send). Le canal perdant est ferme ensuite, hors du
+    // verrou, sinon il resterait ouvert sur le serveur.
     let mut to_close: Option<SftpHandle> = None;
     let chosen: Option<std::sync::Arc<SftpHandle>> = {
         let store = state.inner.lock().unwrap();
@@ -1123,7 +1160,7 @@ pub fn open_sessions(state: tauri::State<'_, SessionStore>) -> Vec<SessionInfo> 
         .iter()
         .map(|(id, h)| SessionInfo {
             id: *id,
-            label: h.target.label.clone(),
+            label: h.label.clone(),
         })
         .collect()
 }
@@ -1668,8 +1705,37 @@ mod tests {
             input,
             resize,
             sftp: Mutex::new(None),
-            target: target_with(None),
+            ouvrir_sftp: std::sync::Arc::new(|| {
+                Box::pin(async { Err("pas de transport dans ce test".to_owned()) })
+            }),
+            label: "h".into(),
         }
+    }
+
+    /// Le panneau SFTP dépend de la session de l'onglet : si le canal ne peut
+    /// pas s'ouvrir, l'erreur remonte telle quelle et rien n'est mémorisé —
+    /// le prochain essai repart de zéro, plutôt que de rendre un canal mort.
+    #[tokio::test]
+    async fn un_canal_sftp_qui_ne_s_ouvre_pas_ne_laisse_rien_dans_le_magasin() {
+        let app = app_de_test();
+        let state = app.state::<SessionStore>();
+        enregistrer_session(&state, 5, poignee(1)).unwrap();
+        let e = sftp_of(&app.state::<SessionStore>(), 5)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(e, "pas de transport dans ce test");
+        let vide = state.inner.lock().unwrap()[&5]
+            .sftp
+            .lock()
+            .unwrap()
+            .is_none();
+        assert!(vide, "aucun canal ne doit être mémorisé");
+        let e = sftp_of(&app.state::<SessionStore>(), 6)
+            .await
+            .err()
+            .unwrap();
+        assert!(e.contains("inconnue"), "{e}");
     }
 
     /// Onglet fermé PENDANT la connexion : l'enregistrement qui suit doit

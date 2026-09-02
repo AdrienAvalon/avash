@@ -29,23 +29,42 @@ pub struct SftpEntry {
 }
 
 /// Handle SFTP vivant — le front liste/téléverse via ces commandes.
-/// Possède la session SSH mère (la garde ouverte).
+///
+/// Possède la session SSH mère quand il l'a reçue (`open`) ; avec `open_on`,
+/// elle reste à l'appelant, qui doit la garder vivante.
 pub struct SftpHandle {
     pub sftp: SftpSession,
-    _session: AvashSession,
+    _session: Option<AvashSession>,
 }
 
 impl SftpHandle {
     /// Ouvre le sous-système SFTP sur une session (consommée, gardée vivante).
     pub async fn open(mut session: AvashSession) -> Result<Self> {
-        let channel = session.open_sftp_channel().await?;
-        let sftp = SftpSession::new(channel.into_stream())
-            .await
-            .context("Ouverture sous-système SFTP")?;
+        let sftp = Self::sous_systeme(&mut session).await?;
         Ok(Self {
             sftp,
-            _session: session,
+            _session: Some(session),
         })
+    }
+
+    /// Ouvre le sous-système SFTP sur un canal supplémentaire d'une session
+    /// qui reste à l'appelant — celle du terminal, typiquement. Pas de seconde
+    /// connexion ni de seconde authentification : le protocole multiplexe les
+    /// canaux, et le serveur ne voit qu'une session. Le canal vit tant que la
+    /// session vit.
+    pub async fn open_on(session: &mut AvashSession) -> Result<Self> {
+        let sftp = Self::sous_systeme(session).await?;
+        Ok(Self {
+            sftp,
+            _session: None,
+        })
+    }
+
+    async fn sous_systeme(session: &mut AvashSession) -> Result<SftpSession> {
+        let channel = session.open_sftp_channel().await?;
+        SftpSession::new(channel.into_stream())
+            .await
+            .context("Ouverture sous-système SFTP")
     }
 
     /// Liste un répertoire distant.

@@ -15,12 +15,18 @@ use tokio::sync::Mutex;
 /// Reponses recues par le serveur sur ses canaux `forwarded-tcpip` (test -R).
 static REMOTE_REPLY: Mutex<Vec<Vec<u8>>> = Mutex::const_new(Vec::new());
 
-#[derive(Clone)]
-struct TestSshServer;
+#[derive(Clone, Default)]
+struct TestSshServer {
+    /// Connexions TCP acceptées par CETTE instance : de quoi prouver qu'une
+    /// opération n'a pas rouvert de session derrière le dos du test.
+    connexions: Arc<std::sync::atomic::AtomicUsize>,
+}
 
 impl russh::server::Server for TestSshServer {
     type Handler = TestSshSession;
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
+        self.connexions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         TestSshSession::default()
     }
 }
@@ -663,12 +669,18 @@ static CLE_HOTE: std::sync::LazyLock<PrivateKey> = std::sync::LazyLock::new(|| {
 
 /// Démarre le serveur SSH de test sur un port libre, retourne le port.
 async fn spawn_test_sshd() -> u16 {
+    spawn_test_sshd_compte().await.0
+}
+
+/// Comme `spawn_test_sshd`, avec le compteur de connexions de ce serveur.
+async fn spawn_test_sshd_compte() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
     let config = russh::server::Config {
         keys: vec![CLE_HOTE.clone()],
         ..Default::default()
     };
     let config = Arc::new(config);
-    let mut server = TestSshServer;
+    let mut server = TestSshServer::default();
+    let connexions = server.connexions.clone();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();
@@ -676,7 +688,7 @@ async fn spawn_test_sshd() -> u16 {
     tokio::spawn(async move {
         let _ = server.run_on_socket(config, &listener).await;
     });
-    port
+    (port, connexions)
 }
 
 /// Répertoire personnel virtuel, pour ne pas toucher au `known_hosts` réel.
@@ -874,6 +886,48 @@ async fn sftp_list_download_upload() {
 /// Regression corrigee : le `match` sur `check_known_hosts` confondait
 /// "hote inconnu" (Ok(false)) et "cle changee" (Err(KeyChanged)) dans un bras
 /// `_` commun, et reapprenait la cle dans les deux cas.
+/// Le panneau SFTP d'un onglet ouvre un canal sur la session du terminal, pas
+/// une seconde connexion : le serveur ne doit voir qu'une session, et le
+/// terminal doit rester utilisable pendant que le panneau travaille.
+#[tokio::test]
+async fn sftp_sur_la_session_du_terminal_ne_rouvre_pas_de_connexion() {
+    use std::sync::atomic::Ordering;
+    let (port, connexions) = spawn_test_sshd_compte().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion échouée");
+    let mut pty = session.open_pty(80, 24, "xterm").await.expect("PTY");
+    let _ = pty.out_rx.recv().await.expect("bannière du PTY");
+
+    let sftp = avash::sftp::SftpHandle::open_on(&mut session)
+        .await
+        .expect("SFTP sur la session existante");
+    let entries = sftp.list("/").await.unwrap();
+    assert!(
+        entries.iter().any(|e| e.name == "rapport.md"),
+        "{entries:?}"
+    );
+
+    // Le terminal vit toujours sur la même session : l'écho du serveur revient.
+    pty.in_tx.send(b"ping\n".to_vec()).await.unwrap();
+    let echo = tokio::time::timeout(std::time::Duration::from_secs(5), pty.out_rx.recv())
+        .await
+        .expect("le PTY n'a plus répondu après l'ouverture du SFTP")
+        .expect("PTY fermé");
+    assert!(!echo.is_empty());
+
+    assert_eq!(
+        connexions.load(Ordering::SeqCst),
+        1,
+        "le serveur a vu plus d'une connexion pour un seul onglet"
+    );
+    sftp.close().await.unwrap();
+    // La session mère n'est pas emportée par la fermeture du canal SFTP.
+    let (out, code) = session.run("echo encore").await.unwrap();
+    assert_eq!(code, 0, "{out}");
+}
+
 #[tokio::test]
 async fn changed_host_key_is_refused() {
     let port = spawn_test_sshd().await;

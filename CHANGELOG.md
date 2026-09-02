@@ -51,6 +51,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   en ligne de commande, qui n'avait aucun test, est exercé comme binaire :
   `list`, absence de configuration, commande inconnue, `run` incomplet. Le
   front extrait l'expansion des chemins de dossiers, testée.
+- **Le panneau SFTP n'ouvre plus de seconde connexion SSH.** Il rejouait la
+  connexion complète de l'onglet — rebonds, clé d'hôte, authentification —
+  pour obtenir un canal que le protocole offre sur la session existante. Il
+  ouvre désormais son canal sur la session du terminal : une seule session
+  côté serveur, pas de seconde authentification dans les journaux ni refusée
+  par une politique de sessions, et le mot de passe n'a plus à rester en
+  mémoire pour le rejeu — la cible est oubliée dès la connexion établie. Un
+  test d'intégration compte les connexions vues par le serveur : une seule.
 - **Les binaires de test de l'interface démarrent sous Windows.** Tauri ne
   pose son manifeste d'application que sur l'exécutable de l'application ; un
   binaire de test qui construit une application factice mourait avant `main`,

@@ -35,7 +35,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 289 Rust (118 cœur, 32 intégration, 53 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 90 front · 40 scénarios bout en bout dans 21 fichiers, tous en intégration continue |
+| Tests | 291 Rust (118 cœur, 33 intégration, 54 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 90 front · 40 scénarios bout en bout dans 21 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
@@ -146,19 +146,20 @@ chemin n'arrive jamais », « le serveur est honnête », « les tests tournent 
 
 ---
 
-### 1.4 Le panneau SFTP ouvre une seconde connexion SSH
+### 1.4 Le panneau SFTP sur la session du terminal — **fait**
 
-Chaque onglet qui déplie son panneau de fichiers rejoue la connexion complète —
-rebonds, vérification de clé d'hôte, authentification — au lieu d'ouvrir un
-canal `sftp` sur la session du terminal, que le protocole permet. Le code le
-dit et le fait proprement (course entre deux ouvertures gérée, connexion
-perdante refermée), mais cela double les ressources côté serveur, déclenche une
-seconde authentification, visible dans les journaux et parfois refusée par les
-politiques qui bornent les sessions par utilisateur, et fait dépendre le
-panneau d'un mot de passe gardé en mémoire pour le rejeu. Le remède est de
-conserver, dans la poignée de session, de quoi ouvrir un canal supplémentaire
-sur la connexion existante. Chantier de taille moyenne, à jouer contre le
-serveur SSH de test avant tout autre changement du panneau.
+Chaque onglet qui dépliait son panneau de fichiers rejouait la connexion
+complète — rebonds, vérification de clé d'hôte, authentification — au lieu
+d'ouvrir un canal `sftp` sur la session du terminal, que le protocole permet.
+Cela doublait les ressources côté serveur, déclenchait une seconde
+authentification, visible dans les journaux et parfois refusée par les
+politiques qui bornent les sessions par utilisateur, et obligeait à garder le
+mot de passe en mémoire pour le rejeu. Le panneau ouvre désormais son canal
+sur la session vivante, partagée avec le relais du terminal ; la cible, mot
+de passe compris, n'est plus conservée une fois connecté. Un test
+d'intégration compte les connexions vues par le serveur SSH de test : une
+seule pour un terminal et son panneau, et le terminal répond toujours pendant
+que le panneau liste.
 
 ## Axe 2 — Élargir la portée
 
