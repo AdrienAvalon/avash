@@ -201,6 +201,16 @@ cd e2e && npm install   # une fois
 npm test                # toute la suite
 ```
 
+**Régression visuelle.** `specs/visuel.spec.js` compare des captures de
+l'interface (accueil sur les deux thèmes, palette, modale) à des références,
+pixel à pixel, avec une tolérance d'un demi pour-cent. Les références de
+`e2e/visuel/reference` sont celles de la chaîne (ubuntu-latest) : les polices
+d'une autre machine ne rendent pas pareil, donc en local le scénario est sauté
+sauf `VISUEL=1 npm test`, et ses captures vont dans `e2e/.tmp`, ignoré. Après
+un changement d'interface voulu, rafraîchir les références : récupérer
+l'artefact « visuel » du job E2E, copier son dossier `reference` dans
+`e2e/visuel/reference`, commiter.
+
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
 et le détail des 35 scénarios.
 

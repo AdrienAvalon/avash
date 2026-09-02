@@ -281,6 +281,20 @@ jobs:
         working-directory: e2e
         run: xvfb-run -a npm test
 
+      # Régression visuelle : les captures produites (réelles et différences)
+      # sont publiées quoi qu'il arrive. Pour rafraîchir les références après
+      # un changement d'interface voulu : récupérer l'artefact « visuel »,
+      # copier son dossier reference dans e2e/visuel/reference, commiter.
+      - name: Captures de régression visuelle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: visuel
+          path: |
+            e2e/visuel/reference
+            e2e/.tmp/visuel
+          if-no-files-found: ignore
+
   # Conformité RDP contre de VRAIS serveurs xrdp.
   #
   # Ce job existe parce que les trois défauts RDP de la version 0.3.3 — image

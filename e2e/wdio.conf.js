@@ -111,6 +111,22 @@ export const config = {
         "./specs/enregistrement.spec.js", "./specs/sante.spec.js",
       ],
   maxInstances: 1,
+  // Régression visuelle : captures comparées pixel à pixel à des références.
+  // Les références du dépôt sont celles de la chaîne (ubuntu-latest) : les
+  // polices d'une autre machine ne rendent pas pareil, donc en local les
+  // captures vont dans un dossier ignoré par git, et le scénario ne tourne
+  // qu'à la demande (VISUEL=1) ou en intégration continue.
+  services: [
+    ["visual", {
+      baselineFolder: join(import.meta.dirname, process.env.CI ? "visuel/reference" : ".tmp/visuel-local/reference"),
+      screenshotPath: join(import.meta.dirname, ".tmp/visuel"),
+      formatImageName: "{tag}",
+      autoSaveBaseline: true,
+      savePerInstance: false,
+      blockOutStatusBar: false,
+      blockOutToolBar: false,
+    }],
+  ],
   capabilities: [
     { "tauri:options": { application: "../target/release/avash-ui" }, "wdio:maxInstances": 1 },
   ],

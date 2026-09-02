@@ -20,3 +20,6 @@ web/public/hero.png
 
 # Extraction d'une AppImage (squashfs-root) : artefact local, jamais versionné
 squashfs-root/
+
+# Captures de régression visuelle produites localement (les références sont dans e2e/visuel/reference)
+e2e/.tmp/

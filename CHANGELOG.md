@@ -7,6 +7,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Régression visuelle.** Un scénario compare l'accueil sur les deux
+  thèmes, la palette et la modale de connexion à des captures de référence,
+  pixel à pixel ; ce que les autres scénarios ne voient pas — une marge qui
+  saute, une couleur de jeton qui change — rougit désormais. Les références
+  sont celles de la chaîne, publiées en artefact à chaque passage.
 - **Les commandes Tauri sont découpées par domaine.** `commands.rs` (2 900
   lignes) devient un répertoire : sessions, SFTP, tunnels, snippets,
   enregistrement, clés, secrets, dossiers, import, santé, et les tests à
