@@ -16,7 +16,9 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   reçoit un 401 de GitHub en HTTP/2 quand `cargo-deny` clone la base d'avis.
   La chaîne installe désormais les deux composants et Node 22, comme sur
   GitHub, force HTTP/1.1 pour ce clone, et met en cache les outils compilés
-  (`tauri-driver`, `cargo-audit`, `cargo-deny`).
+  (`tauri-driver`, `cargo-audit`, `cargo-deny`). Le job bout en bout, rejoué
+  pièce par pièce dans un conteneur nu, crée aussi `/run/sshd` : lancé par
+  root, le `sshd` du harnais l'exige.
   Le miroir, qui avait cinquante commits de retard, est rattrapé, et son
   jeton rejoint celui de GitHub dans les secrets chiffrés du poste.
   `CONTRIBUTING.md` dit comment déclarer un autre exécuteur.

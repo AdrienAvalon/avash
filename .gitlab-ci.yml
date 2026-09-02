@@ -121,6 +121,11 @@ bout-en-bout:
     # Serveur RDP de test et son certificat auto-signé (non versionné) : les
     # scénarios à serveurs locaux tournent ici aussi, comme sur GitHub.
     - apt-get install -y -qq openssh-server openssl
+    # Ici le harnais tourne en root (conteneur), et sshd lancé par root exige
+    # le répertoire de séparation de privilèges, que le paquet ne crée pas sans
+    # systemd : « Missing privilege separation directory: /run/sshd ». Sur
+    # GitHub le harnais est un utilisateur ordinaire et sshd s'en passe.
+    - mkdir -p /run/sshd
     - cargo build --release --manifest-path test-rdp-server/Cargo.toml
     - openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost"
         -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
