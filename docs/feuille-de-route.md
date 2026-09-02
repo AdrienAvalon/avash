@@ -35,7 +35,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 291 Rust (118 cœur, 33 intégration, 54 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 90 front · 40 scénarios bout en bout dans 21 fichiers, tous en intégration continue |
+| Tests | 293 Rust (120 cœur, 33 intégration, 54 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 90 front · 40 scénarios bout en bout dans 21 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
@@ -234,9 +234,14 @@ sur des mesures de ce qui coûte réellement.
 - **Contrôle des dépendances** : `cargo-audit` signale les vulnérabilités connues,
   mais rien ne surveille les licences ni les dépendances abandonnées. `cargo-deny`
   couvre les deux, et sert la conformité AGPL.
-- **Test par fuzzing** du parseur `~/.ssh/config` : il lit un fichier que
-  l'utilisateur peut avoir édité à la main, c'est la surface d'entrée la plus
-  exposée du cœur.
+- **Test par fuzzing** du parseur `~/.ssh/config` — **fait** (02/09/2026) : un
+  test de mutation déterministe (2 000 variantes d'une configuration réaliste :
+  octets retournés, troncatures, fragments de mots-clés, octets hostiles)
+  vérifie qu'aucune ne fait paniquer le parseur et que ce qu'il rend reste
+  cohérent. Première trouvaille dès l'écriture : un espace collé au nom d'hôte
+  d'un `ProxyJump` traversait le découpage, et le rebond devenait introuvable
+  sans que le message ne le montre. Le fuzzing avec `cargo-fuzz` (nightly,
+  couverture guidée) reste possible pour aller plus loin.
 - **Accessibilité au clavier** : les boîtes de dialogue sont traitées ; la liste
   d'hôtes ne se parcourt pas encore aux flèches.
 

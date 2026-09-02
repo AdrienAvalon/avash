@@ -1,4 +1,4 @@
-// Avash front v0.2 — terminal interactif réel : xterm.js ↔ PTY Rust (russh)
+// Avash — cœur du front : arbre des hôtes, onglets, terminaux (xterm.js ↔ PTY Rust), palette, amorçage.
 
 import "@xterm/xterm/css/xterm.css";
 import { Terminal } from "@xterm/xterm";

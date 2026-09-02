@@ -51,6 +51,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   en ligne de commande, qui n'avait aucun test, est exercé comme binaire :
   `list`, absence de configuration, commande inconnue, `run` incomplet. Le
   front extrait l'expansion des chemins de dossiers, testée.
+- **Le parseur de `~/.ssh/config` est fuzzé par mutation.** Deux mille
+  variantes d'une configuration réaliste — octets retournés, troncatures,
+  fragments de mots-clés, octets hostiles — ne doivent ni le faire paniquer
+  ni lui faire rendre un hôte incohérent. Première trouvaille : un espace
+  collé au nom d'hôte d'un `ProxyJump` (`relais :2200`) traversait le
+  découpage et rendait le rebond introuvable ; chaque morceau est rogné.
 - **Le processus RDP est découpé en modules.** `rdp-sidecar/src/main.rs`
   (2 700 lignes) ne garde que le point d'entrée ; neuf modules prennent
   chacun un domaine : ligne de commande, connexion et négociation, session

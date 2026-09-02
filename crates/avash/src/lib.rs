@@ -350,19 +350,28 @@ pub fn split_proxy_jump(spec: &str) -> Vec<HopSpec> {
         .map(str::trim)
         .filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("none"))
         .map(|token| {
+            // Chaque morceau est rogné : `user @hote :port` n'est pas une
+            // syntaxe valide, mais un fichier édité à la main peut la
+            // contenir, et un espace collé au nom d'hôte rendait un rebond
+            // introuvable sans que le message ne le laisse voir (trouvé par
+            // le test de mutation).
             let (user, rest) = match token.split_once('@') {
-                Some((u, r)) => (Some(u.to_string()), r),
+                Some((u, r)) => (Some(u.trim()).filter(|u| !u.is_empty()), r.trim()),
                 None => (None, token),
             };
             // `host:port` — on ne coupe que si la partie apres `:` est un port
             // (evite de casser une adresse IPv6 nue, rare en ProxyJump).
             let (host, port) = match rest.rsplit_once(':') {
-                Some((h, p)) if !h.is_empty() && p.parse::<u16>().is_ok() => {
-                    (h.to_string(), p.parse::<u16>().ok())
+                Some((h, p)) if !h.trim().is_empty() && p.trim().parse::<u16>().is_ok() => {
+                    (h.trim().to_string(), p.trim().parse::<u16>().ok())
                 }
                 _ => (rest.to_string(), None),
             };
-            HopSpec { user, host, port }
+            HopSpec {
+                user: user.map(str::to_string),
+                host,
+                port,
+            }
         })
         .filter(|h| !h.host.is_empty())
         .collect()
@@ -1542,5 +1551,163 @@ Host autre
             parse_ssh_config().unwrap()[0].user.as_deref(),
             Some("change")
         );
+    }
+}
+
+/// Fuzzing par mutation du parseur `~/.ssh/config`.
+///
+/// C'est la surface d'entrée la plus exposée du cœur : un fichier que
+/// l'utilisateur édite à la main, qu'un outil tiers réécrit, ou qu'un dépôt de
+/// dotfiles fournit. Le même principe que pour le processus RDP : muter un
+/// contenu authentique atteint des chemins que des octets aléatoires ne
+/// touchent jamais, parce que le tout premier `Host` filtre déjà tout ce qui ne
+/// ressemble pas à une configuration.
+#[cfg(test)]
+mod tests_mutation {
+    use super::{parse_config_str, split_proxy_jump};
+
+    /// Générateur déterministe (LCG) : une suite rejouable, aucun crate de plus.
+    struct Graine(u64);
+    impl Graine {
+        fn suivant(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+        fn entre(&mut self, borne: usize) -> usize {
+            (self.suivant() as usize) % borne.max(1)
+        }
+    }
+
+    const SOUCHE: &str = "\
+# Configuration réaliste, avec ce que le parseur sait lire.
+Include ~/.ssh/conf.d/*.conf
+Host prod
+  HostName 10.0.0.7
+  User adrien
+  Port 2222
+  IdentityFile ~/.ssh/id_ed25519
+  ProxyJump bastion, relais:2200
+  #Tags: prod, web
+  #Folder: clients/acme
+Host bastion
+  HostName bastion.exemple.net
+  User rebond
+Match host *.interne
+  ProxyJump none
+Host *
+  ServerAliveInterval 30
+";
+
+    /// Fragments qui visent les chemins du parseur : mots-clés, séparateurs,
+    /// commentaires porteurs de sens, valeurs vides, octets hostiles.
+    const FRAGMENTS: &[&str] = &[
+        "Host ",
+        "Host\t",
+        "Match ",
+        "Include ",
+        "ProxyJump ",
+        "#Tags: ",
+        "#Folder: ",
+        "Port ",
+        "Port 99999",
+        "\n",
+        "\r\n",
+        "\0",
+        "  ",
+        "=",
+        "\"",
+        "*",
+        "?",
+        ",",
+        "../",
+        "é",
+        "\u{feff}",
+        "\u{2028}",
+        "none",
+    ];
+
+    fn muter(graine: &mut Graine, base: &str) -> String {
+        let mut octets: Vec<u8> = base.as_bytes().to_vec();
+        for _ in 0..=graine.entre(6) {
+            match graine.entre(6) {
+                0 if !octets.is_empty() => {
+                    let i = graine.entre(octets.len());
+                    octets[i] = graine.suivant() as u8;
+                }
+                1 if !octets.is_empty() => {
+                    let i = graine.entre(octets.len());
+                    octets.truncate(i);
+                }
+                2 => {
+                    let i = graine.entre(octets.len() + 1);
+                    let f = FRAGMENTS[graine.entre(FRAGMENTS.len())];
+                    octets.splice(i..i, f.bytes());
+                }
+                3 if octets.len() > 2 => {
+                    let a = graine.entre(octets.len());
+                    let b = a + graine.entre(octets.len() - a);
+                    let bloc: Vec<u8> = octets[a..b].to_vec();
+                    let i = graine.entre(octets.len());
+                    octets.splice(i..i, bloc);
+                }
+                4 if octets.len() > 2 => {
+                    let a = graine.entre(octets.len());
+                    let b = a + graine.entre(octets.len() - a);
+                    octets.drain(a..b);
+                }
+                _ => {
+                    let i = graine.entre(octets.len() + 1);
+                    let n = 1 + graine.entre(64);
+                    octets.splice(i..i, std::iter::repeat_n(b'A', n));
+                }
+            }
+        }
+        // Le parseur reçoit une `&str` : ce que `read_to_string` aurait rendu.
+        String::from_utf8_lossy(&octets).into_owned()
+    }
+
+    /// Aucune mutation ne fait paniquer le parseur, et ce qu'il rend reste
+    /// cohérent : un alias jamais vide, un port jamais nul, des rebonds sans
+    /// espace autour.
+    #[test]
+    fn aucun_fichier_mute_ne_fait_paniquer_le_parseur() {
+        let mut graine = Graine(0x5eed_0002_0926);
+        let mut hotes_vus = 0usize;
+        for _ in 0..2_000 {
+            let contenu = muter(&mut graine, SOUCHE);
+            let hotes = parse_config_str(&contenu);
+            for h in &hotes {
+                assert!(!h.alias.is_empty(), "alias vide pour :\n{contenu}");
+                assert!(!h.alias.contains(['\n', '\r']), "alias multiligne");
+                assert_ne!(h.port, Some(0), "port nul accepté pour :\n{contenu}");
+                if let Some(pj) = &h.proxy_jump {
+                    for hop in split_proxy_jump(pj) {
+                        assert_eq!(hop.host.trim(), hop.host, "rebond non rogné : {hop:?}");
+                    }
+                }
+            }
+            hotes_vus += hotes.len();
+        }
+        assert!(
+            hotes_vus > 0,
+            "les mutations ont tué toutes les entrées : test sans portée"
+        );
+    }
+
+    /// Les mutations sont rejouables : deux exécutions rendent la même suite.
+    #[test]
+    fn la_suite_de_mutations_est_deterministe() {
+        let a: Vec<String> = {
+            let mut g = Graine(42);
+            (0..20).map(|_| muter(&mut g, SOUCHE)).collect()
+        };
+        let b: Vec<String> = {
+            let mut g = Graine(42);
+            (0..20).map(|_| muter(&mut g, SOUCHE)).collect()
+        };
+        assert_eq!(a, b);
     }
 }
