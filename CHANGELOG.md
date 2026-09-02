@@ -24,12 +24,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   suivi d'un caractère accentué — un simple nom de fichier dans
   `~/.putty/sessions` faisait tomber l'import ; il travaille désormais octet
   par octet, et n'accepte plus `%+2` comme séquence.
-- **La suite bout en bout tourne aussi sous Windows.** Edge WebDriver pilote
-  l'exécutable Windows à chaque poussée, sur tout ce qui ne demande pas de
-  serveur local. Corrigé pour y arriver : sous pilotage WebDriver, avash ne
-  retire plus `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` — c'est la variable par
-  laquelle le pilote commande WebView2, et sans elle aucune session ne
-  s'ouvrait. Hors pilotage, rien ne change : la valeur héritée est retirée.
+- **La suite bout en bout tourne aussi sous Windows.** À chaque poussée, sur
+  tout ce qui ne demande pas de serveur local. Edge WebDriver ne sait plus
+  lancer une application WebView2 depuis sa version 133 (« DevToolsActivePort
+  file doesn't exist ») : l'application se compile avec la fonctionnalité
+  `webdriver`, qui embarque un serveur WebDriver (tauri-plugin-wdio-webdriver)
+  que le harnais lance et arrête à chaque fichier de scénarios. Jamais dans
+  un binaire publié. Au passage, sous pilotage WebDriver, avash ne retire plus
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` — hors pilotage, rien ne change.
 - **Régression visuelle.** Un scénario compare l'accueil sur les deux
   thèmes, la palette et la modale de connexion à des captures de référence,
   pixel à pixel ; ce que les autres scénarios ne voient pas — une marge qui

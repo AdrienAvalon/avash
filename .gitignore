@@ -23,3 +23,8 @@ squashfs-root/
 
 # Captures de régression visuelle produites localement (les références sont dans e2e/visuel/reference)
 e2e/.tmp/
+
+# Schémas générés par Tauri à chaque construction (autocomplétion des
+# capacités) : leur contenu suit les fonctionnalités compilées, ils ne se
+# commitent pas — le modèle officiel les ignore aussi.
+crates/avash-ui/gen/schemas/

@@ -79,21 +79,30 @@ L'attendu d'`isolation.spec.js` est **dérivé du semage** (`HOTES_SEMES`, expor
 par `wdio.conf.js`) : le réénoncer l'avait rendu faux en CI, où l'hôte
 réellement joignable n'est pas semé.
 
-## Sous Windows
+## Sous Windows : le serveur WebDriver embarqué
 
-Même suite, autre pilote natif : `tauri-driver` s'appuie sur Edge WebDriver,
-qu'il lance sur l'exécutable de l'application (`browserName: webview2`). Il
-faut `msedgedriver.exe` de la version d'Edge installée
-(<https://msedgedriver.microsoft.com/>), désigné par la variable
-`MSEDGEDRIVER` ; le harnais le passe en `--native-driver`. Les serveurs locaux
-ne sont pas montés (`LOCAL_SERVERS` est faux), l'import PuTTY et la régression
-visuelle sont sautés. Le job `e2e-windows` de la chaîne joue ce sous-ensemble.
+Même suite, autre chemin vers l'application. Edge WebDriver — le pilote natif
+que `tauri-driver` enchaîne sous Windows — ne lance plus une application
+WebView2 depuis sa version 133 : chaque session mourait après quatre minutes
+sur « DevToolsActivePort file doesn't exist », l'exception d'automatisation du
+durcissement `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` n'y changeait rien.
+L'application est donc compilée avec `--features webdriver` : elle embarque un
+serveur WebDriver (`tauri-plugin-wdio-webdriver`, 127.0.0.1:4445) et le harnais
+la lance lui-même dans `beforeSession`, attend `/status`, puis WebdriverIO lui
+parle en direct ; `afterSession` l'arrête. Une application par fichier de
+scénarios, comme sous Linux. Les serveurs locaux ne sont pas montés
+(`LOCAL_SERVERS` est faux), l'import PuTTY et la régression visuelle sont
+sautés. Le job `e2e-windows` de la chaîne joue ce sous-ensemble.
 
-Deux pièges rencontrés : Edge WebDriver commande WebView2 par
-`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (port de débogage, dossier de données),
-que le harnais ne doit pas poser lui-même et que l'application ne doit pas
-retirer sous `TAURI_WEBVIEW_AUTOMATION=true` — sinon chaque scénario meurt
-après quatre minutes sur « DevToolsActivePort file doesn't exist ».
+`E2E_EMBARQUE=1` force ce chemin sur toute plateforme (Linux compris, sur un
+binaire compilé avec la fonctionnalité) : c'est ainsi que le harnais se
+vérifie avant de pousser. Le même chemin ouvrira macOS, qui n'a aucun pilote.
+
+Une limite connue : le serveur embarqué synthétise les touches en JavaScript
+(Origine et Fin non traduites, flèches gérées seulement sur des boutons radio,
+modificateurs ignorés sur les touches de fonction). `liste-clavier.spec.js`,
+qui a besoin de vraies touches, se saute sur ce chemin et reste joué sous
+Linux.
 
 ## Astuces WebKitGTK
 

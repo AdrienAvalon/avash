@@ -1,6 +1,15 @@
-// Harnais E2E : pilote la VRAIE application compilée (WebKitGTK) via tauri-driver
-// + WebdriverIO. Seul niveau qui attrape les bugs du runtime réel (ex. confirm() /
-// prompt() inopérants sous WebKitGTK) et les flux utilisateur complets.
+// Harnais E2E : pilote la VRAIE application compilée via WebdriverIO. Seul
+// niveau qui attrape les bugs du runtime réel (ex. confirm() / prompt()
+// inopérants sous WebKitGTK) et les flux utilisateur complets.
+//
+// Deux chemins vers l'application. Sous Linux, tauri-driver et WebKitWebDriver
+// lancent l'application à chaque session. Sous Windows (et sur demande,
+// E2E_EMBARQUE=1, partout), c'est le harnais qui lance l'application, compilée
+// avec la fonctionnalité `webdriver` : elle embarque alors un serveur WebDriver
+// (tauri-plugin-wdio-webdriver, port 4445) — Edge WebDriver ne sait plus lancer
+// une application WebView2 depuis sa version 133 (« DevToolsActivePort file
+// doesn't exist »), et macOS n'a aucun pilote. Une application par fichier de
+// scénarios dans les deux cas : l'isolation ne dépend pas du chemin.
 //
 // Bac à sable : HOME + XDG_CONFIG_HOME temporaires, pré-remplis d'une config SSH
 // de test — aucun effet sur la vraie config. Deux serveurs locaux sont démarrés
@@ -13,6 +22,7 @@ import { join } from "node:path";
 
 let tauriDriver;
 let sshd;
+let appEmbarquee;
 // Le lanceur crée le bac à sable et le publie dans l'environnement : les
 // processus de travail, forkés ensuite, retrouvent le MÊME chemin — sans quoi
 // chacun en créerait un différent et ne pourrait pas remettre à zéro celui que
@@ -28,6 +38,68 @@ export const SSH_PORT = 2223;
 // sans serveur local tournent — c'est déjà ce que la CI Linux ne voyait pas.
 export const WINDOWS = process.platform === "win32";
 export const LOCAL_SERVERS = !process.env.E2E_NO_RDP && !WINDOWS;
+// Serveur WebDriver embarqué dans l'application (cf. en-tête) : d'office sous
+// Windows, sur demande ailleurs.
+export const EMBARQUE = WINDOWS || !!process.env.E2E_EMBARQUE;
+const PORT_EMBARQUE = 4445;
+const APP = join(import.meta.dirname, "..", "target", "release", WINDOWS ? "avash-ui.exe" : "avash-ui");
+
+// L'environnement de l'application pilotée, quel que soit le chemin qui la
+// lance. AVASH_HOME en plus de HOME/XDG_CONFIG_HOME : sous Windows, l'API qui
+// donne le répertoire de configuration interroge le shell et ignore les deux
+// autres. Sans cette variable, la suite écrirait dans les fichiers RÉELS de
+// l'utilisateur — config SSH et fichier de confiance RDP.
+const ENV_APP = {
+  ...process.env,
+  HOME: sandbox,
+  AVASH_HOME: sandbox,
+  // La langue suit la locale au premier lancement : les scénarios affirment
+  // des textes français, la webview doit se croire en France quelle que soit
+  // la machine (la locale n'a pas à être installée, WebKit lit ces variables
+  // telles quelles).
+  LANGUAGE: "fr_FR:fr",
+  LANG: "fr_FR.UTF-8",
+  LC_ALL: "fr_FR.UTF-8",
+  // … et quand la locale n'est pas installée sur la machine (chaîne
+  // d'intégration), la webview démarre quand même en anglais : le cœur impose
+  // alors la langue avant le premier script (AVASH_LANGUE).
+  AVASH_LANGUE: "fr",
+  XDG_CONFIG_HOME: join(sandbox, ".config"),
+  // Surtout pas WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ici : l'application
+  // retire toute valeur héritée, et n'en a pas besoin — le serveur embarqué
+  // n'ouvre aucun port de débogage Chromium.
+};
+
+/** Lance l'application compilée avec son serveur WebDriver, et attend qu'il réponde. */
+async function lancerAppEmbarquee() {
+  const app = spawn(APP, [], {
+    env: { ...ENV_APP, TAURI_WEBDRIVER_PORT: String(PORT_EMBARQUE) },
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  let sortie = null;
+  app.on("exit", (code, signal) => { sortie = { code, signal }; });
+  const echeance = Date.now() + 60000;
+  while (Date.now() < echeance) {
+    if (sortie) throw new Error(`l'application s'est arrêtée avant d'être pilotable (code ${sortie.code}, signal ${sortie.signal})`);
+    try {
+      const r = await fetch(`http://127.0.0.1:${PORT_EMBARQUE}/status`, { signal: AbortSignal.timeout(2000) });
+      if (r.ok && (await r.json()).value?.ready) return app;
+    } catch { /* pas encore à l'écoute */ }
+    await new Promise((res) => setTimeout(res, 250));
+  }
+  app.kill();
+  throw new Error("le serveur WebDriver embarqué n'a jamais répondu (60 s)");
+}
+
+/** Arrête l'application lancée par le harnais, et attend sa sortie. */
+function arreterAppEmbarquee(app) {
+  if (!app || app.exitCode !== null) return Promise.resolve();
+  return new Promise((res) => {
+    const force = setTimeout(() => { try { app.kill("SIGKILL"); } catch { /* déjà partie */ } }, 5000);
+    app.once("exit", () => { clearTimeout(force); res(); });
+    app.kill();
+  });
+}
 
 // Les hôtes réellement semés, selon que les serveurs locaux tournent ou non.
 // Exporté pour que les specs raisonnent sur le semage plutôt que de le
@@ -139,7 +211,7 @@ export const config = {
   framework: "mocha",
   reporters: ["spec"],
   hostname: "127.0.0.1",
-  port: 4444,
+  port: EMBARQUE ? PORT_EMBARQUE : 4444,
   path: "/",
   mochaOpts: { ui: "bdd", timeout: 60000 },
   // Le défaut de WebdriverIO est de 3 s. C'est court pour une application
@@ -152,45 +224,22 @@ export const config = {
     if (LOCAL_SERVERS) sshd = startSshd(); // génère cette clé dans ~/.ssh, démarre le sshd
     // Les serveurs RDP de test sont démarrés PAR CHAQUE spec RDP (serveur dédié,
     // cf. rdp.spec/rdp-reconnect.spec) : pas de serveur partagé à coupler.
-    // Sous Windows, tauri-driver s'appuie sur le pilote Edge (msedgedriver),
-    // désigné par MSEDGEDRIVER — la chaîne le télécharge à la version d'Edge
-    // installée.
-    const argsPilote = WINDOWS && process.env.MSEDGEDRIVER ? ["--native-driver", process.env.MSEDGEDRIVER] : [];
-    tauriDriver = spawn(WINDOWS ? "tauri-driver.exe" : "tauri-driver", argsPilote, {
+    // Avec le serveur embarqué, c'est `beforeSession` qui lance l'application.
+    if (EMBARQUE) return;
+    tauriDriver = spawn("tauri-driver", [], {
       stdio: [null, process.stdout, process.stderr],
-      // AVASH_HOME en plus de HOME/XDG_CONFIG_HOME : sous Windows, l'API qui
-      // donne le répertoire de configuration interroge le shell et ignore les
-      // deux autres. Sans cette variable, la suite y écrirait dans les fichiers
-      // RÉELS de l'utilisateur — config SSH et fichier de confiance RDP.
-      env: {
-        ...process.env,
-        HOME: sandbox,
-        AVASH_HOME: sandbox,
-        // La langue suit la locale au premier lancement : les scénarios
-        // affirment des textes français, la webview doit se croire en France
-        // quelle que soit la machine (la locale n'a pas à être installée,
-        // WebKit lit ces variables telles quelles).
-        LANGUAGE: "fr_FR:fr",
-        LANG: "fr_FR.UTF-8",
-        LC_ALL: "fr_FR.UTF-8",
-        // … et quand la locale n'est pas installée sur la machine (chaîne
-        // d'intégration), la webview démarre quand même en anglais : le cœur
-        // impose alors la langue avant le premier script (AVASH_LANGUE).
-        AVASH_LANGUE: "fr",
-        XDG_CONFIG_HOME: join(sandbox, ".config"),
-        // Surtout pas WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ici : sous
-        // pilotage, l'application y pose elle-même le port de débogage que le
-        // pilote Edge attend ; une valeur venue d'ici l'effaçait, et la
-        // session ne s'ouvrait jamais (« DevToolsActivePort file doesn't
-        // exist »). AVASH_LANGUE suffit pour la langue.
-      },
+      env: ENV_APP,
     });
   },
   // Avant CHAQUE fichier de spécifications : on remet le bac à sable dans son
   // état semé. L'application démarre ensuite et lit un état déterministe, quel
   // que soit ce qu'ont fait les fichiers précédents (spécification isolation).
-  beforeSession: () => {
+  beforeSession: async () => {
     seedSandbox();
+    if (EMBARQUE) appEmbarquee = await lancerAppEmbarquee();
+  },
+  afterSession: async () => {
+    if (EMBARQUE) { await arreterAppEmbarquee(appEmbarquee); appEmbarquee = null; }
   },
   // ... et on attend qu'elle soit RÉELLEMENT prête avant le premier geste.
   //

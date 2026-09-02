@@ -288,12 +288,12 @@ sur des mesures de ce qui coûte réellement.
   l'import. Le fuzzing guidé trouve ce que la mutation à graine fixe ne
   produit pas : à garder en chaîne, et à étendre à chaque nouveau parseur.
 - **Scénarios bout en bout sous Windows** — **fait** (02/09/2026) : la même
-  suite WebdriverIO, pilotée par Edge WebDriver sur l'exécutable Windows, joue
-  à chaque poussée tout ce qui ne demande pas de serveur local. Elle a trouvé
-  d'emblée ce qu'aucun test unitaire ne pouvait voir : le durcissement de
-  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` retirait la variable par laquelle le
-  pilote commande WebView2, et l'application n'était pilotable qu'à travers
-  WebKit.
+  suite WebdriverIO joue à chaque poussée, sur l'exécutable Windows, tout ce
+  qui ne demande pas de serveur local. Le chemin classique (tauri-driver puis
+  Edge WebDriver) est mort avec Edge 133, qui ne lance plus une application
+  WebView2 ; l'application embarque donc, pour la suite seulement
+  (`--features webdriver`), un serveur WebDriver que le harnais lance et
+  arrête à chaque fichier. Le même chemin ouvrira macOS, qui n'a aucun pilote.
 - **Régression visuelle** — **fait** (02/09/2026) : quatre captures de
   référence produites par la chaîne, comparées pixel à pixel à chaque passage.
 - **Accessibilité au clavier** — **fait** : boîtes de dialogue (piège de focus,

@@ -299,7 +299,10 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
   la variable est celle qu'Edge WebDriver pose lui-même pour commander
   l'application, et l'on n'y touche pas — la retirer laissait chaque scénario
   Windows mourir sur « DevToolsActivePort file doesn't exist ». Décision pure
-  et testée dans `action_webview2`.
+  et testée dans `action_webview2`. (Edge WebDriver ne lance de toute façon
+  plus une application WebView2 depuis sa version 133 : la suite Windows passe
+  par un serveur WebDriver embarqué, fonctionnalité `webdriver` d'avash-ui,
+  compilée par la suite et jamais par la publication.)
 - **Secrets dans le trousseau du système** (`keyring`), jamais en clair sur le
   disque ; mot de passe RDP passé au sidecar par stdin.
 - **Build release optimisé** : `opt-level = 3`, LTO, `codegen-units = 1`,

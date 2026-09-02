@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -34,7 +34,15 @@ pub fn run() {
         // trousseau chargé automatiquement. Une commande enregistrée est une
         // surface offerte à la webview ; celle qui ne sert pas ne s'enregistre
         // pas. Elles restent publiques dans le crate, donc testées.
-        .plugin(langue::plugin())
+        .plugin(langue::plugin());
+    // Serveur WebDriver embarqué : la suite bout en bout pilote l'application
+    // par lui sous Windows (Edge WebDriver ne lance plus une application
+    // WebView2 depuis sa version 133) et pourra le faire sous macOS. Compilé
+    // seulement avec la fonctionnalité `webdriver`, que la publication ne pose
+    // jamais : voir Cargo.toml.
+    #[cfg(feature = "webdriver")]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::list_hosts,
             commands::open_external,

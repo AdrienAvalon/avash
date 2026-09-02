@@ -4,13 +4,21 @@
 // les options par un clic droit. Tab sautait du champ de recherche aux boutons
 // du bas — la liste entière était hors d'atteinte, et l'on ne pouvait ni éditer,
 // ni déplacer, ni supprimer un hôte sans souris.
+import { EMBARQUE } from "../wdio.conf.js";
+
 describe("Liste d'hôtes — atteignable au clavier", () => {
   const lignes = () => $$("#host-list [data-cle]");
   const focalisee = () => browser.execute(() => document.activeElement?.dataset?.cle ?? null);
   const poserFocus = () =>
     browser.execute(() => document.querySelector("#host-list [data-cle]").focus());
 
-  before(async () => {
+  before(async function () {
+    // Le serveur WebDriver embarqué (chemin Windows) synthétise les touches en
+    // JavaScript : Origine et Fin n'y sont pas traduites, les flèches n'y sont
+    // gérées que sur des boutons radio, et les modificateurs ne s'appliquent
+    // pas aux touches de fonction (Maj+F10). Rien de cela ne concerne
+    // l'application : ce fichier reste joué sous Linux, avec de vraies touches.
+    if (EMBARQUE) this.skip();
     await browser.waitUntil(async () => (await lignes()).length > 0,
       { timeout: 10000, timeoutMsg: "aucune ligne focalisable" });
   });
