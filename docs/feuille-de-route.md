@@ -206,12 +206,15 @@ sur des mesures de ce qui coûte réellement.
 - **Fait depuis (0.4.0)** : la boîte englobante des rectangles sales a laissé
   place à une fusion sélective, mesurée sur le fil — 8,39 Mo → 4,36 Mo pour le
   même parcours, avec davantage de trames livrées.
-- **Reste à faire, identifié** : le panneau SFTP **rouvre une session SSH
-  complète**, chaîne de rebonds comprise, au lieu d'ouvrir un canal sur celle
-  de l'onglet : cinq à sept allers-retours avant le moindre listing.
+- **Fait (0.6.2)** : le panneau SFTP rouvrait une session SSH complète, chaîne
+  de rebonds comprise, au lieu d'ouvrir un canal sur celle de l'onglet : cinq
+  à sept allers-retours avant le moindre listing. Il ouvre son canal sur la
+  session vivante (voir 1.4).
 - **Repères de non-régression.** Les mesures existantes (regroupement, décodage
-  UTF-8) affichent des chiffres mais rien ne casse s'ils se dégradent. Un seuil
-  d'échec les transformerait en garde-fous.
+  UTF-8) affichent des chiffres mais rien ne cassait s'ils se dégradaient. Un
+  test pose désormais un plancher sur le décodeur UTF-8 en flux, large (dix
+  fois sous la mesure en profil de test) pour ne pas rougir sous charge, mais
+  qui verrait une régression algorithmique.
 - **Découpage du paquet front.** 577 Ko en un seul module, surtout xterm.js. Un
   chargement différé du terminal accélérerait le premier affichage — à mesurer
   avant de décider : le gain peut être négligeable pour une application locale.
@@ -247,8 +250,10 @@ sur des mesures de ce qui coûte réellement.
   d'un `ProxyJump` traversait le découpage, et le rebond devenait introuvable
   sans que le message ne le montre. Le fuzzing avec `cargo-fuzz` (nightly,
   couverture guidée) reste possible pour aller plus loin.
-- **Accessibilité au clavier** : les boîtes de dialogue sont traitées ; la liste
-  d'hôtes ne se parcourt pas encore aux flèches.
+- **Accessibilité au clavier** — **fait** : boîtes de dialogue (piège de focus,
+  Échap), et liste d'hôtes parcourue aux flèches, Origine et Fin, avec un seul
+  arrêt de tabulation et un focus qui vaut sélection, le tout sous scénarios
+  bout en bout.
 
 ---
 

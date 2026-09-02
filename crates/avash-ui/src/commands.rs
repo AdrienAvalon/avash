@@ -1820,6 +1820,31 @@ mod tests {
         assert_eq!((liste[0].id, liste[0].label.as_str()), (4, "h"));
     }
 
+    /// Plancher de débit du décodeur UTF-8 en flux : il traverse chaque octet
+    /// de sortie du terminal. La mesure (`benches/utf8.rs`) donne des centaines
+    /// de Mo/s en release ; le plancher est posé dix fois sous ce qu'on observe
+    /// en profil de test, pour ne pas rougir sous charge, mais une régression
+    /// algorithmique — un recollage quadratique, un tampon recopié à chaque
+    /// bloc — le franchirait de loin.
+    #[test]
+    fn le_decodeur_utf8_garde_un_debit_plancher() {
+        let ligne = "\x1b[32mavalon\x1b[m@\x1b[36mcachyos\x1b[m ~ » déjà vu — 100 % ✓\r\n";
+        let source: Vec<u8> = ligne.repeat(5_000).into_bytes();
+        let mut d = Utf8Stream::default();
+        let depart = std::time::Instant::now();
+        let mut sortie = 0usize;
+        for bloc in source.chunks(64) {
+            sortie += d.push(bloc).len();
+        }
+        let secondes = depart.elapsed().as_secs_f64();
+        let debit = source.len() as f64 / secondes / 1e6;
+        assert!(sortie > 0);
+        assert!(
+            debit > 2.0,
+            "décodeur UTF-8 à {debit:.1} Mo/s sur des blocs de 64 octets : régression"
+        );
+    }
+
     #[test]
     fn open_external_refuse_les_schemas_dangereux() {
         // Un lien du terminal ne doit jamais ouvrir file://, javascript:, etc.
