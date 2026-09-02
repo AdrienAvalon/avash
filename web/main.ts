@@ -5,11 +5,12 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
-import { partageClipboard, setPartageClipboard } from "./prefs";
+import { partageClipboard, setPartageClipboard, setSondeAuDemarrage, sondeAuDemarrage } from "./prefs";
 import { filterHosts, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode } from "./filters";
 import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, hostSessionState, renderTagBar, terminalTheme } from "./theme";
@@ -28,6 +29,7 @@ import "./import";
 // Modules à effet : ils branchent leurs écouteurs à l'import et n'exportent
 // rien que le cœur utilise. Sans ces lignes, ils ne sont jamais chargés.
 import "./maj";
+import { enregistrementsOpen } from "./enregistrements";
 import "./panneaux";
 import { appliquerLangue, langue, setLangue, t } from "./i18n";
 
@@ -485,6 +487,8 @@ function newSessionShell(label: string) {
 
   const search = new SearchAddon();
   term.loadAddon(search);
+  const serialiser = new SerializeAddon();
+  term.loadAddon(serialiser);
   // Liens cliquables : ouverts dans le navigateur du systeme, jamais dans la
   // webview (qui a acces a invoke). openUrl passe par l'API Tauri.
   term.loadAddon(
@@ -561,7 +565,7 @@ function newSessionShell(label: string) {
     }, 60);
   });
 
-  const s: Session = { id, alias: label, term, fit, tab, search, closed: false, reconnect: null, sftpPath: "" };
+  const s: Session = { id, alias: label, term, fit, tab, search, serialiser, closed: false, reconnect: null, sftpPath: "" };
   state.sessions.set(id, s);
   state.active = id;
   // N'afficher que ce terminal, et masquer tout bureau RDP : son conteneur est
@@ -941,20 +945,40 @@ function titreSante(cle: string): string {
   return t(s.etat === "inconnu" ? "sante-inconnu" : "sante-injoignable", { raison: s.raison });
 }
 
+const SANTE_KEY = "avash.sante";
+
+/** La dernière sonde survit au relancement : les voyants reviennent tels
+ *  qu'ils étaient, jusqu'à la prochaine sonde. */
+function restaurerSante() {
+  try {
+    const brut = localStorage.getItem(SANTE_KEY);
+    if (!brut) return;
+    for (const [cle, sante] of JSON.parse(brut) as [string, Sante][]) state.sante.set(cle, sante);
+  } catch {
+    /* rien de mémorisé, ou illisible : on repart sans voyants */
+  }
+}
+
 let santeEnCours = false;
-async function verifierSante() {
+/** `silencieux` : au démarrage, pas d'annonce ; les voyants suffisent. */
+async function verifierSante(silencieux = false) {
   if (santeEnCours) return;
   santeEnCours = true;
-  notify(t("sante-en-cours"));
+  if (!silencieux) notify(t("sante-en-cours"));
   try {
     const r = await invoke<{ cle: string; sante: Sante }[]>("hosts_health");
     state.sante.clear();
     for (const { cle, sante } of r) state.sante.set(cle, sante);
+    try {
+      localStorage.setItem(SANTE_KEY, JSON.stringify([...state.sante]));
+    } catch {
+      /* stockage indisponible : les voyants vivent le temps de la session */
+    }
     renderHosts();
     const up = r.filter((x) => x.sante.etat === "joignable").length;
-    notify(t("sante-bilan", { up, down: r.length - up }), up === r.length ? "succes" : "info");
+    if (!silencieux) notify(t("sante-bilan", { up, down: r.length - up }), up === r.length ? "succes" : "info");
   } catch (e) {
-    notifyErreur(t("sante-impossible", { e: String(e) }));
+    if (!silencieux) notifyErreur(t("sante-impossible", { e: String(e) }));
   } finally {
     santeEnCours = false;
   }
@@ -977,10 +1001,25 @@ function commandesPalette(): EntreePalette[] {
       },
     },
     {
+      nom: t("palette-enregistrements"),
+      detail: t("palette-enregistrements-detail"),
+      icone: "film",
+      ouvrir: () => void enregistrementsOpen(),
+    },
+    {
       nom: t("palette-sante"),
       detail: t("palette-sante-detail"),
       icone: "refresh",
       ouvrir: () => void verifierSante(),
+    },
+    {
+      nom: t(sondeAuDemarrage() ? "palette-sante-demarrage-off" : "palette-sante-demarrage-on"),
+      detail: t("palette-sante-demarrage-detail"),
+      icone: "refresh",
+      ouvrir: () => {
+        setSondeAuDemarrage(!sondeAuDemarrage());
+        notify(t(sondeAuDemarrage() ? "sante-demarrage-active" : "sante-demarrage-coupe"), "succes");
+      },
     },
     {
       nom: t(anglais ? "palette-langue-fr" : "palette-langue-en"),
@@ -1097,6 +1136,9 @@ $("theme-toggle").addEventListener("click", cycleTheme);
 applyTheme();
 void setupWindowControls();
 
-void loadHosts();
+restaurerSante();
+void loadHosts().then(() => {
+  if (sondeAuDemarrage()) void verifierSante(true);
+});
 // Prechargement : au moment du clic, la police est deja prete.
 void ensureFontLoaded();

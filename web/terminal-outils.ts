@@ -111,7 +111,10 @@ ctxMenu().addEventListener("click", (e) => {
 
 async function demarrerEnregistrement(s: Session) {
   try {
-    const chemin = await invoke<string>("enregistrement_demarrer", { id: s.id, cols: s.term.cols, rows: s.term.rows });
+    // L'écran tel qu'il est : sans lui, un enregistrement lancé en cours de
+    // session rejouait à partir d'un écran noir.
+    const etatInitial = s.serialiser.serialize();
+    const chemin = await invoke<string>("enregistrement_demarrer", { id: s.id, cols: s.term.cols, rows: s.term.rows, etatInitial });
     s.tab.classList.add("rec");
     notify(t("enregistrement-demarre", { chemin }), "succes");
   } catch (e) {

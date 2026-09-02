@@ -32,5 +32,10 @@ describe("Santé des hôtes", () => {
     });
     const mort = await dot("ssh:web-1");
     expect(mort.titre).toMatch(/^Injoignable : /);
+
+    // La sonde survit au relancement : elle est mémorisée sur la machine.
+    const memorise = await browser.execute(() => localStorage.getItem("avash.sante"));
+    expect(memorise).toContain("ssh:test-ssh");
+    expect(memorise).toContain('"joignable"');
   });
 });

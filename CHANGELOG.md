@@ -7,6 +7,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Finitions sur ce qui venait d'arriver.** L'enregistrement de session
+  s'ouvre sur l'écran tel qu'il est au moment de démarrer, et non sur du
+  noir ; deux enregistrements dans la même seconde ne se marchent plus
+  dessus ; la palette liste les enregistrements, du plus récent au plus
+  ancien, avec le dossier à portée de clic. La santé des hôtes survit au
+  relancement et peut se sonder au démarrage, sur option, sans annonce.
+  L'import reprend les bureaux RDP de MobaXterm et convertit les clés
+  `.ppk` avec `puttygen` quand il est présent, au lieu de les laisser de
+  côté.
 - **La force des tests est mesurée par mutation.** Un premier passage de
   `cargo mutants` sur quatre modules du cœur a laissé survivre treize mutants,
   tous dans le calendrier de l'enregistreur, vérifié en forme mais pas en

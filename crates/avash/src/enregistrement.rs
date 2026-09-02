@@ -123,7 +123,7 @@ impl Enregistreur {
             use std::os::unix::fs::PermissionsExt as _;
             let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
         }
-        let chemin = dir.join(nom_de_fichier(libelle, &horodatage_maintenant()));
+        let base = nom_de_fichier(libelle, &horodatage_maintenant());
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -131,9 +131,30 @@ impl Enregistreur {
             use std::os::unix::fs::OpenOptionsExt as _;
             options.mode(0o600);
         }
-        let fichier = options
-            .open(&chemin)
-            .with_context(|| format!("création de {}", chemin.display()))?;
+        // Deux enregistrements de la même session dans la même seconde — arrêter
+        // puis redémarrer aussitôt — portent le même nom : le second est suffixé
+        // plutôt que refusé. `create_new` garantit qu'on n'écrase jamais.
+        let (chemin, fichier) = (1u32..)
+            .map(|n| {
+                if n == 1 {
+                    dir.join(&base)
+                } else {
+                    dir.join(base.replace(".cast", &format!("-{n}.cast")))
+                }
+            })
+            .take(1000)
+            .find_map(|c| match options.open(&c) {
+                Ok(f) => Some(Ok((c, f))),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(e) => Some(Err(
+                    anyhow::Error::new(e).context(format!("création de {}", c.display()))
+                )),
+            })
+            .unwrap_or_else(|| {
+                Err(anyhow::anyhow!(
+                    "mille enregistrements dans la même seconde"
+                ))
+            })?;
         let mut moi = Self {
             fichier: std::io::BufWriter::new(fichier),
             chemin,
@@ -202,6 +223,55 @@ impl Enregistreur {
 /// Relecture minimale d'un fichier asciicast v2 : l'en-tête et les événements.
 /// Sert aux tests et à un futur lecteur intégré ; tolère une dernière ligne
 /// tronquée, comme le ferait `asciinema play`.
+/// Un enregistrement sur le disque, pour la liste.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct Info {
+    pub chemin: PathBuf,
+    pub nom: String,
+    pub octets: u64,
+    /// Dernière modification, en secondes depuis l'époque.
+    pub modifie: u64,
+}
+
+/// Les enregistrements d'un répertoire, du plus récent au plus ancien. Un
+/// répertoire absent donne une liste vide, pas une erreur : personne n'a
+/// encore enregistré.
+#[must_use]
+pub fn lister(dir: &Path) -> Vec<Info> {
+    let Ok(entrees) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    // Le tri se fait à la précision du système de fichiers, pas à la seconde :
+    // deux enregistrements arrêtés puis relancés dans la même seconde doivent
+    // sortir dans l'ordre où ils ont été écrits.
+    let mut v: Vec<(std::time::Duration, Info)> = entrees
+        .flatten()
+        .filter_map(|e| {
+            let chemin = e.path();
+            if chemin.extension().and_then(|x| x.to_str()) != Some("cast") {
+                return None;
+            }
+            let meta = e.metadata().ok()?;
+            let precis = meta
+                .modified()
+                .ok()
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .unwrap_or_default();
+            Some((
+                precis,
+                Info {
+                    nom: chemin.file_name()?.to_str()?.to_string(),
+                    chemin,
+                    octets: meta.len(),
+                    modifie: precis.as_secs(),
+                },
+            ))
+        })
+        .collect();
+    v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.nom.cmp(&a.1.nom)));
+    v.into_iter().map(|(_, i)| i).collect()
+}
+
 /// Un événement relu : instant en secondes, type (`o` ou `r`), donnée.
 pub type Evenement = (f64, String, String);
 
@@ -359,6 +429,60 @@ mod tests {
                 0o700
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Arrêter puis redémarrer dans la même seconde donnait deux fois le même
+    /// nom, et le second démarrage échouait « fichier existant ». Trouvé par le
+    /// scénario bout en bout, qui enchaîne exactement cela.
+    #[test]
+    fn deux_enregistrements_dans_la_meme_seconde_ne_se_marchent_pas_dessus() {
+        let dir = bac("collision");
+        let a = Enregistreur::demarrer_dans(&dir, "x", 80, 24).unwrap();
+        let b = Enregistreur::demarrer_dans(&dir, "x", 80, 24).unwrap();
+        let c = Enregistreur::demarrer_dans(&dir, "x", 80, 24).unwrap();
+        assert_ne!(a.chemin(), b.chemin());
+        assert_ne!(b.chemin(), c.chemin());
+        let nb = b
+            .chemin()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let nc = c
+            .chemin()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        // Même seconde ou non, les suffixes sont ceux attendus dès qu'il y a collision.
+        if a.chemin().file_name() != b.chemin().file_name() && nb.ends_with("-2.cast") {
+            assert!(nc.ends_with("-3.cast"), "{nc}");
+        }
+        assert_eq!(lister(&dir).len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn la_liste_ne_retient_que_les_cast_du_plus_recent_au_plus_ancien() {
+        let dir = bac("liste");
+        assert!(lister(&dir).is_empty(), "répertoire absent : liste vide");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ancien.cast"), "{}\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), "pas un enregistrement").unwrap();
+        let vieux = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::open(dir.join("ancien.cast"))
+            .unwrap()
+            .set_modified(vieux)
+            .unwrap();
+        std::fs::write(dir.join("recent.cast"), "{}\n[0.1,\"o\",\"x\"]\n").unwrap();
+        let l = lister(&dir);
+        let noms: Vec<&str> = l.iter().map(|i| i.nom.as_str()).collect();
+        assert_eq!(noms, vec!["recent.cast", "ancien.cast"]);
+        assert!(l[0].octets > l[1].octets);
+        assert!(l[0].modifie > l[1].modifie);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

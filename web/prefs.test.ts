@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { CLIP_KEY, partageClipboard, setPartageClipboard } from "./prefs";
+import { CLIP_KEY, SANTE_DEMARRAGE_KEY, partageClipboard, setPartageClipboard, sondeAuDemarrage, setSondeAuDemarrage } from "./prefs";
 
 // Node 26 déclare un `localStorage` global inerte que jsdom ne remplace pas :
 // l'environnement DOM ne suffit donc pas ici. On installe un stockage conforme
@@ -41,5 +41,26 @@ describe("partage du presse-papiers avec les bureaux RDP", () => {
   it("ne tient une valeur inattendue que pour un refus explicite", () => {
     stockage.setItem(CLIP_KEY, "peut-être");
     expect(partageClipboard()).toBe(true);
+  });
+});
+
+describe("sonde de santé au démarrage", () => {
+  beforeEach(() => localStorage.removeItem(SANTE_DEMARRAGE_KEY));
+
+  it("est coupée quand rien n'a jamais été réglé : une sonde n'est pas anodine", () => {
+    expect(sondeAuDemarrage()).toBe(false);
+  });
+
+  it("retient l'activation, puis le retour au repos", () => {
+    setSondeAuDemarrage(true);
+    expect(sondeAuDemarrage()).toBe(true);
+    expect(localStorage.getItem(SANTE_DEMARRAGE_KEY)).toBe("1");
+    setSondeAuDemarrage(false);
+    expect(sondeAuDemarrage()).toBe(false);
+  });
+
+  it("ne tient une valeur inattendue que pour un repos", () => {
+    localStorage.setItem(SANTE_DEMARRAGE_KEY, "oui");
+    expect(sondeAuDemarrage()).toBe(false);
   });
 });

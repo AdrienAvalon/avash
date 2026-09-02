@@ -19,10 +19,10 @@
 //! ne les lit pas — et le candidat le dit.
 
 use crate::SshHost;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// D'où vient une session importable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Source {
     Putty,
@@ -30,21 +30,41 @@ pub enum Source {
 }
 
 /// Une session lue chez un autre outil, prête à être proposée.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionImportee {
     pub source: Source,
     /// Le nom tel que l'outil d'origine l'affiche.
     pub nom_origine: String,
     pub host: SshHost,
+    /// Clé `PuTTY` (`.ppk`) attachée à la session : convertible avec `puttygen`
+    /// au moment d'écrire, si l'outil est présent.
+    #[serde(default)]
+    pub ppk: Option<String>,
     /// Ce qui n'a pas pu être repris (clé `.ppk`, mandataire…), en clair.
+    #[serde(default)]
     pub remarques: Vec<String>,
+}
+
+/// Un bureau RDP lu chez un autre outil (`MobaXterm`), prêt à être proposé.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BureauImporte {
+    pub source: Source,
+    pub nom_origine: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    #[serde(default)]
+    pub folder: String,
 }
 
 /// Bilan d'une lecture : les sessions reprises, et ce qui a été laissé.
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct Lecture {
     pub sessions: Vec<SessionImportee>,
-    /// Sessions d'un autre protocole (RDP, telnet, série…), non reprises.
+    /// Bureaux RDP (`MobaXterm` `#91`).
+    pub bureaux: Vec<BureauImporte>,
+    /// Sessions d'un autre protocole (telnet, série…), non reprises.
     pub ignorees: usize,
 }
 
@@ -84,18 +104,76 @@ pub fn alias_libre(base: &str, pris: &[String]) -> String {
         .expect("quatre milliards de suffixes ne sont jamais tous pris")
 }
 
-fn clé_reprise(chemin: &str, remarques: &mut Vec<String>) -> Option<String> {
+/// Rend la clé à écrire dans `IdentityFile`, ou `None` si c'est une `.ppk` :
+/// celle-ci est rendue à part, pour conversion.
+fn clé_reprise(
+    chemin: &str,
+    remarques: &mut Vec<String>,
+    ppk: &mut Option<String>,
+) -> Option<String> {
     let chemin = chemin.trim();
     if chemin.is_empty() {
         return None;
     }
     if chemin.to_ascii_lowercase().ends_with(".ppk") {
-        remarques.push(format!(
-            "Clé PuTTY non reprise ({chemin}) : OpenSSH ne lit pas le format .ppk, convertissez-la avec puttygen."
-        ));
+        if puttygen_disponible() {
+            remarques.push(format!(
+                "Clé PuTTY ({chemin}) : sera convertie au format OpenSSH avec puttygen à l'import."
+            ));
+        } else {
+            remarques.push(format!(
+                "Clé PuTTY non reprise ({chemin}) : OpenSSH ne lit pas le format .ppk ; installez puttygen pour la convertir à l'import."
+            ));
+        }
+        *ppk = Some(chemin.to_string());
         return None;
     }
     Some(chemin.to_string())
+}
+
+/// `puttygen` est-il sur le chemin ? Il convertit une `.ppk` en clé OpenSSH.
+#[must_use]
+pub fn puttygen_disponible() -> bool {
+    std::process::Command::new("puttygen")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Convertit une clé `PuTTY` en clé privée OpenSSH, écrite en 0600 dans `dir`
+/// sous le nom de la `.ppk` sans son extension (`cle.ppk` → `cle`). Refuse
+/// d'écraser une clé existante. Une `.ppk` protégée par phrase de passe ne se
+/// convertit pas ainsi : `puttygen` la demanderait, et rien ne peut répondre.
+pub fn convertir_ppk(ppk: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
+    use anyhow::Context as _;
+    let tige = ppk
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .context("nom de clé illisible")?;
+    std::fs::create_dir_all(dir).with_context(|| format!("création de {}", dir.display()))?;
+    let dest = dir.join(tige);
+    if dest.exists() {
+        anyhow::bail!("{} existe déjà : la clé n'est pas écrasée", dest.display());
+    }
+    let sortie = std::process::Command::new("puttygen")
+        .arg(ppk)
+        .args(["-O", "private-openssh", "-o"])
+        .arg(&dest)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .context("lancement de puttygen")?;
+    if !sortie.status.success() {
+        anyhow::bail!(
+            "puttygen a refusé {} : {}",
+            ppk.display(),
+            String::from_utf8_lossy(&sortie.stderr).trim()
+        );
+    }
+    crate::restreindre_au_proprietaire(&dest);
+    Ok(dest)
 }
 
 // ---------- PuTTY ----------
@@ -171,7 +249,8 @@ fn session_putty_depuis<'a>(
     if mandataire.is_some_and(|m| m != 0) {
         remarques.push("Mandataire PuTTY non repris : à traduire en ProxyJump à la main.".into());
     }
-    let identity_file = cle.and_then(|c| clé_reprise(&c, &mut remarques));
+    let mut ppk = None;
+    let identity_file = cle.and_then(|c| clé_reprise(&c, &mut remarques, &mut ppk));
     Some(SessionImportee {
         source: Source::Putty,
         nom_origine: nom.to_string(),
@@ -183,6 +262,7 @@ fn session_putty_depuis<'a>(
             identity_file,
             ..SshHost::default()
         },
+        ppk,
         remarques,
     })
 }
@@ -323,22 +403,45 @@ pub fn parse_mobaxterm_ini(contenu: &str) -> Lecture {
                 let Some((type_session, champs)) = reste.split_once('#') else {
                     continue;
                 };
-                if type_session != "109" {
-                    lecture.ignorees += 1;
-                    continue;
-                }
                 let champs: Vec<&str> = champs.split('#').next().unwrap_or("").split('%').collect();
                 let hostname = champs.get(1).map(|s| s.trim()).unwrap_or_default();
                 if hostname.is_empty() {
                     lecture.ignorees += 1;
                     continue;
                 }
+                let nom = nom.trim();
+                if type_session == "91" {
+                    // Bureau RDP : hôte, port, utilisateur aux mêmes places.
+                    lecture.bureaux.push(BureauImporte {
+                        source: Source::MobaXterm,
+                        nom_origine: nom.to_string(),
+                        name: nom.to_string(),
+                        host: hostname.to_string(),
+                        port: champs
+                            .get(2)
+                            .and_then(|p| p.trim().parse::<u16>().ok())
+                            .filter(|p| *p != 0)
+                            .unwrap_or(3389),
+                        user: champs
+                            .get(3)
+                            .map(|s| s.trim())
+                            .unwrap_or_default()
+                            .to_string(),
+                        folder: dossier.clone(),
+                    });
+                    continue;
+                }
+                if type_session != "109" {
+                    lecture.ignorees += 1;
+                    continue;
+                }
                 let mut remarques = Vec::new();
+                let mut ppk = None;
                 let identity_file = champs
                     .get(14)
                     .filter(|s| !s.trim().is_empty())
                     .map(|s| chemin_moba(s))
-                    .and_then(|c| clé_reprise(&c, &mut remarques));
+                    .and_then(|c| clé_reprise(&c, &mut remarques, &mut ppk));
                 if champs
                     .get(19)
                     .is_some_and(|p| p.trim() != "0" && !p.trim().is_empty())
@@ -348,7 +451,6 @@ pub fn parse_mobaxterm_ini(contenu: &str) -> Lecture {
                             .into(),
                     );
                 }
-                let nom = nom.trim();
                 lecture.sessions.push(SessionImportee {
                     source: Source::MobaXterm,
                     nom_origine: nom.to_string(),
@@ -368,6 +470,7 @@ pub fn parse_mobaxterm_ini(contenu: &str) -> Lecture {
                         folder: dossier.clone(),
                         ..SshHost::default()
                     },
+                    ppk,
                     remarques,
                 });
             }
@@ -455,9 +558,16 @@ mod tests {
         assert_eq!(s.host.user.as_deref(), Some("adrien"), "user@hôte de PuTTY");
         assert_eq!(s.host.hostname.as_deref(), Some("bastion.exemple.net"));
         assert!(s.host.identity_file.is_none());
+        assert_eq!(
+            s.ppk.as_deref(),
+            Some("C:\\Users\\a\\cle.ppk"),
+            "la ppk est gardée pour conversion"
+        );
         assert_eq!(s.remarques.len(), 2, "{:?}", s.remarques);
         assert!(
-            s.remarques.iter().any(|r| r.contains(".ppk")),
+            s.remarques
+                .iter()
+                .any(|r| r.contains(".ppk") || r.contains("puttygen")),
             "{:?}",
             s.remarques
         );
@@ -506,7 +616,23 @@ mod tests {
     fn un_ini_mobaxterm_donne_les_sessions_ssh_avec_leur_dossier() {
         let l = parse_mobaxterm_ini(MOBA);
         assert_eq!(l.sessions.len(), 2, "{l:?}");
-        assert_eq!(l.ignorees, 1, "le bureau RDP est compté");
+        assert_eq!(l.ignorees, 0, "{l:?}");
+        assert_eq!(
+            l.bureaux.len(),
+            1,
+            "le bureau RDP est repris, pas seulement compté"
+        );
+        let b = &l.bureaux[0];
+        assert_eq!(
+            (
+                b.name.as_str(),
+                b.host.as_str(),
+                b.port,
+                b.user.as_str(),
+                b.folder.as_str()
+            ),
+            ("Bureau", "10.0.0.9", 3389, "adrien", "")
+        );
         let d = &l.sessions[0];
         assert_eq!(d.source, Source::MobaXterm);
         assert_eq!(
@@ -529,6 +655,50 @@ mod tests {
             w.host.identity_file.as_deref(),
             Some("C:\\Users\\a\\.ssh\\id_ed25519")
         );
+    }
+
+    /// Conversion réelle d'une clé `PuTTY`, quand `puttygen` est là : la clé
+    /// OpenSSH naît en 0600 sous le nom de la `.ppk`, et n'écrase jamais.
+    #[cfg(unix)]
+    #[test]
+    fn une_ppk_se_convertit_avec_puttygen_quand_il_est_present() {
+        if !puttygen_disponible() {
+            eprintln!("puttygen absent : conversion non testée ici");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("avash-ppk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ppk = dir.join("cle-test.ppk");
+        // Sans `--new-passphrase`, puttygen demande une phrase de passe au
+        // terminal ; un fichier vide vaut « aucune ».
+        let gen = std::process::Command::new("puttygen")
+            .args(["-t", "ed25519", "-q", "--new-passphrase", "/dev/null", "-o"])
+            .arg(&ppk)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(gen.success());
+        let dest = convertir_ppk(&ppk, &dir.join("ssh")).unwrap();
+        assert_eq!(dest.file_name().unwrap(), "cle-test");
+        let contenu = std::fs::read_to_string(&dest).unwrap();
+        assert!(
+            contenu.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"),
+            "{contenu}"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let e = convertir_ppk(&ppk, &dir.join("ssh"))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("existe déjà"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

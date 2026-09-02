@@ -33,3 +33,23 @@ export function setPartageClipboard(actif: boolean): void {
     /* stockage indisponible : le réglage vaut pour la session en cours */
   }
 }
+
+/** Sonder la santé des hôtes au démarrage : coupé par défaut — une sonde
+ *  ouvre une connexion vers chaque serveur, ce n'est pas anodin partout. */
+export const SANTE_DEMARRAGE_KEY = "avash.sante.demarrage";
+
+export function sondeAuDemarrage(): boolean {
+  try {
+    return localStorage.getItem(SANTE_DEMARRAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setSondeAuDemarrage(actif: boolean): void {
+  try {
+    localStorage.setItem(SANTE_DEMARRAGE_KEY, actif ? "1" : "0");
+  } catch {
+    /* stockage indisponible : le choix vaut pour la session */
+  }
+}

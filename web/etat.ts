@@ -3,6 +3,7 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { type Host, type OsInfo } from "./filters";
 
 // ---------- Systeme distant par hote ----------
@@ -32,6 +33,8 @@ export type Session = {
   fit: FitAddon;
   tab: HTMLElement;
   search: SearchAddon;
+  /** Sérialise l'écran (séquences comprises) : état initial d'un enregistrement. */
+  serialiser: SerializeAddon;
   /** Session terminee cote serveur : le clavier ne part plus au shell. */
   closed: boolean;
   /** Rouvre la meme cible dans ce meme onglet (Entree apres deconnexion). */
