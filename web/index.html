@@ -415,6 +415,7 @@
     .tab .state.live { background: var(--ok); box-shadow: 0 0 6px rgba(74,210,149,.6); }
     .tab .state.closed { background: var(--text-faint); }
     .tab.dead .label { opacity: .55; text-decoration: line-through; }
+    .tab.rec .label::before { content: "●"; color: var(--err); margin-right: 5px; font-size: 9px; vertical-align: 1px; animation: pulse 1.4s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
     .tab .close {
       opacity: 0; font-size: 12px; line-height: 1; width: 18px; height: 18px;
@@ -920,6 +921,9 @@
           <div class="ctx-item" data-act="search" data-i18n="rechercher">Rechercher<span class="ctx-key" data-i18n="ctrl-maj-f">Ctrl+Maj+F</span></div>
           <div class="ctx-item" data-act="selectall" data-i18n="tout-selectionner">Tout sélectionner</div>
           <div class="ctx-item" data-act="clear" data-i18n="effacer-l-ecran">Effacer l'écran</div>
+          <div class="ctx-sep"></div>
+          <div class="ctx-item" data-act="record" data-i18n="enregistrer-la-session">Enregistrer la session (asciinema)</div>
+          <div class="ctx-item" data-act="record-stop" data-i18n="arreter-l-enregistrement" hidden>Arrêter l'enregistrement</div>
         </div>
         <aside class="sftp-panel" id="sftp-panel">
           <div class="sftp-resize" id="sftp-resize"></div>

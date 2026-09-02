@@ -7,6 +7,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Enregistrement de session au format asciicast.** Depuis le menu
+  contextuel du terminal, une session s'enregistre dans un fichier asciicast
+  v2 — celui d'`asciinema`, rejouable avec `asciinema play` — sous le
+  répertoire de configuration, en 0600. Seule la sortie est enregistrée, avec
+  les redimensionnements ; jamais les frappes : un mot de passe tapé à
+  l'aveugle n'y figure pas. Le voyant rouge de l'onglet dit que ça tourne ;
+  fermer l'onglet ferme le fichier.
 - **L'interface parle anglais.** Toutes les chaînes — la page comme les
   textes produits par le code, environ trois cents — sont extraites dans un
   module de traduction ; le français reste la source et la langue par défaut,

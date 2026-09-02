@@ -69,7 +69,13 @@ pub struct SessionHandle {
     pub ouvrir_sftp: OuvreurSftp,
     /// Libelle affiche : l'alias, ou `user@hote` pour une saisie directe.
     pub label: String,
+    /// Enregistrement asciicast en cours, partagé avec le pump qui y écrit
+    /// chaque sortie. `None` hors enregistrement.
+    pub enregistreur: Enregistrement,
 }
+
+/// L'enregistreur d'un onglet, tenu par le pump et par les commandes.
+pub type Enregistrement = std::sync::Arc<Mutex<Option<avash::enregistrement::Enregistreur>>>;
 
 /// Ou et comment se connecter.
 ///
@@ -444,6 +450,82 @@ fn ouvreur_sftp(session: &SessionPartagee) -> OuvreurSftp {
     })
 }
 
+/// Relaie la sortie du terminal vers le front, regroupée, et vers
+/// l'enregistrement s'il y en a un.
+///
+/// Les blocs arrivant du canal SSH sont souvent minuscules — 1, 4, 38,
+/// 101 octets — et chacun coûterait un message JSON, un aller-retour IPC
+/// et une écriture xterm. On les regroupe donc sur une courte fenêtre :
+/// le débit s'effondre en nombre de messages sans que la latence devienne
+/// perceptible (`COALESCE_MS` reste sous la durée d'une image à 60 Hz).
+async fn relayer_sortie(
+    app2: &AppHandle,
+    sid: u64,
+    mut out_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    enregistreur: Enregistrement,
+) {
+    const COALESCE_MS: u64 = 8;
+    const FLUSH_BYTES: usize = 16 * 1024;
+    let mut decoder = Utf8Stream::default();
+    let mut buffer = String::new();
+    let mut deadline: Option<tokio::time::Instant> = None;
+
+    loop {
+        // Tant que le tampon attend, on borne l'attente a l'echeance :
+        // sans cela un octet isole resterait bloque jusqu'au suivant.
+        let recu = match deadline {
+            Some(d) => {
+                if let Ok(v) = tokio::time::timeout_at(d, out_rx.recv()).await {
+                    v
+                } else {
+                    if !buffer.is_empty() {
+                        let _ = app2.emit(
+                            "pty-output",
+                            serde_json::json!({ "id": sid, "data": buffer }),
+                        );
+                        buffer.clear();
+                    }
+                    deadline = None;
+                    continue;
+                }
+            }
+            None => out_rx.recv().await,
+        };
+
+        let Some(bytes) = recu else { break };
+        let text = decoder.push(&bytes);
+        if text.is_empty() {
+            continue; // sequence UTF-8 encore incomplete
+        }
+        // L'enregistrement reçoit le texte tel qu'il arrive, avant le
+        // regroupement : les temps du fichier sont ceux du serveur.
+        if let Some(e) = enregistreur.lock().unwrap().as_mut() {
+            let _ = e.sortie(&text);
+        }
+        buffer.push_str(&text);
+
+        // Gros volume : inutile d'attendre, on ecoule tout de suite.
+        if buffer.len() >= FLUSH_BYTES {
+            let _ = app2.emit(
+                "pty-output",
+                serde_json::json!({ "id": sid, "data": buffer }),
+            );
+            buffer.clear();
+            deadline = None;
+        } else if deadline.is_none() {
+            deadline =
+                Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(COALESCE_MS));
+        }
+    }
+    // Ne pas perdre ce qui restait au moment de la fermeture.
+    if !buffer.is_empty() {
+        let _ = app2.emit(
+            "pty-output",
+            serde_json::json!({ "id": sid, "data": buffer }),
+        );
+    }
+}
+
 /// Ouvre une session PTY et démarre le pump out → événements Tauri `pty-output`.
 async fn open_on_target(
     app: AppHandle,
@@ -453,10 +535,6 @@ async fn open_on_target(
     cols: u32,
     rows: u32,
 ) -> Result<String, String> {
-    // Regroupement des sorties : voir plus bas, dans la boucle du pump.
-    const COALESCE_MS: u64 = 8;
-    const FLUSH_BYTES: usize = 16 * 1024;
-
     state.en_cours.lock().unwrap().insert(id);
     let (session, pty) = match etablir(&target, cols, rows).await {
         Ok(v) => v,
@@ -476,7 +554,7 @@ async fn open_on_target(
 
     let input = pty.in_tx.clone();
     let resize = pty.resize_tx.clone();
-    let mut out_rx = pty.out_rx;
+    let out_rx = pty.out_rx;
     let sid = id;
 
     // ⚠️ ENREGISTRER AVANT DE LANCER LE PUMP.
@@ -502,6 +580,7 @@ async fn open_on_target(
     // établie suffit à tout ce qui suit, panneau SFTP inclus.
     drop(target);
     let session: SessionPartagee = std::sync::Arc::new(tokio::sync::Mutex::new(session));
+    let enregistreur: Enregistrement = std::sync::Arc::new(Mutex::new(None));
     enregistrer_session(
         state,
         id,
@@ -512,6 +591,7 @@ async fn open_on_target(
             sftp: Mutex::new(None),
             ouvrir_sftp: ouvreur_sftp(&session),
             label: label.clone(),
+            enregistreur: enregistreur.clone(),
         },
     )?;
 
@@ -534,66 +614,9 @@ async fn open_on_target(
         // sur un hôte chargé. Rien n'était perdu (le canal tamponne), mais le
         // geste le plus fréquent de l'application paraissait lent.
         // La boucle ne touche pas à `session` : les deux emprunts cohabitent.
-        let relais = async {
-            let mut decoder = Utf8Stream::default();
-            let mut buffer = String::new();
-            let mut deadline: Option<tokio::time::Instant> = None;
-
-            loop {
-                // Tant que le tampon attend, on borne l'attente a l'echeance :
-                // sans cela un octet isole resterait bloque jusqu'au suivant.
-                let recu = match deadline {
-                    Some(d) => {
-                        if let Ok(v) = tokio::time::timeout_at(d, out_rx.recv()).await {
-                            v
-                        } else {
-                            if !buffer.is_empty() {
-                                let _ = app2.emit(
-                                    "pty-output",
-                                    serde_json::json!({ "id": sid, "data": buffer }),
-                                );
-                                buffer.clear();
-                            }
-                            deadline = None;
-                            continue;
-                        }
-                    }
-                    None => out_rx.recv().await,
-                };
-
-                let Some(bytes) = recu else { break };
-                let text = decoder.push(&bytes);
-                if text.is_empty() {
-                    continue; // sequence UTF-8 encore incomplete
-                }
-                buffer.push_str(&text);
-
-                // Gros volume : inutile d'attendre, on ecoule tout de suite.
-                if buffer.len() >= FLUSH_BYTES {
-                    let _ = app2.emit(
-                        "pty-output",
-                        serde_json::json!({ "id": sid, "data": buffer }),
-                    );
-                    buffer.clear();
-                    deadline = None;
-                } else if deadline.is_none() {
-                    deadline = Some(
-                        tokio::time::Instant::now()
-                            + tokio::time::Duration::from_millis(COALESCE_MS),
-                    );
-                }
-            }
-            // Ne pas perdre ce qui restait au moment de la fermeture.
-            if !buffer.is_empty() {
-                let _ = app2.emit(
-                    "pty-output",
-                    serde_json::json!({ "id": sid, "data": buffer }),
-                );
-            }
-        };
         tokio::join!(
             probe_and_emit_os(&app2, sid, label_for_event, &session),
-            relais
+            relayer_sortie(&app2, sid, out_rx, enregistreur)
         );
         // La session distante s'est terminee (exit, coupure, kill). On ne
         // l'annonce que si cet id ne porte pas deja une session plus recente
@@ -699,7 +722,82 @@ pub async fn pty_resize(
     };
     let resize = resize.ok_or_else(|| format!("Session {id} inconnue"))?;
     let _ = resize.send((cols, rows)).await;
+    if let Some(e) = enregistreur_de(&state, id) {
+        if let Some(enr) = e.lock().unwrap().as_mut() {
+            let _ = enr.redimension(cols, rows);
+        }
+    }
     Ok(())
+}
+
+// ---------- Enregistrement de session (asciicast) ----------
+
+fn enregistreur_de(state: &tauri::State<'_, SessionStore>, id: u64) -> Option<Enregistrement> {
+    state
+        .inner
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|h| h.enregistreur.clone())
+}
+
+/// Démarre l'enregistrement de la session dans un fichier asciicast v2, et
+/// rend son chemin. Seule la sortie est enregistrée, jamais les frappes.
+#[tauri::command]
+pub fn enregistrement_demarrer(
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+    cols: u32,
+    rows: u32,
+) -> Result<String, String> {
+    let (enregistreur, label) = {
+        let store = state.inner.lock().unwrap();
+        let h = store
+            .get(&id)
+            .ok_or_else(|| format!("Session {id} inconnue"))?;
+        (h.enregistreur.clone(), h.label.clone())
+    };
+    let mut slot = enregistreur.lock().unwrap();
+    if let Some(en_cours) = slot.as_ref() {
+        return Ok(en_cours.chemin().display().to_string());
+    }
+    let e = avash::enregistrement::Enregistreur::demarrer(&label, cols, rows)
+        .map_err(|e| format!("{e:#}"))?;
+    let chemin = e.chemin().display().to_string();
+    *slot = Some(e);
+    Ok(chemin)
+}
+
+/// Arrête l'enregistrement et rend le chemin du fichier ; `None` s'il n'y en
+/// avait pas.
+#[tauri::command]
+pub fn enregistrement_arreter(
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+) -> Result<Option<String>, String> {
+    let Some(enregistreur) = enregistreur_de(&state, id) else {
+        return Err(format!("Session {id} inconnue"));
+    };
+    let pris = enregistreur.lock().unwrap().take();
+    match pris {
+        Some(e) => e
+            .arreter()
+            .map(|p| Some(p.display().to_string()))
+            .map_err(|e| format!("{e:#}")),
+        None => Ok(None),
+    }
+}
+
+/// Le chemin de l'enregistrement en cours, s'il y en a un.
+#[must_use]
+#[tauri::command]
+pub fn enregistrement_en_cours(state: tauri::State<'_, SessionStore>, id: u64) -> Option<String> {
+    enregistreur_de(&state, id).and_then(|e| {
+        e.lock()
+            .unwrap()
+            .as_ref()
+            .map(|x| x.chemin().display().to_string())
+    })
 }
 
 /// Ferme une session (fermeture d'onglet). Coupe aussi la session SFTP liée.
@@ -1709,7 +1807,61 @@ mod tests {
                 Box::pin(async { Err("pas de transport dans ce test".to_owned()) })
             }),
             label: "h".into(),
+            enregistreur: std::sync::Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Démarrer, écrire par le chemin du pump, arrêter : le fichier existe,
+    /// se relit, et un second démarrage pendant l'enregistrement rend le même
+    /// chemin au lieu d'en ouvrir un autre.
+    #[tokio::test]
+    async fn un_enregistrement_se_demarre_recoit_la_sortie_et_s_arrete() {
+        let _g = with_ssh_config("");
+        let app = app_de_test();
+        let state = app.state::<SessionStore>();
+        enregistrer_session(&state, 7, poignee(1)).unwrap();
+        assert!(enregistrement_en_cours(app.state::<SessionStore>(), 7).is_none());
+        let chemin = enregistrement_demarrer(app.state::<SessionStore>(), 7, 80, 24).unwrap();
+        assert_eq!(
+            std::path::Path::new(&chemin)
+                .extension()
+                .and_then(|e| e.to_str()),
+            Some("cast"),
+            "{chemin}"
+        );
+        assert_eq!(
+            enregistrement_demarrer(app.state::<SessionStore>(), 7, 80, 24).unwrap(),
+            chemin
+        );
+        assert_eq!(
+            enregistrement_en_cours(app.state::<SessionStore>(), 7).as_deref(),
+            Some(chemin.as_str())
+        );
+        // Ce que ferait le pump.
+        {
+            let e = state.inner.lock().unwrap()[&7].enregistreur.clone();
+            e.lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .sortie("bonjour\r\n")
+                .unwrap();
+        }
+        pty_resize(app.state::<SessionStore>(), 7, 100, 30)
+            .await
+            .unwrap();
+        let fin = enregistrement_arreter(app.state::<SessionStore>(), 7).unwrap();
+        assert_eq!(fin.as_deref(), Some(chemin.as_str()));
+        assert!(enregistrement_arreter(app.state::<SessionStore>(), 7)
+            .unwrap()
+            .is_none());
+        let contenu = std::fs::read_to_string(&chemin).unwrap();
+        let (entete, ev) = avash::enregistrement::relire(&contenu).unwrap();
+        assert_eq!(entete["title"], "h");
+        let kinds: Vec<&str> = ev.iter().map(|(_, k, _)| k.as_str()).collect();
+        assert_eq!(kinds, vec!["o", "r"]);
+        assert_eq!(ev[0].2, "bonjour\r\n");
+        assert!(enregistrement_demarrer(app.state::<SessionStore>(), 99, 80, 24).is_err());
     }
 
     /// Le panneau SFTP dépend de la session de l'onglet : si le canal ne peut

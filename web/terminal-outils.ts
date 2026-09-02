@@ -1,7 +1,9 @@
 // Outils du terminal : zoom de police, recherche, menu clic droit.
 
 import { invoke } from "@tauri-apps/api/core";
-import { $, FONT_MAX, FONT_MIN, state } from "./etat";
+import { $, FONT_MAX, FONT_MIN, type Session, state } from "./etat";
+import { notify, notifyErreur } from "./notifications";
+import { t } from "./i18n";
 import { collerDansTerminal } from "./dialogues";
 
 // ---------- Zoom de police, recherche, menu clic droit ----------
@@ -65,6 +67,10 @@ $("terminal").addEventListener("contextmenu", (e) => {
   const hasSel = !!s?.term.getSelection();
   // Griser « copier » sans sélection.
   (m.querySelector('[data-act="copy"]') as HTMLElement).classList.toggle("disabled", !hasSel);
+  // Une seule entrée d'enregistrement à la fois : démarrer, ou arrêter.
+  const enCours = !!s?.tab.classList.contains("rec");
+  (m.querySelector('[data-act="record"]') as HTMLElement).hidden = enCours;
+  (m.querySelector('[data-act="record-stop"]') as HTMLElement).hidden = !enCours;
   m.style.left = `${(e as MouseEvent).clientX}px`;
   m.style.top = `${(e as MouseEvent).clientY}px`;
   m.classList.add("open");
@@ -89,6 +95,36 @@ ctxMenu().addEventListener("click", (e) => {
     s.term.selectAll();
   } else if (act === "clear") {
     s.term.clear();
+  } else if (act === "record") {
+    void demarrerEnregistrement(s);
+  } else if (act === "record-stop") {
+    void arreterEnregistrement(s);
   }
   hideContext();
 });
+
+// ---------- Enregistrement de session (asciicast) ----------
+//
+// Seule la sortie du terminal est enregistrée, jamais les frappes ; le fichier
+// se rejoue avec `asciinema play`. Le voyant rouge sur l'onglet dit que ça
+// tourne ; fermer l'onglet ferme le fichier.
+
+async function demarrerEnregistrement(s: Session) {
+  try {
+    const chemin = await invoke<string>("enregistrement_demarrer", { id: s.id, cols: s.term.cols, rows: s.term.rows });
+    s.tab.classList.add("rec");
+    notify(t("enregistrement-demarre", { chemin }), "succes");
+  } catch (e) {
+    notifyErreur(t("enregistrement-impossible", { e: String(e) }));
+  }
+}
+
+async function arreterEnregistrement(s: Session) {
+  try {
+    const chemin = await invoke<string | null>("enregistrement_arreter", { id: s.id });
+    s.tab.classList.remove("rec");
+    if (chemin) notify(t("enregistrement-termine", { chemin }), "succes");
+  } catch (e) {
+    notifyErreur(t("enregistrement-impossible", { e: String(e) }));
+  }
+}

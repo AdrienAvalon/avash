@@ -294,6 +294,11 @@ export const FR: Record<string, string> = {
   "rdp-nom-adresse-utilisateur-requis": "Nom, adresse et utilisateur requis.",
   "rdp-sans-nla-explication": "Sans NLA, votre mot de passe part dans un canal chiffré, mais sans que le serveur se soit authentifié auprès d'Avash au préalable.\n\nL'empreinte du serveur reste épinglée : dès la prochaine connexion, un imposteur sera refusé. Le risque ne porte donc que sur ce premier contact.\n\nSe connecter quand même ?",
   "rdp-se-connecter-sans-nla": "Se connecter sans NLA",
+  "enregistrer-la-session": "Enregistrer la session (asciinema)",
+  "arreter-l-enregistrement": "Arrêter l'enregistrement",
+  "enregistrement-demarre": "Enregistrement en cours : {chemin}",
+  "enregistrement-termine": "Enregistrement terminé : {chemin}",
+  "enregistrement-impossible": "Enregistrement impossible : {e}",
 };
 
 export const EN: Record<string, string> = {
@@ -580,6 +585,11 @@ export const EN: Record<string, string> = {
   "rdp-nom-adresse-utilisateur-requis": "Name, address and user are required.",
   "rdp-sans-nla-explication": "Without NLA, your password travels through an encrypted channel, but without the server having authenticated to Avash first.\n\nThe server's fingerprint stays pinned: from the next connection on, an impostor is refused. The risk is therefore limited to this first contact.\n\nConnect anyway?",
   "rdp-se-connecter-sans-nla": "Connect without NLA",
+  "enregistrer-la-session": "Record the session (asciinema)",
+  "arreter-l-enregistrement": "Stop recording",
+  "enregistrement-demarre": "Recording to {chemin}",
+  "enregistrement-termine": "Recording saved: {chemin}",
+  "enregistrement-impossible": "Could not record: {e}",
 };
 
 const DICOS: Record<Langue, Record<string, string>> = { fr: FR, en: EN };

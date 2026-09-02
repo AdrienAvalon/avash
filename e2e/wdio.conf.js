@@ -108,6 +108,7 @@ export const config = {
         "./specs/rdp.spec.js", "./specs/rdp-reconnect.spec.js",
         "./specs/rdp-clipboard.spec.js",
         "./specs/onglets-mixtes.spec.js", "./specs/enregistrer-et-connecter.spec.js",
+        "./specs/enregistrement.spec.js",
       ],
   maxInstances: 1,
   capabilities: [

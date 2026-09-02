@@ -3,6 +3,7 @@
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub mod enregistrement;
 pub mod folders;
 pub mod import;
 pub mod keys;
