@@ -62,13 +62,18 @@ type Session = {
   sftpPath: string;
 };
 
-/** Taille de police partagée par tous les terminaux (Ctrl +/−). */
-let terminalFontSize = 14;
+/** Bureau RDP enregistré (`~/.config/avash/rdp.yaml`). */
+type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string; sans_nla?: boolean };
+
 const FONT_MIN = 9;
 const FONT_MAX = 28;
 
 const state = {
   hosts: [] as Host[],
+  /** Bureaux RDP enregistrés, rechargés avec les hôtes SSH. */
+  rdpHosts: [] as RdpHostT[],
+  /** Taille de police partagée par tous les terminaux (Ctrl +/−). */
+  terminalFontSize: 14,
   filter: "",
   nextId: 1,
   active: null as number | null,
@@ -276,7 +281,7 @@ type TreeNode = FolderNode<TreeItem>;
 function buildTree(): TreeNode {
   return buildFolderTree<TreeItem>(state.folders, [
     ...state.hosts.map((h) => ({ folder: h.folder ?? "", item: { kind: "ssh", ssh: h } as TreeItem })),
-    ...rdpHostsList.map((h) => ({ folder: h.folder ?? "", item: { kind: "rdp", rdp: h } as TreeItem })),
+    ...state.rdpHosts.map((h) => ({ folder: h.folder ?? "", item: { kind: "rdp", rdp: h } as TreeItem })),
   ]);
 }
 
@@ -583,7 +588,7 @@ function renderHosts() {
   // Un bureau RDP ne porte pas de tag : filtrer par tag doit donc les écarter
   // tous. Ils restaient affichés, et le compteur les comptait — le filtre avait
   // l'air cassé alors qu'il faisait son travail sur la moitié de la liste.
-  const rdpShown = state.tagFilter !== null ? [] : rdpHostsList.filter(
+  const rdpShown = state.tagFilter !== null ? [] : state.rdpHosts.filter(
     (h) => !q || h.name.toLowerCase().includes(q) || h.host.toLowerCase().includes(q) || h.user.toLowerCase().includes(q),
   );
   $("host-count").textContent = String(sshShown.length + rdpShown.length);
@@ -596,7 +601,7 @@ function renderHosts() {
     renderNode(buildTree(), list, 0);
   }
 
-  if (state.hosts.length === 0 && rdpHostsList.length === 0) {
+  if (state.hosts.length === 0 && state.rdpHosts.length === 0) {
     const empty = document.createElement("div");
     empty.className = "host-empty";
     empty.innerHTML =
@@ -616,12 +621,12 @@ function renderHosts() {
   // Filtrer par tag écarte tous les bureaux RDP — ils n'en portent pas. Ils
   // disparaissaient de la liste et du compteur sans un mot, ce qui se lit comme
   // une perte de données.
-  if (state.tagFilter !== null && rdpHostsList.length > 0) {
+  if (state.tagFilter !== null && state.rdpHosts.length > 0) {
     const note = document.createElement("div");
     note.className = "host-empty";
     note.innerHTML =
-      `<p class="sub">${rdpHostsList.length} bureau${rdpHostsList.length > 1 ? "x" : ""} RDP ` +
-      `masqué${rdpHostsList.length > 1 ? "s" : ""} : les bureaux ne portent pas de tag.</p>`;
+      `<p class="sub">${state.rdpHosts.length} bureau${state.rdpHosts.length > 1 ? "x" : ""} RDP ` +
+      `masqué${state.rdpHosts.length > 1 ? "s" : ""} : les bureaux ne portent pas de tag.</p>`;
     list.appendChild(note);
   }
   list.scrollTop = defilement;
@@ -661,7 +666,7 @@ function newSessionShell(label: string) {
     theme: terminalTheme(),
     fontFamily: FONT_STACK,
     // Taille entiere : une valeur fractionnaire donne un rendu flou.
-    fontSize: terminalFontSize,
+    fontSize: state.terminalFontSize,
     lineHeight: 1.25,
     letterSpacing: 0,
     fontWeight: "400",
@@ -761,11 +766,11 @@ function newSessionShell(label: string) {
     }
     // Ctrl +/- / 0 : zoom de police, comme un navigateur.
     if (e.ctrlKey && (e.code === "Equal" || e.code === "NumpadAdd")) {
-      setFontSize(terminalFontSize + 1);
+      setFontSize(state.terminalFontSize + 1);
       return false;
     }
     if (e.ctrlKey && (e.code === "Minus" || e.code === "NumpadSubtract")) {
-      setFontSize(terminalFontSize - 1);
+      setFontSize(state.terminalFontSize - 1);
       return false;
     }
     if (e.ctrlKey && e.code === "Digit0") {
@@ -1123,7 +1128,7 @@ async function loadHosts() {
     invoke<string[]>("folders_list").catch(() => [] as string[]),
   ]);
   state.hosts = hotes;
-  rdpHostsList = bureaux;
+  state.rdpHosts = bureaux;
   state.folders = dossiers;
   renderHosts();
   refreshEmptyHint();
@@ -1197,7 +1202,7 @@ function renderPalette() {
       icone: "terminal",
       ouvrir: () => void openSession(h),
     })),
-    ...rdpHostsList
+    ...state.rdpHosts
       .filter((h) => !q || h.name.toLowerCase().includes(q) || h.host.toLowerCase().includes(q))
       .map((h) => ({
         nom: h.name,
@@ -1791,14 +1796,6 @@ window.addEventListener("keydown", (e) => {
   confirmClose(e.key === "Enter" && document.activeElement === $("confirm-ok"));
 });
 
-hydrateIcons();
-$("theme-toggle").addEventListener("click", cycleTheme);
-applyTheme();
-void setupWindowControls();
-
-void loadHosts();
-// Prechargement : au moment du clic, la police est deja prete.
-void ensureFontLoaded();
 
 // ---------- Verrous clavier (Num / Maj / Défilement) ----------
 // Un bureau RDP démarre avec ses propres verrous : si le pavé numérique est
@@ -2428,9 +2425,9 @@ window.addEventListener("keydown", (e) => {
 
 /** Applique une taille de police à tous les terminaux et la borne. */
 function setFontSize(px: number) {
-  terminalFontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
+  state.terminalFontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
   for (const s of state.sessions.values()) {
-    s.term.options.fontSize = terminalFontSize;
+    s.term.options.fontSize = state.terminalFontSize;
     s.fit.fit();
     invoke("pty_resize", { id: s.id, cols: s.term.cols, rows: s.term.rows }).catch(() => {});
   }
@@ -3392,8 +3389,6 @@ type RdpTarget = { host: string; port: number | null; user: string; password: st
  *  session. Un bureau enregistré, lui, retient ce choix dans son fichier. */
 const sansNlaAccepte = new Set<string>();
 
-type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string; sans_nla?: boolean };
-let rdpHostsList: RdpHostT[] = [];
 const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
 
 // Presse-papiers poste -> bureau distant (CLIPRDR). On lit le presse-papiers
@@ -3910,7 +3905,7 @@ $("rdp-context").addEventListener("click", async (e) => {
   const act = (e.target as HTMLElement).closest("[data-act]")?.getAttribute("data-act");
   const id = $("rdp-context").dataset.id;
   $("rdp-context").classList.remove("open");
-  const h = rdpHostsList.find((x) => x.id === id);
+  const h = state.rdpHosts.find((x) => x.id === id);
   if (!act || !h) return;
   if (act === "connect") void connectRdpSaved(h);
   else if (act === "edit") openEditRdp(h);
@@ -4109,7 +4104,7 @@ initPanels();
 function allFolders(): string[] {
   return allFolderPaths(state.folders, [
     ...state.hosts.map((h) => h.folder ?? ""),
-    ...rdpHostsList.map((h) => h.folder ?? ""),
+    ...state.rdpHosts.map((h) => h.folder ?? ""),
   ]);
 }
 
@@ -4215,3 +4210,16 @@ $("move-form").addEventListener("submit", (e) => {
 // Racine : d\u00e9poser un h\u00f4te sur la zone vide de la liste le remet \u00e0 la racine.
 setupFolderDrop($("host-list"), "", false);
 
+// ---------- Amorçage ----------
+//
+// En dernier, une fois tout branché : icônes, thème, contrôles de fenêtre, puis
+// la liste des hôtes et la police du terminal.
+
+hydrateIcons();
+$("theme-toggle").addEventListener("click", cycleTheme);
+applyTheme();
+void setupWindowControls();
+
+void loadHosts();
+// Prechargement : au moment du clic, la police est deja prete.
+void ensureFontLoaded();
