@@ -168,7 +168,14 @@ La porte qualité complète est le script `check.sh` à la racine :
 
 Le hook `pre-commit` reprend l'essentiel : garde, format, clippy, tests Rust,
 tests du processus RDP, et les trois vérifications rapides du front (`tsc`,
-ESLint, Vitest). Il se contourne ponctuellement avec `git commit --no-verify`.
+ESLint, Vitest). Il est versionné dans `scripts/hooks/` ; un clone neuf
+l'active une fois pour toutes :
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+Il se contourne ponctuellement avec `git commit --no-verify`.
 
 Les tests de bout en bout pilotent la **vraie application compilée** via
 `tauri-driver` et WebdriverIO. Ils vivent dans `e2e/` :

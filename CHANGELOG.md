@@ -51,6 +51,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   en ligne de commande, qui n'avait aucun test, est exercé comme binaire :
   `list`, absence de configuration, commande inconnue, `run` incomplet. Le
   front extrait l'expansion des chemins de dossiers, testée.
+- **Le hook de pré-commit est versionné** (`scripts/hooks/pre-commit`) : il
+  ne vivait que dans le `.git` d'une machine, et un clone neuf n'avait aucune
+  des quatre portes en local. `git config core.hooksPath scripts/hooks`
+  l'active.
 - **Le parseur de `~/.ssh/config` est fuzzé par mutation.** Deux mille
   variantes d'une configuration réaliste — octets retournés, troncatures,
   fragments de mots-clés, octets hostiles — ne doivent ni le faire paniquer
