@@ -1,6 +1,6 @@
 [package]
 name = "avash-ui"
-version = "0.6.0"
+version = "0.6.1"
 license = "AGPL-3.0-or-later"
 edition = "2021"
 # Application, pas bibliothèque : rien n'est publié sur crates.io. Le dire
