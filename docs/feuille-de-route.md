@@ -4,10 +4,11 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 2 septembre 2026, après la publication de la version 0.6.1
-— un lot de durcissement (collage, WebView2, traces RDP, WebSocket) et de
-corrections, après la 0.6.0 qui avait étendu le pipeline graphique RDP à
-Windows.
+Dernière révision : 2 septembre 2026, après la publication de la version 0.6.2
+— un lot de fond (panneau SFTP sur la session du terminal, mot de passe oublié
+dès la connexion, front et processus RDP découpés en modules, chaîne
+d'intégration complète, quarante tests de plus, fuzzing du parseur), après la
+0.6.1 qui durcissait le collage, la webview et les traces RDP.
 
 Dépôts : [GitHub](https://github.com/AdrienAvalon/avash) (public) · GitLab interne (privé).
 
@@ -40,7 +41,7 @@ défaut n'est pas livrée, même terminée.
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.6.1 (Linux + Windows, signées, attestation Sigstore) |
+| Version publiée | 0.6.2 (Linux + Windows, signées, attestation Sigstore) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour

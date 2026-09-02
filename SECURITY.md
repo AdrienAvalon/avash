@@ -37,9 +37,10 @@ ou depuis la page des releases.
 
 > **La 0.3.0 a corrigé plusieurs défauts sérieux des séries antérieures** — clé
 > d'hôte SSH insuffisamment vérifiée, certificat RDP pas vérifié du tout, repli
-> de NLA vers TLS accepté — et la 0.6.1 durcit le collage, la webview et le
-> processus RDP. Une mise à jour depuis toute version antérieure est vivement
-> recommandée. Le détail est dans le [CHANGELOG](CHANGELOG.md).
+> de NLA vers TLS accepté — la 0.6.1 durcit le collage, la webview et le
+> processus RDP, et la 0.6.2 cesse de garder le mot de passe en mémoire une
+> fois la session établie. Une mise à jour depuis toute version antérieure est
+> vivement recommandée. Le détail est dans le [CHANGELOG](CHANGELOG.md).
 
 ## Modèle de sécurité
 

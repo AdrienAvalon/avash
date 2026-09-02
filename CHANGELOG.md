@@ -7,6 +7,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.6.2] - 2026-09-02
+
+Une version de fond, sans fonctionnalité nouvelle : le panneau SFTP cesse
+d'ouvrir une seconde connexion, le mot de passe n'est plus gardé en mémoire
+après la connexion, les deux plus gros fichiers du projet sont découpés en
+modules, la chaîne d'intégration joue enfin tous les scénarios, et quarante
+tests de plus couvrent ce que seuls des commentaires décrivaient.
+
 - **La chaîne d'intégration joue enfin tous les scénarios bout en bout.** Sept
   fichiers sur vingt et un — connexion SSH réelle, SFTP, les trois RDP, les
   onglets mixtes, « enregistrer puis connecter » — n'étaient exécutés qu'en
@@ -836,7 +844,8 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.6.1...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.6.2
 [0.2.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.0
 [0.2.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.1
 [0.2.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.2
