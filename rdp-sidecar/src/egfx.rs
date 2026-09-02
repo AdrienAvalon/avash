@@ -305,11 +305,11 @@ pub fn memoriser(cle: &str, chemin: &std::path::Path) {
     if Politique::pour(cle, Some(chemin)) == Politique::Accepter {
         return;
     }
-    if let Some(parent) = chemin.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let ancien = std::fs::read_to_string(chemin).unwrap_or_default();
-    let _ = std::fs::write(chemin, format!("{ancien}{cle}\n"));
+    // Atomique, comme le fichier d'empreintes : ce fichier vit au même endroit
+    // et une coupure pendant `fs::write` l'aurait laissé vide — chaque serveur
+    // à canal graphique aurait de nouveau coûté une reconnexion.
+    let _ = crate::atomique::ecrire(chemin, format!("{ancien}{cle}\n").as_bytes());
 }
 
 /// Identifiant du canal graphique, partagé avec la boucle de session.

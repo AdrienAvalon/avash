@@ -28,14 +28,17 @@ correctifs de sécurité sont priorisés par rapport aux autres travaux.
 
 | Version | Supportée          |
 |---------|--------------------|
-| 0.3.x   | Oui                |
-| < 0.3   | Non                |
+| 0.6.x   | Oui                |
+| < 0.6   | Non                |
 
-Les correctifs de sécurité sont publiés pour la série **0.3.x**.
+Les correctifs de sécurité sont publiés pour la série **0.6.x**, la dernière
+publiée ; une version antérieure se met à jour par la mise à jour automatique
+ou depuis la page des releases.
 
-> **La 0.3.0 corrige plusieurs défauts sérieux des séries antérieures** — clé
+> **La 0.3.0 a corrigé plusieurs défauts sérieux des séries antérieures** — clé
 > d'hôte SSH insuffisamment vérifiée, certificat RDP pas vérifié du tout, repli
-> de NLA vers TLS accepté. Une mise à jour depuis une 0.2.x est vivement
+> de NLA vers TLS accepté — et la 0.6.1 durcit le collage, la webview et le
+> processus RDP. Une mise à jour depuis toute version antérieure est vivement
 > recommandée. Le détail est dans le [CHANGELOG](CHANGELOG.md).
 
 ## Modèle de sécurité

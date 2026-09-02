@@ -647,10 +647,24 @@ static DERNIER_UTILISATEUR: std::sync::Mutex<Option<String>> = std::sync::Mutex:
 
 // ---------- Harnais de test ----------
 
+/// Clé d'hôte UNIQUE pour tous les serveurs de test.
+///
+/// Chaque serveur tirait la sienne. Or ils écoutent sur des ports éphémères et
+/// partagent le même `known_hosts` (le répertoire personnel virtuel est commun à
+/// tout le processus) : quand le système réattribuait à un serveur le port d'un
+/// serveur précédent — libéré à la fin de son test —, la clé apprise pour ce port
+/// ne correspondait plus, et le client refusait à bon droit une « interception ».
+/// Vu en intégration continue, une fois sur quelques dizaines d'exécutions. Une
+/// clé partagée rend le port indifférent ; le test de clé changée, lui, écrit son
+/// propre leurre.
+static CLE_HOTE: std::sync::LazyLock<PrivateKey> = std::sync::LazyLock::new(|| {
+    PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()
+});
+
 /// Démarre le serveur SSH de test sur un port libre, retourne le port.
 async fn spawn_test_sshd() -> u16 {
     let config = russh::server::Config {
-        keys: vec![PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()],
+        keys: vec![CLE_HOTE.clone()],
         ..Default::default()
     };
     let config = Arc::new(config);
@@ -882,6 +896,11 @@ async fn changed_host_key_is_refused() {
     let err = res
         .err()
         .expect("une cle d'hote modifiee doit etre refusee");
+
+    // Le leurre ne doit pas survivre au test : le port sera réattribué à un
+    // autre serveur de test, qui porte la clé commune — il passerait alors pour
+    // une interception, dans un test qui n'a rien à voir.
+    let _ = avash::ssh::forget_host_key_at("127.0.0.1", port, &known_hosts);
 
     // Le message doit etre exploitable tel quel dans l'interface : un
     // "Unknown key" opaque ne dit pas a l'utilisateur ce qui se passe ni quoi

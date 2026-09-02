@@ -7,8 +7,8 @@
 **Gestionnaire graphique de connexions SSH et RDP — natif, rapide, sécurisé.**
 
 [![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.3-8b7cf6.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-295%20verts-brightgreen.svg)](#qualité)
+[![Version](https://img.shields.io/badge/version-0.6.1-8b7cf6.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-781%20verts-brightgreen.svg)](#qualité)
 
 </div>
 
@@ -57,8 +57,8 @@ dans [SECURITY.md](SECURITY.md).
 ### Linux (AppImage)
 
 ```bash
-chmod +x Avash_0.4.3_amd64.AppImage
-./Avash_0.4.3_amd64.AppImage
+chmod +x Avash_0.6.1_amd64.AppImage
+./Avash_0.6.1_amd64.AppImage
 ```
 
 ### Windows
@@ -79,11 +79,11 @@ Deux moyens de vérifier qu'un fichier téléchargé est bien le nôtre :
 
 ```bash
 # 1. Empreinte : compare avec le fichier SHA256SUMS publié avec la version
-sha256sum Avash_0.4.3_x64-setup.exe
+sha256sum Avash_0.6.1_x64-setup.exe
 
 # 2. Provenance : preuve cryptographique que le binaire vient de ce dépôt,
 #    de ce commit, produit par notre chaîne d'intégration continue
-gh attestation verify Avash_0.4.3_x64-setup.exe --repo AdrienAvalon/avash
+gh attestation verify Avash_0.6.1_x64-setup.exe --repo AdrienAvalon/avash
 ```
 
 La seconde vérification est plus forte que la première : elle ne dit pas
@@ -139,17 +139,17 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 
 ## Qualité
 
-**750 tests** couvrent le projet, tous exécutés à chaque commit :
+**781 tests** couvrent le projet, tous exécutés à chaque commit :
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
-| Cœur (`crates/avash`) | 117 | parseur `~/.ssh/config`, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques |
+| Cœur (`crates/avash`) | 118 | parseur `~/.ssh/config`, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
 | Intégration | 28 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP, tunnels, rebonds `ProxyJump` |
-| Interface (`crates/avash-ui`) | 34 | commandes Tauri, décodage UTF-8 en flux, verrous clavier |
-| Processus RDP | 65 | empreinte du serveur, fichier des empreintes, plafond de résolution, négociation, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique (surfaces, cache, ClearCodec, RemoteFX Progressive), magnétoscope, rejeu d'enregistrements réels, fuzzing par mutation |
+| Interface (`crates/avash-ui`) | 43 | commandes Tauri, décodage UTF-8 en flux, verrous clavier, annonce du processus RDP, variables d'environnement de la webview |
+| Processus RDP | 77 | empreinte du serveur, fichier des empreintes, écriture atomique, plafond de résolution, négociation, origine WebSocket, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique (surfaces, cache, ClearCodec, RemoteFX Progressive), magnétoscope, rejeu d'enregistrements réels, fuzzing par mutation |
 | Paquets IronRDP portés | 387 | nos correctifs — remplissage des tuiles, bande passante, redirection de serveur, capacités précoces, **ordre des champs de ClearCodec** — et les tests amont de `ironrdp-pdu`, qui ne s'exécutaient nulle part (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
-| Front (Vitest) | 78 | logique pure : arborescence, filtres, scancodes, mappage souris, réglages |
-| Bout en bout (WebdriverIO) | 41 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** |
+| Front (Vitest) | 88 | logique pure : arborescence, filtres, scancodes, mappage souris, réglages, collage sûr |
+| Bout en bout (WebdriverIO) | 40 | l'application réelle : connexion SSH et RDP effectives, SFTP, presse-papiers RDP, dossiers, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
 qui ne voient pas le même code — ESLint typé, `cargo audit` et `cargo deny` sur

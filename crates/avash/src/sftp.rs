@@ -377,8 +377,14 @@ impl SftpHandle {
 }
 
 /// Résolveur de chemin de téléchargement local par défaut.
+///
+/// Le repli passe par `repertoire_personnel()`, le point d'entrée unique du
+/// crate, et non par `dirs::home_dir()` : sous `AVASH_HOME` — les tests, ou une
+/// installation qui isole sa configuration —, c'est là que les fichiers
+/// doivent atterrir.
+#[must_use]
 pub fn default_local_dir() -> PathBuf {
     dirs::download_dir()
-        .or_else(dirs::home_dir)
+        .or_else(crate::repertoire_personnel)
         .unwrap_or_else(|| PathBuf::from("."))
 }

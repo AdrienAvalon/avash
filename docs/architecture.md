@@ -308,15 +308,16 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 
 ## Correctifs portés sur IronRDP
 
-`rdp-sidecar/vendor/` contient deux crates d'IronRDP copiés, avec **un seul
-changement chacun**. Ce n'est pas un fork de confort : ce sont deux défauts qui
-touchent tout client IronRDP parlant à xrdp, et qui rendaient avash inutilisable
-contre des serveurs légitimes.
+`rdp-sidecar/vendor/` contient trois crates d'IronRDP copiés, chacun avec un
+ou deux changements ciblés. Ce n'est pas un fork de confort : ce sont des
+défauts qui touchent tout client IronRDP parlant à xrdp, à GNOME Remote Desktop
+ou à Windows, et qui rendaient avash inutilisable contre des serveurs légitimes.
 
 | Crate | Défaut | Symptôme |
 |---|---|---|
-| `ironrdp-session` | le remplissage de fin de ligne n'est pas retiré dans les chemins compressés | image cisaillée en diagonale |
-| `ironrdp-connector` | la mesure de bande passante n'est jamais renvoyée | connexion suspendue sans fin |
+| `ironrdp-session` | le remplissage de fin de ligne n'est pas retiré dans les chemins compressés ; le PDU de redirection est rejeté ; deux paniques déclenchables par un serveur | image cisaillée en diagonale ; GNOME Remote Desktop ferme sans un mot ; le client tombe |
+| `ironrdp-connector` | la mesure de bande passante n'est jamais renvoyée ; le drapeau du pipeline graphique n'est pas annoncé | connexion suspendue sans fin ; GNOME Remote Desktop refuse la connexion |
+| `ironrdp-pdu` | ClearCodec lit deux champs dans l'ordre inverse de la spécification | aucun bureau Windows ne s'affiche par le canal graphique |
 
 Chacun a ses propres tests, exécutés par `check.sh`, le hook de pré-commit et
 les deux chaînes d'intégration : sans cela, une montée de version pourrait les

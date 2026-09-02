@@ -94,9 +94,14 @@ bout-en-bout:
     - mkdir -p crates/avash-ui/binaries
     - cp rdp-sidecar/target/release/avash-rdp crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
     - cargo build --release -p avash-ui
+    # Serveur RDP de test et son certificat auto-signé (non versionné) : les
+    # scénarios à serveurs locaux tournent ici aussi, comme sur GitHub.
+    - apt-get install -y -qq openssh-server openssl
+    - cargo build --release --manifest-path test-rdp-server/Cargo.toml
+    - openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost"
+        -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
     - cd e2e && npm ci
-    # E2E_NO_RDP écarte les scénarios exigeant un serveur local.
-    - E2E_NO_RDP=1 xvfb-run -a npm test
+    - xvfb-run -a npm test
 
 # --- Conformité RDP : de VRAIS serveurs xrdp -----------------------------
 # Les trois défauts RDP de la 0.3.3 — image cisaillée, clavier en QWERTY,

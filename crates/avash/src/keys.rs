@@ -183,10 +183,15 @@ pub fn generate(name: &str, comment: &str) -> Result<KeyEntry> {
     let pem = pair
         .to_openssh(russh::keys::ssh_key::LineEnding::LF)
         .context("Encodage de la clé privée")?;
-    std::fs::write(&private, pem.as_bytes())
-        .with_context(|| format!("Écriture de {}", private.display()))?;
-    // Avant tout le reste : une cle privee lisible par d'autres est refusee
-    // par OpenSSH, et exposee entre-temps.
+    // La clé privée naît en 0600, et jamais avec l'umask : `fs::write` la
+    // créait lisible par tous puis `set_mode` la resserrait — la fenêtre était
+    // brève, mais c'est précisément le défaut que `ecrire_atomiquement` ferme
+    // pour les fichiers de configuration, et une clé privée le mérite encore
+    // plus. `create_new` double la garde d'existence ci-dessus : même une course
+    // avec un autre processus n'écrasera pas une clé.
+    ecrire_prive(&private, pem.as_bytes())?;
+    // Sous Windows, les droits sont une liste de contrôle d'accès posée après
+    // coup ; sous Unix, `ecrire_prive` a déjà fait le nécessaire.
     set_mode(&private, 0o600)?;
 
     let mut pubkey = pair.public_key().clone();
@@ -207,6 +212,26 @@ pub fn generate(name: &str, comment: &str) -> Result<KeyEntry> {
         public_line: Some(line.trim().to_string()),
         mode: mode_of(&private),
     })
+}
+
+/// Écrit un fichier qui n'existe pas encore, lisible par son seul propriétaire
+/// dès sa création.
+fn ecrire_prive(path: &Path, contenu: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options
+        .open(path)
+        .with_context(|| format!("Création de {}", path.display()))?;
+    f.write_all(contenu)
+        .with_context(|| format!("Écriture de {}", path.display()))?;
+    f.sync_all()
+        .with_context(|| format!("Synchronisation de {}", path.display()))
 }
 
 /// Commande shell qui installe une cle publique dans `authorized_keys`.
@@ -420,6 +445,29 @@ mod tests {
         // Et elle doit se relire : une cle qu'on ne peut pas recharger ne
         // sert a rien.
         russh::keys::load_secret_key(&private, None).expect("cle privee illisible");
+    }
+
+    /// La clé privée doit être privée dès sa création, pas après coup : on la
+    /// crée en 0600 plutôt que de la resserrer une fois écrite. Ce que le test
+    /// peut vérifier, c'est le résultat et le refus d'écraser un fichier posé
+    /// entre la vérification d'existence et l'écriture.
+    #[cfg(unix)]
+    #[test]
+    fn ecrire_prive_cree_en_0600_et_refuse_d_ecraser() {
+        use std::os::unix::fs::PermissionsExt;
+        let _h = temp_home();
+        let cible = crate::repertoire_personnel().unwrap().join("secret");
+        ecrire_prive(&cible, b"contenu").unwrap();
+        let mode = std::fs::metadata(&cible).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "droits à la création : {mode:o}");
+        assert_eq!(std::fs::read(&cible).unwrap(), b"contenu");
+        // Déjà là : on refuse, on ne tronque pas.
+        assert!(ecrire_prive(&cible, b"autre").is_err());
+        assert_eq!(
+            std::fs::read(&cible).unwrap(),
+            b"contenu",
+            "l'original est intact"
+        );
     }
 
     #[test]

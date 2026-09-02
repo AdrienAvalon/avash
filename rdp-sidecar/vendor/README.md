@@ -1,6 +1,6 @@
 # Correctifs portés sur IronRDP
 
-Deux crates sont copiés ici avec un changement chacun.
+Trois crates sont copiés ici, chacun avec un ou deux changements ciblés, décrits section par section.
 
 Une retouche mécanique s'y ajoute, sans rapport avec les défauts : les
 `#[expect(lint)]` deviennent `#[allow(lint)]`. Hors de leur espace de travail

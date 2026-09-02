@@ -33,14 +33,14 @@ défaut n'est pas livrée, même terminée.
 
 ## Où nous en sommes (mesuré)
 
-| Indicateur | Valeur au 31/08/2026 |
+| Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 182 Rust (115 cœur, 24 intégration, 34 interface, 9 processus RDP) · 78 front · 35 scénarios bout en bout |
-| Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) |
+| Tests | 266 Rust (118 cœur, 28 intégration, 43 interface, 77 processus RDP) · 387 dans les paquets IronRDP portés · 88 front · 40 scénarios bout en bout dans 21 fichiers, tous en intégration continue |
+| Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.3.0 (Linux + Windows, signées, attestation Sigstore) |
+| Version publiée | 0.6.1 (Linux + Windows, signées, attestation Sigstore) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
@@ -187,12 +187,12 @@ sur des mesures de ce qui coûte réellement.
   ~2 × en réseau local, et des octets identiques dans tous les cas. Nagle restait
   par ailleurs actif sur toutes les sessions, et un onglet RDP masqué continuait
   de tirer des trames pleines.
-- **Reste à faire, identifié et chiffré** : le processus RDP fusionne ses
-  rectangles sales en **boîte englobante** — deux coins opposés produisent une
-  trame plein écran, 8 Mo là où 2 Ko suffiraient, ce qui plafonne le nombre
-  d'images par seconde sur un bureau chargé. Et le panneau SFTP **rouvre une
-  session SSH complète**, chaîne de rebonds comprise, au lieu d'ouvrir un canal
-  sur celle de l'onglet : cinq à sept allers-retours avant le moindre listing.
+- **Fait depuis (0.4.0)** : la boîte englobante des rectangles sales a laissé
+  place à une fusion sélective, mesurée sur le fil — 8,39 Mo → 4,36 Mo pour le
+  même parcours, avec davantage de trames livrées.
+- **Reste à faire, identifié** : le panneau SFTP **rouvre une session SSH
+  complète**, chaîne de rebonds comprise, au lieu d'ouvrir un canal sur celle
+  de l'onglet : cinq à sept allers-retours avant le moindre listing.
 - **Repères de non-régression.** Les mesures existantes (regroupement, décodage
   UTF-8) affichent des chiffres mais rien ne casse s'ils se dégradent. Un seuil
   d'échec les transformerait en garde-fous.
@@ -239,7 +239,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2 | 3 |
-| Scénarios bout en bout | 35 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 40 | en hausse à chaque fonctionnalité |
 | Couverture des tests | non mesurée | mesurée, puis en hausse |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |

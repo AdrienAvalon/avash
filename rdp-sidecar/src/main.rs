@@ -60,6 +60,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
+mod atomique;
 mod egfx;
 mod magnetoscope;
 mod progressif;
@@ -610,37 +611,11 @@ fn memoriser_empreinte(cle: &str, empreinte: &str) -> anyhow::Result<()> {
         contenu.push('\n');
     }
     contenu.push_str(&format!("{cle} {empreinte}\n"));
-
-    // Écriture atomique, comme le fait le cœur pour ses propres fichiers. Le
-    // sidecar ne dépend pas du crate `avash`, la fonction n'y était donc pas —
-    // alors que c'est ce fichier-ci qui compte le plus : le perdre ramène TOUS
-    // les serveurs à « premier contact », et le TOFU cesse de protéger sans que
-    // rien ne le signale. Une lecture-modification-écriture non atomique perdait
-    // aussi l'empreinte d'un premier contact concurrent.
-    let tmp = chemin.with_extension(format!("tmp{}", std::process::id()));
-    {
-        use std::io::Write as _;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut f = options.open(&tmp)?;
-        f.write_all(contenu.as_bytes())?;
-        f.sync_all()?;
-    }
-    if let Err(e) = std::fs::rename(&tmp, &chemin) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e.into());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&chemin, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
+    // Écriture atomique (voir `atomique`) : c'est ce fichier-ci qui compte le
+    // plus — le perdre ramène TOUS les serveurs à « premier contact », et le
+    // TOFU cesse de protéger sans que rien ne le signale.
+    atomique::ecrire(&chemin, contenu.as_bytes())
+        .with_context(|| format!("écriture de {}", chemin.display()))
 }
 
 /// Aligne les verrous clavier du bureau distant sur ceux du poste.
@@ -1249,11 +1224,7 @@ async fn main() -> Result<()> {
     let memoire = chemin_canal_graphique();
     let cle = format!("{}:{}", args.host, args.port);
     let mut graphique = egfx::Politique::pour(&cle, memoire.as_deref());
-    // Quatre tours suffisent au pire cas connu : connexion, redirection, reprise
-    // avec le canal graphique, redirection de nouveau. La marge est là pour ne
-    // pas transformer un serveur inhabituel en échec ; la borne, pour qu'un
-    // serveur qui redirige en rond ne nous y entraîne pas.
-    for _ in 0..6 {
+    for _ in 0..TOURS_MAX {
         let dessine = std::sync::atomic::AtomicBool::new(false);
         let issue = executer(&args, redirection.take(), &mut poste, graphique, &dessine).await;
         // Une session qui se termine sans avoir affiché la moindre image, alors
@@ -1297,8 +1268,17 @@ async fn main() -> Result<()> {
             }
         }
     }
-    anyhow::bail!("Le serveur nous redirige sans fin : trois tours ont suffi à le montrer.")
+    anyhow::bail!(
+        "Le serveur nous redirige sans fin : {TOURS_MAX} tours n'ont pas suffi à ouvrir une session."
+    )
 }
+
+/// Nombre de connexions successives tolérées pour une seule ouverture de
+/// session. Quatre suffisent au pire cas connu : connexion, redirection, reprise
+/// avec le canal graphique, redirection de nouveau. La marge est là pour ne pas
+/// transformer un serveur inhabituel en échec ; la borne, pour qu'un serveur qui
+/// redirige en rond ne nous y entraîne pas.
+const TOURS_MAX: usize = 6;
 
 /// Ce qu'une session a donné.
 /// Le poste de travail côté interface : l'écoute locale et le client accepté.

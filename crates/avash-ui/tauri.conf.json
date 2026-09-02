@@ -35,10 +35,10 @@
     "publisher": "Adrien Cros",
     "homepage": "https://github.com/AdrienAvalon/avash",
     "category": "Utility",
-    "copyright": "Copyright © 2026 Adrien Cros. MIT.",
+    "copyright": "Copyright © 2026 Adrien Cros. AGPL-3.0-or-later.",
     "licenseFile": "../../LICENSE",
-    "shortDescription": "Gestionnaire de connexions SSH natif.",
-    "longDescription": "Avash — gestionnaire graphique de connexions SSH/SFTP : léger, rapide, sécurisé. Terminal xterm.js, tunnels visuels (-L/-R/-D), SFTP glisser-déposer, snippets, clés et trousseau système. Sans télémétrie.",
+    "shortDescription": "Gestionnaire de connexions SSH et RDP natif.",
+    "longDescription": "Avash — gestionnaire graphique de connexions SSH, SFTP et RDP : léger, rapide, sécurisé. Terminal xterm.js, bureaux distants intégrés, tunnels visuels (-L/-R/-D), SFTP glisser-déposer, snippets, clés et trousseau système. Sans télémétrie.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

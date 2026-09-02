@@ -17,3 +17,6 @@ node_modules/
 crates/avash/avash-test
 avash-test
 web/public/hero.png
+
+# Extraction d'une AppImage (squashfs-root) : artefact local, jamais versionné
+squashfs-root/

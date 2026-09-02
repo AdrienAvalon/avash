@@ -5,6 +5,40 @@ Toutes les modifications notables d'Avash sont consignées dans ce fichier.
 Le format s'inspire de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/),
 et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+- **La chaîne d'intégration joue enfin tous les scénarios bout en bout.** Sept
+  fichiers sur vingt et un — connexion SSH réelle, SFTP, les trois RDP, les
+  onglets mixtes, « enregistrer puis connecter » — n'étaient exécutés qu'en
+  local, alors que ce sont ceux qui traversent réellement les protocoles. Le
+  harnais monte son sshd ; la chaîne construit désormais le serveur RDP de test
+  et génère son certificat, sur GitHub comme sur GitLab.
+- **Le job Windows compilait l'interface sans le front.** `generate_context!`
+  de Tauri exige `web/dist` : le job échouait avant le moindre test. Le front y
+  est construit d'abord.
+- **Un test d'intégration échouait au hasard.** Chaque serveur SSH de test
+  tirait sa propre clé sur un port éphémère, tous partagés dans un même
+  `known_hosts` : un port réattribué au serveur d'un test suivant passait pour
+  une interception. Une clé commune rend le port indifférent, et le test de clé
+  changée retire son leurre derrière lui.
+- **Une AppImage extraite était suivie par git** (`squashfs-root/`, 11 Mo)
+  depuis la 0.5.0 ; retirée et ignorée. Une note de développement de l'époque
+  où le projet s'appelait autrement est supprimée.
+- **La clé privée générée naît en 0600.** Elle était écrite avec l'umask puis
+  resserrée après coup : la fenêtre était brève, mais c'est le défaut que
+  l'écriture atomique ferme déjà pour les fichiers de configuration. La
+  création refuse aussi d'écraser un fichier apparu entre-temps.
+- **Le processus RDP écrit ses deux fichiers d'état atomiquement.** Le fichier
+  des empreintes l'était ; la liste des serveurs à canal graphique, non — une
+  coupure l'aurait vidée, et chaque serveur aurait de nouveau coûté une
+  reconnexion. Une fonction commune, testée, sert les deux.
+- Le dossier de téléchargement par défaut suit `AVASH_HOME` comme le reste du
+  cœur ; la borne de redirections du processus RDP dit le vrai nombre de tours.
+- **Documentation remise au niveau de la 0.6.1** : version, comptes de tests,
+  versions supportées dans `SECURITY.md`, trois paquets IronRDP portés et non
+  deux, fichiers du chantier GNOME Remote Desktop nommés tels qu'ils existent,
+  licence dans les métadonnées du bundle, liens du journal des modifications.
+
 ## [0.6.1] - 2026-09-02
 
 - **Plus de carrés noirs quand avash est piloté à travers une session RDP.**
@@ -755,3 +789,13 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
 [0.2.5]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.5
 [0.2.6]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.6
 [0.2.7]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.7
+[0.3.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.3.0
+[0.3.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.3.1
+[0.3.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.3.2
+[0.3.3]: https://github.com/AdrienAvalon/avash/releases/tag/v0.3.3
+[0.4.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.4.0
+[0.4.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.4.1
+[0.4.3]: https://github.com/AdrienAvalon/avash/releases/tag/v0.4.3
+[0.5.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.5.0
+[0.6.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.6.0
+[0.6.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.6.1

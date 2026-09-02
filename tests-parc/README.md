@@ -207,10 +207,10 @@ une session complète. C'est possible, ce n'est pas petit.
 
 ## Chantier : GNOME Remote Desktop en conteneur
 
-`Containerfile.grd.chantier` et `demarrer-grd.sh.chantier` sont **inachevés** —
-le suffixe est là pour qu'on ne les prenne pas pour un serveur du parc. Ils
-visaient le mode utilisateur, qui n'est pas le bon (voir ci-dessus) ; ils
-restent utiles pour la partie compositeur.
+`Containerfile.grd` et `demarrer-grd.sh` sont **inachevés** : `parc-rdp.sh` ne
+les démarre pas, et c'est voulu — ils ne font pas partie du parc. Ils visaient
+le mode utilisateur, qui n'est pas le bon (voir ci-dessus) ; ils restent utiles
+pour la partie compositeur.
 
 Ce qui marche :
 

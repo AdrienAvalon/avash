@@ -21,8 +21,9 @@ const sandbox = process.env.AVASH_E2E_SANDBOX ?? mkdtempSync(join(tmpdir(), "ava
 const sshDir = join(sandbox, "sshtest");
 export const RDP_PORT = 33899;
 export const SSH_PORT = 2223;
-// Serveurs locaux (RDP + sshd) désactivés en CI : le sshd non-root et les certs
-// de test ne s'y prêtent pas. Les specs qui en dépendent sont retirées de la liste.
+// Serveurs locaux (RDP + sshd) : actifs partout, intégration continue comprise,
+// qui construit le serveur RDP de test et génère son certificat. `E2E_NO_RDP=1`
+// reste disponible pour une machine sans sshd ni serveur de test.
 export const LOCAL_SERVERS = !process.env.E2E_NO_RDP;
 
 // Les hôtes réellement semés, selon que les serveurs locaux tournent ou non.
@@ -74,7 +75,11 @@ function startSshd() {
     "UsePAM no", "PasswordAuthentication no", "PubkeyAuthentication yes",
     "StrictModes no", "Subsystem sftp internal-sftp", "",
   ].join("\n"));
-  const sshdBin = execSync("command -v sshd || echo /usr/bin/sshd").toString().trim();
+  // `sshd` vit dans /usr/sbin, qui n'est pas toujours sur le PATH d'un
+  // exécuteur d'intégration continue : on le cherche là aussi.
+  const sshdBin = execSync(
+    "command -v sshd || ls /usr/sbin/sshd 2>/dev/null || echo /usr/bin/sshd",
+  ).toString().trim();
   // -D : reste au premier plan pour qu'on tienne le processus et qu'on le tue à la fin.
   return spawn(sshdBin, ["-D", "-f", cfg, "-E", join(sshDir, "sshd.log")], { stdio: "ignore" });
 }
