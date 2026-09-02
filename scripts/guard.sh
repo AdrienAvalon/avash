@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-FILES="web/main.ts web/filters.ts web/index.html"
+FILES="web/*.ts web/index.html"
 fail=0
 
 forbid() { # motif  libellé

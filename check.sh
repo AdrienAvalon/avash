@@ -94,7 +94,7 @@ fi
 
 step "Front (avash-web)"
 run "garde"              "$ROOT" ./scripts/guard.sh
-run "lint"               "$WEB" npx eslint main.ts filters.ts prefs.ts icons.ts collage.ts
+run "lint"               "$WEB" npx eslint .
 run "typage"             "$WEB" npx tsc --noEmit
 run "tests"              "$WEB" npx vitest run
 run "build"              "$WEB" npx vite build

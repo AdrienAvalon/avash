@@ -51,6 +51,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   en ligne de commande, qui n'avait aucun test, est exercé comme binaire :
   `list`, absence de configuration, commande inconnue, `run` incomplet. Le
   front extrait l'expansion des chemins de dossiers, testée.
+- **Le front est découpé en modules.** `web/main.ts` (4 200 lignes) portait
+  toute l'application ; il garde le cœur — arbre des hôtes, onglets,
+  terminaux, palette, amorçage — et dix-huit modules prennent chacun un
+  domaine : état partagé, thème, SFTP, RDP, tunnels, snippets, dialogues,
+  notifications, connexion directe, clés, menu d'hôte, dossiers, raccourcis,
+  outils du terminal, verrous, barre de titre, mise à jour, panneaux. Le
+  texte des sections est repris tel quel ; les seules variables mutées d'un
+  module à l'autre ont rejoint l'objet `state`. Le lint, la garde et le
+  contrôle couvrent désormais tous les modules, pas une liste de fichiers.
 - **Le panneau SFTP n'ouvre plus de seconde connexion SSH.** Il rejouait la
   connexion complète de l'onglet — rebonds, clé d'hôte, authentification —
   pour obtenir un canal que le protocole offre sur la session existante. Il

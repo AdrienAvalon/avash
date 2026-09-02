@@ -12,7 +12,7 @@ l'organisation du code et les choix techniques notables.
 |                                                             |
 |   Front (web/)                Cœur natif (Rust)             |
 |   TypeScript + xterm.js  <->  commands.rs / rdp.rs          |
-|      main.ts / filters.ts     (commandes Tauri)            |
+|      main.ts + modules        (commandes Tauri)            |
 |                                     |                       |
 |                                     v                       |
 |                              crate avash (SSH, SFTP,       |
@@ -73,9 +73,20 @@ via le mécanisme `externalBin` de Tauri, à côté de l'exécutable principal.
 
 Le front vit dans `web/` (paquet `avash-web`, `type: module`) :
 
-- **`main.ts`** — l'application : rendu de l'arbre des hôtes, onglets, sessions
-  de terminal (xterm.js), panneau SFTP, gestion des sessions RDP (canvas et
-  WebSocket) ;
+- **`main.ts`** — le cœur de l'application : arbre des hôtes, onglets,
+  sessions de terminal (xterm.js), palette, et l'amorçage en toute fin, une
+  fois les autres modules importés ;
+- **un module par domaine**, chacun important ce qu'il utilise des autres :
+  `etat.ts` (l'état partagé — hôtes, sessions, bureaux RDP, réglages — les
+  thèmes du terminal et l'accès au DOM), `theme.ts`, `sftp.ts` (panneau,
+  transferts, glisser-déposer), `rdp.ts` (sessions sur canvas et WebSocket,
+  entrées, presse-papiers, bureaux enregistrés), `tunnels.ts`, `snippets.ts`,
+  `dialogues.ts` (saisie, confirmation, mot de passe, piège de focus),
+  `notifications.ts`, `connexion-directe.ts`, `cles.ts`, `menu-hote.ts`,
+  `dossiers.ts`, `raccourcis.ts`, `terminal-outils.ts` (zoom, recherche, menu
+  clic droit), `verrous.ts`, `titre.ts`, `maj.ts`, `panneaux.ts`. Aucune
+  variable n'est mutée d'un module à l'autre : ce qui change de main vit dans
+  l'objet `state` de `etat.ts` ;
 - **`filters.ts`** — la logique **pure et testable** extraite du reste : arbre
   des hôtes, correspondance de recherche, scancodes clavier, mappage souris
   RDP (letterbox), lecture des verrous clavier. Couverte par `filters.test.ts` ;
@@ -119,7 +130,7 @@ c'était un déni de service, pas un détournement.
 Ensuite, tout transite en **binaire** (`ArrayBuffer` natif — ni base64, ni
 JSON), le premier octet étant le code de message. Les définitions de référence
 sont `input_ops` / `frame_msg` dans `rdp-sidecar/src/main.rs` et le
-gestionnaire `ws.onmessage` / `send` dans `web/main.ts`.
+gestionnaire `ws.onmessage` / `send` dans `web/rdp.ts`.
 
 ### Application → sidecar
 
@@ -299,7 +310,8 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Codec RemoteFX Progressive | `rdp-sidecar/src/progressif.rs` |
 | Surfaces et cache du canal graphique | `rdp-sidecar/src/surface.rs` |
 | Magnétoscope (capture et rejeu) | `rdp-sidecar/src/magnetoscope.rs` |
-| Front (application) | `web/main.ts` |
+| Front (cœur : arbre, onglets, terminaux, amorçage) | `web/main.ts` |
+| Front (un module par domaine : `etat`, `sftp`, `rdp`, `tunnels`, `snippets`, `dialogues`…) | `web/*.ts` |
 | Front (logique pure testable) | `web/filters.ts` |
 | Front (réglages persistants) | `web/prefs.ts` |
 | Client SFTP (dont bandes parallèles) | `crates/avash/src/sftp.rs` |
