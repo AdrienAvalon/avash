@@ -34,6 +34,23 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   reconnexion. Une fonction commune, testée, sert les deux.
 - Le dossier de téléchargement par défaut suit `AVASH_HOME` comme le reste du
   cœur ; la borne de redirections du processus RDP dit le vrai nombre de tours.
+- **Les chemins que seuls des commentaires décrivaient ont leurs tests.** La
+  relecture complète du projet a listé les fonctions sans test direct ; elles
+  en ont un. Côté processus RDP : le découpage `DOMAINE\utilisateur` et
+  `utilisateur@domaine`, le format binaire des trames envoyé à l'interface
+  (type, géométrie, pixels ligne par ligne, et le lot de rectangles), le
+  mappage des boutons de souris, la configuration après redirection (les
+  identifiants du serveur et son jeton de routage priment). Côté interface :
+  la résolution des rebonds `ProxyJump` (alias, `user@hôte:port`, clé de la
+  cible reprise, chaîne ordonnée, `none`) et, grâce au moteur d'exécution
+  factice de Tauri, le magasin de sessions — fermer un onglet pendant la
+  connexion annule l'enregistrement, fermer un onglet sans connexion en vol ne
+  sème pas d'annulation, une session plus récente évince l'ancienne sans être
+  close par elle, écrire vers une session inconnue est une erreur — et le
+  refus d'une adresse RDP à espace avant tout lancement de processus. L'outil
+  en ligne de commande, qui n'avait aucun test, est exercé comme binaire :
+  `list`, absence de configuration, commande inconnue, `run` incomplet. Le
+  front extrait l'expansion des chemins de dossiers, testée.
 - **Documentation remise au niveau de la 0.6.1** : version, comptes de tests,
   versions supportées dans `SECURITY.md`, trois paquets IronRDP portés et non
   deux, fichiers du chantier GNOME Remote Desktop nommés tels qu'ils existent,

@@ -348,6 +348,22 @@ export function buildFolderTree<T>(
 }
 
 /** Nombre total d'éléments dans un nœud et tous ses descendants (récursif). */
+/** Tous les chemins de dossiers à proposer : ceux du registre, plus chaque
+ *  préfixe des dossiers réellement portés par des hôtes (`a/b/c` ⇒ `a`, `a/b`,
+ *  `a/b/c`), sans doublon, triés. Un hôte rangé dans un dossier que le
+ *  registre ignore doit tout de même le faire apparaître. */
+export function allFolderPaths(registered: string[], used: string[]): string[] {
+  const set = new Set<string>(registered);
+  for (const f of used) {
+    let acc = "";
+    for (const seg of (f || "").split("/").filter(Boolean)) {
+      acc = acc ? `${acc}/${seg}` : seg;
+      set.add(acc);
+    }
+  }
+  return [...set].filter(Boolean).sort();
+}
+
 export function folderNodeCount<T>(node: FolderNode<T>): number {
   let n = node.items.length;
   for (const c of node.children.values()) n += folderNodeCount(c);

@@ -35,7 +35,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 266 Rust (118 cœur, 28 intégration, 43 interface, 77 processus RDP) · 387 dans les paquets IronRDP portés · 88 front · 40 scénarios bout en bout dans 21 fichiers, tous en intégration continue |
+| Tests | 289 Rust (118 cœur, 32 intégration, 53 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 90 front · 40 scénarios bout en bout dans 21 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
@@ -206,8 +206,16 @@ sur des mesures de ce qui coûte réellement.
 
 ## Axe 4 — Confiance dans le code
 
-- **Couverture de tests** : aucun outil de mesure installé. `cargo-llvm-cov`
-  révélerait les chemins jamais exercés — utile surtout sur le code de sécurité.
+- **Couverture de tests** : mesurée le 02/09/2026 avec `cargo-llvm-cov`
+  (`cargo llvm-cov --workspace` à la racine, `cargo llvm-cov` dans
+  `rdp-sidecar/`), avant le lot de tests qui a suivi. Cœur et interface : 71 %
+  des lignes ; processus RDP : 66 %. Le cœur SSH est entre 82 % et 96 % par
+  fichier ; les trous sont l'interface Tauri (`commands.rs` 39 %, `rdp.rs`
+  22 % : des commandes qui exigent un état Tauri, désormais construit par le
+  moteur d'exécution factice), l'outil en ligne de commande (0 %, désormais
+  exercé comme binaire), et dans le processus RDP la boucle de connexion
+  (`main.rs` 47 %), que seuls la conformité et les scénarios bout en bout
+  traversent. Prochaine étape : remesurer après ce lot et suivre la courbe.
 - **Contrôle des dépendances** : `cargo-audit` signale les vulnérabilités connues,
   mais rien ne surveille les licences ni les dépendances abandonnées. `cargo-deny`
   couvre les deux, et sert la conformité AGPL.
@@ -240,7 +248,7 @@ Ces mesures sont à relever à chaque version :
 |---|---|---|
 | Plateformes réellement livrées | 2 | 3 |
 | Scénarios bout en bout | 40 | en hausse à chaque fonctionnalité |
-| Couverture des tests | non mesurée | mesurée, puis en hausse |
+| Couverture des tests | 71 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |
 

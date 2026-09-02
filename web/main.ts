@@ -24,6 +24,7 @@ import {
   describeTunnel, tunnelFlag, tunnelTraffic, activeTunnelsByHost,
   type Host, type TunnelDef, type TunnelStatus, type TunnelKind, type OsInfo,
   buildFolderTree, folderNodeCount, rdpScancode, le16, rdpMousePos, choisirVerrous, type FolderNode,
+  allFolderPaths,
 } from "./filters";
 
 // ---------- Systeme distant par hote ----------
@@ -4106,17 +4107,10 @@ initPanels();
 
 /** Ensemble des dossiers connus (registre + dérivés des hôtes), triés. */
 function allFolders(): string[] {
-  const set = new Set<string>(state.folders);
-  const add = (f: string) => {
-    let acc = "";
-    for (const seg of (f || "").split("/").filter(Boolean)) {
-      acc = acc ? `${acc}/${seg}` : seg;
-      set.add(acc);
-    }
-  };
-  for (const h of state.hosts) add(h.folder ?? "");
-  for (const h of rdpHostsList) add(h.folder ?? "");
-  return [...set].filter(Boolean).sort();
+  return allFolderPaths(state.folders, [
+    ...state.hosts.map((h) => h.folder ?? ""),
+    ...rdpHostsList.map((h) => h.folder ?? ""),
+  ]);
 }
 
 async function createFolder(parent: string) {

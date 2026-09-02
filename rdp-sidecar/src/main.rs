@@ -2536,3 +2536,179 @@ mod tests_rdstls {
         );
     }
 }
+
+#[cfg(test)]
+mod tests_identifiants {
+    use super::split_credentials;
+
+    /// NLA/CredSSP attend le domaine à part ; l'utilisateur, lui, le tape
+    /// comme il l'a toujours fait. Les deux formes courantes sont découpées, et
+    /// `--domain` explicite laisse le nom intact.
+    #[test]
+    fn les_deux_formes_de_domaine_sont_decoupees() {
+        assert_eq!(
+            split_credentials("TEST\\adrien", None),
+            ("adrien".to_owned(), Some("TEST".to_owned()))
+        );
+        assert_eq!(
+            split_credentials("adrien@exemple.local", None),
+            ("adrien".to_owned(), Some("exemple.local".to_owned()))
+        );
+    }
+
+    #[test]
+    fn sans_domaine_le_nom_reste_entier() {
+        assert_eq!(
+            split_credentials("adrien", None),
+            ("adrien".to_owned(), None)
+        );
+    }
+
+    #[test]
+    fn un_domaine_explicite_prime_et_laisse_le_nom_tel_quel() {
+        // Un compte contenant un « @ » légitime ne doit pas être redécoupé
+        // quand l'appelant a déjà dit le domaine.
+        assert_eq!(
+            split_credentials("adrien@exemple.local", Some("AUTRE")),
+            ("adrien@exemple.local".to_owned(), Some("AUTRE".to_owned()))
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_trames {
+    use super::{frame_msg, frames_msg, mouse_button};
+    use ironrdp::graphics::image_processing::PixelFormat;
+    use ironrdp::pdu::geometry::InclusiveRectangle;
+    use ironrdp::session::image::DecodedImage;
+
+    fn image_numerotee(l: u16, h: u16) -> DecodedImage {
+        // Chaque pixel porte sa position : un rectangle mal découpé se voit.
+        let mut image = DecodedImage::new(PixelFormat::RgbA32, l, h);
+        let pixels: Vec<u8> = (0..usize::from(l) * usize::from(h))
+            .flat_map(|i| [(i % 256) as u8, (i / 256) as u8, 0xAA, 0xFF])
+            .collect();
+        image.peindre_rgba(0, 0, l, h, &pixels);
+        image
+    }
+
+    fn r(l: u16, t: u16, ri: u16, b: u16) -> InclusiveRectangle {
+        InclusiveRectangle {
+            left: l,
+            top: t,
+            right: ri,
+            bottom: b,
+        }
+    }
+
+    /// Le format binaire est le contrat avec l'interface (`ws.onmessage`) : un
+    /// octet de type, quatre u16 petit-boutiens, puis les pixels ligne par
+    /// ligne. Aucun test ne le fixait.
+    #[test]
+    fn une_trame_simple_porte_sa_geometrie_et_ses_pixels() {
+        let image = image_numerotee(8, 4);
+        let m = frame_msg(&image, &r(2, 1, 4, 2)); // 3 × 2 pixels
+        assert_eq!(m[0], 2);
+        assert_eq!(&m[1..9], &[2, 0, 1, 0, 3, 0, 2, 0]);
+        assert_eq!(m.len(), 9 + 3 * 2 * 4);
+        // Premier pixel copié = position (2,1) = indice 1*8+2 = 10.
+        assert_eq!(&m[9..13], &[10, 0, 0xAA, 0xFF]);
+        // Première ligne complète : indices 10, 11, 12 ; puis 18, 19, 20.
+        assert_eq!(m[9 + 3 * 4], 18, "la seconde ligne suit le pas de l'image");
+    }
+
+    #[test]
+    fn un_seul_rectangle_garde_la_forme_historique() {
+        let image = image_numerotee(8, 4);
+        let zone = [r(0, 0, 1, 1)];
+        assert_eq!(frames_msg(&image, &zone), frame_msg(&image, &zone[0]));
+    }
+
+    #[test]
+    fn plusieurs_rectangles_sont_concatenes_avec_leur_compte() {
+        let image = image_numerotee(8, 4);
+        let zone = [r(0, 0, 1, 0), r(6, 3, 7, 3)]; // 2×1 chacun
+        let m = frames_msg(&image, &zone);
+        assert_eq!(m[0], 13);
+        assert_eq!(m[1], 2, "nombre de rectangles");
+        assert_eq!(m.len(), 2 + 2 * (8 + 2 * 4));
+        assert_eq!(&m[2..10], &[0, 0, 0, 0, 2, 0, 1, 0]);
+        assert_eq!(&m[10..14], &[0, 0, 0xAA, 0xFF]);
+        let second = 2 + 8 + 8;
+        assert_eq!(&m[second..second + 8], &[6, 0, 3, 0, 2, 0, 1, 0]);
+        // (6,3) = indice 3*8+6 = 30.
+        assert_eq!(&m[second + 8..second + 12], &[30, 0, 0xAA, 0xFF]);
+    }
+
+    #[test]
+    fn les_boutons_de_souris_suivent_la_convention_du_front() {
+        use ironrdp::input::MouseButton;
+        // 0 = gauche (et tout inconnu), 1 = milieu, 2 = droit — l'ordre de
+        // `MouseEvent.button` du navigateur, transmis tel quel.
+        assert_eq!(mouse_button(0), MouseButton::Left);
+        assert_eq!(mouse_button(1), MouseButton::Middle);
+        assert_eq!(mouse_button(2), MouseButton::Right);
+        assert_eq!(mouse_button(3), MouseButton::X1);
+        assert_eq!(mouse_button(4), MouseButton::X2);
+        assert_eq!(mouse_button(200), MouseButton::Left);
+    }
+}
+
+#[cfg(test)]
+mod tests_configuration {
+    use super::{build_config, parse_args_de};
+    use ironrdp::connector::Credentials;
+    use ironrdp::session::redirection::Redirection;
+
+    fn redirection() -> Redirection {
+        Redirection {
+            session_id: 7,
+            drapeaux: 0,
+            adresse: None,
+            jeton: Some(b"Cookie: msts=2464288595\r\n".to_vec()),
+            utilisateur: Some("69<;349v".to_owned()),
+            domaine: None,
+            mot_de_passe: Some(b"secret".to_vec()),
+            fqdn: None,
+            guid: None,
+            utilisateur_brut: None,
+            domaine_brut: None,
+        }
+    }
+
+    /// Après une redirection, ce sont les identifiants du serveur — engendrés
+    /// pour l'occasion — qui partent, et le jeton de routage est replacé dans
+    /// la requête X.224. Sans quoi GNOME Remote Desktop renvoie à l'accueil,
+    /// indéfiniment.
+    #[test]
+    fn une_redirection_impose_ses_identifiants_et_son_jeton() {
+        let a = parse_args_de(&["--host", "x", "-u", "adrien"], "mdp").unwrap();
+        let c = build_config(&a, Some(&redirection()));
+        match c.credentials {
+            Credentials::UsernamePassword { username, password } => {
+                assert_eq!(username, "69<;349v");
+                assert_eq!(password, "secret");
+            }
+            autre => panic!("identifiants inattendus : {autre:?}"),
+        }
+        assert!(
+            c.request_data.is_some(),
+            "le jeton de routage doit être posé"
+        );
+    }
+
+    #[test]
+    fn sans_redirection_ce_sont_ceux_de_l_utilisateur() {
+        let a = parse_args_de(&["--host", "x", "-u", "TEST\\adrien"], "mdp").unwrap();
+        let c = build_config(&a, None);
+        match c.credentials {
+            Credentials::UsernamePassword { username, password } => {
+                assert_eq!(username, "adrien");
+                assert_eq!(password, "mdp");
+            }
+            autre => panic!("identifiants inattendus : {autre:?}"),
+        }
+        assert_eq!(c.domain.as_deref(), Some("TEST"));
+        assert!(c.request_data.is_none());
+    }
+}

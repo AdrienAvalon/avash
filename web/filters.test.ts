@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanSize, matchHost, filterHosts, remoteJoin, type Host } from "./filters";
+import { allFolderPaths, humanSize, matchHost, filterHosts, remoteJoin, type Host } from "./filters";
 
 const host = (o: Partial<Host>): Host => ({
   alias: "srv", hostname: null, user: null, port: null,
@@ -514,5 +514,20 @@ describe("partage du presse-papiers RDP", () => {
   });
   it("est coupé par un réglage à 0", () => {
     expect(partage("0")).toBe(false);
+  });
+});
+
+describe("allFolderPaths", () => {
+  it("ajoute chaque préfixe des dossiers utilisés, sans doublon, trié", () => {
+    expect(allFolderPaths(["prod"], ["clients/acme/web", "prod", ""])).toEqual([
+      "clients",
+      "clients/acme",
+      "clients/acme/web",
+      "prod",
+    ]);
+  });
+
+  it("ignore les segments vides et les barres en trop", () => {
+    expect(allFolderPaths([], ["/a//b/", undefined as unknown as string])).toEqual(["a", "a/b"]);
   });
 });

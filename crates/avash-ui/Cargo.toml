@@ -30,6 +30,12 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-clipboard-manager = "2"
 
+[dev-dependencies]
+# Moteur d'exécution factice de Tauri : de quoi construire un `State` et un
+# `AppHandle` sans fenêtre, donc exercer les commandes et le magasin de sessions
+# — la logique d'annulation pendant une connexion n'avait aucun test unitaire.
+tauri = { version = "2", features = ["test"] }
+
 [[bench]]
 name = "utf8"
 harness = false

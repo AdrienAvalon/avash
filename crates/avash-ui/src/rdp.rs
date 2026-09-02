@@ -506,6 +506,51 @@ mod tests_chemin_sidecar {
 }
 
 #[cfg(test)]
+mod tests_ouverture {
+    use super::{rdp_close, rdp_diagnostic, rdp_open, RdpStore};
+    use tauri::Manager as _;
+
+    fn app_de_test() -> tauri::App<tauri::test::MockRuntime> {
+        tauri::test::mock_builder()
+            .manage(RdpStore::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("application factice")
+    }
+
+    /// L'adresse arrive du front telle quelle jusqu'à la clé du fichier
+    /// d'empreintes : une espace suffit à désarmer le TOFU en silence. Elle
+    /// doit être refusée AVANT tout lancement de processus.
+    #[tokio::test]
+    async fn une_adresse_a_espace_est_refusee_avant_de_lancer_quoi_que_ce_soit() {
+        let app = app_de_test();
+        let issue = rdp_open(
+            app.state::<RdpStore>(),
+            1,
+            "hote avec espace".into(),
+            None,
+            "u".into(),
+            "p".into(),
+            800,
+            600,
+            false,
+        )
+        .await;
+        let Err(e) = issue else {
+            panic!("une adresse à espace a été acceptée")
+        };
+        assert!(e.contains("caractère interdit"), "{e}");
+        assert!(app.state::<RdpStore>().inner.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fermer_ou_diagnostiquer_une_session_inconnue_ne_casse_rien() {
+        let app = app_de_test();
+        assert!(rdp_close(app.state::<RdpStore>(), 42).is_ok());
+        assert_eq!(rdp_diagnostic(app.state::<RdpStore>(), 42), "");
+    }
+}
+
+#[cfg(test)]
 mod tests_annonce {
     use super::{analyser_annonce, message_arret};
 

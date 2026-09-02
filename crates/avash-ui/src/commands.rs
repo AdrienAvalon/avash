@@ -312,7 +312,7 @@ impl Utf8Stream {
 /// peut donc etre reattribue alors que l'ancienne session vit encore. Le pump
 /// evince s'en sert pour ne pas emettre un `pty-closed` qui fermerait le
 /// nouvel onglet.
-fn is_superseded(app: &AppHandle, sid: u64, epoch: u64) -> bool {
+fn is_superseded<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epoch: u64) -> bool {
     use tauri::Manager as _;
     app.state::<SessionStore>()
         .inner
@@ -349,7 +349,7 @@ async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &m
 ///
 /// Rien n'est fait si cet identifiant porte déjà une session plus récente : on
 /// fermerait le nouvel onglet.
-fn clore_session(app: &AppHandle, sid: u64, epoch: u64) {
+fn clore_session<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epoch: u64) {
     use tauri::Manager as _;
     if is_superseded(app, sid, epoch) {
         return;
@@ -1397,6 +1397,68 @@ mod tests {
         assert_eq!(t.label, "prod");
     }
 
+    // ---------- resolve_jumps ----------
+
+    /// Un maillon nu est un alias de `~/.ssh/config` : on reprend son adresse,
+    /// son port, son utilisateur et sa clé. Aucun test ne couvrait cette
+    /// résolution, par laquelle passe pourtant chaque connexion à travers un
+    /// bastion.
+    #[test]
+    fn un_rebond_par_alias_reprend_la_config_du_bastion() {
+        let _g = with_ssh_config(
+            "Host bastion\n  HostName 10.0.0.1\n  User rebond\n  Port 2222\n  IdentityFile /k/bastion\n\n\
+             Host cible\n  HostName 10.0.0.2\n  ProxyJump bastion\n",
+        );
+        let t = Target::from_alias("cible").unwrap();
+        assert_eq!(t.jumps.len(), 1);
+        let h = &t.jumps[0];
+        assert_eq!(h.addr, "10.0.0.1");
+        assert_eq!(h.port, 2222);
+        assert_eq!(h.auth.user, "rebond");
+        assert_eq!(
+            h.auth.key_path.as_deref(),
+            Some(std::path::Path::new("/k/bastion"))
+        );
+        assert!(
+            h.auth.password.is_none(),
+            "un rebond n'a pas de mot de passe"
+        );
+    }
+
+    /// `user@hote:port` n'est pas cherché comme alias : la saisie fait foi, et
+    /// faute de clé propre le rebond réutilise celle de la cible.
+    #[test]
+    fn un_rebond_explicite_reutilise_la_cle_de_la_cible() {
+        let _g = with_ssh_config(
+            "Host cible\n  HostName 10.0.0.2\n  IdentityFile /k/cible\n  ProxyJump deploy@1.2.3.4:2200\n",
+        );
+        let t = Target::from_alias("cible").unwrap();
+        assert_eq!(t.jumps.len(), 1);
+        let h = &t.jumps[0];
+        assert_eq!(
+            (h.addr.as_str(), h.port, h.auth.user.as_str()),
+            ("1.2.3.4", 2200, "deploy")
+        );
+        assert_eq!(
+            h.auth.key_path.as_deref(),
+            Some(std::path::Path::new("/k/cible"))
+        );
+    }
+
+    /// Une chaîne `a,b` donne deux rebonds dans l'ordre ; `none` et l'absence
+    /// de directive n'en donnent aucun.
+    #[test]
+    fn une_chaine_de_rebonds_garde_l_ordre_et_none_n_en_donne_aucun() {
+        let _g = with_ssh_config(
+            "Host a\n  HostName 10.0.0.10\n\nHost b\n  HostName 10.0.0.11\n\n\
+             Host cible\n  HostName 10.0.0.2\n  ProxyJump a, b\n\nHost direct\n  HostName 10.0.0.3\n  ProxyJump none\n",
+        );
+        let t = Target::from_alias("cible").unwrap();
+        let adresses: Vec<&str> = t.jumps.iter().map(|h| h.addr.as_str()).collect();
+        assert_eq!(adresses, vec!["10.0.0.10", "10.0.0.11"]);
+        assert!(Target::from_alias("direct").unwrap().jumps.is_empty());
+    }
+
     #[test]
     fn target_depuis_alias_retombe_sur_les_defauts() {
         let _g = with_ssh_config("Host simple\n  HostName 10.0.0.9\n");
@@ -1578,6 +1640,118 @@ mod tests {
             "le mot de passe ne doit jamais apparaitre dans une trace : {rendu}"
         );
         assert!(rendu.contains("masqué"), "{rendu}");
+    }
+
+    // ---------- Magasin de sessions : annulation pendant la connexion ----------
+    //
+    // Ces chemins ne vivaient que dans des commentaires et dans la suite bout en
+    // bout. Le moteur factice de Tauri permet de construire l'état sans fenêtre.
+
+    use tauri::Manager as _;
+
+    fn app_de_test() -> tauri::App<tauri::test::MockRuntime> {
+        tauri::test::mock_builder()
+            .manage(SessionStore {
+                inner: Mutex::new(HashMap::new()),
+                annules: Mutex::new(std::collections::HashSet::new()),
+                en_cours: Mutex::new(std::collections::HashSet::new()),
+            })
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("application factice")
+    }
+
+    fn poignee(epoch: u64) -> SessionHandle {
+        let (input, _) = tokio::sync::mpsc::channel(1);
+        let (resize, _) = tokio::sync::mpsc::channel(1);
+        SessionHandle {
+            epoch,
+            input,
+            resize,
+            sftp: Mutex::new(None),
+            target: target_with(None),
+        }
+    }
+
+    /// Onglet fermé PENDANT la connexion : l'enregistrement qui suit doit
+    /// échouer en le disant, et ne rien laisser dans le magasin — sinon une
+    /// session SSH établie survivait sans onglet, listée comme cible de snippet.
+    #[tokio::test]
+    async fn fermer_pendant_la_connexion_annule_l_enregistrement() {
+        let app = app_de_test();
+        let state = app.state::<SessionStore>();
+        state.en_cours.lock().unwrap().insert(1);
+        pty_close(app.state::<SessionStore>(), 1).await.unwrap();
+        let issue = enregistrer_session(&state, 1, poignee(1));
+        assert_eq!(issue.unwrap_err(), CONNEXION_ANNULEE);
+        assert!(
+            state.inner.lock().unwrap().is_empty(),
+            "rien ne doit rester"
+        );
+        assert!(
+            state.annules.lock().unwrap().is_empty(),
+            "l'annulation est consommée"
+        );
+        assert!(state.en_cours.lock().unwrap().is_empty());
+    }
+
+    /// Fermer un onglet dont la connexion avait déjà échoué ne doit PAS semer
+    /// une annulation : l'identifiant est réattribué après un rechargement de
+    /// fenêtre, et la session suivante se voyait répondre « annulée », figée.
+    #[tokio::test]
+    async fn fermer_sans_connexion_en_vol_ne_seme_pas_d_annulation() {
+        let app = app_de_test();
+        let state = app.state::<SessionStore>();
+        pty_close(app.state::<SessionStore>(), 2).await.unwrap();
+        assert!(state.annules.lock().unwrap().is_empty());
+        assert!(enregistrer_session(&state, 2, poignee(1)).is_ok());
+        assert!(state.inner.lock().unwrap().contains_key(&2));
+    }
+
+    /// Le front renumérote ses onglets à chaque rechargement : une session plus
+    /// récente sous le même identifiant évince l'ancienne, et la fin de
+    /// l'ancienne ne doit pas fermer la nouvelle.
+    #[tokio::test]
+    async fn une_session_plus_recente_evince_l_ancienne_sans_etre_close_par_elle() {
+        let app = app_de_test();
+        let state = app.state::<SessionStore>();
+        enregistrer_session(&state, 3, poignee(1)).unwrap();
+        enregistrer_session(&state, 3, poignee(2)).unwrap();
+        assert!(is_superseded(app.handle(), 3, 1), "l'époque 1 est évincée");
+        assert!(!is_superseded(app.handle(), 3, 2));
+        // La fin du pump de l'ancienne session ne touche pas à la nouvelle.
+        clore_session(app.handle(), 3, 1);
+        assert_eq!(
+            state.inner.lock().unwrap().get(&3).map(|h| h.epoch),
+            Some(2)
+        );
+        // Celle de la session courante, si.
+        clore_session(app.handle(), 3, 2);
+        assert!(state.inner.lock().unwrap().get(&3).is_none());
+    }
+
+    /// Une frappe vers une session fermée doit être une erreur, pas un silence :
+    /// le front croyait sinon l'avoir transmise.
+    #[tokio::test]
+    async fn ecrire_dans_une_session_inconnue_est_une_erreur() {
+        let app = app_de_test();
+        let e = pty_write(app.state::<SessionStore>(), 9, "ls".into())
+            .await
+            .unwrap_err();
+        assert!(e.contains("inconnue"), "{e}");
+        assert!(pty_resize(app.state::<SessionStore>(), 9, 80, 24)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn open_sessions_liste_les_sessions_enregistrees() {
+        let app = app_de_test();
+        let state = app.state::<SessionStore>();
+        assert!(open_sessions(app.state::<SessionStore>()).is_empty());
+        enregistrer_session(&state, 4, poignee(1)).unwrap();
+        let liste = open_sessions(app.state::<SessionStore>());
+        assert_eq!(liste.len(), 1);
+        assert_eq!((liste[0].id, liste[0].label.as_str()), (4, "h"));
     }
 
     #[test]
