@@ -129,7 +129,8 @@ c'était un déni de service, pas un détournement.
 
 Ensuite, tout transite en **binaire** (`ArrayBuffer` natif — ni base64, ni
 JSON), le premier octet étant le code de message. Les définitions de référence
-sont `input_ops` / `frame_msg` dans `rdp-sidecar/src/main.rs` et le
+sont `input_ops` dans `rdp-sidecar/src/entrees.rs`, `frame_msg` dans
+`rdp-sidecar/src/trames.rs` et le
 gestionnaire `ws.onmessage` / `send` dans `web/rdp.ts`.
 
 ### Application → sidecar
@@ -305,7 +306,16 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Dossiers | `crates/avash/src/folders.rs` |
 | Commandes Tauri | `crates/avash-ui/src/commands.rs` |
 | Lancement du sidecar RDP | `crates/avash-ui/src/rdp.rs` |
-| Sidecar RDP (protocole, IronRDP) | `rdp-sidecar/src/main.rs` |
+| Sidecar RDP — point d'entrée | `rdp-sidecar/src/main.rs` |
+| Sidecar RDP — ligne de commande, disposition clavier, résolution | `rdp-sidecar/src/args.rs` |
+| Sidecar RDP — connexion, négociation NLA/RDSTLS, redirections, coupures | `rdp-sidecar/src/connexion.rs` |
+| Sidecar RDP — session établie (boucle, cadencement, redimensionnement, statistiques) | `rdp-sidecar/src/session.rs` |
+| Sidecar RDP — confiance au serveur (TOFU), fichier des empreintes | `rdp-sidecar/src/empreintes.rs` |
+| Sidecar RDP — canal local (jeton, origine du WebSocket) | `rdp-sidecar/src/acces_local.rs` |
+| Sidecar RDP — entrées (souris, clavier, verrous) | `rdp-sidecar/src/entrees.rs` |
+| Sidecar RDP — trames vers l'interface (zone sale, format binaire) | `rdp-sidecar/src/trames.rs` |
+| Sidecar RDP — presse-papiers CLIPRDR | `rdp-sidecar/src/presse_papiers.rs` |
+| Sidecar RDP — capture `--shot` | `rdp-sidecar/src/capture.rs` |
 | Canal graphique RDP (MS-RDPEGFX) | `rdp-sidecar/src/egfx.rs` |
 | Codec RemoteFX Progressive | `rdp-sidecar/src/progressif.rs` |
 | Surfaces et cache du canal graphique | `rdp-sidecar/src/surface.rs` |

@@ -112,7 +112,7 @@ de la retrouver et de la révoquer à la main dans l'outil du système.
 
 Le mot de passe RDP est passé au sidecar `avash-rdp` **sur son entrée standard
 (stdin)**, jamais en argument de ligne de commande (voir
-`crates/avash-ui/src/rdp.rs` et `read_password` dans `rdp-sidecar/src/main.rs`).
+`crates/avash-ui/src/rdp.rs` et `read_password` dans `rdp-sidecar/src/args.rs`).
 Il n'apparaît donc **pas dans `/proc/<pid>/cmdline`** ni dans la liste des
 processus, où tout utilisateur de la machine pourrait le lire.
 

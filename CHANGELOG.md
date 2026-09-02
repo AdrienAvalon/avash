@@ -51,6 +51,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   en ligne de commande, qui n'avait aucun test, est exercé comme binaire :
   `list`, absence de configuration, commande inconnue, `run` incomplet. Le
   front extrait l'expansion des chemins de dossiers, testée.
+- **Le processus RDP est découpé en modules.** `rdp-sidecar/src/main.rs`
+  (2 700 lignes) ne garde que le point d'entrée ; neuf modules prennent
+  chacun un domaine : ligne de commande, connexion et négociation, session
+  établie, confiance au serveur, canal local, entrées, trames, presse-papiers,
+  capture. Chaque module de test suit le code qu'il exerce ; le texte est
+  repris tel quel, seules les visibilités et les imports changent.
 - **Le front est découpé en modules.** `web/main.ts` (4 200 lignes) portait
   toute l'application ; il garde le cœur — arbre des hôtes, onglets,
   terminaux, palette, amorçage — et dix-huit modules prennent chacun un
