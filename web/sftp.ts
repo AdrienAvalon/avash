@@ -9,6 +9,7 @@ import { humanSize, remoteJoin, parentDir, sortSftpEntries, shortDate, shellQuot
 import { $, type Session, state } from "./etat";
 import { askConfirm, askText } from "./dialogues";
 import { placerMenu } from "./menu-hote";
+import { t } from "./i18n";
 
 // ===== SFTP =====
 
@@ -47,7 +48,7 @@ async function sftpNavigate(path: string) {
   s.sftpPath = path;
   ($("sftp-path") as HTMLInputElement).value = path;
   const list = $("sftp-list");
-  list.innerHTML = `<div class="sftp-status">Chargement…</div>`;
+  list.innerHTML = `<div class="sftp-status">${t("chargement")}</div>`;
   try {
     const entries = await invoke<SftpEntry[]>("sftp_list", { id: s.id, path });
     // La reponse peut arriver apres un changement d'onglet.
@@ -89,8 +90,8 @@ async function sftpNavigate(path: string) {
       el.querySelector(".nm")!.textContent = e.name;
       el.querySelector(".sz")!.textContent = e.is_dir ? shortDate(e.modified) : humanSize(e.size);
       el.title = e.is_dir
-        ? `${e.name} — modifié ${shortDate(e.modified) || "?"} — double-clic : ouvrir`
-        : `${e.name} — ${humanSize(e.size)}, modifié ${shortDate(e.modified) || "?"} — double-clic : télécharger`;
+        ? t("sftp-titre-dossier", { nom: e.name, date: shortDate(e.modified) || "?" })
+        : t("sftp-titre-fichier", { nom: e.name, taille: humanSize(e.size), date: shortDate(e.modified) || "?" });
       lot.appendChild(el);
     });
     list.appendChild(lot);
@@ -98,7 +99,7 @@ async function sftpNavigate(path: string) {
     // Délégation : trois écouteurs pour toute la liste, au lieu de trois par
     // entrée. `sftpDelegue` est réarmé à chaque navigation avec le lot courant.
     sftpDelegue(list, sorted, path);
-    sftpStatus(`${entries.length} élément${entries.length > 1 ? "s" : ""}`);
+    sftpStatus(t(entries.length > 1 ? "sftp-elements" : "sftp-element", { n: entries.length }));
   } catch (e) {
     list.innerHTML = "";
     sftpStatus(`⚠️ ${e}`, "err");
@@ -196,7 +197,7 @@ async function sftpDownload(remote: string, name: string) {
   const s = sftpSession();
   if (!s) return;
   if (sftp.busy) {
-    sftpStatus("Un transfert est déjà en cours.", "err");
+    sftpStatus(t("sftp-transfert-en-cours"), "err");
     return;
   }
   sftp.busy = true;
@@ -217,7 +218,7 @@ async function sftpUploadPaths(paths: string[]) {
   const s = sftpSession();
   if (!s || paths.length === 0) return;
   if (sftp.busy) {
-    sftpStatus("Un transfert est déjà en cours.", "err");
+    sftpStatus(t("sftp-transfert-en-cours"), "err");
     return;
   }
   sftp.busy = true;
@@ -239,7 +240,7 @@ async function sftpUploadPaths(paths: string[]) {
     sftp.busy = false;
     sftpProgressDone();
   }
-  if (errors.length === 0) sftpStatus(`✅ ${ok} fichier${ok > 1 ? "s" : ""} envoyé${ok > 1 ? "s" : ""}`, "ok");
+  if (errors.length === 0) sftpStatus("✅ " + t(ok > 1 ? "sftp-fichiers-envoyes" : "sftp-fichier-envoye", { n: ok }), "ok");
   else sftpStatus(`⚠️ ${errors.join(" · ")}`, "err");
   if (sftpSession() === s) void sftpNavigate(dir);
 }
@@ -248,9 +249,9 @@ async function sftpPickAndUpload() {
   if (!sftpSession()) return;
   let picked: string[] | string | null;
   try {
-    picked = await openDialog({ multiple: true, directory: false, title: "Fichiers à envoyer" });
+    picked = await openDialog({ multiple: true, directory: false, title: t("sftp-fichiers-a-envoyer") });
   } catch (e) {
-    sftpStatus(`⚠️ Sélecteur indisponible : ${e}`, "err");
+    sftpStatus("⚠️ " + t("selecteur-indisponible", { e: String(e) }), "err");
     return;
   }
   if (!picked) return;
@@ -260,10 +261,10 @@ async function sftpPickAndUpload() {
 async function sftpMkdir(dir: string) {
   const s = sftpSession();
   if (!s) return;
-  const name = await askText("Nouveau dossier", "Nom du dossier", "");
+  const name = await askText(t("nouveau-dossier-2"), t("dossiers-nom"), "");
   if (name === null) return;
   if (!validFileName(name)) {
-    sftpStatus("Nom de dossier invalide.", "err");
+    sftpStatus(t("sftp-nom-dossier-invalide"), "err");
     return;
   }
   try {
@@ -277,10 +278,10 @@ async function sftpMkdir(dir: string) {
 async function sftpRename(entry: SftpEntry, dir: string) {
   const s = sftpSession();
   if (!s) return;
-  const name = await askText("Renommer", "Nouveau nom", entry.name);
+  const name = await askText(t("sftp-renommer"), t("sftp-nouveau-nom"), entry.name);
   if (name === null || name === entry.name) return;
   if (!validFileName(name)) {
-    sftpStatus("Nom invalide.", "err");
+    sftpStatus(t("sftp-nom-invalide"), "err");
     return;
   }
   try {
@@ -294,8 +295,8 @@ async function sftpRename(entry: SftpEntry, dir: string) {
 async function sftpDelete(entry: SftpEntry, dir: string) {
   const s = sftpSession();
   if (!s) return;
-  const what = entry.is_dir ? `le dossier « ${entry.name} » (doit être vide)` : `« ${entry.name} »`;
-  if (!(await askConfirm(`Supprimer ${what} sur le serveur ?\n\nCette action est définitive.`))) return;
+  const what = entry.is_dir ? t("sftp-le-dossier-vide", { nom: entry.name }) : `« ${entry.name} »`;
+  if (!(await askConfirm(t("sftp-supprimer-question", { quoi: what })))) return;
   try {
     await invoke("sftp_remove", { id: s.id, path: remoteJoin(dir, entry.name), isDir: entry.is_dir });
     void sftpNavigate(dir);
@@ -338,7 +339,7 @@ $("sftp-context").addEventListener("click", (e) => {
     invoke("pty_write", { id: s.id, data: `cd ${shellQuote(target)}\r` }).catch(() => {});
     s.term.focus();
   } else if (act === "copy") {
-    navigator.clipboard.writeText(full).then(() => sftpStatus(`Chemin copié : ${full}`, "ok"), () => {});
+    navigator.clipboard.writeText(full).then(() => sftpStatus(t("sftp-chemin-copie", { chemin: full }), "ok"), () => {});
   } else if (act === "rename" && entry) void sftpRename(entry, path);
   else if (act === "mkdir") void sftpMkdir(path);
   else if (act === "delete" && entry) void sftpDelete(entry, path);

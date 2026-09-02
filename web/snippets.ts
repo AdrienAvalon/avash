@@ -7,6 +7,7 @@ import { $, state } from "./etat";
 import { askConfirm } from "./dialogues";
 import { focusSession } from "./main";
 import { notifyErreur } from "./notifications";
+import { t } from "./i18n";
 
 // ---------- Snippets ----------
 
@@ -35,7 +36,7 @@ function renderSnippets() {
   if (snip.list.length === 0) {
     const empty = document.createElement("div");
     empty.className = "snippet-empty";
-    empty.textContent = "Aucun snippet. Crée-en un ci-dessous.";
+    empty.textContent = t("snippets-aucun");
     list.appendChild(empty);
     return;
   }
@@ -48,9 +49,9 @@ function renderSnippets() {
         <div class="scmd"></div>
       </div>
       <div class="sacts">
-        <button class="tbtn go" data-act="send" title="Envoyer">${ic("play")}</button>
-        <button class="tbtn" data-act="edit" title="Modifier">${ic("pencil")}</button>
-        <button class="tbtn danger" data-act="delete" title="Supprimer">${ic("trash")}</button>
+        <button class="tbtn go" data-act="send" title="${t("envoyer-2")}">${ic("play")}</button>
+        <button class="tbtn" data-act="edit" title="${t("snippets-modifier")}">${ic("pencil")}</button>
+        <button class="tbtn danger" data-act="delete" title="${t("supprimer")}">${ic("trash")}</button>
       </div>`;
     row.querySelector(".snm")!.textContent = sn.name;
     if (nVars > 0) {
@@ -73,7 +74,7 @@ function snippetFormReset() {
   ($("snippet-form") as HTMLFormElement).reset();
   ($("sn-id") as HTMLInputElement).value = "";
   ($("sn-run") as HTMLInputElement).checked = true;
-  $("snippet-form-title").textContent = "Nouveau snippet";
+  $("snippet-form-title").textContent = t("nouveau-snippet");
   $("sn-submit").textContent = "Enregistrer";
   $("sn-reset").hidden = true;
   $("sn-error").hidden = true;
@@ -90,8 +91,8 @@ function snippetEdit(sn: Snippet) {
   ($("sn-name") as HTMLInputElement).value = sn.name;
   ($("sn-command") as HTMLTextAreaElement).value = sn.command;
   ($("sn-run") as HTMLInputElement).checked = sn.run;
-  $("snippet-form-title").textContent = `Modifier « ${sn.name} »`;
-  $("sn-submit").textContent = "Enregistrer les modifications";
+  $("snippet-form-title").textContent = t("snippets-modifier-titre", { nom: sn.name });
+  $("sn-submit").textContent = t("enregistrer-les-modifications");
   $("sn-reset").hidden = false;
   ($("snippet-block") as HTMLDetailsElement).open = true;
   snippetSyncVars();
@@ -99,12 +100,12 @@ function snippetEdit(sn: Snippet) {
 }
 
 async function snippetDelete(sn: Snippet) {
-  if (!(await askConfirm(`Supprimer le snippet « ${sn.name} » ?`))) return;
+  if (!(await askConfirm(t("snippets-supprimer-question", { nom: sn.name })))) return;
   try {
     await invoke("snippet_delete", { id: sn.id });
     await snippetsRefresh();
   } catch (e) {
-    notifyErreur(`Suppression impossible : ${e}`);
+    notifyErreur(t("suppression-impossible", { e: String(e) }));
   }
 }
 
@@ -157,7 +158,7 @@ async function snippetSendFlow(sn: Snippet) {
     sessions = [];
   }
   if (sessions.length === 0) {
-    $("sn-error").textContent = "Ouvre d'abord une session : un snippet s'envoie dans un terminal.";
+    $("sn-error").textContent = t("snippets-ouvre-session");
     $("sn-error").hidden = false;
     return;
   }
@@ -233,7 +234,7 @@ $("send-form").addEventListener("submit", async (e) => {
   if (sendCtx.sessions.length > 1) {
     ids = [...$("send-targets").querySelectorAll<HTMLInputElement>("input:checked")].map((i) => Number(i.dataset.sid));
     if (ids.length === 0) {
-      $("send-error").textContent = "Choisis au moins une session.";
+      $("send-error").textContent = t("snippets-choisis-session");
       $("send-error").hidden = false;
       return;
     }

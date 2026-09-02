@@ -14,6 +14,7 @@ import { focusTab, orderedTabs } from "./raccourcis";
 import { loadHosts, renderHosts } from "./main";
 import { notify, notifyErreur } from "./notifications";
 import { openMoveModal } from "./dossiers";
+import { t } from "./i18n";
 
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
@@ -59,7 +60,7 @@ async function pushLocalClipboard(force = false): Promise<void> {
 // quand le serveur le réclame, dans l'onglet actif.
 export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget }>();
 
-export async function openRdp(t: RdpTarget) {
+export async function openRdp(cible: RdpTarget) {
   const id = state.nextId++;
   // Onglet
   const tabs = $("tabs");
@@ -70,7 +71,7 @@ export async function openRdp(t: RdpTarget) {
   // Même règle que les onglets SSH : le nom de l'hôte enregistré, et à défaut
   // « utilisateur@adresse » pour une connexion directe. Les deux protocoles se
   // lisent ainsi de la même façon dans la barre d'onglets.
-  tab.querySelector(".label")!.textContent = t.name ?? `${t.user}@${t.host}`;
+  tab.querySelector(".label")!.textContent = cible.name ?? `${cible.user}@${cible.host}`;
   tab.querySelector(".close")!.innerHTML = ic("x");
   tabs.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
   tabs.appendChild(tab);
@@ -81,8 +82,8 @@ export async function openRdp(t: RdpTarget) {
   const even = (n: number) => n - (n % 2);
   // Mutables : au redimensionnement natif, le serveur renvoie la vraie taille
   // (message CONNECTED) et on les remet à jour — le mappage souris suit.
-  let rdpW = Math.max(200, Math.min(8192, even(Math.round(t.width || area.width || 1280))));
-  let rdpH = Math.max(200, Math.min(8192, Math.round(t.height || area.height || 800)));
+  let rdpW = Math.max(200, Math.min(8192, even(Math.round(cible.width || area.width || 1280))));
+  let rdpH = Math.max(200, Math.min(8192, Math.round(cible.height || area.height || 800)));
 
   // Canvas dans la zone terminal
   $("terminal-empty").style.display = "none";
@@ -95,13 +96,13 @@ export async function openRdp(t: RdpTarget) {
   // Indicateur de qualité en direct (fps / débit / latence). Clic pour masquer.
   const hud = document.createElement("div");
   hud.className = "rdp-hud";
-  hud.title = "Qualité de la session — clic pour masquer";
+  hud.title = t("rdp-hud-titre");
   hud.addEventListener("click", () => hud.classList.toggle("mini"));
   wrap.appendChild(canvas);
   wrap.appendChild(hud);
   $("terminal").appendChild(wrap);
   const ctx = canvas.getContext("2d")!;
-  rdpSessions.set(id, { canvas, tab, ws: null, hostId: t.hostId, target: t });
+  rdpSessions.set(id, { canvas, tab, ws: null, hostId: cible.hostId, target: cible });
   state.active = id;
 
   tab.addEventListener("click", () => focusRdp(id));
@@ -196,9 +197,9 @@ export async function openRdp(t: RdpTarget) {
   //   [1] CONNECTED w,h · [2] FRAME x,y,w,h + RGBA · [3] ERROR utf8
   try {
     const conn = await invoke<{ port: number; token: string }>("rdp_open", {
-      id, host: t.host, port: t.port, user: t.user, password: t.password,
+      id, host: cible.host, port: cible.port, user: cible.user, password: cible.password,
       width: rdpW, height: rdpH,
-      sansNla: t.sansNla === true || sansNlaAccepte.has(`${t.host}:${t.port ?? 3389}`),
+      sansNla: cible.sansNla === true || sansNlaAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
     });
     // L'onglet a pu être fermé pendant la connexion (TLS + NLA prennent du
     // temps) : sans cette garde, l'affectation levait une exception, attrapée
@@ -321,13 +322,13 @@ export async function openRdp(t: RdpTarget) {
     // Le serveur ne sait pas faire d'authentification réseau. Ce n'est pas
     // forcément une attaque — un xrdp dont le module PAM n'est pas configuré
     // est dans ce cas —, mais ce n'est pas à nous d'en décider en silence.
-    if (String(e).includes("[AVASH_RDP_SANS_NLA]") && (await proposerSansNla(t, String(e)))) {
+    if (String(e).includes("[AVASH_RDP_SANS_NLA]") && (await proposerSansNla(cible, String(e)))) {
       closeRdp(id);
-      await openRdp({ ...t, sansNla: true });
+      await openRdp({ ...cible, sansNla: true });
       return;
     }
     tab.querySelector(".state")!.className = "state closed";
-    notify(`Connexion RDP impossible : ${e}`, "erreur");
+    notify(t("rdp-connexion-impossible", { e: String(e) }), "erreur");
     showRdpClosed(id); // proposer de réessayer
   }
   focusRdp(id);
@@ -343,26 +344,21 @@ export async function openRdp(t: RdpTarget) {
  *  exactement le compromis du TOFU, et il faut le dire tel quel plutôt que
  *  d'agiter un avertissement vague.
  */
-async function proposerSansNla(t: RdpTarget, erreur: string): Promise<boolean> {
+async function proposerSansNla(cible: RdpTarget, erreur: string): Promise<boolean> {
   // Le processus RDP distingue deux cas — le serveur refuse NLA d'emblée, ou il
   // l'annonce sans mener l'échange à terme. On reprend SA phrase plutôt que
   // d'en inventer une générique qui serait fausse dans l'un des deux cas.
   const raison = erreur.replace(/^.*\[AVASH_RDP_SANS_NLA\]\s*/s, "").trim();
   const ok = await askConfirm(
-    `${t.name ?? t.host} — ${raison}\n\n` +
-      "Sans NLA, votre mot de passe part dans un canal chiffré, mais sans que " +
-      "le serveur se soit authentifié auprès d'Avash au préalable.\n\n" +
-      "L'empreinte du serveur reste épinglée : dès la prochaine connexion, un " +
-      "imposteur sera refusé. Le risque ne porte donc que sur ce premier " +
-      "contact.\n\nSe connecter quand même ?",
-    { ok: "Se connecter sans NLA" },
+    `${cible.name ?? cible.host} — ${raison}\n\n` + t("rdp-sans-nla-explication"),
+    { ok: t("rdp-se-connecter-sans-nla") },
   );
   if (!ok) return false;
-  sansNlaAccepte.add(`${t.host}:${t.port ?? 3389}`);
+  sansNlaAccepte.add(`${cible.host}:${cible.port ?? 3389}`);
   // Un bureau enregistré retient le choix ; une connexion directe ne vaut que
   // pour cette session.
-  if (t.hostId) {
-    await invoke("rdp_host_set_sans_nla", { id: t.hostId, valeur: true }).catch(() => {});
+  if (cible.hostId) {
+    await invoke("rdp_host_set_sans_nla", { id: cible.hostId, valeur: true }).catch(() => {});
   }
   return true;
 }
@@ -472,11 +468,11 @@ function showRdpClosed(id: number) {
   const ov = document.createElement("div");
   ov.className = "rdp-closed";
   ov.innerHTML =
-    `<div class="rdp-closed-box"><p>Connexion RDP fermée.</p>` +
+    `<div class="rdp-closed-box"><p>${t("rdp-connexion-fermee")}</p>` +
     `<pre class="rdp-closed-diag" hidden></pre>` +
     `<div class="rdp-closed-actions">` +
-    `<button type="button" class="btn-primary" data-act="reconnect">Reconnecter</button>` +
-    `<button type="button" class="btn-ghost" data-act="close">Fermer l'onglet</button>` +
+    `<button type="button" class="btn-primary" data-act="reconnect">${t("rdp-reconnecter")}</button>` +
+    `<button type="button" class="btn-ghost" data-act="close">${t("fermer-l-onglet-maj")}</button>` +
     `</div></div>`;
   // « Connexion RDP fermée » sans un mot de plus ne dit pas si le serveur a
   // redémarré, si le réseau a lâché ou si le processus a échoué. Le sidecar
@@ -548,11 +544,11 @@ $("rdp-context").addEventListener("click", async (e) => {
   else if (act === "forget") {
     // cf. le volet SSH : une action muette ne se distingue pas d'un clic raté.
     await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user })
-      .then(() => notify(`Mot de passe oublié pour ${h.name}.`, "succes"))
-      .catch((err) => notifyErreur(`Le mot de passe n'a pas pu être oublié : ${err}`));
+      .then(() => notify(t("hote-mdp-oublie", { alias: h.name }), "succes"))
+      .catch((err) => notifyErreur(t("hote-mdp-non-oublie", { e: String(err) })));
   } else if (act === "delete") {
-    if (!(await askConfirm(`Supprimer le bureau RDP « ${h.name} » ?\n\nSon mot de passe mémorisé sera aussi oublié.`))) return;
-    await invoke("rdp_host_delete", { id: h.id }).catch((err) => notifyErreur(`Suppression impossible : ${err}`));
+    if (!(await askConfirm(t("rdp-supprimer-question", { nom: h.name })))) return;
+    await invoke("rdp_host_delete", { id: h.id }).catch((err) => notifyErreur(t("suppression-impossible", { e: String(err) })));
     await loadHosts();
   }
 });
@@ -593,7 +589,7 @@ $("rdp-edit-form").addEventListener("submit", async (e) => {
   const port = portRaw ? Number(portRaw) : 3389;
   const pw = ($("re-password") as HTMLInputElement).value;
   if (!name || !host || !user) {
-    err.textContent = "Nom, adresse et utilisateur requis.";
+    err.textContent = t("rdp-nom-adresse-utilisateur-requis");
     err.hidden = false;
     return;
   }

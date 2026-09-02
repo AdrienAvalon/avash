@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { $ } from "./etat";
 import { loadHosts, openManualSession } from "./main";
 import { openRdp } from "./rdp";
+import { t } from "./i18n";
 
 // ---------- Connexion directe (sans ~/.ssh/config) ----------
 
@@ -83,7 +84,7 @@ async function manualSubmit(ev: Event) {
     const addr = ($("m-addr") as HTMLInputElement).value.trim();
     const user = ($("m-user") as HTMLInputElement).value.trim();
     const password = ($("m-password") as HTMLInputElement).value;
-    if (!addr || !user) { manualError().textContent = "Adresse et utilisateur requis."; manualError().hidden = false; return; }
+    if (!addr || !user) { manualError().textContent = t("cd-adresse-utilisateur-requis"); manualError().hidden = false; return; }
     const portRaw = ($("m-port") as HTMLInputElement).value.trim();
     const rport2 = portRaw ? Number(portRaw) : 3389;
     const rport = rport2;
@@ -94,7 +95,7 @@ async function manualSubmit(ev: Event) {
     // acceptait n'importe quoi et posait dans la barre latérale une ligne sans
     // libellé, que même sa suppression ne savait plus nommer.
     if (enregistrer && !nomRdp) {
-      manualError().textContent = "Donne un nom à ce bureau pour l'enregistrer.";
+      manualError().textContent = t("cd-nom-bureau");
       manualError().hidden = false;
       return;
     }
@@ -140,7 +141,7 @@ async function manualSubmit(ev: Event) {
       // pris, fichier illisible), l'utilisateur le voit dans le formulaire
       // plutot que de decouvrir plus tard que rien n'a ete sauve.
       alias = ($("m-alias") as HTMLInputElement).value.trim();
-      if (!alias) throw new Error("Donne un nom à l'hôte pour l'enregistrer.");
+      if (!alias) throw new Error(t("cd-nom-hote"));
       await invoke("host_save", {
         alias,
         addr: target.addr,
@@ -161,7 +162,7 @@ async function manualSubmit(ev: Event) {
     manualError().hidden = false;
   } finally {
     submit.disabled = false;
-    submit.textContent = "Se connecter";
+    submit.textContent = t("se-connecter");
   }
 }
 

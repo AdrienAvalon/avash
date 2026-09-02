@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { $ } from "./etat";
+import { t } from "./i18n";
 
 // ---------- Clés SSH : lister, générer, déployer ----------
 
@@ -44,7 +45,7 @@ async function keysRefresh() {
   if (keys.length === 0) {
     const empty = document.createElement("div");
     empty.className = "key-empty";
-    empty.textContent = "Aucune clé pour l'instant — crée-en une ci-dessous.";
+    empty.textContent = t("cles-aucune");
     list.appendChild(empty);
   }
   for (const k of keys) {
@@ -60,7 +61,7 @@ async function keysRefresh() {
     const mode = document.createElement("span");
     mode.className = "kmode" + (k.mode === "600" ? "" : " warn");
     mode.textContent = k.mode === "600" ? "600" : `${k.mode} ⚠`;
-    mode.title = k.mode === "600" ? "Droits corrects" : "OpenSSH exige 600 sur une clé privée";
+    mode.title = k.mode === "600" ? t("cles-droits-corrects") : t("cles-droits-600");
 
     row.append(name, mode);
 
@@ -68,11 +69,11 @@ async function keysRefresh() {
       const copy = document.createElement("button");
       copy.className = "kcopy";
       copy.type = "button";
-      copy.textContent = "copier la publique";
+      copy.textContent = t("cles-copier-publique");
       copy.addEventListener("click", async () => {
         await navigator.clipboard.writeText(k.public_line!);
-        copy.textContent = "copiée ✓";
-        setTimeout(() => (copy.textContent = "copier la publique"), 1500);
+        copy.textContent = t("cles-copiee");
+        setTimeout(() => (copy.textContent = t("cles-copier-publique")), 1500);
       });
       row.appendChild(copy);
 
@@ -105,7 +106,7 @@ async function keygenSubmit(ev: Event) {
   btn.disabled = true;
   try {
     const k = await invoke<KeyEntry>("key_generate", { name, comment: comment || null });
-    keyFeedback(`Clé « ${k.name} » créée dans ${k.path}`, "ok");
+    keyFeedback(t("cles-creee", { nom: k.name, chemin: k.path }), "ok");
     ($("keygen-form") as HTMLFormElement).reset();
     await keysRefresh();
   } catch (e) {
@@ -137,7 +138,7 @@ async function deploySubmit(ev: Event) {
     keyFeedback(String(e), "error");
   } finally {
     btn.disabled = false;
-    btn.textContent = "Installer la clé";
+    btn.textContent = t("installer-la-cle");
   }
 }
 

@@ -10,6 +10,7 @@ import { type Host } from "./filters";
 import { $ } from "./etat";
 import { notify, notifyErreur } from "./notifications";
 import { loadHosts } from "./main";
+import { t } from "./i18n";
 
 type Candidat = {
   source: "putty" | "mobaxterm";
@@ -33,12 +34,12 @@ function rendre(bilan: Bilan) {
   candidats = bilan.candidats;
   const consultes = $("import-consultes");
   consultes.textContent = bilan.consultes.length
-    ? `Consulté : ${bilan.consultes.join(" · ")}`
-    : "Aucun emplacement habituel trouvé sur cette machine : désignez un dossier de sessions PuTTY ou un fichier MobaXterm.ini.";
+    ? t("import-consulte", { liste: bilan.consultes.join(" · ") })
+    : t("import-aucun-emplacement");
   const l = liste();
   l.innerHTML = "";
   if (candidats.length === 0) {
-    l.innerHTML = `<div class="empty">Aucune session SSH à importer.</div>`;
+    l.innerHTML = `<div class="empty">${t("import-aucune-session")}</div>`;
   }
   candidats.forEach((c, i) => {
     const row = document.createElement("div");
@@ -46,12 +47,12 @@ function rendre(bilan: Bilan) {
     row.dataset.alias = c.host.alias;
     const port = c.host.port ?? 22;
     const cible = `${c.host.user ? c.host.user + "@" : ""}${c.host.hostname ?? "?"}:${port}`;
-    const dossier = c.host.folder ? ` · dossier ${escapeHtml(c.host.folder)}` : "";
-    const cle = c.host.identity_file ? ` · clé ${escapeHtml(c.host.identity_file)}` : "";
-    const doublon = c.doublon ? `<div class="import-remarque">Déjà déclaré sous « ${escapeHtml(c.doublon)} » : décoché pour ne pas dupliquer.</div>` : "";
+    const dossier = c.host.folder ? ` · ${t("import-dossier")} ${escapeHtml(c.host.folder)}` : "";
+    const cle = c.host.identity_file ? ` · ${t("import-cle")} ${escapeHtml(c.host.identity_file)}` : "";
+    const doublon = c.doublon ? `<div class="import-remarque">${escapeHtml(t("import-doublon", { alias: c.doublon }))}</div>` : "";
     const remarques = c.remarques.map((r) => `<div class="import-remarque">${escapeHtml(r)}</div>`).join("");
     row.innerHTML = `
-      <input type="checkbox" id="import-c-${i}" ${c.doublon ? "" : "checked"} aria-label="Importer ${escapeHtml(c.nom_origine)}" />
+      <input type="checkbox" id="import-c-${i}" ${c.doublon ? "" : "checked"} aria-label="${escapeHtml(t("importer"))} ${escapeHtml(c.nom_origine)}" />
       <label class="import-alias" for="import-c-${i}"><input type="text" value="${escapeHtml(c.host.alias)}" aria-label="Alias" spellcheck="false" /><span class="import-source">${c.source === "putty" ? "PuTTY" : "MobaXterm"}</span></label>
       <div class="import-detail">${escapeHtml(c.nom_origine)} → ${escapeHtml(cible)}${dossier}${cle}</div>
       ${doublon}${remarques}`;
@@ -59,7 +60,7 @@ function rendre(bilan: Bilan) {
   });
   const bilanEl = $("import-bilan");
   const parties: string[] = [];
-  if (bilan.ignorees > 0) parties.push(`${bilan.ignorees} session${bilan.ignorees > 1 ? "s" : ""} d'un autre protocole (RDP, telnet, série) laissée${bilan.ignorees > 1 ? "s" : ""} de côté.`);
+  if (bilan.ignorees > 0) parties.push(t(bilan.ignorees > 1 ? "import-ignorees" : "import-ignoree", { n: bilan.ignorees }));
   bilanEl.textContent = parties.join(" ");
   majBouton();
 }
@@ -78,13 +79,13 @@ function majBouton() {
 }
 
 async function analyser(chemin?: string) {
-  liste().innerHTML = `<div class="empty">Lecture…</div>`;
+  liste().innerHTML = `<div class="empty">${t("import-lecture")}</div>`;
   try {
     rendre(await invoke<Bilan>("import_scan", { chemin: chemin ?? null }));
   } catch (e) {
     liste().innerHTML = "";
     $("import-bilan").textContent = "";
-    notifyErreur(`Import impossible : ${e}`);
+    notifyErreur(t("import-impossible", { e: String(e) }));
   }
 }
 
@@ -103,10 +104,10 @@ async function importChoisir() {
     // Un fichier (MobaXterm.ini, .mxtsessions) ou un dossier (sessions PuTTY) :
     // le sélecteur natif ne propose pas les deux à la fois, on demande d'abord
     // un fichier, et l'annulation bascule sur un dossier.
-    choisi = await openDialog({ multiple: false, directory: false, title: "MobaXterm.ini ou .mxtsessions" });
-    if (!choisi) choisi = await openDialog({ multiple: false, directory: true, title: "Dossier des sessions PuTTY" });
+    choisi = await openDialog({ multiple: false, directory: false, title: t("import-titre-fichier") });
+    if (!choisi) choisi = await openDialog({ multiple: false, directory: true, title: t("import-titre-dossier") });
   } catch (e) {
-    notifyErreur(`Sélecteur indisponible : ${e}`);
+    notifyErreur(t("selecteur-indisponible", { e: String(e) }));
     return;
   }
   if (!choisi) return;
@@ -121,10 +122,10 @@ async function importSubmit() {
   try {
     const n = await invoke<number>("import_apply", { hosts });
     importClose();
-    notify(`${n} hôte${n > 1 ? "s" : ""} importé${n > 1 ? "s" : ""} dans ~/.ssh/config.`, "succes");
+    notify(t(n > 1 ? "import-hotes-importes" : "import-hote-importe", { n }), "succes");
     await loadHosts();
   } catch (e) {
-    notifyErreur(`Import interrompu : ${e}`);
+    notifyErreur(t("import-interrompu", { e: String(e) }));
   } finally {
     btn.disabled = false;
   }

@@ -7,6 +7,7 @@ import { $, state } from "./etat";
 import { askConfirm, askPassword } from "./dialogues";
 import { notifyErreur } from "./notifications";
 import { renderHosts } from "./main";
+import { t } from "./i18n";
 
 // ---------- Tunnels SSH ----------
 
@@ -62,7 +63,7 @@ function renderTunnels() {
   if (defs.length === 0) {
     const empty = document.createElement("div");
     empty.className = "tunnel-empty";
-    empty.textContent = "Aucun tunnel défini. Crée-en un ci-dessous.";
+    empty.textContent = t("tunnels-aucun");
     list.appendChild(empty);
     return;
   }
@@ -82,7 +83,7 @@ function renderTunnels() {
       <div class="tacts">
         <button class="tbtn" data-act="toggle"></button>
         <button class="tbtn" data-act="edit" title="Modifier">${ic("pencil")}</button>
-        <button class="tbtn danger" data-act="delete" title="Supprimer">${ic("trash")}</button>
+        <button class="tbtn danger" data-act="delete" title="${t("supprimer")}">${ic("trash")}</button>
       </div>`;
     row.querySelector(".tflag")!.textContent = tunnelFlag(d.kind);
     row.querySelector(".tname")!.textContent = d.name || d.alias;
@@ -91,8 +92,8 @@ function renderTunnels() {
     desc.title = describeTunnel(d); // la ligne est tronquee si longue
     const stats = row.querySelector(".tstats")!;
     if (st && alive) stats.textContent = tunnelTraffic(st);
-    else if (st) stats.textContent = "Connexion perdue";
-    else stats.textContent = "Arrêté";
+    else if (st) stats.textContent = t("tunnels-connexion-perdue");
+    else stats.textContent = t("tunnels-arrete");
     const err = row.querySelector(".terr") as HTMLElement;
     if (st?.last_error) {
       err.textContent = `⚠️ ${st.last_error}`;
@@ -103,10 +104,10 @@ function renderTunnels() {
       toggle.textContent = "…";
       toggle.disabled = true;
     } else if (alive) {
-      toggle.innerHTML = `${ic("stop")}<span>Arrêter</span>`;
+      toggle.innerHTML = `${ic("stop")}<span>${t("tunnels-arreter")}</span>`;
       toggle.className = "tbtn stop labeled";
     } else {
-      toggle.innerHTML = `${ic("refresh")}<span>${running ? "Relancer" : "Démarrer"}</span>`;
+      toggle.innerHTML = `${ic("refresh")}<span>${running ? t("tunnels-relancer") : t("tunnels-demarrer")}</span>`;
       toggle.className = "tbtn go labeled";
     }
     toggle.addEventListener("click", () => tunnelToggle(d));
@@ -122,7 +123,7 @@ async function tunnelToggle(d: TunnelDef) {
     try {
       await invoke("tunnel_stop", { id: d.id });
     } catch (e) {
-      notifyErreur(`Arrêt impossible : ${e}`);
+      notifyErreur(t("tunnels-arret-impossible", { e: String(e) }));
     }
     await tunnelsRefresh();
     return;
@@ -167,11 +168,11 @@ async function tunnelStart(d: TunnelDef) {
       } catch (e) {
         const msg = String(e);
         if (!isPasswordRequired(msg)) {
-          $("t-error").textContent = `Démarrage impossible : ${msg}`;
+          $("t-error").textContent = t("tunnels-demarrage-impossible", { e: msg });
           $("t-error").hidden = false;
           return;
         }
-        const rep = await askPassword(label, essai === 0 ? undefined : "Mot de passe refusé, nouvelle tentative.");
+        const rep = await askPassword(label, essai === 0 ? undefined : t("mdp-refuse-nouvelle-tentative"));
         if (!rep) return;
         password = rep.password;
         rememberAsked = rep.remember;
@@ -184,13 +185,13 @@ async function tunnelStart(d: TunnelDef) {
 }
 
 async function tunnelDelete(d: TunnelDef) {
-  const ok = await askConfirm(`Supprimer le tunnel « ${d.name || describeTunnel(d)} » ?` +
-    (tunnels.status.get(d.id)?.alive ? "\n\nIl est actif : il sera coupé." : ""));
+  const ok = await askConfirm(t("tunnels-supprimer-question", { nom: d.name || describeTunnel(d) }) +
+    (tunnels.status.get(d.id)?.alive ? "\n\n" + t("tunnels-actif-sera-coupe") : ""));
   if (!ok) return;
   try {
     await invoke("tunnel_def_delete", { id: d.id });
   } catch (e) {
-    notifyErreur(`Suppression impossible : ${e}`);
+    notifyErreur(t("suppression-impossible", { e: String(e) }));
   }
   await tunnelsRefresh();
 }
@@ -199,18 +200,18 @@ async function tunnelDelete(d: TunnelDef) {
 
 const KIND_HINTS: Record<TunnelKind, { hint: string; bind: string; host: string }> = {
   local: {
-    hint: "Ce que tu ouvres sur ta machine arrive, via le serveur, à la destination (ex. une base de données interne).",
-    bind: "Port local d'écoute",
-    host: "Destination (vue du serveur)",
+    hint: t("tunnels-local-hint"),
+    bind: t("port-local-d-ecoute"),
+    host: t("destination-vue-du-serveur"),
   },
   remote: {
-    hint: "Ce qui frappe ce port sur le serveur arrive, via ta machine, à la destination (ex. exposer un service local).",
-    bind: "Port d'écoute sur le serveur",
-    host: "Destination (vue de ta machine)",
+    hint: t("tunnels-distant-hint"),
+    bind: t("tunnels-port-serveur"),
+    host: t("tunnels-destination-machine"),
   },
   dynamic: {
-    hint: "Mandataire SOCKS5 sur ta machine : configure ton navigateur dessus et tout sort par le serveur.",
-    bind: "Port local du mandataire",
+    hint: t("tunnels-socks-hint"),
+    bind: t("tunnels-port-mandataire"),
     host: "",
   },
 };
@@ -232,7 +233,7 @@ function tunnelSyncKind() {
 function tunnelFormReset() {
   ($("tunnel-form") as HTMLFormElement).reset();
   ($("t-id") as HTMLInputElement).value = "";
-  $("tunnel-form-title").textContent = "Nouveau tunnel";
+  $("tunnel-form-title").textContent = t("nouveau-tunnel");
   $("t-submit").textContent = "Enregistrer";
   $("t-reset").hidden = true;
   $("t-error").hidden = true;
@@ -249,7 +250,7 @@ function tunnelEdit(d: TunnelDef) {
   ($("t-port") as HTMLInputElement).value = d.target_port ? String(d.target_port) : "";
   ($("t-name") as HTMLInputElement).value = d.name;
   $("tunnel-form-title").textContent = `Modifier « ${d.name || describeTunnel(d)} »`;
-  $("t-submit").textContent = "Enregistrer les modifications";
+  $("t-submit").textContent = t("enregistrer-les-modifications");
   $("t-reset").hidden = false;
   ($("tunnel-block") as HTMLDetailsElement).open = true;
   tunnelSyncKind();

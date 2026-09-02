@@ -10,6 +10,7 @@ import { loadHosts, openSession } from "./main";
 import { notify, notifyErreur } from "./notifications";
 import { snippetsClose, snippetsModal } from "./snippets";
 import { tunnelsClose, tunnelsOpen } from "./tunnels";
+import { t } from "./i18n";
 
 // ---------- Menu contextuel d'un hôte ----------
 
@@ -107,15 +108,14 @@ $("host-context").addEventListener("click", async (e) => {
     await tunnelsOpen(alias);
   } else if (act === "delete") {
     const ok = await askConfirm(
-      `Supprimer l'hôte « ${alias} » de ~/.ssh/config ?\n\n` +
-        `Son mot de passe mémorisé sera aussi oublié. Cette action est définitive.`,
+      t("hote-supprimer-question", { alias }),
     );
     if (!ok) return;
     try {
       await invoke("host_delete", { alias });
       await loadHosts();
     } catch (err) {
-      notifyErreur(`Suppression impossible : ${err}`);
+      notifyErreur(t("suppression-impossible", { e: String(err) }));
     }
   } else if (act === "forget") {
     // L'action ne disait rien du tout : ni succès, ni échec. On ne pouvait pas
@@ -128,9 +128,9 @@ $("host-context").addEventListener("click", async (e) => {
         port: h.port,
         user: h.user ?? null,
       });
-      notify(`Mot de passe oublié pour ${h.alias}.`, "succes");
+      notify(t("hote-mdp-oublie", { alias: h.alias }), "succes");
     } catch (err) {
-      notifyErreur(`Le mot de passe n'a pas pu être oublié : ${err}`);
+      notifyErreur(t("hote-mdp-non-oublie", { e: String(err) }));
     }
   }
 });
@@ -155,7 +155,7 @@ async function openEditHost(alias: string) {
     $("edit-modal").classList.add("open");
     setTimeout(() => ($("e-alias") as HTMLInputElement).focus(), 30);
   } catch (e) {
-    notifyErreur(`Impossible de charger l'hôte : ${e}`);
+    notifyErreur(t("hote-chargement-impossible", { e: String(e) }));
   }
 }
 

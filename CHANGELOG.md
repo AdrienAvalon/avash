@@ -7,6 +7,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **L'interface parle anglais.** Toutes les chaînes — la page comme les
+  textes produits par le code, environ trois cents — sont extraites dans un
+  module de traduction ; le français reste la source et la langue par défaut,
+  l'anglais couvre chaque clé sous le contrôle d'un test. La bascule se fait
+  dans la palette (Ctrl+K, « Switch to English ») et se mémorise.
 - **Import des sessions PuTTY et MobaXterm.** Un bouton « Importer des
   sessions » lit les sessions PuTTY (`~/.putty/sessions` sous Unix, le
   registre sous Windows) et MobaXterm (`MobaXterm.ini` ou un export

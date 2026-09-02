@@ -1,6 +1,7 @@
 // Notifications non bloquantes.
 
 import { $ } from "./etat";
+import { t } from "./i18n";
 
 // ---------- Notifications ----------
 //
@@ -31,12 +32,12 @@ export function notify(message: string, nature: NatureAvis = "info"): void {
   el.setAttribute("role", nature === "erreur" ? "alert" : "status");
   const titre = document.createElement("span");
   titre.className = "titre";
-  titre.textContent = nature === "erreur" ? "Échec" : nature === "succes" ? "Fait" : "Information";
+  titre.textContent = nature === "erreur" ? t("notif-echec") : nature === "succes" ? t("notif-fait") : t("notif-information");
   const corps = document.createElement("span");
   corps.textContent = message; // textContent : le message peut venir d'un serveur
   const aide = document.createElement("span");
   aide.className = "fermer";
-  aide.textContent = "Cliquer pour fermer";
+  aide.textContent = t("notif-cliquer-fermer");
   el.append(titre, corps, aide);
 
   const retirer = () => {

@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { getVersion } from "@tauri-apps/api/app";
 import { effectuerCollage } from "./collage";
 import { $ } from "./etat";
+import { t } from "./i18n";
 
 // ---------- Saisie d'un texte (nom de fichier, de dossier) ----------
 
@@ -70,10 +71,8 @@ export function collerDansTerminal(term: Terminal, texte: string): Promise<void>
     coller: (t) => term.paste(t),
     confirmer: (n) =>
       askConfirm(
-        `Coller ${n} ligne${n > 1 ? "s" : ""} dans le terminal ?\n\n` +
-          "Une ligne collée qui se termine par un saut de ligne s'exécute aussitôt. " +
-          "Ne colle que du texte dont tu connais la source.",
-        { ok: "Coller", danger: true },
+        t(n > 1 ? "collage-question-pluriel" : "collage-question", { n }) + "\n\n" + t("collage-avertissement"),
+        { ok: t("coller"), danger: true },
       ),
   });
 }

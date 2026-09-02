@@ -4,6 +4,7 @@ import { ic } from "./icons";
 import { allTags } from "./filters";
 import { $, THEME_DARK, THEME_LIGHT, state } from "./etat";
 import { renderHosts } from "./main";
+import { t } from "./i18n";
 
 // --- Thème de l'interface : système (défaut), clair, ou sombre ---
 
@@ -39,7 +40,7 @@ export function applyTheme() {
   const btn = $("theme-toggle");
   const icon = themePref === "system" ? "monitor" : themePref === "light" ? "sun" : "moon";
   btn.innerHTML = ic(icon);
-  btn.title = `Thème : ${themePref === "system" ? "système" : themePref === "light" ? "clair" : "sombre"} (cliquer pour changer)`;
+  btn.title = t("theme-titre", { mode: t(themePref === "system" ? "theme-systeme" : themePref === "light" ? "theme-clair" : "theme-sombre") });
 }
 
 export function cycleTheme() {
@@ -108,18 +109,18 @@ export function renderTagBar() {
   if (tags.length === 0) { bar.hidden = true; return; }
   bar.hidden = false;
   bar.innerHTML = "";
-  for (const t of tags) {
+  for (const tag of tags) {
     // La barre de filtres est devenue le seul endroit où consulter les tags —
     // les pastilles ont quitté les lignes d'hôte. Elle ne peut donc plus être
     // le seul contrôle hors d'atteinte au clavier.
     const c = document.createElement("button");
     c.type = "button";
-    c.className = "tag-pill" + (t === state.tagFilter ? " on" : "");
-    c.textContent = t;
-    c.setAttribute("aria-pressed", String(t === state.tagFilter));
-    c.title = `Filtrer par « ${t} »`;
+    c.className = "tag-pill" + (tag === state.tagFilter ? " on" : "");
+    c.textContent = tag;
+    c.setAttribute("aria-pressed", String(tag === state.tagFilter));
+    c.title = t("theme-filtrer-par", { tag });
     c.addEventListener("click", () => {
-      state.tagFilter = state.tagFilter === t ? null : t;
+      state.tagFilter = state.tagFilter === tag ? null : tag;
       renderHosts();
     });
     bar.appendChild(c);
@@ -129,7 +130,7 @@ export function renderTagBar() {
     clear.type = "button";
     clear.className = "tag-pill clear";
     clear.textContent = "✕";
-    clear.title = "Effacer le filtre";
+    clear.title = t("theme-effacer-filtre");
     clear.addEventListener("click", () => { state.tagFilter = null; renderHosts(); });
     bar.appendChild(clear);
   }

@@ -5,6 +5,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { $ } from "./etat";
 import { askConfirm } from "./dialogues";
 import { notifyErreur } from "./notifications";
+import { t } from "./i18n";
 
 // ---------- Mise à jour ----------
 
@@ -18,24 +19,24 @@ async function checkForUpdates() {
   try {
     const update = await checkUpdate();
     if (!update) {
-      ver.textContent = "à jour";
+      ver.textContent = t("maj-a-jour");
       setTimeout(() => (ver.textContent = prev), 1800);
       return;
     }
     ver.textContent = prev;
     const ok = await askConfirm(
-      `Version ${update.version} disponible (actuelle : ${update.currentVersion}).\n\n` +
-        `${update.body ?? ""}\n\nTélécharger et installer maintenant ?`,
-      { danger: false, ok: "Installer" },
+      t("maj-disponible", { version: update.version, actuelle: update.currentVersion }) +
+        `\n\n${update.body ?? ""}\n\n` + t("maj-installer-question"),
+      { danger: false, ok: t("maj-installer") },
     );
     if (!ok) return;
     await update.downloadAndInstall();
-    if (await askConfirm("Mise à jour installée. Redémarrer Avash maintenant ?", { danger: false, ok: "Redémarrer" })) await relaunch();
+    if (await askConfirm(t("maj-installee-redemarrer"), { danger: false, ok: t("maj-redemarrer") })) await relaunch();
   } catch (e) {
     // Endpoint injoignable / pas encore configuré / hors ligne : on le dit
     // sans dramatiser.
     ver.textContent = prev;
-    notifyErreur(`Vérification des mises à jour impossible : ${e}`);
+    notifyErreur(t("maj-verification-impossible", { e: String(e) }));
   } finally {
     updateBusy = false;
   }

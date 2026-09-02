@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 306 Rust (129 cœur, 33 intégration, 58 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 90 front · 43 scénarios bout en bout dans 22 fichiers, tous en intégration continue |
+| Tests | 306 Rust (129 cœur, 33 intégration, 58 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 96 front · 45 scénarios bout en bout dans 23 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
@@ -169,12 +169,15 @@ que le panneau liste.
 Ni construit ni testé. C'est la dernière plateforme majeure manquante pour tenir
 la promesse « multi-plateforme ».
 
-### 2.2 Anglais
+### 2.2 Anglais — **fait**
 
-L'interface est entièrement en français, chaînes écrites en dur (28 affectations
-littérales rien que dans `main.ts`). Pour un dépôt public, l'anglais conditionne
-l'adoption. L'approche la moins coûteuse : extraire les chaînes dans un module de
-traduction avant qu'elles ne se multiplient — le coût croît avec le temps.
+L'interface était entièrement en français, chaînes écrites en dur. Elles sont
+extraites dans `web/i18n.ts` : le français reste la source, l'anglais couvre
+chaque clé (un test le vérifie, avec les variables et l'application à la page),
+les textes statiques portent `data-i18n`, ceux du code passent par `t()`. La
+bascule se fait dans la palette et se mémorise ; un scénario bout en bout la
+joue dans les deux sens. Le français reste la langue par défaut tant que rien
+n'est choisi.
 
 ### 2.3 Import depuis PuTTY et MobaXterm — **fait**
 
@@ -285,7 +288,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2 | 3 |
-| Scénarios bout en bout | 43 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 45 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |

@@ -25,6 +25,7 @@ import { setTitlebar, setupWindowControls } from "./titre";
 import { sftp, sftpOpenAt, sftpSyncButton } from "./sftp";
 import { tunnels } from "./tunnels";
 import "./import";
+import { appliquerLangue, langue, setLangue, t } from "./i18n";
 
 // ---------- Arbre des hôtes (dossiers unifiés SSH + RDP) ----------
 
@@ -125,7 +126,7 @@ function rendreAtteignableAuClavier(
 /** Les gestes d'une ligne, souris et clavier. Le suffixe était perdu sur les
  *  hôtes dont l'OS est connu — donc les plus utilisés — et n'a jamais nommé les
  *  gestes clavier, alors que l'infobulle est le seul endroit où les découvrir. */
-const GESTES_LIGNE = "double-clic ou Entrée : ouvrir ; clic droit ou Maj+F10 : options";
+const gestesLigne = () => t("gestes-ligne");
 
 function sshHostElement(h: Host): HTMLElement {
   const el = document.createElement("div");
@@ -153,17 +154,17 @@ function sshHostElement(h: Host): HTMLElement {
   if (h.proxy_jump) {
     const j = document.createElement("span");
     j.className = "jumptag";
-    j.textContent = "rebond";
-    j.title = `Passe par ${h.proxy_jump}`;
+    j.textContent = t("hote-rebond");
+    j.title = t("hote-passe-par", { rebond: h.proxy_jump ?? "" });
     info.appendChild(j);
   }
   const vifs = tunnels.byHost.get(h.alias) ?? 0;
   if (vifs > 0) {
-    const t = document.createElement("span");
-    t.className = "tun";
-    t.textContent = String(vifs);
-    t.title = `${vifs} tunnel(s) ouvert(s) sur cet hôte`;
-    info.appendChild(t);
+    const tun = document.createElement("span");
+    tun.className = "tun";
+    tun.textContent = String(vifs);
+    tun.title = t("hote-tunnels-ouverts", { n: vifs });
+    info.appendChild(tun);
   }
   const dot = el.querySelector(".dot") as HTMLElement;
   dot.className = "dot " + hostSessionState(h.alias);
@@ -173,7 +174,7 @@ function sshHostElement(h: Host): HTMLElement {
   const detail = [h.alias, target, os?.pretty, h.tags.length > 0 ? `tags : ${h.tags.join(", ")}` : ""]
     .filter(Boolean)
     .join(" · ");
-  el.title = `${detail} — ${GESTES_LIGNE}`;
+  el.title = `${detail} — ${gestesLigne()}`;
   el.addEventListener("click", () => {
     state.pickedAlias = h.alias;
     state.pickedRdp = null;
@@ -202,7 +203,7 @@ function rdpHostElement(h: RdpHostT): HTMLElement {
   (el.querySelector(".dot") as HTMLElement).className = "dot" + (live ? " live" : "");
   el.querySelector(".alias")!.textContent = h.name;
   el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
-  el.title = `${h.name} · ${h.user}@${h.host}:${h.port} — ${GESTES_LIGNE}`;
+  el.title = `${h.name} · ${h.user}@${h.host}:${h.port} — ${gestesLigne()}`;
   if (h.id === state.pickedRdp) el.classList.add("picked");
   el.addEventListener("click", () => {
     state.pickedRdp = h.id;
@@ -238,7 +239,7 @@ export async function moveHostTo(kind: string, id: string, folder: string) {
     else await invoke("rdp_host_set_folder", { id, folder });
     await loadHosts();
   } catch (e) {
-    notifyErreur(`Déplacement impossible : ${e}`);
+    notifyErreur(t("deplacement-impossible", { e: String(e) }));
   }
 }
 
@@ -275,7 +276,7 @@ function folderRow(node: TreeNode, depth: number): HTMLElement {
   row.innerHTML = `<span class="chev">${collapsed ? "▸" : "▾"}</span><span class="fic">${ic("folder")}</span><span class="fname"></span><span class="fcount"></span>`;
   row.querySelector(".fname")!.textContent = node.name;
   row.querySelector(".fcount")!.textContent = String(folderNodeCount(node));
-  row.title = `${node.path} — clic ou Entrée : plier/déplier ; clic droit ou Maj+F10 : options ; déposer un hôte pour le ranger`;
+  row.title = `${node.path} — ${t("dossier-gestes")}`;
   row.addEventListener("click", () => {
     if (collapsedFolders.has(node.path)) collapsedFolders.delete(node.path);
     else collapsedFolders.add(node.path);
@@ -360,17 +361,16 @@ export function renderHosts() {
     const empty = document.createElement("div");
     empty.className = "host-empty";
     empty.innerHTML =
-      `<p>Aucun hôte dans <code>~/.ssh/config</code>.</p>` +
-      `<p class="sub">Utilise <strong>Connexion directe</strong> ci-dessous, ` +
-      `ou crée une clé puis installe-la sur un serveur.</p>`;
+      `<p>${t("hotes-aucun-config")}</p>` +
+      `<p class="sub">${t("hotes-aucun-conseil")}</p>`;
     list.appendChild(empty);
   } else if (filtering && sshShown.length + rdpShown.length === 0) {
     const empty = document.createElement("div");
     empty.className = "host-empty";
     // Filtrer par tag seul affichait « Aucun hôte ne correspond à «  » » : le
     // critère cité doit être celui qui filtre réellement.
-    const critere = q !== "" ? state.filter : `tag ${state.tagFilter ?? ""}`;
-    empty.innerHTML = `<p>Aucun hôte ne correspond à « ${stripHtml(critere)} ».</p>`;
+    const critere = q !== "" ? state.filter : `${t("hotes-tag")} ${state.tagFilter ?? ""}`;
+    empty.innerHTML = `<p>${stripHtml(t("hotes-aucun-correspond", { critere }))}</p>`;
     list.appendChild(empty);
   }
   // Filtrer par tag écarte tous les bureaux RDP — ils n'en portent pas. Ils
@@ -380,8 +380,7 @@ export function renderHosts() {
     const note = document.createElement("div");
     note.className = "host-empty";
     note.innerHTML =
-      `<p class="sub">${state.rdpHosts.length} bureau${state.rdpHosts.length > 1 ? "x" : ""} RDP ` +
-      `masqué${state.rdpHosts.length > 1 ? "s" : ""} : les bureaux ne portent pas de tag.</p>`;
+      `<p class="sub">${t(state.rdpHosts.length > 1 ? "hotes-bureaux-masques" : "hotes-bureau-masque", { n: state.rdpHosts.length })}</p>`;
     list.appendChild(note);
   }
   list.scrollTop = defilement;
@@ -407,7 +406,7 @@ function setSessionState(id: number, st: SessionState) {
   if (!dot) return;
   dot.className = `state ${st}`;
   dot.title =
-    st === "connecting" ? "Connexion en cours…" : st === "live" ? "Connectée" : "Session terminée";
+    st === "connecting" ? t("session-connexion-en-cours") : st === "live" ? t("session-connectee") : t("session-terminee");
   s.tab.classList.toggle("dead", st === "closed");
   renderHosts();
   sftpSyncButton();
@@ -445,7 +444,7 @@ function newSessionShell(label: string) {
   tabs.querySelector(".no-session")?.remove();
   const tab = document.createElement("div");
   tab.className = "tab active";
-  tab.innerHTML = `<span class="state" title="Connexion…"></span><span class="label"></span><span class="close">✕</span>`;
+  tab.innerHTML = `<span class="state" title="${t("session-connexion")}"></span><span class="label"></span><span class="close">✕</span>`;
   tab.querySelector(".label")!.textContent = label;
   tab.addEventListener("click", () => focusSession(id));
   tab.querySelector(".close")!.addEventListener("click", (e) => {
@@ -580,9 +579,9 @@ function newSessionShell(label: string) {
 function warnIfDeaf(term: Terminal) {
   if (!ptyListenError) return;
   term.write(
-    `\x1b[33m⚠️  Avash ne reçoit pas les événements du terminal.\r\n` +
-      `   La session va s'ouvrir mais restera muette.\r\n` +
-      `   Détail : ${ptyListenError}\x1b[0m\r\n\r\n`,
+    `\x1b[33m⚠️  ${t("pty-sourd-1")}\r\n` +
+      `   ${t("pty-sourd-2")}\r\n` +
+      `   ${t("pty-sourd-detail", { e: ptyListenError })}\x1b[0m\r\n\r\n`,
   );
 }
 
@@ -623,7 +622,7 @@ async function connectByAlias(s: Session, h: Host) {
     /* on tentera sans, le backend dira ce qui manque */
   }
 
-  term.write(`\x1b[90mConnexion à ${label}…\x1b[0m\r\n`);
+  term.write(`\x1b[90m${t("connexion-a", { cible: label })}\x1b[0m\r\n`);
 
   for (let essai = 0; essai < 3; essai++) {
     // L'onglet a pu être fermé pendant qu'on attendait : sans cette garde, la
@@ -644,23 +643,23 @@ async function connectByAlias(s: Session, h: Host) {
           port: h.port,
           user: h.user ?? null,
           password,
-        }).catch((e) => term.write(`\r\n\x1b[33m⚠️ Mémorisation impossible : ${e}\x1b[0m\r\n`));
+        }).catch((e) => term.write(`\r\n\x1b[33m⚠️ ${t("memorisation-impossible", { e: String(e) })}\x1b[0m\r\n`));
       }
       return;
     } catch (e) {
       const msg = String(e);
       if (isHostKeyChanged(msg)) {
         const clean = msg.replace("[AVASH_HOST_KEY_CHANGED]", "").trim();
-        const ok = await askConfirm(`${clean}\n\nOublier l'ancienne clé et réessayer ? (à ne faire que si le changement est légitime)`);
+        const ok = await askConfirm(`${clean}\n\n${t("cle-hote-oublier-question")}`);
         if (!ok) {
-          markClosed(s, "Connexion annulée : clé d'hôte changée.");
+          markClosed(s, t("connexion-annulee-cle-changee"));
           return;
         }
         try {
           await invoke("known_hosts_forget", { addr: h.hostname ?? h.alias, port: h.port ?? null });
-          term.write(`\x1b[33m⚠️ Ancienne clé oubliée. Nouvelle tentative…\x1b[0m\r\n`);
+          term.write(`\x1b[33m⚠️ ${t("cle-hote-oubliee-nouvelle-tentative")}\x1b[0m\r\n`);
         } catch (fe) {
-          markClosed(s, `Impossible d'oublier l'ancienne clé : ${fe}`);
+          markClosed(s, t("cle-hote-oubli-impossible", { e: String(fe) }));
           return;
         }
         continue; // réessayer : TOFU réapprend la nouvelle clé
@@ -669,23 +668,23 @@ async function connectByAlias(s: Session, h: Host) {
         // Fermeture volontaire pendant la connexion : rien à signaler, l'onglet
         // n'existe plus. Le back le marque explicitement.
         if (msg.includes("[AVASH_ANNULE]")) return;
-        markClosed(s, `⚠️ Échec de la connexion : ${msg}`);
+        markClosed(s, "⚠️ " + t("echec-connexion", { e: msg }));
         return;
       }
       // Mot de passe manquant ou refuse : on redemande, jusqu'a 3 fois.
       const rep = await askPassword(
         label,
-        essai === 0 ? undefined : "Mot de passe refusé, nouvelle tentative.",
+        essai === 0 ? undefined : t("mdp-refuse-nouvelle-tentative"),
       );
       if (!rep) {
-        markClosed(s, "Connexion annulée.");
+        markClosed(s, t("connexion-annulee"));
         return;
       }
       password = rep.password;
       rememberAsked = rep.remember;
     }
   }
-  markClosed(s, "⚠️ Trois tentatives ont échoué.");
+  markClosed(s, "⚠️ " + t("trois-tentatives"));
 }
 
 /**
@@ -700,8 +699,8 @@ function markClosed(s: Session, why: string) {
   setSessionState(s.id, "closed");
   s.term.write(
     `\r\n\x1b[31m${why}\x1b[0m\r\n` +
-      `\x1b[90m── \x1b[0m\x1b[1mEntrée\x1b[0m\x1b[90m : se reconnecter · \x1b[0m` +
-      `\x1b[1mCtrl+W\x1b[0m\x1b[90m : fermer l'onglet ──\x1b[0m\r\n`,
+      `\x1b[90m── \x1b[0m\x1b[1m${t("touche-entree")}\x1b[0m\x1b[90m : ${t("se-reconnecter")} · \x1b[0m` +
+      `\x1b[1mCtrl+W\x1b[0m\x1b[90m : ${t("fermer-l-onglet")} ──\x1b[0m\r\n`,
   );
 }
 
@@ -718,12 +717,12 @@ function markClosed(s: Session, why: string) {
 /// portait un alias, et la session n'était rattachée à aucune ligne de la barre
 /// latérale — voyant éteint, menu qui ne la reconnaît pas. Il fallait fermer
 /// l'onglet et se reconnecter depuis la liste pour retrouver le bon nom.
-export async function openManualSession(t: ManualTarget, alias?: string) {
+export async function openManualSession(cible: ManualTarget, alias?: string) {
   await ensureFontLoaded();
-  const { id, term, session } = newSessionShell(alias?.trim() || `${t.user}@${t.addr}`);
+  const { id, term, session } = newSessionShell(alias?.trim() || `${cible.user}@${cible.addr}`);
   warnIfDeaf(term);
   try {
-    await connectManual(session, t);
+    await connectManual(session, cible);
   } catch (e) {
     closeSession(id);
     throw e;
@@ -733,26 +732,26 @@ export async function openManualSession(t: ManualTarget, alias?: string) {
   // terminal, l'onglet n'a plus de formulaire a qui remonter.
   session.reconnect = async () => {
     try {
-      await connectManual(session, t);
+      await connectManual(session, cible);
     } catch (e) {
       if (String(e).includes("[AVASH_ANNULE]")) return;
-      markClosed(session, `⚠️ Échec de la connexion : ${e}`);
+      markClosed(session, "⚠️ " + t("echec-connexion", { e: String(e) }));
     }
   };
 }
 
-async function connectManual(s: Session, t: ManualTarget) {
+async function connectManual(s: Session, cible: ManualTarget) {
   const { id, term } = s;
   s.closed = false;
   setSessionState(id, "connecting");
-  term.write(`\x1b[90mConnexion à ${t.user}@${t.addr}…\x1b[0m\r\n`);
+  term.write(`\x1b[90m${t("connexion-a", { cible: `${cible.user}@${cible.addr}` })}\x1b[0m\r\n`);
   const label = await invoke<string>("pty_open_manual", {
     id,
-    addr: t.addr,
-    port: t.port,
-    user: t.user,
-    password: t.password,
-    keyPath: t.key_path,
+    addr: cible.addr,
+    port: cible.port,
+    user: cible.user,
+    password: cible.password,
+    keyPath: cible.key_path,
     cols: term.cols,
     rows: term.rows,
   });
@@ -847,7 +846,7 @@ async function listenPty() {
       // Un evenement d'une session deja remplacee (reconnexion) ne doit pas
       // marquer la nouvelle comme morte.
       if (!s || s.closed) return;
-      markClosed(s, "── session terminée ──");
+      markClosed(s, `── ${t("session-terminee-minuscule")} ──`);
     });
   } catch (e) {
     // Un echec ici rend TOUS les terminaux muets : la sortie du serveur
@@ -866,8 +865,8 @@ let ptyListenError: string | null = null;
 function refreshEmptyHint() {
   $("empty-hint").textContent =
     state.hosts.length === 0
-      ? "Aucun hôte configuré — commence par une connexion directe"
-      : "Double-clic sur un hôte pour te connecter";
+      ? t("accueil-aucun-hote")
+      : t("double-clic-sur-un-hote-pour-te-connecter");
 }
 
 export async function loadHosts() {
@@ -924,19 +923,30 @@ let paletteEntrees: EntreePalette[] = [];
  *  les réglages évite d'ajouter une fenêtre de préférences pour un interrupteur. */
 function commandesPalette(): EntreePalette[] {
   const actif = partageClipboard();
+  const anglais = langue() === "en";
   return [
     {
-      nom: actif ? "Ne plus partager le presse-papiers avec les bureaux RDP"
-                 : "Partager le presse-papiers avec les bureaux RDP",
-      detail: actif ? "Actuellement échangé dans les deux sens" : "Actuellement non partagé",
+      nom: actif ? t("palette-clip-stop") : t("palette-clip-start"),
+      detail: actif ? t("palette-clip-actif") : t("palette-clip-inactif"),
       icone: "copy",
       ouvrir: () => {
         setPartageClipboard(!actif);
         // Les sessions ouvertes doivent suivre : le réglage ne vaudrait sinon
         // qu'à partir de la prochaine connexion.
         for (const s of rdpSessions.values()) if (s.ws) annoncerPartageClip(s.ws);
-        notify(actif ? "Le presse-papiers n'est plus échangé avec les bureaux distants."
-                     : "Le presse-papiers est échangé avec les bureaux distants.");
+        notify(actif ? t("clip-plus-echange") : t("clip-echange"));
+      },
+    },
+    {
+      nom: t(anglais ? "palette-langue-fr" : "palette-langue-en"),
+      detail: t("palette-langue-detail"),
+      icone: "book",
+      ouvrir: () => {
+        setLangue(anglais ? "fr" : "en");
+        // Les textes produits par le code se retraduisent au prochain rendu :
+        // on en provoque un tout de suite pour la barre latérale.
+        renderHosts();
+        notify(t("langue-changee"), "succes");
       },
     },
   ];
@@ -968,7 +978,7 @@ function renderPalette() {
   ];
 
   if (paletteEntrees.length === 0) {
-    res.innerHTML = `<div class="empty">Aucun hôte pour « ${stripHtml(q)} »</div>`;
+    res.innerHTML = `<div class="empty">${stripHtml(t("palette-aucun-hote", { q }))}</div>`;
     return;
   }
   paletteIndex = Math.min(paletteIndex, paletteEntrees.length - 1);
@@ -1033,9 +1043,10 @@ window.addEventListener("resize", () => {
 
 // ---------- Amorçage ----------
 //
-// En dernier, une fois tout branché : icônes, thème, contrôles de fenêtre, puis
-// la liste des hôtes et la police du terminal.
+// En dernier, une fois tout branché : langue, icônes, thème, contrôles de
+// fenêtre, puis la liste des hôtes et la police du terminal.
 
+appliquerLangue();
 hydrateIcons();
 $("theme-toggle").addEventListener("click", cycleTheme);
 applyTheme();

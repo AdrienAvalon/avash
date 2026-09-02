@@ -846,106 +846,106 @@
   <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
   <div class="resize-handles" id="resize-handles"></div>
   <div class="titlebar" data-tauri-drag-region>
-    <div class="tb-title" data-tauri-drag-region><svg class="tb-mascot"><use href="#avash-mark"/></svg><span id="tb-name">Avash</span></div>
+    <div class="tb-title" data-tauri-drag-region><svg class="tb-mascot"><use href="#avash-mark"/></svg><span id="tb-name" data-i18n="avash">Avash</span></div>
     <div class="tb-controls">
-      <button class="tb-btn" id="win-min" title="Réduire" type="button" aria-label="Réduire"></button>
-      <button class="tb-btn" id="win-max" title="Agrandir" type="button" aria-label="Agrandir"></button>
-      <button class="tb-btn tb-close" id="win-close" title="Fermer" type="button" aria-label="Fermer"></button>
+      <button class="tb-btn" id="win-min" title="Réduire" data-i18n-title="reduire" type="button" aria-label="Réduire" data-i18n-aria="reduire"></button>
+      <button class="tb-btn" id="win-max" title="Agrandir" data-i18n-title="agrandir" type="button" aria-label="Agrandir" data-i18n-aria="agrandir"></button>
+      <button class="tb-btn tb-close" id="win-close" title="Fermer" data-i18n-title="fermer" type="button" aria-label="Fermer" data-i18n-aria="fermer"></button>
     </div>
   </div>
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <span class="mascot"><svg class="mark"><use href="#avash-mark"/></svg></span> Avash <span class="ver" id="app-version" title="Vérifier les mises à jour">…</span>
-        <button id="theme-toggle" class="theme-toggle" type="button" title="Thème" aria-label="Thème"></button>
+        <span class="mascot"><svg class="mark"><use href="#avash-mark"/></svg></span> Avash <span class="ver" id="app-version" title="Vérifier les mises à jour" data-i18n-title="verifier-les-mises-a-jour">…</span>
+        <button id="theme-toggle" class="theme-toggle" type="button" title="Thème" data-i18n-title="theme" aria-label="Thème" data-i18n-aria="theme"></button>
       </div>
       <div class="search-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input id="search" class="search" placeholder="Filtrer les hôtes…" autocomplete="off" />
-        <kbd>Ctrl K</kbd>
+        <input id="search" class="search" placeholder="Filtrer les hôtes…" data-i18n-placeholder="filtrer-les-hotes" autocomplete="off" />
+        <kbd data-i18n="ctrl-k">Ctrl K</kbd>
       </div>
-      <div class="section-title"><span>Hôtes</span><span class="st-right"><button id="new-folder-btn" class="mini-btn" type="button" title="Nouveau dossier" aria-label="Nouveau dossier">+ dossier</button><span id="host-count">—</span></span></div>
+      <div class="section-title"><span data-i18n="hotes">Hôtes</span><span class="st-right"><button id="new-folder-btn" class="mini-btn" type="button" title="Nouveau dossier" data-i18n-title="nouveau-dossier-2" aria-label="Nouveau dossier" data-i18n-aria="nouveau-dossier-2" data-i18n="dossier">+ dossier</button><span id="host-count">—</span></span></div>
       <div class="tag-bar" id="tag-bar" hidden></div>
       <div id="host-list" class="host-list"></div>
       <div class="side-actions">
-        <button id="manual-btn" class="manual-btn" type="button" data-icon="plus">Connexion directe</button>
-        <button id="keys-btn" class="manual-btn" type="button" data-icon="key">Mes clés SSH</button>
-        <button id="tunnels-btn" class="manual-btn" type="button" data-icon="tunnel">Tunnels</button>
-        <button id="snippets-btn" class="manual-btn" type="button" data-icon="zap">Snippets</button>
-        <button id="import-btn" class="manual-btn" type="button" data-icon="download">Importer des sessions</button>
+        <button id="manual-btn" class="manual-btn" type="button" data-icon="plus" data-i18n="connexion-directe">Connexion directe</button>
+        <button id="keys-btn" class="manual-btn" type="button" data-icon="key" data-i18n="mes-cles-ssh">Mes clés SSH</button>
+        <button id="tunnels-btn" class="manual-btn" type="button" data-icon="tunnel" data-i18n="tunnels">Tunnels</button>
+        <button id="snippets-btn" class="manual-btn" type="button" data-icon="zap" data-i18n="snippets">Snippets</button>
+        <button id="import-btn" class="manual-btn" type="button" data-icon="download" data-i18n="importer-des-sessions">Importer des sessions</button>
       </div>
-      <div class="footer"><span>~/.ssh/config</span><span id="footer-version">avash</span></div>
+      <div class="footer"><span data-i18n="ssh-config">~/.ssh/config</span><span id="footer-version" data-i18n="avash-2">avash</span></div>
       <div class="side-resize" id="side-resize"></div>
     </aside>
 
     <section class="main">
       <div class="tabbar">
-        <button class="tabbar-btn tb-icon" id="side-toggle" type="button" title="Réduire/afficher la barre latérale (Ctrl+.)" aria-label="Réduire/afficher la barre latérale (Ctrl+.)">
+        <button class="tabbar-btn tb-icon" id="side-toggle" type="button" title="Réduire/afficher la barre latérale (Ctrl+.)" data-i18n-title="reduire-afficher-la-barre-laterale-ctrl" aria-label="Réduire/afficher la barre latérale (Ctrl+.)" data-i18n-aria="reduire-afficher-la-barre-laterale-ctrl">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
         </button>
-        <div class="tabs" id="tabs"><span class="no-session">Aucune session</span></div>
-        <button class="tabbar-btn" id="sftp-toggle" type="button" title="Fichiers distants (SFTP) — Ctrl+B" disabled aria-label="Fichiers distants (SFTP)">
+        <div class="tabs" id="tabs"><span class="no-session" data-i18n="aucune-session">Aucune session</span></div>
+        <button class="tabbar-btn" id="sftp-toggle" type="button" title="Fichiers distants (SFTP) — Ctrl+B" data-i18n-title="fichiers-distants-sftp-ctrl-b" disabled aria-label="Fichiers distants (SFTP)" data-i18n-aria="fichiers-distants-sftp">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-          <span>Fichiers</span>
+          <span data-i18n="fichiers">Fichiers</span>
         </button>
       </div>
       <div class="terminal-zone">
         <div class="terminal-empty" id="terminal-empty">
           <img class="big-logo" src="hero.svg" alt="Avash" draggable="false" />
-          <div class="title">Prêt quand tu l'es.</div>
-          <div class="hint" id="empty-hint">Double-clic sur un hôte pour te connecter</div>
+          <div class="title" data-i18n="pret-quand-tu-l-es">Prêt quand tu l'es.</div>
+          <div class="hint" id="empty-hint" data-i18n="double-clic-sur-un-hote-pour-te-connecter">Double-clic sur un hôte pour te connecter</div>
           <div class="empty-actions">
-            <button class="btn-primary" id="empty-connect" type="button" data-icon="plus">Connexion directe</button>
-            <button class="btn-ghost" id="empty-keys" type="button" data-icon="key">Mes clés SSH</button>
+            <button class="btn-primary" id="empty-connect" type="button" data-icon="plus" data-i18n="connexion-directe">Connexion directe</button>
+            <button class="btn-ghost" id="empty-keys" type="button" data-icon="key" data-i18n="mes-cles-ssh">Mes clés SSH</button>
           </div>
           <div class="shortcuts">
-            <span><kbd>Ctrl</kbd>+<kbd>K</kbd> palette</span>
-            <span><kbd>Ctrl</kbd>+<kbd>W</kbd> fermer l'onglet</span>
-            <span><kbd>Ctrl</kbd>+<kbd>Tab</kbd> onglet suivant</span>
-            <span><kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> aller à un onglet</span>
-            <span><kbd>Ctrl</kbd>+<kbd>B</kbd> panneau SFTP</span>
+            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>K</kbd> palette</span>
+            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>W</kbd> fermer l'onglet</span>
+            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd data-i18n="tab">Tab</kbd> onglet suivant</span>
+            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> aller à un onglet</span>
+            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>B</kbd> panneau SFTP</span>
           </div>
         </div>
         <div id="terminal"></div>
         <div class="term-search" id="term-search">
-          <input id="term-search-input" placeholder="Rechercher…" spellcheck="false" />
-          <button id="term-search-prev" title="Précédent (Maj+Entrée)" data-icon="arrowUp" aria-label="Précédent (Maj+Entrée)"></button>
-          <button id="term-search-next" title="Suivant (Entrée)" data-icon="arrowDown" aria-label="Suivant (Entrée)"></button>
-          <button id="term-search-close" title="Fermer (Échap)" data-icon="x" aria-label="Fermer (Échap)"></button>
+          <input id="term-search-input" placeholder="Rechercher…" data-i18n-placeholder="rechercher-2" spellcheck="false" />
+          <button id="term-search-prev" title="Précédent (Maj+Entrée)" data-i18n-title="precedent-maj-entree" data-icon="arrowUp" aria-label="Précédent (Maj+Entrée)" data-i18n-aria="precedent-maj-entree"></button>
+          <button id="term-search-next" title="Suivant (Entrée)" data-i18n-title="suivant-entree" data-icon="arrowDown" aria-label="Suivant (Entrée)" data-i18n-aria="suivant-entree"></button>
+          <button id="term-search-close" title="Fermer (Échap)" data-i18n-title="fermer-echap" data-icon="x" aria-label="Fermer (Échap)" data-i18n-aria="fermer-echap"></button>
         </div>
         <div class="ctx-menu" id="term-context">
-          <div class="ctx-item" data-act="copy">Copier<span class="ctx-key">Ctrl+Maj+C</span></div>
-          <div class="ctx-item" data-act="paste">Coller<span class="ctx-key">Ctrl+Maj+V</span></div>
+          <div class="ctx-item" data-act="copy" data-i18n="copier">Copier<span class="ctx-key" data-i18n="ctrl-maj-c">Ctrl+Maj+C</span></div>
+          <div class="ctx-item" data-act="paste" data-i18n="coller">Coller<span class="ctx-key" data-i18n="ctrl-maj-v">Ctrl+Maj+V</span></div>
           <div class="ctx-sep"></div>
-          <div class="ctx-item" data-act="search">Rechercher<span class="ctx-key">Ctrl+Maj+F</span></div>
-          <div class="ctx-item" data-act="selectall">Tout sélectionner</div>
-          <div class="ctx-item" data-act="clear">Effacer l'écran</div>
+          <div class="ctx-item" data-act="search" data-i18n="rechercher">Rechercher<span class="ctx-key" data-i18n="ctrl-maj-f">Ctrl+Maj+F</span></div>
+          <div class="ctx-item" data-act="selectall" data-i18n="tout-selectionner">Tout sélectionner</div>
+          <div class="ctx-item" data-act="clear" data-i18n="effacer-l-ecran">Effacer l'écran</div>
         </div>
         <aside class="sftp-panel" id="sftp-panel">
           <div class="sftp-resize" id="sftp-resize"></div>
           <div class="sftp-head">
-            <button class="sftp-ib" id="sftp-up" title="Dossier parent" type="button" data-icon="arrowUp" aria-label="Dossier parent"></button>
-            <input class="sftp-path" id="sftp-path" spellcheck="false" autocomplete="off" aria-label="Chemin distant" title="Chemin distant — Entrée pour y aller" />
-            <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" type="button" data-icon="refresh" aria-label="Rafraîchir"></button>
+            <button class="sftp-ib" id="sftp-up" title="Dossier parent" data-i18n-title="dossier-parent" type="button" data-icon="arrowUp" aria-label="Dossier parent" data-i18n-aria="dossier-parent"></button>
+            <input class="sftp-path" id="sftp-path" spellcheck="false" autocomplete="off" aria-label="Chemin distant" data-i18n-aria="chemin-distant" title="Chemin distant — Entrée pour y aller" data-i18n-title="chemin-distant-entree-pour-y-aller" />
+            <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" data-i18n-title="rafraichir" type="button" data-icon="refresh" aria-label="Rafraîchir" data-i18n-aria="rafraichir"></button>
           </div>
           <div class="sftp-list" id="sftp-list"></div>
           <div class="sftp-drop" id="sftp-drop"><span>⬆︎</span>Déposer pour envoyer ici</div>
           <div class="sftp-foot">
-            <button class="btn-mini" id="sftp-up-btn" type="button" data-icon="upload">Envoyer…</button>
-            <button class="btn-mini" id="sftp-mkdir-btn" type="button" data-icon="plus">Dossier</button>
+            <button class="btn-mini" id="sftp-up-btn" type="button" data-icon="upload" data-i18n="envoyer">Envoyer…</button>
+            <button class="btn-mini" id="sftp-mkdir-btn" type="button" data-icon="plus" data-i18n="dossier-2">Dossier</button>
           </div>
           <div class="sftp-progress" id="sftp-progress" hidden><div class="bar" id="sftp-bar"></div></div>
-          <div class="sftp-status" id="sftp-status">Glisse des fichiers ici, ou clique sur un fichier pour le télécharger.</div>
+          <div class="sftp-status" id="sftp-status" data-i18n="glisse-des-fichiers-ici-ou-clique-sur-un-f">Glisse des fichiers ici, ou clique sur un fichier pour le télécharger.</div>
         </aside>
         <div class="ctx-menu" id="sftp-context">
-          <div class="ctx-item" data-act="download">Télécharger</div>
-          <div class="ctx-item" data-act="cd">Aller ici dans le terminal</div>
-          <div class="ctx-item" data-act="copy">Copier le chemin</div>
+          <div class="ctx-item" data-act="download" data-i18n="telecharger">Télécharger</div>
+          <div class="ctx-item" data-act="cd" data-i18n="aller-ici-dans-le-terminal">Aller ici dans le terminal</div>
+          <div class="ctx-item" data-act="copy" data-i18n="copier-le-chemin">Copier le chemin</div>
           <div class="ctx-sep"></div>
-          <div class="ctx-item" data-act="rename">Renommer…</div>
-          <div class="ctx-item" data-act="mkdir">Nouveau dossier…</div>
+          <div class="ctx-item" data-act="rename" data-i18n="renommer">Renommer…</div>
+          <div class="ctx-item" data-act="mkdir" data-i18n="nouveau-dossier">Nouveau dossier…</div>
           <div class="ctx-sep"></div>
-          <div class="ctx-item danger" data-act="delete">Supprimer</div>
+          <div class="ctx-item danger" data-act="delete" data-i18n="supprimer">Supprimer</div>
         </div>
       </div>
     </section>
@@ -953,7 +953,7 @@
 
   <div class="palette-backdrop" id="palette">
     <div class="palette">
-      <input id="palette-input" placeholder="Taper un nom d'hôte ou une commande…" autocomplete="off" />
+      <input id="palette-input" placeholder="Taper un nom d'hôte ou une commande…" data-i18n-placeholder="taper-un-nom-d-hote-ou-une-commande" autocomplete="off" />
       <div class="results" id="palette-results"></div>
     </div>
   </div>
@@ -963,60 +963,60 @@
     <div class="modal-backdrop" id="manual-modal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="manual-modal-title">
       <form id="manual-form" autocomplete="off">
-        <h2 id="manual-modal-title">Connexion directe</h2>
-        <p class="modal-hint">Sans passer par <code>~/.ssh/config</code>.</p>
+        <h2 id="manual-modal-title" data-i18n="connexion-directe">Connexion directe</h2>
+        <p class="modal-hint" data-i18n="sans-passer-par">Sans passer par <code>~/.ssh/config</code>.</p>
 
         <div class="auth-switch" style="margin-bottom:2px">
-          <label class="radio"><input type="radio" name="proto" value="ssh" checked /> SSH</label>
-          <label class="radio"><input type="radio" name="proto" value="rdp" /> RDP <code>bureau</code></label>
+          <label class="radio" data-i18n="ssh"><input type="radio" name="proto" value="ssh" checked /> SSH</label>
+          <label class="radio" data-i18n="rdp"><input type="radio" name="proto" value="rdp" /> RDP <code>bureau</code></label>
         </div>
-        <label>Adresse ou IP
+        <label data-i18n="adresse-ou-ip">Adresse ou IP
           <input id="m-addr" name="addr" placeholder="192.168.1.10" required />
         </label>
-        <label>Port
+        <label data-i18n="port">Port
           <input id="m-port" name="port" type="number" min="1" max="65535" placeholder="22" />
         </label>
-        <label>Utilisateur
+        <label data-i18n="utilisateur">Utilisateur
           <input id="m-user" name="user" placeholder="root" required />
         </label>
 
         <div class="auth-switch" id="m-auth-switch">
-          <label class="radio"><input type="radio" name="auth" value="password" checked /> Mot de passe</label>
-          <label class="radio"><input type="radio" name="auth" value="key" /> Clé privée</label>
+          <label class="radio" data-i18n="mot-de-passe"><input type="radio" name="auth" value="password" checked /> Mot de passe</label>
+          <label class="radio" data-i18n="cle-privee"><input type="radio" name="auth" value="key" /> Clé privée</label>
         </div>
 
-        <label id="m-password-row">Mot de passe
+        <label id="m-password-row" data-i18n="mot-de-passe">Mot de passe
           <input id="m-password" name="password" type="password" />
         </label>
-        <label id="m-key-row" hidden>Chemin de la clé privée
+        <label id="m-key-row" hidden data-i18n="chemin-de-la-cle-privee">Chemin de la clé privée
           <input id="m-key" name="key" placeholder="~/.ssh/id_ed25519" />
         </label>
         <label class="check" id="m-rdp-remember-row" hidden>
           <input type="checkbox" id="m-rdp-remember" />
-          <span>Mémoriser le mot de passe (trousseau système)</span>
+          <span data-i18n="memoriser-le-mot-de-passe-trousseau-system">Mémoriser le mot de passe (trousseau système)</span>
         </label>
         <label class="check" id="m-rdp-save-row" hidden>
           <input type="checkbox" id="m-rdp-save" />
-          <span>Enregistrer cette connexion RDP</span>
+          <span data-i18n="enregistrer-cette-connexion-rdp">Enregistrer cette connexion RDP</span>
         </label>
-        <label id="m-rdp-name-row" hidden>Nom
-          <input id="m-rdp-name" placeholder="Serveur prod" />
+        <label id="m-rdp-name-row" hidden data-i18n="nom">Nom
+          <input id="m-rdp-name" placeholder="Serveur prod" data-i18n-placeholder="serveur-prod" />
         </label>
 
         <label class="check" id="m-save-row">
           <input type="checkbox" id="m-save" />
-          <span>Enregistrer cet hôte dans <code>~/.ssh/config</code></span>
+          <span data-i18n="enregistrer-cet-hote-dans">Enregistrer cet hôte dans <code>~/.ssh/config</code></span>
         </label>
-        <label id="m-alias-row" hidden>Nom à donner à l'hôte
+        <label id="m-alias-row" hidden data-i18n="nom-a-donner-a-l-hote">Nom à donner à l'hôte
           <input id="m-alias" placeholder="prod-web" />
-          <span class="field-hint">Utilisable ensuite avec <code>ssh prod-web</code>.</span>
+          <span class="field-hint" data-i18n="utilisable-ensuite-avec">Utilisable ensuite avec <code>ssh prod-web</code>.</span>
         </label>
 
         <p class="modal-error" id="m-error" hidden></p>
 
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="m-cancel">Annuler</button>
-          <button type="submit" class="btn-primary" id="m-submit">Se connecter</button>
+          <button type="button" class="btn-ghost" id="m-cancel" data-i18n="annuler">Annuler</button>
+          <button type="submit" class="btn-primary" id="m-submit" data-i18n="se-connecter">Se connecter</button>
         </div>
       </form>
       </div>
@@ -1024,62 +1024,62 @@
 
     <div class="modal-backdrop" id="import-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
-        <h2 id="import-modal-title">Importer des sessions</h2>
-        <p class="modal-hint">Depuis PuTTY ou MobaXterm. Les hôtes retenus sont écrits dans <code>~/.ssh/config</code> ; les mots de passe ne sont jamais repris.</p>
+        <h2 id="import-modal-title" data-i18n="importer-des-sessions">Importer des sessions</h2>
+        <p class="modal-hint" data-i18n="depuis-putty-ou-mobaxterm-les-hotes-retenu">Depuis PuTTY ou MobaXterm. Les hôtes retenus sont écrits dans <code>~/.ssh/config</code> ; les mots de passe ne sont jamais repris.</p>
         <p class="modal-hint" id="import-consultes"></p>
 
         <div class="import-list" id="import-list" aria-live="polite"></div>
         <p class="modal-hint" id="import-bilan"></p>
 
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="import-choisir">Désigner un fichier ou un dossier…</button>
+          <button type="button" class="btn-ghost" id="import-choisir" data-i18n="designer-un-fichier-ou-un-dossier">Désigner un fichier ou un dossier…</button>
           <span class="modal-actions-spacer"></span>
-          <button type="button" class="btn-ghost" id="import-cancel">Annuler</button>
-          <button type="button" class="btn-primary" id="import-submit" disabled>Importer</button>
+          <button type="button" class="btn-ghost" id="import-cancel" data-i18n="annuler">Annuler</button>
+          <button type="button" class="btn-primary" id="import-submit" disabled data-i18n="importer">Importer</button>
         </div>
       </div>
     </div>
 
     <div class="modal-backdrop" id="keys-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="keys-modal-title">
-        <h2 id="keys-modal-title">Clés SSH</h2>
-        <p class="modal-hint">Dans <code>~/.ssh</code>. Une clé évite de retaper son mot de passe.</p>
+        <h2 id="keys-modal-title" data-i18n="cles-ssh">Clés SSH</h2>
+        <p class="modal-hint" data-i18n="dans">Dans <code>~/.ssh</code>. Une clé évite de retaper son mot de passe.</p>
 
         <div class="key-list" id="key-list"></div>
 
         <details class="key-block">
-          <summary>Créer une nouvelle clé</summary>
+          <summary data-i18n="creer-une-nouvelle-cle">Créer une nouvelle clé</summary>
           <form id="keygen-form" autocomplete="off">
-            <label>Nom du fichier
+            <label data-i18n="nom-du-fichier">Nom du fichier
               <input id="k-name" placeholder="id_avash" required />
             </label>
-            <label>Commentaire
-              <input id="k-comment" placeholder="adrien@pc (par défaut)" />
+            <label data-i18n="commentaire">Commentaire
+              <input id="k-comment" placeholder="adrien@pc (par défaut)" data-i18n-placeholder="adrien-pc-par-defaut" />
             </label>
-            <button type="submit" class="btn-primary" id="k-gen-submit">Générer (ed25519)</button>
+            <button type="submit" class="btn-primary" id="k-gen-submit" data-i18n="generer-ed25519">Générer (ed25519)</button>
           </form>
         </details>
 
         <details class="key-block" id="deploy-block">
-          <summary>Installer une clé sur un serveur</summary>
-          <p class="modal-hint">Une dernière connexion par mot de passe, puis la clé prend le relais.</p>
+          <summary data-i18n="installer-une-cle-sur-un-serveur">Installer une clé sur un serveur</summary>
+          <p class="modal-hint" data-i18n="une-derniere-connexion-par-mot-de-passe-pu">Une dernière connexion par mot de passe, puis la clé prend le relais.</p>
           <form id="deploy-form" autocomplete="off">
-            <label>Clé à installer
+            <label data-i18n="cle-a-installer">Clé à installer
               <select id="d-key"></select>
             </label>
-            <label>Adresse ou IP
+            <label data-i18n="adresse-ou-ip">Adresse ou IP
               <input id="d-addr" placeholder="192.168.1.10" required />
             </label>
-            <label>Port
+            <label data-i18n="port">Port
               <input id="d-port" type="number" min="1" max="65535" placeholder="22" />
             </label>
-            <label>Utilisateur
+            <label data-i18n="utilisateur">Utilisateur
               <input id="d-user" placeholder="root" required />
             </label>
-            <label>Mot de passe
+            <label data-i18n="mot-de-passe">Mot de passe
               <input id="d-password" type="password" required />
             </label>
-            <button type="submit" class="btn-primary" id="d-submit">Installer la clé</button>
+            <button type="submit" class="btn-primary" id="d-submit" data-i18n="installer-la-cle">Installer la clé</button>
           </form>
         </details>
 
@@ -1087,156 +1087,156 @@
         <p class="modal-ok" id="k-ok" hidden></p>
 
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="k-close">Fermer</button>
+          <button type="button" class="btn-ghost" id="k-close" data-i18n="fermer">Fermer</button>
         </div>
       </div>
     </div>
 
     <div class="modal-backdrop" id="pass-modal">
       <form class="modal" id="pass-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="pass-modal-title">
-        <h2 id="pass-modal-title">Mot de passe</h2>
+        <h2 id="pass-modal-title" data-i18n="mot-de-passe">Mot de passe</h2>
         <p class="modal-hint" id="pass-target">—</p>
-        <label>Mot de passe
+        <label data-i18n="mot-de-passe">Mot de passe
           <input id="pass-input" type="password" required autocomplete="current-password" />
         </label>
         <label class="check">
           <input type="checkbox" id="pass-remember" />
-          <span>Mémoriser dans le trousseau du système</span>
+          <span data-i18n="memoriser-dans-le-trousseau-du-systeme">Mémoriser dans le trousseau du système</span>
         </label>
         <p class="modal-error" id="pass-error" hidden></p>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="pass-cancel">Annuler</button>
-          <button type="submit" class="btn-primary" id="pass-submit">Se connecter</button>
+          <button type="button" class="btn-ghost" id="pass-cancel" data-i18n="annuler">Annuler</button>
+          <button type="submit" class="btn-primary" id="pass-submit" data-i18n="se-connecter">Se connecter</button>
         </div>
       </form>
     </div>
 
     <div class="ctx-menu" id="rdp-context">
-      <div class="ctx-item" data-act="connect">Se connecter</div>
-      <div class="ctx-item" data-act="edit">Modifier…</div>
-      <div class="ctx-item" data-act="move">Déplacer vers…</div>
-      <div class="ctx-item" data-act="forget">Oublier le mot de passe</div>
+      <div class="ctx-item" data-act="connect" data-i18n="se-connecter">Se connecter</div>
+      <div class="ctx-item" data-act="edit" data-i18n="modifier">Modifier…</div>
+      <div class="ctx-item" data-act="move" data-i18n="deplacer-vers">Déplacer vers…</div>
+      <div class="ctx-item" data-act="forget" data-i18n="oublier-le-mot-de-passe">Oublier le mot de passe</div>
       <div class="ctx-sep"></div>
-      <div class="ctx-item danger" data-act="delete">Supprimer</div>
+      <div class="ctx-item danger" data-act="delete" data-i18n="supprimer">Supprimer</div>
     </div>
     <div class="ctx-menu" id="host-context">
-      <div class="ctx-item" data-act="connect">Se connecter</div>
-      <div class="ctx-item" data-act="edit">Modifier…</div>
-      <div class="ctx-item" data-act="move">Déplacer vers…</div>
-      <div class="ctx-item" data-act="tunnels">Tunnels…</div>
-      <div class="ctx-item" data-act="forget">Oublier le mot de passe</div>
+      <div class="ctx-item" data-act="connect" data-i18n="se-connecter">Se connecter</div>
+      <div class="ctx-item" data-act="edit" data-i18n="modifier">Modifier…</div>
+      <div class="ctx-item" data-act="move" data-i18n="deplacer-vers">Déplacer vers…</div>
+      <div class="ctx-item" data-act="tunnels" data-i18n="tunnels-2">Tunnels…</div>
+      <div class="ctx-item" data-act="forget" data-i18n="oublier-le-mot-de-passe">Oublier le mot de passe</div>
       <div class="ctx-sep"></div>
-      <div class="ctx-item danger" data-act="delete">Supprimer l'hôte</div>
+      <div class="ctx-item danger" data-act="delete" data-i18n="supprimer-l-hote">Supprimer l'hôte</div>
     </div>
     <div class="modal-backdrop" id="tunnels-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="tunnels-modal-title">
-        <h2 id="tunnels-modal-title">Tunnels SSH</h2>
-        <p class="modal-hint">Un tunnel vit sur sa propre connexion : fermer un onglet ne le coupe pas.</p>
+        <h2 id="tunnels-modal-title" data-i18n="tunnels-ssh">Tunnels SSH</h2>
+        <p class="modal-hint" data-i18n="un-tunnel-vit-sur-sa-propre-connexion-ferm">Un tunnel vit sur sa propre connexion : fermer un onglet ne le coupe pas.</p>
 
         <div class="tunnel-list" id="tunnel-list"></div>
 
         <details class="key-block" id="tunnel-block">
-          <summary id="tunnel-form-title">Nouveau tunnel</summary>
+          <summary id="tunnel-form-title" data-i18n="nouveau-tunnel">Nouveau tunnel</summary>
           <form id="tunnel-form" autocomplete="off">
             <input type="hidden" id="t-id" />
-            <label>Hôte
+            <label data-i18n="hote">Hôte
               <select id="t-alias" required></select>
             </label>
             <div class="auth-switch">
-              <label class="radio"><input type="radio" name="tkind" value="local" checked /> Local <code>-L</code></label>
-              <label class="radio"><input type="radio" name="tkind" value="remote" /> Distant <code>-R</code></label>
-              <label class="radio"><input type="radio" name="tkind" value="dynamic" /> SOCKS <code>-D</code></label>
+              <label class="radio" data-i18n="local"><input type="radio" name="tkind" value="local" checked /> Local <code>-L</code></label>
+              <label class="radio" data-i18n="distant"><input type="radio" name="tkind" value="remote" /> Distant <code>-R</code></label>
+              <label class="radio" data-i18n="socks"><input type="radio" name="tkind" value="dynamic" /> SOCKS <code>-D</code></label>
             </div>
             <p class="field-hint" id="t-kind-hint"></p>
-            <label><span id="t-bind-label">Port local d'écoute</span>
+            <label><span id="t-bind-label" data-i18n="port-local-d-ecoute">Port local d'écoute</span>
               <input id="t-bind" type="number" min="1" max="65535" placeholder="8080" required />
             </label>
             <div class="tunnel-target" id="t-target-row">
-              <label><span id="t-host-label">Destination (vue du serveur)</span>
+              <label><span id="t-host-label" data-i18n="destination-vue-du-serveur">Destination (vue du serveur)</span>
                 <input id="t-host" placeholder="localhost" />
               </label>
-              <label>Port
+              <label data-i18n="port">Port
                 <input id="t-port" type="number" min="1" max="65535" placeholder="5432" />
               </label>
             </div>
-            <label><span>Nom <span class="field-hint">(optionnel)</span></span>
-              <input id="t-name" placeholder="Base de prod" />
+            <label><span data-i18n="nom">Nom <span class="field-hint" data-i18n="optionnel">(optionnel)</span></span>
+              <input id="t-name" placeholder="Base de prod" data-i18n-placeholder="base-de-prod" />
             </label>
             <p class="modal-error" id="t-error" hidden></p>
             <div class="modal-actions">
-              <button type="button" class="btn-ghost" id="t-reset" hidden>Annuler la modification</button>
-              <button type="submit" class="btn-primary" id="t-submit">Enregistrer</button>
+              <button type="button" class="btn-ghost" id="t-reset" hidden data-i18n="annuler-la-modification">Annuler la modification</button>
+              <button type="submit" class="btn-primary" id="t-submit" data-i18n="enregistrer">Enregistrer</button>
             </div>
           </form>
         </details>
 
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="t-close">Fermer</button>
+          <button type="button" class="btn-ghost" id="t-close" data-i18n="fermer">Fermer</button>
         </div>
       </div>
     </div>
     <div class="modal-backdrop" id="snippets-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="snippets-modal-title">
-        <h2 id="snippets-modal-title">Snippets</h2>
-        <p class="modal-hint">Des commandes prêtes à envoyer dans le terminal. Variables <code>{{nom}}</code> demandées à l'envoi ; envoi possible sur plusieurs sessions.</p>
+        <h2 id="snippets-modal-title" data-i18n="snippets">Snippets</h2>
+        <p class="modal-hint" data-i18n="des-commandes-pretes-a-envoyer-dans-le-ter">Des commandes prêtes à envoyer dans le terminal. Variables <code>{{nom}}</code> demandées à l'envoi ; envoi possible sur plusieurs sessions.</p>
         <div class="snippet-list" id="snippet-list"></div>
         <details class="key-block" id="snippet-block">
-          <summary id="snippet-form-title">Nouveau snippet</summary>
+          <summary id="snippet-form-title" data-i18n="nouveau-snippet">Nouveau snippet</summary>
           <form id="snippet-form" autocomplete="off">
             <input type="hidden" id="sn-id" />
-            <label>Nom
-              <input id="sn-name" placeholder="Redémarrer nginx" required />
+            <label data-i18n="nom">Nom
+              <input id="sn-name" placeholder="Redémarrer nginx" data-i18n-placeholder="redemarrer-nginx" required />
             </label>
-            <label><span>Commande <span class="field-hint">— <code>{{variable}}</code> pour un champ demandé à l'envoi</span></span>
-              <textarea id="sn-command" rows="3" spellcheck="false" placeholder="sudo systemctl restart {{service}}"></textarea>
+            <label><span data-i18n="commande">Commande <span class="field-hint">— <code>{{variable}}</code> pour un champ demandé à l'envoi</span></span>
+              <textarea id="sn-command" rows="3" spellcheck="false" placeholder="sudo systemctl restart {{service}}" data-i18n-placeholder="sudo-systemctl-restart-service"></textarea>
             </label>
             <p class="field-hint" id="sn-vars"></p>
             <label class="check">
               <input type="checkbox" id="sn-run" checked />
-              <span>Exécuter (envoyer avec Entrée) — sinon insérer sans valider</span>
+              <span data-i18n="executer-envoyer-avec-entree-sinon-inserer">Exécuter (envoyer avec Entrée) — sinon insérer sans valider</span>
             </label>
             <p class="modal-error" id="sn-error" hidden></p>
             <div class="modal-actions">
-              <button type="button" class="btn-ghost" id="sn-reset" hidden>Annuler la modification</button>
-              <button type="submit" class="btn-primary" id="sn-submit">Enregistrer</button>
+              <button type="button" class="btn-ghost" id="sn-reset" hidden data-i18n="annuler-la-modification">Annuler la modification</button>
+              <button type="submit" class="btn-primary" id="sn-submit" data-i18n="enregistrer">Enregistrer</button>
             </div>
           </form>
         </details>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="sn-close">Fermer</button>
+          <button type="button" class="btn-ghost" id="sn-close" data-i18n="fermer">Fermer</button>
         </div>
       </div>
     </div>
     <div class="modal-backdrop" id="send-modal">
       <form class="modal" id="send-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="send-title">
-        <h2 id="send-title">Envoyer</h2>
+        <h2 id="send-title" data-i18n="envoyer-2">Envoyer</h2>
         <pre class="send-preview" id="send-preview"></pre>
         <div id="send-vars"></div>
         <div id="send-targets-wrap" hidden>
-          <div class="send-section">Envoyer à</div>
+          <div class="send-section" data-i18n="envoyer-a">Envoyer à</div>
           <div class="send-targets" id="send-targets"></div>
         </div>
         <label class="check">
           <input type="checkbox" id="send-run" />
-          <span>Exécuter (avec Entrée)</span>
+          <span data-i18n="executer-avec-entree">Exécuter (avec Entrée)</span>
         </label>
         <p class="modal-error" id="send-error" hidden></p>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="send-cancel">Annuler</button>
-          <button type="submit" class="btn-primary" id="send-submit">Envoyer</button>
+          <button type="button" class="btn-ghost" id="send-cancel" data-i18n="annuler">Annuler</button>
+          <button type="submit" class="btn-primary" id="send-submit" data-i18n="envoyer-2">Envoyer</button>
         </div>
       </form>
     </div>
     <div class="modal-backdrop" id="ask-modal">
       <form class="modal" id="ask-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="ask-title">
         <h2 id="ask-title">—</h2>
-        <label><span id="ask-label">Nom</span>
+        <label><span id="ask-label" data-i18n="nom">Nom</span>
           <input id="ask-input" required spellcheck="false" />
         </label>
         <p class="modal-error" id="ask-error" hidden></p>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="ask-cancel">Annuler</button>
-          <button type="submit" class="btn-primary" id="ask-submit">OK</button>
+          <button type="button" class="btn-ghost" id="ask-cancel" data-i18n="annuler">Annuler</button>
+          <button type="submit" class="btn-primary" id="ask-submit" data-i18n="ok">OK</button>
         </div>
       </form>
     </div>
@@ -1245,86 +1245,86 @@
         <h2 id="confirm-title">—</h2>
         <p class="confirm-msg" id="confirm-message"></p>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="confirm-cancel">Annuler</button>
-          <button type="button" class="btn-primary" id="confirm-ok">Confirmer</button>
+          <button type="button" class="btn-ghost" id="confirm-cancel" data-i18n="annuler">Annuler</button>
+          <button type="button" class="btn-primary" id="confirm-ok" data-i18n="confirmer">Confirmer</button>
         </div>
       </div>
     </div>
     <div class="modal-backdrop" id="edit-modal">
       <form class="modal" id="edit-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
-        <h2 id="edit-modal-title">Modifier l'hôte</h2>
+        <h2 id="edit-modal-title" data-i18n="modifier-l-hote">Modifier l'hôte</h2>
         <input type="hidden" id="e-old" />
-        <label>Nom (alias)
+        <label data-i18n="nom-alias">Nom (alias)
           <input id="e-alias" required />
         </label>
-        <label>Adresse ou IP
+        <label data-i18n="adresse-ou-ip">Adresse ou IP
           <input id="e-addr" required />
         </label>
-        <label>Port
+        <label data-i18n="port">Port
           <input id="e-port" type="number" min="1" max="65535" placeholder="22" />
         </label>
-        <label>Utilisateur
+        <label data-i18n="utilisateur">Utilisateur
           <input id="e-user" />
         </label>
-        <label><span>Chemin de la clé privée <span class="field-hint">(optionnel)</span></span>
+        <label><span data-i18n="chemin-de-la-cle-privee">Chemin de la clé privée <span class="field-hint" data-i18n="optionnel">(optionnel)</span></span>
           <input id="e-key" placeholder="~/.ssh/id_ed25519" />
         </label>
-        <label><span>Rebond ProxyJump <span class="field-hint">(optionnel) — bastion(s), ex. <code>jump</code> ou <code>user@bastion:22</code></span></span>
-          <input id="e-jump" placeholder="bastion, deploy@10.0.0.1:2222" />
+        <label><span data-i18n="rebond-proxyjump">Rebond ProxyJump <span class="field-hint" data-i18n="optionnel-bastion-s-ex">(optionnel) — bastion(s), ex. <code>jump</code> ou <code>user@bastion:22</code></span></span>
+          <input id="e-jump" placeholder="bastion, deploy@10.0.0.1:2222" data-i18n-placeholder="bastion-deploy-10-0-0-1-2222" />
         </label>
-        <label><span>Tags <span class="field-hint">(optionnel) — séparés par des virgules</span></span>
-          <input id="e-tags" placeholder="prod, web" />
+        <label><span data-i18n="tags">Tags <span class="field-hint" data-i18n="optionnel-separes-par-des-virgules">(optionnel) — séparés par des virgules</span></span>
+          <input id="e-tags" placeholder="prod, web" data-i18n-placeholder="prod-web" />
         </label>
         <p class="modal-error" id="e-error" hidden></p>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="e-cancel">Annuler</button>
-          <button type="submit" class="btn-primary" id="e-submit">Enregistrer</button>
+          <button type="button" class="btn-ghost" id="e-cancel" data-i18n="annuler">Annuler</button>
+          <button type="submit" class="btn-primary" id="e-submit" data-i18n="enregistrer">Enregistrer</button>
         </div>
       </form>
     </div>
     <div class="modal-backdrop" id="rdp-edit-modal">
       <form class="modal" id="rdp-edit-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="rdp-edit-modal-title">
-        <h2 id="rdp-edit-modal-title">Modifier le bureau RDP</h2>
+        <h2 id="rdp-edit-modal-title" data-i18n="modifier-le-bureau-rdp">Modifier le bureau RDP</h2>
         <input type="hidden" id="re-id" />
-        <label>Nom
+        <label data-i18n="nom">Nom
           <input id="re-name" required />
         </label>
-        <label>Adresse ou IP
+        <label data-i18n="adresse-ou-ip">Adresse ou IP
           <input id="re-addr" required />
         </label>
-        <label>Port
+        <label data-i18n="port">Port
           <input id="re-port" type="number" min="1" max="65535" placeholder="3389" />
         </label>
-        <label>Utilisateur
+        <label data-i18n="utilisateur">Utilisateur
           <input id="re-user" required />
         </label>
-        <label><span>Mot de passe <span class="field-hint">(laisser vide pour ne pas changer)</span></span>
+        <label><span data-i18n="mot-de-passe">Mot de passe <span class="field-hint" data-i18n="laisser-vide-pour-ne-pas-changer">(laisser vide pour ne pas changer)</span></span>
           <input id="re-password" type="password" />
         </label>
         <p class="modal-error" id="re-error" hidden></p>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="re-cancel">Annuler</button>
-          <button type="submit" class="btn-primary" id="re-submit">Enregistrer</button>
+          <button type="button" class="btn-ghost" id="re-cancel" data-i18n="annuler">Annuler</button>
+          <button type="submit" class="btn-primary" id="re-submit" data-i18n="enregistrer">Enregistrer</button>
         </div>
       </form>
     </div>
     <div class="ctx-menu" id="folder-context">
-      <div class="ctx-item" data-act="new">Nouveau sous-dossier…</div>
-      <div class="ctx-item" data-act="rename">Renommer…</div>
+      <div class="ctx-item" data-act="new" data-i18n="nouveau-sous-dossier">Nouveau sous-dossier…</div>
+      <div class="ctx-item" data-act="rename" data-i18n="renommer">Renommer…</div>
       <div class="ctx-sep"></div>
-      <div class="ctx-item danger" data-act="delete">Supprimer le dossier</div>
+      <div class="ctx-item danger" data-act="delete" data-i18n="supprimer-le-dossier">Supprimer le dossier</div>
     </div>
     <div class="modal-backdrop" id="move-modal">
       <form class="modal" id="move-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="move-modal-title">
-        <h2 id="move-modal-title">Déplacer vers un dossier</h2>
+        <h2 id="move-modal-title" data-i18n="deplacer-vers-un-dossier">Déplacer vers un dossier</h2>
         <div class="move-list" id="move-list"></div>
-        <label><span>Nouveau dossier <span class="field-hint">(ex. <code>prod/web</code>)</span></span>
+        <label><span data-i18n="nouveau-dossier-2">Nouveau dossier <span class="field-hint" data-i18n="ex">(ex. <code>prod/web</code>)</span></span>
           <input id="move-new" placeholder="prod/web" />
         </label>
         <p class="modal-error" id="move-error" hidden></p>
         <div class="modal-actions">
-          <button type="button" class="btn-ghost" id="move-cancel">Annuler</button>
-          <button type="submit" class="btn-primary" id="move-submit">Créer et déplacer</button>
+          <button type="button" class="btn-ghost" id="move-cancel" data-i18n="annuler">Annuler</button>
+          <button type="submit" class="btn-primary" id="move-submit" data-i18n="creer-et-deplacer">Créer et déplacer</button>
         </div>
       </form>
     </div></body>

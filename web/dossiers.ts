@@ -7,6 +7,7 @@ import { askConfirm, askText } from "./dialogues";
 import { closeAllContextMenus, placerMenu } from "./menu-hote";
 import { loadHosts, moveHostTo, setupFolderDrop } from "./main";
 import { notifyErreur } from "./notifications";
+import { t } from "./i18n";
 
 // ---------- Gestion des dossiers (création, menu, déplacement) ----------
 
@@ -20,8 +21,8 @@ function allFolders(): string[] {
 
 async function createFolder(parent: string) {
   const name = await askText(
-    parent ? "Nouveau sous-dossier" : "Nouveau dossier",
-    parent ? `Dans \u00ab ${parent} \u00bb` : "Nom du dossier",
+    parent ? t("dossiers-nouveau-sous-dossier") : t("nouveau-dossier-2"),
+    parent ? t("dossiers-dans", { parent }) : t("dossiers-nom"),
     "",
   );
   if (!name || !name.trim()) return;
@@ -32,7 +33,7 @@ async function createFolder(parent: string) {
     saveCollapsed();
     await loadHosts();
   } catch (e) {
-    notifyErreur(`Cr\u00e9ation impossible : ${e}`);
+    notifyErreur(t("dossiers-creation-impossible", { e: String(e) }));
   }
 }
 
@@ -55,7 +56,7 @@ $("folder-context").addEventListener("click", async (e) => {
     await createFolder(path);
   } else if (act === "rename") {
     const leaf = path.split("/").pop() ?? path;
-    const name = await askText("Renommer le dossier", `Nouveau nom de \u00ab ${leaf} \u00bb`, leaf);
+    const name = await askText(t("dossiers-renommer"), t("dossiers-nouveau-nom", { nom: leaf }), leaf);
     if (!name || !name.trim() || name.trim() === leaf) return;
     const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
     const to = parent ? `${parent}/${name.trim()}` : name.trim();
@@ -63,15 +64,15 @@ $("folder-context").addEventListener("click", async (e) => {
       await invoke("folder_rename", { from: path, to });
       await loadHosts();
     } catch (ex) {
-      notifyErreur(`Renommage impossible : ${ex}`);
+      notifyErreur(t("dossiers-renommage-impossible", { e: String(ex) }));
     }
   } else if (act === "delete") {
-    if (!(await askConfirm(`Supprimer le dossier \u00ab ${path} \u00bb ?\n\nLes h\u00f4tes qu'il contient (et ses sous-dossiers) reviennent \u00e0 la racine ; ils ne sont pas supprim\u00e9s.`))) return;
+    if (!(await askConfirm(t("dossiers-supprimer-question", { chemin: path })))) return;
     try {
       await invoke("folder_delete", { path });
       await loadHosts();
     } catch (ex) {
-      notifyErreur(`Suppression impossible : ${ex}`);
+      notifyErreur(t("suppression-impossible", { e: String(ex) }));
     }
   }
 });
@@ -91,7 +92,7 @@ export function openMoveModal(kind: string, id: string) {
     row.addEventListener("click", () => void doMove(folder));
     listEl.appendChild(row);
   };
-  addRow("\u2196 Racine", "");
+  addRow(t("dossiers-racine"), "");
   for (const f of allFolders()) addRow(f, f);
   $("move-modal").classList.add("open");
   setTimeout(() => ($("move-new") as HTMLInputElement).focus(), 30);
@@ -110,7 +111,7 @@ $("move-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const f = ($("move-new") as HTMLInputElement).value.trim();
   if (!f) {
-    $("move-error").textContent = "Saisis un nom de dossier.";
+    $("move-error").textContent = t("dossiers-saisis-nom");
     $("move-error").hidden = false;
     return;
   }
