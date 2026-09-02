@@ -7,6 +7,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **macOS entre dans la chaîne.** Un job compile et teste le cœur, le
+  processus RDP et l'interface sur `macos-latest` à chaque commit ; la
+  release produit une image disque pour les Mac à puce Apple et l'archive
+  signée que la mise à jour automatique télécharge. Sans identité de
+  développeur Apple, l'application n'est pas notarisée : clic droit → Ouvrir
+  au premier lancement. Pas encore éprouvée sur une machine réelle.
 - **Santé des hôtes.** « Vérifier la santé des hôtes », dans la palette,
   ouvre une connexion TCP jusqu'au port de chaque hôte SSH et RDP — seize à
   la fois, chacune bornée à une seconde et demie — et la referme aussitôt :

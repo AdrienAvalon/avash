@@ -39,7 +39,7 @@ défaut n'est pas livrée, même terminée.
 | Tests | 317 Rust (138 cœur, 33 intégration, 60 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 96 front · 47 scénarios bout en bout dans 25 fichiers, tous en intégration continue |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
-| Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle |
+| Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
 | Version publiée | 0.6.2 (Linux + Windows, signées, attestation Sigstore) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
@@ -164,10 +164,16 @@ que le panneau liste.
 
 ## Axe 2 — Élargir la portée
 
-### 2.1 macOS
+### 2.1 macOS — **construit, pas encore éprouvé**
 
-Ni construit ni testé. C'est la dernière plateforme majeure manquante pour tenir
-la promesse « multi-plateforme ».
+Ni construit ni testé jusqu'au 02/09/2026. Désormais : un job `macos-latest`
+de la chaîne compile le front, teste le cœur (serveur SSH en mémoire compris),
+compile et teste le processus RDP et l'interface à chaque commit ; la release
+produit l'image disque `Avash_x.y.z_aarch64.dmg` et l'archive signée que la
+mise à jour automatique télécharge, avec l'entrée `darwin-aarch64` du
+manifeste. Le trousseau natif Apple est celui de `keyring`. Ce qui manque :
+une machine pour l'éprouver en usage réel, et une notarisation (identité de
+développeur Apple) pour épargner le clic droit → Ouvrir du premier lancement.
 
 ### 2.2 Anglais — **fait**
 
@@ -287,7 +293,7 @@ Ces mesures sont à relever à chaque version :
 
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
-| Plateformes réellement livrées | 2 | 3 |
+| Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
 | Scénarios bout en bout | 47 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |

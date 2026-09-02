@@ -79,6 +79,21 @@ signé numériquement**. C'est le comportement normal pour un logiciel sans
 certificat de signature de code (Authenticode) — cliquer sur « Informations
 complémentaires » puis « Exécuter quand même ».
 
+### macOS (image disque)
+
+`Avash_x.y.z_aarch64.dmg`, pour les Mac à puce Apple. L'application n'est pas
+notarisée : au premier lancement, Gatekeeper refuse d'ouvrir un logiciel « d'un
+développeur non identifié ». Clic droit sur l'application → **Ouvrir**, une
+fois ; ou, dans un terminal :
+
+```bash
+xattr -d com.apple.quarantine /Applications/Avash.app
+```
+
+La version macOS est construite et testée par la chaîne d'intégration
+continue (cœur, processus RDP, interface), mais **n'a pas encore été éprouvée
+sur une machine réelle** : les retours sont bienvenus.
+
 Deux moyens de vérifier qu'un fichier téléchargé est bien le nôtre :
 
 ```bash
