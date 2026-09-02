@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 02/09/2026 |
 |---|---|
-| Tests | 323 Rust (143 cœur, 33 intégration, 61 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 104 front · 47 scénarios bout en bout dans 25 fichiers, tous en intégration continue |
+| Tests | 323 Rust (143 cœur, 33 intégration, 61 interface, 86 processus RDP) · 387 dans les paquets IronRDP portés · 104 front · 52 scénarios bout en bout dans 26 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -280,6 +280,15 @@ sur des mesures de ce qui coûte réellement.
   d'un `ProxyJump` traversait le découpage, et le rebond devenait introuvable
   sans que le message ne le montre. Le fuzzing avec `cargo-fuzz` (nightly,
   couverture guidée) reste possible pour aller plus loin.
+- **Scénarios bout en bout sous Windows** — **fait** (02/09/2026) : la même
+  suite WebdriverIO, pilotée par Edge WebDriver sur l'exécutable Windows, joue
+  à chaque poussée tout ce qui ne demande pas de serveur local. Elle a trouvé
+  d'emblée ce qu'aucun test unitaire ne pouvait voir : le durcissement de
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` retirait la variable par laquelle le
+  pilote commande WebView2, et l'application n'était pilotable qu'à travers
+  WebKit.
+- **Régression visuelle** — **fait** (02/09/2026) : quatre captures de
+  référence produites par la chaîne, comparées pixel à pixel à chaque passage.
 - **Accessibilité au clavier** — **fait** : boîtes de dialogue (piège de focus,
   Échap), et liste d'hôtes parcourue aux flèches, Origine et Fin, avec un seul
   arrêt de tabulation et un focus qui vaut sélection, le tout sous scénarios
@@ -307,7 +316,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 47 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 52 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |

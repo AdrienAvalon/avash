@@ -213,8 +213,15 @@ un changement d'interface voulu, rafraîchir les références : récupérer
 l'artefact « visuel » du job E2E, copier son dossier `reference` dans
 `e2e/visuel/reference`, commiter.
 
+**Sous Windows.** La même suite tourne avec Edge WebDriver à la place de
+WebKitWebDriver : installer `msedgedriver` de la version d'Edge présente,
+puis `set MSEDGEDRIVER=chemin\msedgedriver.exe` et `npm test` — le harnais le
+passe à `tauri-driver --native-driver`. Les scénarios qui exigent un serveur
+local (sshd, RDP de test) et l'import PuTTY sont écartés d'eux-mêmes ; la
+chaîne joue ce sous-ensemble à chaque poussée (job `e2e-windows`).
+
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
-et le détail des 35 scénarios.
+et le détail des 52 scénarios.
 
 ### Conformité RDP : le niveau qui manquait
 

@@ -33,7 +33,7 @@ une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) 
 effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 (`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`.
 
-## Couverture (35 scénarios, 18 fichiers)
+## Couverture (52 scénarios, 26 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -55,14 +55,22 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 | `liste-clavier.spec.js` | **barre latérale au clavier** : un seul arrêt de tabulation, flèches et Origine/Fin, focus qui vaut sélection, `Maj+F10` et navigation dans le menu |
 | `prefs.spec.js`       | réglage du **partage de presse-papiers** : présent à la palette, bascule, retenu, libellé qui annonce l'état courant |
 | `resize.spec.js`      | l'application reste répondante après une rafale de redimensionnements |
+| `onglets-mixtes.spec.js` | SSH et RDP côte à côte : bascule d'onglets, fermeture, l'autre survit |
+| `enregistrer-et-connecter.spec.js` | « Enregistrer et connecter » depuis la modale de connexion directe |
+| `enregistrement.spec.js` | **enregistrement asciicast** sur la session SSH réelle : l'écran initial, la sortie, le fichier ; la liste dans la palette |
+| `sante.spec.js`       | **santé des hôtes** : voyant vert sur le sshd local, rouge sur une adresse sans route, résultat retenu |
+| `import.spec.js`      | **import PuTTY** : sessions semées dans `.putty/sessions`, aperçu, application (hors Windows) |
+| `langue.spec.js`      | **langue** imposée par `AVASH_LANGUE`, bascule à la palette, retenue |
+| `visuel.spec.js`      | **régression visuelle** : accueil sur les deux thèmes, palette, modale, contre `visuel/reference` (`VISUEL=1`, Linux) |
 
 Chaque fichier de tests repart de l'état semé (`beforeSession` remet le bac à sable à zéro).
 Serveurs locaux : chaque spec RDP démarre son propre serveur de test (aucun couplage) ;
 un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spec`.
 
-En CI (`E2E_NO_RDP=1`), la configuration **exclut** les cinq scénarios qui
-exigent un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`,
-`rdp-clipboard`). C'est une exclusion et non une énumération de ce qui tourne :
+En CI (`E2E_NO_RDP=1`), la configuration **exclut** les fichiers qui exigent
+un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`,
+`onglets-mixtes`, `enregistrer-et-connecter`, `enregistrement`, `sante`).
+C'est une exclusion et non une énumération de ce qui tourne :
 la liste énumérative prenait du retard à chaque scénario ajouté, et cinq
 scénarios pourtant sans serveur ne tournaient plus qu'en local. Une nouvelle
 spec sans serveur tourne désormais en intégration continue d'office.
@@ -70,6 +78,22 @@ spec sans serveur tourne désormais en intégration continue d'office.
 L'attendu d'`isolation.spec.js` est **dérivé du semage** (`HOTES_SEMES`, exporté
 par `wdio.conf.js`) : le réénoncer l'avait rendu faux en CI, où l'hôte
 réellement joignable n'est pas semé.
+
+## Sous Windows
+
+Même suite, autre pilote natif : `tauri-driver` s'appuie sur Edge WebDriver,
+qu'il lance sur l'exécutable de l'application (`browserName: webview2`). Il
+faut `msedgedriver.exe` de la version d'Edge installée
+(<https://msedgedriver.microsoft.com/>), désigné par la variable
+`MSEDGEDRIVER` ; le harnais le passe en `--native-driver`. Les serveurs locaux
+ne sont pas montés (`LOCAL_SERVERS` est faux), l'import PuTTY et la régression
+visuelle sont sautés. Le job `e2e-windows` de la chaîne joue ce sous-ensemble.
+
+Deux pièges rencontrés : Edge WebDriver commande WebView2 par
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (port de débogage, dossier de données),
+que le harnais ne doit pas poser lui-même et que l'application ne doit pas
+retirer sous `TAURI_WEBVIEW_AUTOMATION=true` — sinon chaque scénario meurt
+après quatre minutes sur « DevToolsActivePort file doesn't exist ».
 
 ## Astuces WebKitGTK
 

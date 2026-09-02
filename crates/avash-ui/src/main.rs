@@ -1,6 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // Pilotage WebDriver (suite bout en bout) : tauri-driver le signale par
+    // TAURI_WEBVIEW_AUTOMATION=true, que Tauri lit lui-même pour ouvrir
+    // l'automatisation de la webview. Les deux durcissements ci-dessous en
+    // dépendent : le canal par lequel le pilote natif commande l'application
+    // est une variable d'environnement qu'ils retireraient sinon.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let automatisation = std::env::var_os("TAURI_WEBVIEW_AUTOMATION").is_some_and(|v| v == "true");
+
     // Redimensionnement de la fenêtre : WebKitGTK compose les couches sur le
     // GPU et réalloue ses tampons vidéo à CHAQUE image du geste. Mesuré au
     // profileur sur une machine AMD : 42 % du temps passait dans le noyau
@@ -30,8 +38,6 @@ fn main() {
         // l'automatisation : qui peut poser l'un peut poser l'autre, l'exception
         // n'ajoute donc aucune surface. Décision pure et testée dans
         // `retirer_inspecteur_webkit`.
-        let automatisation =
-            std::env::var_os("TAURI_WEBVIEW_AUTOMATION").is_some_and(|v| v == "true");
         if retirer_inspecteur_webkit(
             std::env::var_os("WEBKIT_INSPECTOR_SERVER").is_some(),
             automatisation,
@@ -61,10 +67,18 @@ fn main() {
     // variable — il n'en défère jamais la valeur héritée : il pose la sienne en
     // session distante, la retire sinon. La décision vit dans `action_webview2`,
     // pure et testée.
+    //
+    // SAUF sous pilotage WebDriver — même exception que pour WebKit : Edge
+    // WebDriver lance une application WebView2 en posant précisément cette
+    // variable (`--remote-debugging-port`, dossier de données), c'est SON canal
+    // de commande. La retirer laissait chaque scénario mourir après quatre
+    // minutes sur « DevToolsActivePort file doesn't exist » — le fichier que
+    // le pilote attend n'était jamais écrit, faute de port. Qui peut poser
+    // TAURI_WEBVIEW_AUTOMATION peut poser l'autre : aucune surface ajoutée.
     #[cfg(target_os = "windows")]
     {
         let herite = std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_some();
-        match action_webview2(herite, session_distante()) {
+        match action_webview2(herite, session_distante(), automatisation) {
             // SAFETY: exécuté avant tout démarrage de fil d'exécution ou de WebView2.
             ActionWebview2::Poser(v) => unsafe {
                 std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", v)
@@ -121,8 +135,8 @@ enum ActionWebview2 {
 }
 
 /// Décide l'action à mener sur `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, selon
-/// qu'une valeur est déjà présente dans l'environnement (`herite`) et qu'on soit
-/// en session distante.
+/// qu'une valeur est déjà présente dans l'environnement (`herite`), qu'on soit
+/// en session distante, et qu'on soit piloté par `WebDriver` (`automatisation`).
 ///
 /// avash ne DÉFÈRE jamais la valeur héritée : filtrer une ligne de commande
 /// Chromium par liste noire est illusoire (guillemets internes reconstitués,
@@ -131,10 +145,17 @@ enum ActionWebview2 {
 /// qu'aucun `--remote-debugging-port` planté par un pied local n'atteigne la
 /// webview. Le confort d'un réglage utilisateur bénin ne vaut pas cette surface.
 ///
+/// Sous pilotage `WebDriver`, la variable EST le canal de commande du pilote
+/// natif (Edge `WebDriver` la pose lui-même) : on n'y touche pas, session distante
+/// ou non — un scénario joué à travers RDP a besoin de son port, pas de notre
+/// composition logicielle.
+///
 /// Pur : aucun accès à l'environnement, testable sur toute plateforme.
 #[cfg(any(target_os = "windows", test))]
-fn action_webview2(herite: bool, distante: bool) -> ActionWebview2 {
-    if distante {
+fn action_webview2(herite: bool, distante: bool, automatisation: bool) -> ActionWebview2 {
+    if automatisation {
+        ActionWebview2::NePasToucher
+    } else if distante {
         ActionWebview2::Poser("--disable-gpu-compositing")
     } else if herite {
         ActionWebview2::Retirer
@@ -163,7 +184,10 @@ mod tests {
 
     #[test]
     fn hors_session_distante_sans_heritage_ne_touche_a_rien() {
-        assert_eq!(action_webview2(false, false), ActionWebview2::NePasToucher);
+        assert_eq!(
+            action_webview2(false, false, false),
+            ActionWebview2::NePasToucher
+        );
     }
 
     #[test]
@@ -171,11 +195,11 @@ mod tests {
         // Peu importe une éventuelle valeur héritée : on impose la nôtre, on ne la
         // fusionne pas (une ligne de commande Chromium n'est pas filtrable sûrement).
         assert_eq!(
-            action_webview2(false, true),
+            action_webview2(false, true, false),
             ActionWebview2::Poser("--disable-gpu-compositing")
         );
         assert_eq!(
-            action_webview2(true, true),
+            action_webview2(true, true, false),
             ActionWebview2::Poser("--disable-gpu-compositing")
         );
     }
@@ -186,6 +210,27 @@ mod tests {
         // --renderer-cmd-prefix, ou un --no-sand"box échappant à tout filtre)
         // planté dans l'environnement par un pied local n'atteint jamais la webview,
         // parce qu'on retire la variable au lieu d'essayer de la nettoyer.
-        assert_eq!(action_webview2(true, false), ActionWebview2::Retirer);
+        assert_eq!(action_webview2(true, false, false), ActionWebview2::Retirer);
+    }
+
+    #[test]
+    fn sous_webdriver_la_variable_posee_par_le_pilote_est_gardee() {
+        // Régression vue en CI Windows : chaque scénario mourait sur
+        // « DevToolsActivePort file doesn't exist » — Edge WebDriver pose le port
+        // de débogage dans cette variable, et on la retirait avant WebView2.
+        assert_eq!(
+            action_webview2(true, false, true),
+            ActionWebview2::NePasToucher
+        );
+        assert_eq!(
+            action_webview2(false, false, true),
+            ActionWebview2::NePasToucher
+        );
+        // Même à travers RDP : le pilote a besoin de son port, pas de notre
+        // composition logicielle.
+        assert_eq!(
+            action_webview2(true, true, true),
+            ActionWebview2::NePasToucher
+        );
     }
 }

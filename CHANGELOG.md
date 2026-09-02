@@ -12,6 +12,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   `LANGUAGE` ; la variable, lue par le cœur et injectée avant le premier
   script, tranche — après un choix mémorisé, avant la locale. Le harnais
   bout en bout s'en sert sur toutes les plateformes.
+- **La suite bout en bout tourne aussi sous Windows.** Edge WebDriver pilote
+  l'exécutable Windows à chaque poussée, sur tout ce qui ne demande pas de
+  serveur local. Corrigé pour y arriver : sous pilotage WebDriver, avash ne
+  retire plus `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` — c'est la variable par
+  laquelle le pilote commande WebView2, et sans elle aucune session ne
+  s'ouvrait. Hors pilotage, rien ne change : la valeur héritée est retirée.
 - **Régression visuelle.** Un scénario compare l'accueil sur les deux
   thèmes, la palette et la modale de connexion à des captures de référence,
   pixel à pixel ; ce que les autres scénarios ne voient pas — une marge qui

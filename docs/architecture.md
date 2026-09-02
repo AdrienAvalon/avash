@@ -291,7 +291,15 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
   `main()` interroge `GetSystemMetrics(SM_REMOTESESSION)` (FFI directe vers
   user32, aucune caisse ajoutée) et, en session distante, pose la composition
   logicielle via `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`. Sur un écran physique,
-  rien ne change. La variable posée à la main reste prioritaire.
+  une valeur héritée de l'environnement est **retirée**, jamais filtrée : WebView2
+  la concatène à la ligne de commande de Chromium, et un `--remote-debugging-port`
+  ou un `--renderer-cmd-prefix` planté là par un pied local prendrait la webview.
+  Une exception, symétrique de `WEBKIT_INSPECTOR_SERVER` sous Linux : sous
+  pilotage WebDriver (`TAURI_WEBVIEW_AUTOMATION=true`, posé par tauri-driver),
+  la variable est celle qu'Edge WebDriver pose lui-même pour commander
+  l'application, et l'on n'y touche pas — la retirer laissait chaque scénario
+  Windows mourir sur « DevToolsActivePort file doesn't exist ». Décision pure
+  et testée dans `action_webview2`.
 - **Secrets dans le trousseau du système** (`keyring`), jamais en clair sur le
   disque ; mot de passe RDP passé au sidecar par stdin.
 - **Build release optimisé** : `opt-level = 3`, LTO, `codegen-units = 1`,
