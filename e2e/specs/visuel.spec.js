@@ -3,11 +3,13 @@
 //
 // Ce que les autres scénarios ne voient pas : une marge qui saute, une couleur
 // de jeton qui change, un texte qui déborde. Les références vivent dans
-// e2e/visuel/reference et sont celles de la chaîne d'intégration ; en local le
-// scénario ne tourne qu'avec VISUEL=1 (voir wdio.conf.js).
+// e2e/visuel/reference et sont celles de la chaîne d'intégration. Le scénario
+// ne tourne qu'avec VISUEL=1, dans un passage à part (voir wdio.conf.js).
 describe("Régression visuelle", () => {
   before(async function () {
-    if (!process.env.CI && !process.env.VISUEL) this.skip();
+    // Les références sont celles de Linux (ubuntu-latest) : ailleurs, les
+    // polices ne rendent pas pareil et la comparaison ne dirait rien.
+    if (!process.env.VISUEL || process.platform !== "linux") this.skip();
     // Une taille fixe : les captures dépendent de la géométrie.
     try { await browser.setWindowSize(1280, 800); } catch { /* pilote sans redimensionnement */ }
     await browser.waitUntil(async () => (await $$("#host-list [data-cle]")).length > 0, { timeout: 10000 });

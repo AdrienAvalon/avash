@@ -206,7 +206,9 @@ l'interface (accueil sur les deux thèmes, palette, modale) à des références,
 pixel à pixel, avec une tolérance d'un demi pour-cent. Les références de
 `e2e/visuel/reference` sont celles de la chaîne (ubuntu-latest) : les polices
 d'une autre machine ne rendent pas pareil, donc en local le scénario est sauté
-sauf `VISUEL=1 npm test`, et ses captures vont dans `e2e/.tmp`, ignoré. Après
+sauf `VISUEL=1 npx wdio run wdio.conf.js --spec specs/visuel.spec.js` — un
+passage à part, car le service de comparaison ralentit chaque fichier de
+scénarios —, et ses captures vont dans `e2e/.tmp`, ignoré. Après
 un changement d'interface voulu, rafraîchir les références : récupérer
 l'artefact « visuel » du job E2E, copier son dossier `reference` dans
 `e2e/visuel/reference`, commiter.

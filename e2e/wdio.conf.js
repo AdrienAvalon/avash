@@ -24,7 +24,10 @@ export const SSH_PORT = 2223;
 // Serveurs locaux (RDP + sshd) : actifs partout, intégration continue comprise,
 // qui construit le serveur RDP de test et génère son certificat. `E2E_NO_RDP=1`
 // reste disponible pour une machine sans sshd ni serveur de test.
-export const LOCAL_SERVERS = !process.env.E2E_NO_RDP;
+// Sous Windows, ni sshd de harnais ni serveur RDP de test : seuls les scénarios
+// sans serveur local tournent — c'est déjà ce que la CI Linux ne voyait pas.
+export const WINDOWS = process.platform === "win32";
+export const LOCAL_SERVERS = !process.env.E2E_NO_RDP && !WINDOWS;
 
 // Les hôtes réellement semés, selon que les serveurs locaux tournent ou non.
 // Exporté pour que les specs raisonnent sur le semage plutôt que de le
@@ -112,11 +115,13 @@ export const config = {
       ],
   maxInstances: 1,
   // Régression visuelle : captures comparées pixel à pixel à des références.
+  // Le service n'est chargé qu'à la demande (VISUEL=1) : branché en
+  // permanence, il multipliait par vingt la durée de chaque fichier de
+  // scénarios. La chaîne lance le scénario visuel dans un passage à part.
   // Les références du dépôt sont celles de la chaîne (ubuntu-latest) : les
   // polices d'une autre machine ne rendent pas pareil, donc en local les
-  // captures vont dans un dossier ignoré par git, et le scénario ne tourne
-  // qu'à la demande (VISUEL=1) ou en intégration continue.
-  services: [
+  // captures vont dans un dossier ignoré par git.
+  services: !process.env.VISUEL ? [] : [
     ["visual", {
       baselineFolder: join(import.meta.dirname, process.env.CI ? "visuel/reference" : ".tmp/visuel-local/reference"),
       screenshotPath: join(import.meta.dirname, ".tmp/visuel"),
@@ -128,7 +133,7 @@ export const config = {
     }],
   ],
   capabilities: [
-    { "tauri:options": { application: "../target/release/avash-ui" }, "wdio:maxInstances": 1 },
+    { "tauri:options": { application: WINDOWS ? "../target/release/avash-ui.exe" : "../target/release/avash-ui" }, "wdio:maxInstances": 1 },
   ],
   logLevel: "error",
   framework: "mocha",
@@ -147,7 +152,12 @@ export const config = {
     if (LOCAL_SERVERS) sshd = startSshd(); // génère cette clé dans ~/.ssh, démarre le sshd
     // Les serveurs RDP de test sont démarrés PAR CHAQUE spec RDP (serveur dédié,
     // cf. rdp.spec/rdp-reconnect.spec) : pas de serveur partagé à coupler.
-    tauriDriver = spawn("tauri-driver", [], {
+    // Sous Windows, tauri-driver s'appuie sur le pilote Edge (msedgedriver),
+    // désigné par MSEDGEDRIVER — la chaîne le télécharge à la version d'Edge
+    // installée. WebView2 prend la langue du système : on lui impose le
+    // français par ses arguments additionnels, comme LANG le fait pour WebKit.
+    const argsPilote = WINDOWS && process.env.MSEDGEDRIVER ? ["--native-driver", process.env.MSEDGEDRIVER] : [];
+    tauriDriver = spawn(WINDOWS ? "tauri-driver.exe" : "tauri-driver", argsPilote, {
       stdio: [null, process.stdout, process.stderr],
       // AVASH_HOME en plus de HOME/XDG_CONFIG_HOME : sous Windows, l'API qui
       // donne le répertoire de configuration interroge le shell et ignore les
@@ -165,6 +175,7 @@ export const config = {
         LANG: "fr_FR.UTF-8",
         LC_ALL: "fr_FR.UTF-8",
         XDG_CONFIG_HOME: join(sandbox, ".config"),
+        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--lang=fr-FR",
       },
     });
   },

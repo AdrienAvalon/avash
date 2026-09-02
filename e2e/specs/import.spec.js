@@ -7,6 +7,9 @@
 
 describe("Import de sessions", () => {
   const lignes = () => $$("#import-list [data-alias]");
+  // Sous Windows, les sessions PuTTY se lisent dans le registre, pas dans les
+  // fichiers semés ici : le scénario n'y a pas de matière.
+  before(function () { if (process.platform === "win32") this.skip(); });
 
   it("propose la session PuTTY, avec sa remarque, et ignore le reste", async () => {
     await $("#import-btn").click();
