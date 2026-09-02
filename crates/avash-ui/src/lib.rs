@@ -1,6 +1,7 @@
 //! Avash GUI — coquille Tauri 2. Sessions PTY multi-onglets côté Rust.
 
 pub mod commands;
+pub mod langue;
 pub mod rdp;
 
 pub use commands::*;
@@ -33,6 +34,7 @@ pub fn run() {
         // trousseau chargé automatiquement. Une commande enregistrée est une
         // surface offerte à la webview ; celle qui ne sert pas ne s'enregistre
         // pas. Elles restent publiques dans le crate, donc testées.
+        .plugin(langue::plugin())
         .invoke_handler(tauri::generate_handler![
             commands::list_hosts,
             commands::open_external,

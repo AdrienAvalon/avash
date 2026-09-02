@@ -8,7 +8,7 @@
 
 [![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.6.2-8b7cf6.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-859%20verts-brightgreen.svg)](#qualité)
+[![Tests](https://img.shields.io/badge/tests-861%20verts-brightgreen.svg)](#qualité)
 
 </div>
 
@@ -38,7 +38,7 @@ vingtaine de mégaoctets et démarre en une fraction de seconde.
 - Arborescence de dossiers pour ranger hôtes SSH et bureaux RDP ensemble, par glisser-déposer
 - Étiquettes, recherche instantanée et palette de commandes (`Ctrl+K`)
 - Snippets : commandes réutilisables avec variables, envoyables sur plusieurs sessions
-- Interface en **français** et en **anglais** (bascule dans la palette, mémorisée)
+- Interface en **français** et en **anglais** : suit la locale, bascule dans la palette mémorisée, ou `AVASH_LANGUE=fr|en` dans l'environnement
 - **Santé des hôtes** : une sonde TCP par hôte depuis la palette, ou au démarrage sur option, voyant vert ou rouge sur chaque ligne mémorisé d'un lancement à l'autre
 - **Enregistrement de session** au format asciicast v2 (menu du terminal), rejouable avec `asciinema play` ; l'écran tel qu'il est au départ, la sortie ensuite, jamais les frappes ; la liste des enregistrements dans la palette
 - Import des sessions **PuTTY** (fichiers ou registre) et **MobaXterm** (`MobaXterm.ini`, `.mxtsessions`), bureaux RDP et dossiers compris, doublons signalés, clés `.ppk` converties par `puttygen` s'il est là
@@ -158,16 +158,16 @@ Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
 
 ## Qualité
 
-**859 tests** couvrent le projet, tous exécutés à chaque commit :
+**861 tests** couvrent le projet, tous exécutés à chaque commit :
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
 | Cœur (`crates/avash`) | 143 | parseur `~/.ssh/config` et son **fuzzing par mutation**, import PuTTY et MobaXterm, enregistrement asciicast, sonde de santé, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
 | Intégration | 33 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP sur la session du terminal, tunnels, rebonds `ProxyJump` ; l'outil en ligne de commande exercé comme binaire |
-| Interface (`crates/avash-ui`) | 60 | commandes Tauri, import de sessions, enregistrement, santé des hôtes, magasin de sessions sur moteur factice (annulation pendant la connexion, éviction par époque), résolution des rebonds `ProxyJump`, décodage UTF-8 en flux, verrous clavier, annonce du processus RDP, variables d'environnement de la webview |
+| Interface (`crates/avash-ui`) | 61 | commandes Tauri, import de sessions, enregistrement, santé des hôtes, magasin de sessions sur moteur factice (annulation pendant la connexion, éviction par époque), résolution des rebonds `ProxyJump`, décodage UTF-8 en flux, verrous clavier, annonce du processus RDP, variables d'environnement de la webview |
 | Processus RDP | 86 | empreinte du serveur, fichier des empreintes, écriture atomique, plafond de résolution, négociation, identifiants et domaine, format binaire des trames, configuration après redirection, origine WebSocket, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique (surfaces, cache, ClearCodec, RemoteFX Progressive), magnétoscope, rejeu d'enregistrements réels, fuzzing par mutation |
 | Paquets IronRDP portés | 387 | nos correctifs — remplissage des tuiles, bande passante, redirection de serveur, capacités précoces, **ordre des champs de ClearCodec** — et les tests amont de `ironrdp-pdu`, qui ne s'exécutaient nulle part (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
-| Front (Vitest) | 103 | logique pure : arborescence, chemins de dossiers, filtres, scancodes, mappage souris, réglages, collage sûr, traductions (couverture des deux dictionnaires, variables, page) |
+| Front (Vitest) | 104 | logique pure : arborescence, chemins de dossiers, filtres, scancodes, mappage souris, réglages, collage sûr, traductions (couverture des deux dictionnaires, variables, page) |
 | Bout en bout (WebdriverIO) | 47 | l'application réelle : connexion SSH et RDP effectives, SFTP, enregistrement asciicast, santé des hôtes, presse-papiers RDP, dossiers, import PuTTY, langue, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,

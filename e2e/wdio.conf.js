@@ -174,6 +174,10 @@ export const config = {
         LANGUAGE: "fr_FR:fr",
         LANG: "fr_FR.UTF-8",
         LC_ALL: "fr_FR.UTF-8",
+        // … et quand la locale n'est pas installée sur la machine (chaîne
+        // d'intégration), la webview démarre quand même en anglais : le cœur
+        // impose alors la langue avant le premier script (AVASH_LANGUE).
+        AVASH_LANGUE: "fr",
         XDG_CONFIG_HOME: join(sandbox, ".config"),
         WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--lang=fr-FR",
       },

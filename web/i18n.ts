@@ -646,16 +646,28 @@ const DICOS: Record<Langue, Record<string, string>> = { fr: FR, en: EN };
 
 let courante: Langue = lireLangue();
 
-/** Le choix mémorisé s'il existe ; sinon la langue du système : français
- *  pour une locale `fr*`, anglais pour toute autre. Un système allemand ou
- *  japonais lit l'anglais plus sûrement que le français. */
-export function lireLangue(locale: string = typeof navigator === "undefined" ? "" : navigator.language): Langue {
+declare global {
+  interface Window {
+    /** Posé par le cœur avant tout script quand `AVASH_LANGUE` est défini. */
+    __AVASH_LANGUE?: string;
+  }
+}
+
+/** Le choix mémorisé s'il existe ; sinon la langue imposée par
+ *  l'environnement (`AVASH_LANGUE`, injectée par le cœur) ; sinon la langue du
+ *  système : français pour une locale `fr*`, anglais pour toute autre. Un
+ *  système allemand ou japonais lit l'anglais plus sûrement que le français. */
+export function lireLangue(
+  locale: string = typeof navigator === "undefined" ? "" : navigator.language,
+  imposee: string | undefined = typeof window === "undefined" ? undefined : window.__AVASH_LANGUE,
+): Langue {
   try {
     const v = localStorage.getItem(CLE_LANGUE);
     if (v === "en" || v === "fr") return v;
   } catch {
     /* stockage indisponible : on suit la locale */
   }
+  if (imposee === "fr" || imposee === "en") return imposee;
   return locale.toLowerCase().startsWith("fr") ? "fr" : "en";
 }
 

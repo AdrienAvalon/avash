@@ -7,6 +7,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **`AVASH_LANGUE` impose la langue.** Sur une machine sans la locale
+  installée, la webview démarre en anglais quoi que disent `LANG` et
+  `LANGUAGE` ; la variable, lue par le cœur et injectée avant le premier
+  script, tranche — après un choix mémorisé, avant la locale. Le harnais
+  bout en bout s'en sert sur toutes les plateformes.
 - **Régression visuelle.** Un scénario compare l'accueil sur les deux
   thèmes, la palette et la modale de connexion à des captures de référence,
   pixel à pixel ; ce que les autres scénarios ne voient pas — une marge qui

@@ -99,6 +99,14 @@ describe("langue au premier lancement", () => {
     expect(lireLangue("")).toBe("en");
   });
 
+  it("la langue imposée par l'environnement prime sur la locale, pas sur le choix", () => {
+    expect(lireLangue("de-DE", "fr")).toBe("fr");
+    expect(lireLangue("fr-FR", "en")).toBe("en");
+    expect(lireLangue("fr-FR", "xx")).toBe("fr"); // valeur inattendue : ignorée
+    localStorage.setItem(CLE_LANGUE, "en");
+    expect(lireLangue("fr-FR", "fr")).toBe("en");
+  });
+
   it("un choix mémorisé prime sur la locale", () => {
     localStorage.setItem(CLE_LANGUE, "fr");
     expect(lireLangue("de-DE")).toBe("fr");

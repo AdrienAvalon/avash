@@ -17,10 +17,12 @@ describe("Langue de l'interface", () => {
     await item.click();
   }
 
-  it("se croit en France, comme le harnais le demande, et démarre en français", async () => {
-    // Le harnais pose LANG/LANGUAGE : si ce garde-fou tombe, tous les
-    // scénarios qui lisent du français tomberont avec lui, sans dire pourquoi.
-    expect(await browser.execute(() => navigator.language.toLowerCase())).toMatch(/^fr/);
+  it("démarre en français, comme le harnais l'impose", async () => {
+    // Le harnais pose AVASH_LANGUE=fr, que le cœur injecte avant le premier
+    // script : si ce garde-fou tombe, tous les scénarios qui lisent du
+    // français tomberont avec lui, sans dire pourquoi. (LANG ne suffit pas :
+    // sans la locale installée, la webview démarre en anglais.)
+    expect(await browser.execute(() => window.__AVASH_LANGUE)).toBe("fr");
     expect(await browser.execute(() => document.documentElement.lang)).toBe("fr");
   });
 
