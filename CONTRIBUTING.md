@@ -283,22 +283,37 @@ Voir [tests-parc/README.md](tests-parc/README.md).
 
 ## Exécuteur GitLab
 
-Le dépôt est poussé sur GitHub **et** sur GitLab, mais seul GitHub vérifiait
-quoi que ce soit : GitLab recevait chaque poussée sans rien contrôler. Une
-chaîne équivalente vit désormais dans `.gitlab-ci.yml` — reste à lui donner un
-exécuteur, sans quoi les travaux resteront en attente :
+Le dépôt est poussé sur GitHub **et** sur GitLab. Pendant longtemps seul GitHub
+vérifiait quoi que ce soit : GitLab recevait chaque poussée sans rien contrôler,
+et le miroir avait pris cinquante commits de retard. La chaîne équivalente de
+`.gitlab-ci.yml` tourne depuis le 3 septembre 2026 sur un exécuteur enregistré
+sur le poste du mainteneur (`avalon-cachyos`, runner 18 du projet) : Docker
+privilégié — le travail de conformité RDP monte des conteneurs dans le
+conteneur —, image par défaut `rust:1-bookworm`, deux travaux en parallèle. Sa
+configuration vit dans `/etc/gitlab-runner/config.toml` (jeton d'enregistrement
+compris, lisible par personne d'autre), le service est `gitlab-runner.service`.
+Le poste éteint, les travaux attendent ; ils reprennent au démarrage suivant.
+
+Pour en déclarer un autre :
 
 ```bash
 # Sur la machine qui hébergera l'exécuteur
-sudo pacman -S gitlab-runner        # ou le paquet de ta distribution
+sudo pacman -S docker gitlab-runner # ou les paquets de ta distribution
+sudo systemctl enable --now docker
+sudo usermod -aG docker gitlab-runner
 sudo gitlab-runner register \
   --url https://gitlab.avalon-network.com \
   --executor docker \
   --docker-image rust:1-bookworm \
   --docker-privileged            # requis par le travail de conformité RDP (dind)
+sudo systemctl enable --now gitlab-runner
 ```
 
-Le jeton d'inscription se prend dans **Paramètres → CI/CD → Runners** du projet.
+Le jeton d'inscription se prend dans **Paramètres → CI/CD → Runners** du projet
+(« Nouveau runner de projet »), ou par l'API avec un jeton personnel portant
+`create_runner` : `POST /api/v4/user/runners` avec `runner_type=project_type`
+et `project_id`. Il ne se colle dans aucun fichier suivi : `register` l'écrit
+lui-même dans `config.toml`.
 
 ## Style de code
 

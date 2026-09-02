@@ -7,6 +7,19 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le miroir GitLab vérifie enfin.** Un exécuteur est enregistré sur le poste
+  du mainteneur (Docker privilégié, deux travaux à la fois) : la chaîne de
+  `.gitlab-ci.yml`, écrite en 0.4.0, tourne pour la première fois — et ce
+  premier passage a montré trois défauts qu'aucune relecture n'aurait vus :
+  l'image `rust:1-bookworm` n'embarque ni `rustfmt` ni `clippy` ; Debian n'y
+  fournit que Node 18, sous le plancher de stylelint et knip ; et son git 2.39
+  reçoit un 401 de GitHub en HTTP/2 quand `cargo-deny` clone la base d'avis.
+  La chaîne installe désormais les deux composants et Node 22, comme sur
+  GitHub, force HTTP/1.1 pour ce clone, et met en cache les outils compilés
+  (`tauri-driver`, `cargo-audit`, `cargo-deny`).
+  Le miroir, qui avait cinquante commits de retard, est rattrapé, et son
+  jeton rejoint celui de GitHub dans les secrets chiffrés du poste.
+  `CONTRIBUTING.md` dit comment déclarer un autre exécuteur.
 - **Les deux chaînes d'intégration lintent tout le front.** `ci.yml` et
   `.gitlab-ci.yml` passaient ESLint sur une liste énumérée de cinq fichiers
   — une trentaine de modules depuis le découpage — et sautaient stylelint,
