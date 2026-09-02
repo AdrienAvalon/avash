@@ -14,11 +14,23 @@ updates:
     schedule: { interval: weekly, day: monday }
     groups:
       sidecar-mineur: { update-types: [minor, patch] }
+    ignore:
+      # x509-cert est aussi une dépendance des paquets IronRDP portés : la
+      # version doit être la leur, sinon deux types `Certificate` cohabitent
+      # et rien ne compile. À remonter quand IronRDP change.
+      - dependency-name: x509-cert
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /web
     schedule: { interval: weekly, day: monday }
     groups:
       front-mineur: { update-types: [minor, patch] }
+    ignore:
+      # typescript-eslint borne la version de TypeScript qu'il accepte : une
+      # majeure de TypeScript casse l'installation tant qu'il ne l'a pas
+      # suivie. À lever quand typescript-eslint annonce TypeScript 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /e2e
     schedule: { interval: monthly }

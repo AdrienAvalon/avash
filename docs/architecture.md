@@ -11,7 +11,7 @@ l'organisation du code et les choix techniques notables.
 |  Application Tauri (avash-ui)                               |
 |                                                             |
 |   Front (web/)                Cœur natif (Rust)             |
-|   TypeScript + xterm.js  <->  commands.rs / rdp.rs          |
+|   TypeScript + xterm.js  <->  commands/ · rdp.rs            |
 |      main.ts + modules        (commandes Tauri)            |
 |                                     |                       |
 |                                     v                       |
@@ -52,7 +52,11 @@ Le fichier `Cargo.toml` à la racine définit un workspace de deux crates, et en
 
 - **`crates/avash-ui`** — l'**application Tauri**. Elle expose le cœur au front
   via des commandes Tauri :
-  - `commands.rs` — commandes SSH/SFTP/config/tunnels/snippets ;
+  - `commands/` — les commandes Tauri, un fichier par domaine : `sessions`
+    (magasin, cible, connexion, relais, PTY), `sftp`, `tunnels`, `snippets`,
+    `enregistrement`, `cles`, `secrets`, `dossiers`, `import`, `sante` ;
+    `mod.rs` réexporte tout, si bien que `commands::x` reste le chemin de chaque
+    commande ;
   - `rdp.rs` — lancement et supervision du sidecar RDP ;
   - `main.rs` / `lib.rs` — point d'entrée et enregistrement des plugins Tauri
     (`dialog`, `updater`, `process`, `clipboard-manager`).
@@ -304,7 +308,7 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Connexion SSH, TOFU, redirections | `crates/avash/src/ssh.rs` |
 | Secrets (trousseau) | `crates/avash/src/secrets.rs` |
 | Dossiers | `crates/avash/src/folders.rs` |
-| Commandes Tauri | `crates/avash-ui/src/commands.rs` |
+| Commandes Tauri (un fichier par domaine) | `crates/avash-ui/src/commands/` |
 | Lancement du sidecar RDP | `crates/avash-ui/src/rdp.rs` |
 | Sidecar RDP — point d'entrée | `rdp-sidecar/src/main.rs` |
 | Sidecar RDP — ligne de commande, disposition clavier, résolution | `rdp-sidecar/src/args.rs` |

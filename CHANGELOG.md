@@ -7,6 +7,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Les commandes Tauri sont découpées par domaine.** `commands.rs` (2 900
+  lignes) devient un répertoire : sessions, SFTP, tunnels, snippets,
+  enregistrement, clés, secrets, dossiers, import, santé, et les tests à
+  part ; chaque fichier importe explicitement ce qu'il prend à ses voisins,
+  et `commands::x` reste le chemin de chaque commande. Le texte est repris
+  tel quel.
+- **Dépendances suivies.** Les quatre premières mises à jour d'actions
+  proposées par Dependabot sont fusionnées ; le processus RDP passe à
+  tokio-tungstenite 0.30 ; deux majeures sont écartées avec leur raison
+  (x509-cert, lié aux paquets IronRDP portés ; TypeScript 7, que
+  typescript-eslint n'accepte pas encore).
 - **La langue suit la locale au premier lancement** : français pour un
   système en `fr*`, anglais pour les autres, jusqu'à un choix explicite ;
   les tailles s'écrivent en Ko ou en KB, les dates en jj/mm/aa ou en ISO.

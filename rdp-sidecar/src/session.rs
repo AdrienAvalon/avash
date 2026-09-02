@@ -232,7 +232,7 @@ pub(crate) async fn executer(
     let mut hello = vec![1u8];
     hello.extend_from_slice(&w.to_le_bytes());
     hello.extend_from_slice(&h.to_le_bytes());
-    sink.send(Message::Binary(hello)).await?;
+    sink.send(Message::Binary(hello.into())).await?;
 
     let mut db = Database::new();
 
@@ -271,7 +271,7 @@ pub(crate) async fn executer(
                     dirty.clear();
                     stat_bytes += msg.len() as u64;
                     stat_frames += 1;
-                    sink.send(Message::Binary(msg))
+                    sink.send(Message::Binary(msg.into()))
                         .await
                         .context("envoi frame")?;
                     awaiting_ack = true;
@@ -296,7 +296,7 @@ pub(crate) async fn executer(
                     let mut hello = vec![1u8];
                     hello.extend_from_slice(&nl.to_le_bytes());
                     hello.extend_from_slice(&nh.to_le_bytes());
-                    sink.send(Message::Binary(hello))
+                    sink.send(Message::Binary(hello.into()))
                         .await
                         .context("nouvelle taille")?;
                 }
@@ -390,7 +390,7 @@ pub(crate) async fn executer(
                         let msg = frame_msg(&image, &full);
                         stat_bytes += msg.len() as u64;
                         stat_frames += 1;
-                        sink.send(Message::Binary(msg)).await.context("envoi refresh")?;
+                        sink.send(Message::Binary(msg.into())).await.context("envoi refresh")?;
                         awaiting_ack = true;
                         last_send = Instant::now();
                         dirty.clear();
@@ -462,7 +462,7 @@ pub(crate) async fn executer(
                     m.extend_from_slice(&fps.to_le_bytes());
                     m.extend_from_slice(&kbps.to_le_bytes());
                     m.extend_from_slice(&lat.to_le_bytes());
-                    sink.send(Message::Binary(m)).await.ok();
+                    sink.send(Message::Binary(m.into())).await.ok();
                     stat_frames = 0;
                     stat_bytes = 0;
                     stat_window = Instant::now();
@@ -498,7 +498,7 @@ pub(crate) async fn executer(
                         // CLIPBOARD [8] vers le front : le distant a copié du texte.
                         let mut m = vec![8u8];
                         m.extend_from_slice(text.as_bytes());
-                        sink.send(Message::Binary(m)).await.context("envoi presse-papiers")?;
+                        sink.send(Message::Binary(m.into())).await.context("envoi presse-papiers")?;
                     }
                 }
             }
@@ -556,7 +556,7 @@ pub(crate) async fn executer(
                             let mut msg = vec![1u8];
                             msg.extend_from_slice(&nw.to_le_bytes());
                             msg.extend_from_slice(&nh.to_le_bytes());
-                            sink.send(Message::Binary(msg)).await.context("annonce resize")?;
+                            sink.send(Message::Binary(msg.into())).await.context("annonce resize")?;
                             // Réinitialise le cadencement : une image en attente à
                             // l'ancienne taille n'a plus de sens, et un ACK laissé en
                             // suspens gèlerait la reprise. Le serveur va renvoyer un
