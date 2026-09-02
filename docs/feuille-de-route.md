@@ -230,7 +230,11 @@ sur des mesures de ce qui coûte réellement.
   moteur d'exécution factice), l'outil en ligne de commande (0 %, désormais
   exercé comme binaire), et dans le processus RDP la boucle de connexion
   (`main.rs` 47 %), que seuls la conformité et les scénarios bout en bout
-  traversent. Prochaine étape : remesurer après ce lot et suivre la courbe.
+  traversent. Remesurée après le lot du même jour : **75 %** des lignes pour
+  cœur et interface (`commands.rs` 49 %, `rdp.rs` 38 %, outil en ligne de
+  commande 69 %), 66 % pour le processus RDP, dont la boucle de session et la
+  capture restent hors de portée des tests unitaires. À suivre à chaque
+  version.
 - **Contrôle des dépendances** : `cargo-audit` signale les vulnérabilités connues,
   mais rien ne surveille les licences ni les dépendances abandonnées. `cargo-deny`
   couvre les deux, et sert la conformité AGPL.
@@ -268,7 +272,7 @@ Ces mesures sont à relever à chaque version :
 |---|---|---|
 | Plateformes réellement livrées | 2 | 3 |
 | Scénarios bout en bout | 40 | en hausse à chaque fonctionnalité |
-| Couverture des tests | 71 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
+| Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |
 
