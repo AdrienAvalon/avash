@@ -1,0 +1,13 @@
+# Périmètre de CodeQL.
+#
+# Le code IronRDP porté (rdp-sidecar/vendor) est celui de l'amont, suivi par
+# ses correctifs ; il emploie RC4 là où le protocole RDP l'impose (échange de
+# licence), ce que CodeQL signale à raison mais que nous ne pouvons pas
+# changer sans casser l'interopérabilité. Les exemples du cœur sont des outils
+# de vérification manuelle qui affichent volontairement ce qu'ils lisent.
+name: avash
+paths-ignore:
+  - rdp-sidecar/vendor
+  - crates/avash/examples
+  - web/dist
+  - node_modules

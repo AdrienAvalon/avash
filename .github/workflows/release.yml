@@ -9,10 +9,10 @@ on:
     tags: ["v*"]
   workflow_dispatch: # permet un essai manuel sans créer de tag
 
+# Par défaut, lecture seule ; seul le job qui publie reçoit les droits d'écrire
+# (release, attestation), pas les trois jobs de construction.
 permissions:
-  contents: write     # créer la release et y joindre les binaires
-  id-token: write     # jeton OIDC : prouve à Sigstore que la signature vient de ce workflow
-  attestations: write # enregistrer l'attestation de provenance
+  contents: read
 
 jobs:
   build:
@@ -32,7 +32,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.nom }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Dépendances système (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -41,14 +41,14 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev patchelf
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Front (le binaire embarque web/dist)
         working-directory: web
@@ -123,7 +123,7 @@ jobs:
           VERSION: "0.6.2"
 
       - name: Publier les artefacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: avash-${{ matrix.nom }}
           path: |
@@ -141,8 +141,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write     # créer la release et y joindre les binaires
+      id-token: write     # jeton OIDC : prouve à Sigstore que la signature vient de ce workflow
+      attestations: write # enregistrer l'attestation de provenance
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: { path: artefacts }
       # Manifeste interrogé par l'application (plugin updater de Tauri). Sans ce
       # fichier, l'endpoint renvoie 404 et « vérifier les mises à jour » échoue.
@@ -199,7 +203,7 @@ jobs:
       # Ce n'est PAS une signature Authenticode : elle ne lève pas
       # l'avertissement de Windows, qui exige un certificat d'autorité.
       - name: Attester la provenance des binaires
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             artefacts/**/*.AppImage
@@ -208,7 +212,7 @@ jobs:
             artefacts/**/*.dmg
             artefacts/**/*.app.tar.gz
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             artefacts/**/*.AppImage
