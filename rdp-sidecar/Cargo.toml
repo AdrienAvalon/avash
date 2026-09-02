@@ -21,7 +21,7 @@ ironrdp-tls = { version = "0.2", features = ["rustls"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-x509-cert = "0.2"
+x509-cert = "0.3"
 tokio-tungstenite = "0.24"
 futures-util = "0.3.34"
 rand = "0.10.2"
