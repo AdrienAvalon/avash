@@ -51,6 +51,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   en ligne de commande, qui n'avait aucun test, est exercé comme binaire :
   `list`, absence de configuration, commande inconnue, `run` incomplet. Le
   front extrait l'expansion des chemins de dossiers, testée.
+- **Les binaires de test de l'interface démarrent sous Windows.** Tauri ne
+  pose son manifeste d'application que sur l'exécutable de l'application ; un
+  binaire de test qui construit une application factice mourait avant `main`,
+  faute des contrôles communs version 6 (bogue amont tauri-apps/tauri#13419).
+  Le manifeste est désormais posé par l'éditeur de liens sur chaque
+  exécutable du paquet, depuis un fichier unique.
 - **Documentation remise au niveau de la 0.6.1** : version, comptes de tests,
   versions supportées dans `SECURITY.md`, trois paquets IronRDP portés et non
   deux, fichiers du chantier GNOME Remote Desktop nommés tels qu'ils existent,
