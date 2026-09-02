@@ -18,8 +18,22 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   logiciel (`--disable-gpu-compositing`) — exactement l'analogue du
   `WEBKIT_DISABLE_COMPOSITING_MODE` déjà posé sous Linux. Aucun effet sur un
   écran physique, où le GPU sert normalement. Une valeur
-  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` déjà posée est respectée pour le
-  compositing, mais expurgée de ses drapeaux sensibles (voir ci-dessous).
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` héritée de l'environnement n'est pas
+  reprise : avash en prend le contrôle entier (voir « Sécurité »).
+
+- **La fusion des rectangles à redessiner ignorait les paires qui se
+  chevauchent.** Passé le plafond de rectangles, le processus RDP fusionne la
+  paire dont l'union gaspille le moins de surface. Or deux rectangles qui se
+  recouvrent ont une union *plus petite* que la somme de leurs aires : la
+  soustraction non signée s'enroulait, la paire recevait un coût quasi infini
+  et n'était jamais choisie — c'est pourtant la plus rentable à fusionner. En
+  compilation de test, la même soustraction paniquait. Le calcul est saturé à
+  zéro, avec un test qui reproduit le cas.
+
+- **L'annonce « port jeton » du processus RDP est analysée par une fonction
+  pure, testée.** Un port hors plage ou un jeton manquant sont refusés avec un
+  message clair ; et quand le processus s'arrête sans rien annoncer, c'est la
+  dernière ligne de son diagnostic qui remonte, pas un message générique.
 
 ### Sécurité
 
@@ -31,23 +45,35 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   exécuter la seconde ligne à l'insu de l'utilisateur (pastejacking). Le collage
   passe désormais par `term.paste()`, qui applique l'encadrement, et tout
   collage multi-ligne demande confirmation.
-- **Les drapeaux WebView2 dangereux hérités de l'environnement sont retirés.**
-  `--remote-debugging-port`, `--no-sandbox`, `--disable-web-security` et
-  consorts, posés dans `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, arment un
-  débogueur distant ou désactivent le bac à sable de la webview — un pied local
-  en ferait un pivot. avash les expurge avant de démarrer. Symétriquement, sous
-  Linux, un `WEBKIT_INSPECTOR_SERVER` hérité est neutralisé.
+- **avash ne défère plus à `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`.**
+  `--remote-debugging-port`, `--no-sandbox`, `--renderer-cmd-prefix` et
+  consorts, posés dans cette variable, arment un débogueur distant, désactivent
+  le bac à sable ou font exécuter un binaire arbitraire par la webview — un
+  pied local en ferait un pivot. En expurger les drapeaux connus ne suffit pas :
+  Chromium redécoupe la ligne de commande après coup, et `--no-sand"box` passe
+  n'importe quel filtre avant d'être recomposé. avash impose donc sa propre
+  valeur en session distante et retire la variable partout ailleurs.
+  Symétriquement, sous Linux, un `WEBKIT_INSPECTOR_SERVER` hérité est
+  neutralisé — sauf sous pilotage WebDriver (`TAURI_WEBVIEW_AUTOMATION`), où
+  cette variable est le canal de commande de WebKitWebDriver lui-même : la
+  retirer là coupait la suite bout en bout.
 - **Les traces `AVASH_RDP_TRACE` ne remontent plus à l'interface.** Elles
   portent le mot de passe en clair (CredSSP) ; depuis le journal de diagnostic,
   l'interface captait `stderr` et l'affichait dans l'incrustation de fermeture —
   le secret pouvait partir dans une capture d'écran jointe à un rapport de bug.
   Elles vont maintenant dans un fichier dédié en `0600`, dont seul le chemin est
-  annoncé.
+  annoncé. Ce fichier porte un nom imprévisible (aléa de 64 bits, pas seulement
+  le PID) et s'ouvre en `create_new` + `O_NOFOLLOW` : `/tmp` est inscriptible
+  par tous, et un nom devinable ouvert en simple `create` aurait suivi un lien
+  symbolique planté d'avance par un autre compte — jusqu'au fichier de son
+  choix (CWE-59).
 - **Poignée de main WebSocket du processus RDP durcie.** Chaque validation se
   fait désormais dans sa propre tâche (un client muet ne bloque plus la file —
   c'était un déni de service par une page web ou un processus local), l'origine
-  est vérifiée (une page web réelle est refusée, la webview passe), et le jeton
-  est comparé en temps constant.
+  est vérifiée en refusant par défaut — seuls `localhost` et le schéma
+  `tauri://` passent, quelle qu'en soit la casse ; `file://`, `null` ou `data:`
+  sont rejetés au lieu d'être admis faute d'être reconnus —, et le jeton est
+  comparé en temps constant.
 - **La chaîne d'intégration ferme trois portes de plus.** `cargo deny check
   advisories` est enfin appelé (la section `[advisories]` ne servait à rien),
   `cargo audit` échoue désormais sur les défauts de sûreté (`--deny unsound`),
@@ -59,8 +85,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 - **Moins d'allocations sur le chemin chaud du décodage graphique.** Le message
   multi-rectangles réserve sa capacité d'avance (fini le doublement d'un tampon
-  multi-mégaoctets, image après image), la conversion BGRA→RGBA aussi, et le
-  drapeau de trace n'est plus relu de l'environnement à chaque PDU. Côté
+  multi-mégaoctets, image après image), la conversion BGRA→RGBA aussi — et,
+  pour la sortie ClearCodec, elle se fait sur place, sans second tampon plein
+  écran par image —, et le drapeau de trace n'est plus relu de l'environnement
+  à chaque PDU. Côté
   interface, le rectangle du canvas n'est plus recalculé à chaque mouvement de
   souris (un reflow forcé jusqu'à mille fois par seconde), mais mémorisé et
   invalidé au besoin.

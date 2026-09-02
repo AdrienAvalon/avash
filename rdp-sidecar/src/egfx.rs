@@ -104,12 +104,25 @@ pub fn nom_pdu(id: u16) -> &'static str {
 /// allocation dimensionnée d'avance. `flat_map(...).collect()` repartait d'un
 /// tampon vide et doublait sa capacité pour une sortie pourtant connue à l'octet
 /// près — plusieurs mégaoctets recopiés en trop sur une image plein écran.
+/// Employé quand la source est empruntée (non compressé).
 fn bgra_vers_rgba(bgra: &[u8]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(bgra.len());
     for p in bgra.as_chunks::<4>().0 {
         rgba.extend_from_slice(&[p[2], p[1], p[0], 0xFF]);
     }
     rgba
+}
+
+/// Même conversion, mais SUR PLACE, quand on possède déjà le tampon (sortie
+/// ClearCodec) : on échange rouge et bleu et on force l'opacité, sans allouer un
+/// second tampon plein écran par image.
+fn bgra_vers_rgba_sur_place(mut bgra: Vec<u8>, taille: usize) -> Vec<u8> {
+    bgra.truncate(taille);
+    for p in bgra.as_chunks_mut::<4>().0 {
+        p.swap(0, 2); // B <-> R
+        p[3] = 0xFF; // opaque
+    }
+    bgra
 }
 
 /// Accusé de réception d'une trame (MS-RDPEGFX 2.2.2.13).
@@ -477,7 +490,7 @@ impl Egfx {
                     clair.decode(donnees, zone.largeur, zone.hauteur)
                 }));
                 match issue {
-                    Ok(Ok(v)) if v.len() >= l * h * 4 => bgra_vers_rgba(&v[..l * h * 4]),
+                    Ok(Ok(v)) if v.len() >= l * h * 4 => bgra_vers_rgba_sur_place(v, l * h * 4),
                     Ok(Err(e)) => {
                         eprintln!("egfx : ClearCodec refusé : {e}");
                         return;

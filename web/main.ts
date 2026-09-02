@@ -17,7 +17,7 @@ import { check as checkUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ic, fileIconName, hydrateIcons } from "./icons";
 import { partageClipboard, setPartageClipboard } from "./prefs";
-import { collageAValider, nombreLignesCollage } from "./collage";
+import { effectuerCollage } from "./collage";
 import {
   humanSize, filterHosts, allTags, remoteJoin, parentDir, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge,
   sortSftpEntries, shortDate, shellQuote, validFileName, snippetPreview, snippetVars, renderSnippet, type SftpEntry, type Snippet,
@@ -1732,19 +1732,20 @@ window.addEventListener("keydown", (e) => {
 // seconde ligne sur le serveur, invisible. Le collage natif Ctrl+V, lui, passait
 // déjà par onData et était protégé. On confirme en plus tout collage multi-ligne,
 // car le distant peut ne pas avoir activé le bracketed paste.
-async function collerDansTerminal(term: Terminal, texte: string): Promise<void> {
-  if (!texte) return;
-  if (collageAValider(texte)) {
-    const n = nombreLignesCollage(texte);
-    const ok = await askConfirm(
-      `Coller ${n} ligne${n > 1 ? "s" : ""} dans le terminal ?\n\n` +
-        "Une ligne collée qui se termine par un saut de ligne s'exécute aussitôt. " +
-        "Ne colle que du texte dont tu connais la source.",
-      { ok: "Coller", danger: true },
-    );
-    if (!ok) return;
-  }
-  term.paste(texte);
+// La décision (vide → rien ; multi-ligne → confirmer ; puis coller) vit dans
+// effectuerCollage, pure et testée ; ici on ne fait que brancher term.paste et
+// la modale de confirmation.
+function collerDansTerminal(term: Terminal, texte: string): Promise<void> {
+  return effectuerCollage(texte, {
+    coller: (t) => term.paste(t),
+    confirmer: (n) =>
+      askConfirm(
+        `Coller ${n} ligne${n > 1 ? "s" : ""} dans le terminal ?\n\n` +
+          "Une ligne collée qui se termine par un saut de ligne s'exécute aussitôt. " +
+          "Ne colle que du texte dont tu connais la source.",
+        { ok: "Coller", danger: true },
+      ),
+  });
 }
 
 let confirmResolve: ((v: boolean) => void) | null = null;

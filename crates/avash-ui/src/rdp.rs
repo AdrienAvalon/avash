@@ -250,14 +250,17 @@ async fn lire_annonce(
     let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? else {
         let mut diag = String::new();
         let _ = stderr.read_to_string(&mut diag).await;
-        let msg = diag.trim().lines().last().unwrap_or("").to_owned();
-        return Err(if msg.is_empty() {
-            "Le sidecar RDP s'est arrêté sans se connecter.".to_owned()
-        } else {
-            msg
-        });
+        return Err(message_arret(&diag));
     };
-    let mut it = line.split_whitespace();
+    analyser_annonce(&line)
+}
+
+/// Analyse la ligne « PORT JETON » émise par le sidecar. Pure et testée : c'est
+/// par elle que passe l'ouverture d'une session — un port hors `u16` ou un jeton
+/// manquant doivent être rejetés clairement, pas produire une connexion sans
+/// authentification.
+fn analyser_annonce(ligne: &str) -> Result<(u16, String), String> {
+    let mut it = ligne.split_whitespace();
     let port = it
         .next()
         .and_then(|s| s.parse::<u16>().ok())
@@ -267,6 +270,18 @@ async fn lire_annonce(
         .map(str::to_owned)
         .ok_or_else(|| "Jeton WebSocket manquant.".to_owned())?;
     Ok((port, token))
+}
+
+/// Message d'erreur quand le sidecar s'arrête sans annoncer de port : on remonte
+/// la DERNIÈRE ligne de son diagnostic (« authentification refusée », « TLS »…)
+/// plutôt qu'un générique, seul moyen pour l'utilisateur d'apprendre la cause.
+fn message_arret(diag: &str) -> String {
+    let msg = diag.trim().lines().last().unwrap_or("").trim();
+    if msg.is_empty() {
+        "Le sidecar RDP s'est arrêté sans se connecter.".to_owned()
+    } else {
+        msg.to_owned()
+    }
 }
 
 /// Nombre de lignes de diagnostic gardées par session. De quoi expliquer une
@@ -486,6 +501,53 @@ mod tests_chemin_sidecar {
         assert!(
             rendu.is_none_or(|p| p.is_absolute()),
             "AVASH_RDP_BIN relative doit être refusée"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_annonce {
+    use super::{analyser_annonce, message_arret};
+
+    #[test]
+    fn une_annonce_valide_donne_port_et_jeton() {
+        assert_eq!(
+            analyser_annonce("5000 abcdef0123456789"),
+            Ok((5000, "abcdef0123456789".to_owned()))
+        );
+        // Espaces multiples tolérés (split_whitespace).
+        assert_eq!(
+            analyser_annonce("  42   jeton  "),
+            Ok((42, "jeton".to_owned()))
+        );
+    }
+
+    #[test]
+    fn un_port_illisible_est_refuse() {
+        // Hors u16, non numérique, ou vide : jamais une connexion silencieuse.
+        assert!(analyser_annonce("70000 jeton").is_err()); // > 65535
+        assert!(analyser_annonce("pas-un-port jeton").is_err());
+        assert!(analyser_annonce("").is_err());
+    }
+
+    #[test]
+    fn un_jeton_manquant_est_refuse() {
+        // Un port seul, sans jeton, ne doit pas ouvrir de session non authentifiée.
+        let e = analyser_annonce("5000").unwrap_err();
+        assert!(e.contains("Jeton"), "message inattendu : {e}");
+    }
+
+    #[test]
+    fn l_arret_remonte_la_derniere_ligne_du_diagnostic() {
+        // C'est le seul chemin par lequel l'utilisateur apprend la vraie cause.
+        assert_eq!(
+            message_arret("connexion…\nauthentification refusée"),
+            "authentification refusée"
+        );
+        // Diagnostic vide : message générique plutôt qu'une chaîne vide.
+        assert_eq!(
+            message_arret("   \n  "),
+            "Le sidecar RDP s'est arrêté sans se connecter."
         );
     }
 }

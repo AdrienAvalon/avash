@@ -23,3 +23,21 @@ export function nombreLignesCollage(texte: string): number {
   if (texte === "") return 0;
   return texte.replace(/[\r\n]+$/, "").split(/\r\n|\r|\n/).length;
 }
+
+/** Dépendances d'un collage, injectées pour rester testable sans terminal ni DOM. */
+export interface CollageDeps {
+  /** Colle le texte — en production, toujours `term.paste()` (bracketed paste). */
+  coller: (texte: string) => void;
+  /** Demande confirmation pour un collage de `n` lignes ; `true` = poursuivre. */
+  confirmer: (n: number) => Promise<boolean>;
+}
+
+/** Effectue un collage sûr : rien sur une chaîne vide, confirmation avant un
+ *  collage multi-ligne, puis `coller`. Sépare la DÉCISION (testée ici) du
+ *  câblage (term.paste / askConfirm, dans main.ts) — garantit qu'aucun chemin ne
+ *  peut coller sans passer par `coller`, ni court-circuiter la confirmation. */
+export async function effectuerCollage(texte: string, deps: CollageDeps): Promise<void> {
+  if (!texte) return;
+  if (collageAValider(texte) && !(await deps.confirmer(nombreLignesCollage(texte)))) return;
+  deps.coller(texte);
+}

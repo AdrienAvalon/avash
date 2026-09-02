@@ -79,8 +79,12 @@ eprouver() { # nom  port
   # Viser la ligne « Send ConnectInitial » : c'est CELLE qu'on envoie. Les
   # capacités échangées ensuite contiennent d'autres champs du même nom, à zéro,
   # qui feraient conclure à tort.
-  local annoncee
-  annoncee=$(grep "Send ConnectInitial" "$journal" | grep -oE "keyboard_layout: [0-9]+" | head -1 | cut -d' ' -f2)
+  # Les traces ne vont plus sur stderr (elles portent le mot de passe en clair)
+  # mais dans un fichier 0600 dont le processus n'annonce que le chemin.
+  local trace annoncee
+  trace=$(sed -n 's/.*traces actives, écrites dans \(.*\) (0600).*/\1/p' "$journal" | head -1)
+  annoncee=$(grep "Send ConnectInitial" "${trace:-$journal}" 2>/dev/null | grep -oE "keyboard_layout: [0-9]+" | head -1 | cut -d' ' -f2)
+  [ -n "$trace" ] && rm -f "$trace"
   if [ -z "$annoncee" ]; then
     rouge "disposition clavier introuvable dans la trace"
   elif [ "$annoncee" = "0" ]; then

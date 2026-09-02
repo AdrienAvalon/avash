@@ -753,7 +753,15 @@ fn ajouter_rect(zone: &mut Vec<InclusiveRectangle>, r: &InclusiveRectangle) {
         let mut choix = (u64::MAX, 0usize, 1usize);
         for i in 0..zone.len() {
             for j in (i + 1)..zone.len() {
-                let perte = aire(&union(&zone[i], &zone[j])) - aire(&zone[i]) - aire(&zone[j]);
+                // saturating_sub : deux rectangles qui SE CHEVAUCHENT ont une union
+                // plus petite que la somme de leurs aires — la soustraction brute
+                // débordait (panique en debug/test, enroulement silencieux en
+                // release, où la valeur ~u64::MAX n'était alors jamais choisie et la
+                // paire chevauchante ne fusionnait jamais). Saturé à 0, une paire
+                // qui se recouvre devient au contraire la moins coûteuse à fusionner
+                // — exactement ce qu'on veut.
+                let perte = aire(&union(&zone[i], &zone[j]))
+                    .saturating_sub(aire(&zone[i]) + aire(&zone[j]));
                 if perte < choix.0 {
                     choix = (perte, i, j);
                 }
@@ -1167,14 +1175,24 @@ async fn main() -> Result<()> {
         // se retrouverait dans une capture d'écran jointe à un rapport de bug. On
         // les écrit dans un fichier dédié en 0600 et on n'annonce sur stderr que
         // son chemin.
-        let chemin =
-            std::env::temp_dir().join(format!("avash-rdp-trace-{}.log", std::process::id()));
+        // Nom IMPRÉVISIBLE (aléa 64 bits, pas seulement le PID) et ouverture en
+        // create_new + O_NOFOLLOW : /tmp est mondialement inscriptible, et un nom
+        // devinable ouvert en simple `create` suivrait un lien symbolique planté
+        // d'avance par un autre compte — les traces, qui portent le mot de passe
+        // en clair, atterriraient dans le fichier de son choix (CWE-59). create_new
+        // échoue si la cible existe déjà ; O_NOFOLLOW refuse un lien.
+        let chemin = std::env::temp_dir().join(format!(
+            "avash-rdp-trace-{}-{:016x}.log",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
         let mut ouverture = std::fs::OpenOptions::new();
-        ouverture.create(true).append(true);
+        ouverture.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             ouverture.mode(0o600);
+            ouverture.custom_flags(libc::O_NOFOLLOW);
         }
         match ouverture.open(&chemin) {
             Ok(fichier) => {
@@ -1346,20 +1364,27 @@ fn verifier_origine(
 /// (Linux/macOS) ou `http(s)://tauri.localhost` (Windows) ; le serveur de
 /// développement, `http://localhost:<port>`. Une absence d'origine est admise —
 /// certains clients n'en posent pas, et le jeton reste l'authentification réelle.
+///
+/// Le tri se fait sur une copie en minuscules (un navigateur normalise le schéma,
+/// mais on ne s'y fie pas) et refuse par défaut : seuls les schémas explicitement
+/// attendus (tauri://) passent, tout autre (`file://`, `null`, `data:`…) est
+/// rejeté. Fail-closed — le laxisme précédent n'était que de la défense en
+/// profondeur, autant qu'elle ferme réellement.
 fn origine_admise(origine: Option<&str>) -> bool {
     let Some(o) = origine else {
         return true;
     };
-    match o
+    let o = o.to_ascii_lowercase();
+    if let Some(reste) = o
         .strip_prefix("http://")
         .or_else(|| o.strip_prefix("https://"))
     {
-        Some(reste) => {
-            let hote = reste.split(['/', ':']).next().unwrap_or(reste);
-            hote == "tauri.localhost" || hote == "localhost" || hote == "127.0.0.1"
-        }
-        // Schéma non-web (tauri://…) : admis, le jeton fait foi.
-        None => true,
+        let hote = reste.split(['/', ':']).next().unwrap_or(reste);
+        hote == "tauri.localhost" || hote == "localhost" || hote == "127.0.0.1"
+    } else {
+        // Seule la webview native (schéma tauri://) est admise hors http(s) ; tout
+        // autre schéma est refusé plutôt qu'admis par défaut.
+        o.starts_with("tauri://")
     }
 }
 
@@ -2069,6 +2094,24 @@ mod tests_acces_local {
         // « tauri.localhost.evil.com » ne doit pas être pris pour tauri.localhost.
         assert!(!origine_admise(Some("http://tauri.localhost.evil.com")));
     }
+
+    #[test]
+    fn la_casse_du_schema_ne_contourne_pas_le_controle() {
+        // Un schéma en majuscules ne doit pas basculer dans la branche « admis ».
+        assert!(!origine_admise(Some("HTTP://evil.example")));
+        assert!(!origine_admise(Some("HtTpS://evil.example")));
+        assert!(origine_admise(Some("HTTP://localhost:1420")));
+    }
+
+    #[test]
+    fn un_schema_inattendu_est_refuse_par_defaut() {
+        // Fail-closed : file://, data:, null… ne sont pas admis.
+        assert!(!origine_admise(Some("file:///etc/passwd")));
+        assert!(!origine_admise(Some("null")));
+        assert!(!origine_admise(Some("data:text/html,x")));
+        // La webview native reste admise.
+        assert!(origine_admise(Some("TAURI://localhost")));
+    }
 }
 
 #[cfg(test)]
@@ -2296,6 +2339,22 @@ mod tests_zone_sale {
             "zone non bornée : {} rectangles",
             z.len()
         );
+    }
+
+    #[test]
+    fn des_rectangles_qui_se_chevauchent_au_dela_du_plafond_ne_paniquent_pas() {
+        // Bug corrigé : le choix de la paire à fusionner calculait
+        // aire(union) - aire(a) - aire(b) ; pour deux rectangles qui se recouvrent,
+        // l'union est plus petite que la somme → soustraction u64 négative, panique
+        // en debug/test. Il faut PLUS de RECTS_MAX rectangles, dont certains se
+        // chevauchent, pour entrer dans la boucle de fusion fautive.
+        let mut z = Vec::new();
+        for i in 0..(RECTS_MAX as u16 + 4) {
+            // Des rectangles largement recouvrants (pas seulement inclus l'un dans
+            // l'autre, sinon ils fusionneraient avant d'atteindre la boucle).
+            ajouter_rect(&mut z, &r(i * 3, i * 3, i * 3 + 40, i * 3 + 40));
+        }
+        assert!(z.len() <= RECTS_MAX, "zone non bornée : {}", z.len());
     }
 
     #[test]

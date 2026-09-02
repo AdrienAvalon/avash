@@ -1289,10 +1289,19 @@ mod tests {
         let ssh = dir.join(".ssh");
         std::fs::create_dir_all(&ssh).unwrap();
         std::fs::write(ssh.join("config"), contents).unwrap();
+        // `HOME` ne suffit pas : sous Windows, `dirs::home_dir()` l'ignore et
+        // consulte le profil du système — les tests lisaient alors le vrai
+        // `~/.ssh/config` du poste (vide sur un exécuteur de CI) et échouaient.
+        // `AVASH_HOME` est la dérogation que `repertoire_personnel()` honore sur
+        // toutes les plateformes ; on pose les deux, comme `testutil::temp_home`
+        // dans le cœur.
         let previous = std::env::var("HOME").ok();
+        let previous_avash = std::env::var("AVASH_HOME").ok();
         std::env::set_var("HOME", &dir);
+        std::env::set_var("AVASH_HOME", &dir);
         HomeGuard {
             previous,
+            previous_avash,
             dir,
             _lock: lock,
         }
@@ -1300,6 +1309,7 @@ mod tests {
 
     struct HomeGuard {
         previous: Option<String>,
+        previous_avash: Option<String>,
         dir: std::path::PathBuf,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
@@ -1309,6 +1319,10 @@ mod tests {
             match &self.previous {
                 Some(h) => std::env::set_var("HOME", h),
                 None => std::env::remove_var("HOME"),
+            }
+            match &self.previous_avash {
+                Some(h) => std::env::set_var("AVASH_HOME", h),
+                None => std::env::remove_var("AVASH_HOME"),
             }
             let _ = std::fs::remove_dir_all(&self.dir);
         }

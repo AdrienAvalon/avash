@@ -30,6 +30,11 @@ rand = "0.10.2"
 sha2 = "0.11"
 dirs = "6"
 
+# O_NOFOLLOW pour l'ouverture sûre du fichier de trace (fuite du mot de passe
+# sinon possible via un lien symbolique planté dans /tmp). Unix seulement.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Chemin chaud CPU-bound (décodage graphique) : LTO + une seule unité de
 # codegen pour l'inlining inter-crates ; strip pour un binaire plus compact.
 [profile.release]

@@ -21,7 +21,21 @@ fn main() {
         // débogueur distant sur la webview — donc la lecture des hôtes et
         // l'exécution de commandes distantes à qui s'y connecte en local. Rien
         // ne le justifie pour un lancement normal : on le ferme.
-        if std::env::var_os("WEBKIT_INSPECTOR_SERVER").is_some() {
+        //
+        // SAUF sous pilotage WebDriver : WebKitWebDriver lance l'application avec
+        // cette même variable, c'est SON canal de commande — la retirer coupait
+        // la suite bout en bout (session jamais établie, « IncompleteMessage »
+        // côté tauri-driver). tauri-driver signale ce mode par
+        // TAURI_WEBVIEW_AUTOMATION=true, que Tauri lit lui-même pour ouvrir
+        // l'automatisation : qui peut poser l'un peut poser l'autre, l'exception
+        // n'ajoute donc aucune surface. Décision pure et testée dans
+        // `retirer_inspecteur_webkit`.
+        let automatisation =
+            std::env::var_os("TAURI_WEBVIEW_AUTOMATION").is_some_and(|v| v == "true");
+        if retirer_inspecteur_webkit(
+            std::env::var_os("WEBKIT_INSPECTOR_SERVER").is_some(),
+            automatisation,
+        ) {
             // SAFETY: idem, avant tout démarrage de fil ou de WebKit.
             unsafe { std::env::remove_var("WEBKIT_INSPECTOR_SERVER") };
         }
@@ -38,17 +52,27 @@ fn main() {
     //
     // Mais WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS n'est pas qu'un réglage
     // d'affichage : WebView2 concatène sa valeur à la ligne de commande du
-    // navigateur. Une valeur héritée de l'environnement pourrait y glisser
-    // `--remote-debugging-port` (débogueur distant, prise de contrôle locale de
-    // la webview) ou `--no-sandbox`. On ne défère donc pas aveuglément : on
-    // filtre les drapeaux sensibles de la valeur héritée avant d'y ajouter le
-    // nôtre. Le tri vit dans `arguments_webview2`, pur et testé.
+    // navigateur, que Chromium re-découpe ensuite (guillemets retirés). Une
+    // valeur héritée de l'environnement pourrait y glisser `--remote-debugging-port`
+    // (débogueur distant, prise de contrôle locale de la webview), `--no-sandbox`,
+    // ou pire `--renderer-cmd-prefix` (exécution d'un binaire arbitraire). La
+    // filtrer par liste noire est illusoire : `--no-sand"box` passerait le tri et
+    // serait reconstitué par Chromium. avash prend donc le CONTRÔLE TOTAL de la
+    // variable — il n'en défère jamais la valeur héritée : il pose la sienne en
+    // session distante, la retire sinon. La décision vit dans `action_webview2`,
+    // pure et testée.
     #[cfg(target_os = "windows")]
     {
-        let herite = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").ok();
-        if let Some(valeur) = arguments_webview2(herite.as_deref(), session_distante()) {
+        let herite = std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_some();
+        match action_webview2(herite, session_distante()) {
             // SAFETY: exécuté avant tout démarrage de fil d'exécution ou de WebView2.
-            unsafe { std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", valeur) };
+            ActionWebview2::Poser(v) => unsafe {
+                std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", v)
+            },
+            ActionWebview2::Retirer => unsafe {
+                std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+            },
+            ActionWebview2::NePasToucher => {}
         }
     }
 
@@ -74,121 +98,94 @@ fn session_distante() -> bool {
     unsafe { GetSystemMetrics(SM_REMOTESESSION) != 0 }
 }
 
-/// Décide la valeur de `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` à poser, à partir
-/// de la valeur héritée de l'environnement (`herite`) et du fait qu'on soit en
-/// session distante. Retourne `None` s'il n'y a rien à changer.
+/// Faut-il retirer `WEBKIT_INSPECTOR_SERVER` de l'environnement ? Oui dès
+/// qu'une valeur est héritée — sauf sous pilotage `WebDriver`, où cette variable
+/// est le canal par lequel `WebKitWebDriver` commande l'application.
 ///
-/// Deux gestes indépendants :
-/// - **toujours** retirer les drapeaux sensibles d'une valeur héritée (un pied
-///   local ne doit pas pouvoir armer le débogueur distant de la webview) ;
-/// - **en session distante seulement**, garantir `--disable-gpu-compositing`,
-///   mais uniquement si l'utilisateur n'a rien posé lui-même (sinon on respecte
-///   son choix — il a peut-être une raison de vouloir le compositing GPU).
+/// Pur : aucun accès à l'environnement, testable sur toute plateforme.
+#[cfg(any(target_os = "linux", test))]
+fn retirer_inspecteur_webkit(herite: bool, automatisation: bool) -> bool {
+    herite && !automatisation
+}
+
+/// Ce qu'il faut faire de `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum ActionWebview2 {
+    /// Poser exactement cette valeur (la nôtre).
+    Poser(&'static str),
+    /// Retirer la variable de l'environnement (valeur héritée non fiable).
+    Retirer,
+    /// Ne rien faire (aucune valeur héritée, hors session distante).
+    NePasToucher,
+}
+
+/// Décide l'action à mener sur `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, selon
+/// qu'une valeur est déjà présente dans l'environnement (`herite`) et qu'on soit
+/// en session distante.
+///
+/// avash ne DÉFÈRE jamais la valeur héritée : filtrer une ligne de commande
+/// Chromium par liste noire est illusoire (guillemets internes reconstitués,
+/// drapeaux d'exécution innombrables). Donc — en session distante on impose la
+/// nôtre (`--disable-gpu-compositing`), sinon on retire toute valeur héritée pour
+/// qu'aucun `--remote-debugging-port` planté par un pied local n'atteigne la
+/// webview. Le confort d'un réglage utilisateur bénin ne vaut pas cette surface.
 ///
 /// Pur : aucun accès à l'environnement, testable sur toute plateforme.
 #[cfg(any(target_os = "windows", test))]
-fn arguments_webview2(herite: Option<&str>, distante: bool) -> Option<String> {
-    // Drapeaux qu'on refuse de laisser passer, comparés sur le nom (avant un
-    // éventuel `=valeur`). Ils ouvrent un débogueur distant, désactivent le bac à
-    // sable ou l'isolation d'origine — de quoi transformer la webview en pivot.
-    const DANGEREUX: &[&str] = &[
-        "--remote-debugging-port",
-        "--remote-debugging-pipe",
-        "--remote-debugging-address",
-        "--no-sandbox",
-        "--disable-web-security",
-        "--disable-site-isolation-trials",
-        "--user-data-dir",
-    ];
-
-    let herite = herite.unwrap_or("");
-    let mut jetons: Vec<&str> = Vec::new();
-    let mut retire = false;
-    for jeton in herite.split_whitespace() {
-        let nom = jeton.split('=').next().unwrap_or(jeton);
-        if DANGEREUX.contains(&nom) {
-            retire = true;
-        } else {
-            jetons.push(jeton);
-        }
+fn action_webview2(herite: bool, distante: bool) -> ActionWebview2 {
+    if distante {
+        ActionWebview2::Poser("--disable-gpu-compositing")
+    } else if herite {
+        ActionWebview2::Retirer
+    } else {
+        ActionWebview2::NePasToucher
     }
-
-    // Ajout de la composition logicielle : en session distante, si l'utilisateur
-    // n'a rien imposé (herite vide) et que le drapeau n'y est pas déjà.
-    let mut ajoute = false;
-    if distante && herite.trim().is_empty() && !jetons.contains(&"--disable-gpu-compositing") {
-        jetons.push("--disable-gpu-compositing");
-        ajoute = true;
-    }
-
-    if !retire && !ajoute {
-        return None; // rien à faire : on ne touche pas à la valeur héritée.
-    }
-    Some(jetons.join(" "))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::arguments_webview2;
+    use super::{action_webview2, retirer_inspecteur_webkit, ActionWebview2};
 
     #[test]
-    fn sans_heritage_hors_session_distante_ne_touche_a_rien() {
-        assert_eq!(arguments_webview2(None, false), None);
-        assert_eq!(arguments_webview2(Some(""), false), None);
+    fn l_inspecteur_webkit_herite_est_retire_hors_pilotage() {
+        assert!(retirer_inspecteur_webkit(true, false));
+        assert!(!retirer_inspecteur_webkit(false, false));
     }
 
     #[test]
-    fn en_session_distante_sans_heritage_pose_la_composition_logicielle() {
+    fn l_inspecteur_webkit_est_garde_sous_webdriver() {
+        // Régression vue en CI : la suite bout en bout ne démarrait plus, la
+        // variable posée par WebKitWebDriver étant retirée avant WebKit.
+        assert!(!retirer_inspecteur_webkit(true, true));
+        assert!(!retirer_inspecteur_webkit(false, true));
+    }
+
+    #[test]
+    fn hors_session_distante_sans_heritage_ne_touche_a_rien() {
+        assert_eq!(action_webview2(false, false), ActionWebview2::NePasToucher);
+    }
+
+    #[test]
+    fn en_session_distante_pose_toujours_la_composition_logicielle() {
+        // Peu importe une éventuelle valeur héritée : on impose la nôtre, on ne la
+        // fusionne pas (une ligne de commande Chromium n'est pas filtrable sûrement).
         assert_eq!(
-            arguments_webview2(None, true).as_deref(),
-            Some("--disable-gpu-compositing")
+            action_webview2(false, true),
+            ActionWebview2::Poser("--disable-gpu-compositing")
+        );
+        assert_eq!(
+            action_webview2(true, true),
+            ActionWebview2::Poser("--disable-gpu-compositing")
         );
     }
 
     #[test]
-    fn respecte_un_choix_explicite_de_l_utilisateur_en_session_distante() {
-        // L'utilisateur a posé une valeur bénigne : on ne lui impose pas notre
-        // drapeau par-dessus, il garde la main sur le compositing.
-        assert_eq!(arguments_webview2(Some("--lang=fr-FR"), true), None);
-    }
-
-    #[test]
-    fn retire_les_drapeaux_dangereux_meme_hors_session_distante() {
-        // Le cœur du durcissement : un --remote-debugging-port hérité est
-        // supprimé, en session distante comme sur écran physique.
-        assert_eq!(
-            arguments_webview2(Some("--remote-debugging-port=9222"), false).as_deref(),
-            Some("")
-        );
-        assert_eq!(
-            arguments_webview2(Some("--lang=fr --no-sandbox --mute-audio"), false).as_deref(),
-            Some("--lang=fr --mute-audio")
-        );
-    }
-
-    #[test]
-    fn nettoie_et_ajoute_a_la_fois_en_session_distante() {
-        // Valeur hostile héritée + session distante : on retire le danger. On
-        // n'ajoute PAS la composition logicielle, car l'utilisateur a posé une
-        // valeur (on respecte son choix) — mais le nettoyage, lui, prime.
-        assert_eq!(
-            arguments_webview2(Some("--remote-debugging-pipe"), true).as_deref(),
-            Some("")
-        );
-    }
-
-    #[test]
-    fn n_ajoute_pas_deux_fois_le_drapeau_deja_present() {
-        // herite non vide contenant déjà notre drapeau : rien à changer.
-        assert_eq!(
-            arguments_webview2(Some("--disable-gpu-compositing"), true),
-            None
-        );
-    }
-
-    #[test]
-    fn un_prefixe_ressemblant_n_est_pas_pris_pour_un_drapeau_dangereux() {
-        // --remote-debugging-portable n'est pas --remote-debugging-port.
-        assert_eq!(arguments_webview2(Some("--user-data-dir-x=1"), false), None);
+    fn hors_session_distante_une_valeur_heritee_est_retiree() {
+        // Le cœur du durcissement : un --remote-debugging-port (ou un
+        // --renderer-cmd-prefix, ou un --no-sand"box échappant à tout filtre)
+        // planté dans l'environnement par un pied local n'atteint jamais la webview,
+        // parce qu'on retire la variable au lieu d'essayer de la nettoyer.
+        assert_eq!(action_webview2(true, false), ActionWebview2::Retirer);
     }
 }
