@@ -186,6 +186,39 @@ jobs:
           cargo check -p avash-ui --all-targets
           cargo test -p avash-ui --lib --bin avash-ui
 
+  # macOS : la dernière plateforme majeure. Sans machine pour l'éprouver, la
+  # chaîne vérifie au moins que tout compile et que le cœur passe ses tests là
+  # aussi — le trousseau natif (keyring, dépôt Apple) et les chemins de fichiers
+  # sont les points qui divergent le plus souvent.
+  macos-coeur:
+    name: Cœur — tests macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Front (exigé par la compilation d'avash-ui)
+        working-directory: web
+        run: npm ci && npx vite build
+      - name: cargo test (crate avash)
+        run: cargo test -p avash --all-targets
+      - name: Processus RDP — compilation et tests
+        working-directory: rdp-sidecar
+        run: |
+          cargo check --all-targets
+          cargo test
+      - name: Interface — compilation et tests
+        run: |
+          mkdir -p crates/avash-ui/binaries
+          touch crates/avash-ui/binaries/avash-rdp-aarch64-apple-darwin
+          cargo check -p avash-ui --all-targets
+          cargo test -p avash-ui --lib --bin avash-ui
+
   e2e:
     name: E2E (app réelle, headless)
     runs-on: ubuntu-latest

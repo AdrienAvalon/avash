@@ -1,6 +1,6 @@
 name: Release
 
-# Publie les binaires pour Linux et Windows quand un tag v* est poussé.
+# Publie les binaires pour Linux, Windows et macOS quand un tag v* est poussé.
 # Chaque plateforme construit d'abord le processus RDP (rdp-sidecar, hors
 # workspace) puis le place dans binaries/ sous le nom attendu par Tauri
 # (externalBin ajoute automatiquement le triplet de la cible).
@@ -26,6 +26,9 @@ jobs:
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
             nom: windows
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            nom: macos
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.nom }}
     steps:
@@ -56,8 +59,8 @@ jobs:
         working-directory: rdp-sidecar
         run: cargo build --release
 
-      - name: Placer le sidecar (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Placer le sidecar (Linux, macOS)
+        if: matrix.os != 'windows-latest'
         run: |
           mkdir -p crates/avash-ui/binaries
           cp rdp-sidecar/target/release/avash-rdp \
@@ -80,9 +83,12 @@ jobs:
       # binaires récents (.relr.dyn).
       # TAURI_SIGNING_PRIVATE_KEY : sans elle, Tauri ne produit aucun fichier .sig
       # et la mise à jour automatique ne peut pas vérifier ce qu'elle télécharge.
+      # macOS : l'image disque et l'archive .app.tar.gz que la mise à jour
+      # automatique télécharge. Sans identité de développeur Apple, rien n'est
+      # notarisé : Gatekeeper demande un clic droit → Ouvrir au premier lancement.
       - name: Bundles Tauri
         working-directory: crates/avash-ui
-        run: cargo tauri build
+        run: cargo tauri build ${{ matrix.os == 'macos-latest' && '--bundles app,dmg' || '' }}
         env:
           NO_STRIP: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -125,6 +131,9 @@ jobs:
             target/release/bundle/appimage/*.AppImage.sig
             target/release/bundle/nsis/*.exe
             target/release/bundle/nsis/*.exe.sig
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app.tar.gz
+            target/release/bundle/macos/*.app.tar.gz.sig
             portable/*.zip
           if-no-files-found: warn
 
@@ -150,9 +159,9 @@ jobs:
                  "ne peut pas vérifier ce qu'elle télécharge."
             exit 1
           fi
-          python3 - "$version" "$base" "$(sig '*.AppImage.sig')" "$(sig '*-setup.exe.sig')" <<'PY' > latest.json
+          python3 - "$version" "$base" "$(sig '*.AppImage.sig')" "$(sig '*-setup.exe.sig')" "$(sig '*.app.tar.gz.sig')" <<'PY' > latest.json
           import json, sys, datetime
-          version, base, sig_linux, sig_win = sys.argv[1:5]
+          version, base, sig_linux, sig_win, sig_mac = sys.argv[1:6]
           plateformes = {}
           if sig_linux:
               plateformes["linux-x86_64"] = {
@@ -163,6 +172,11 @@ jobs:
               plateformes["windows-x86_64"] = {
                   "signature": sig_win,
                   "url": f"{base}/Avash_{version}_x64-setup.exe",
+              }
+          if sig_mac:
+              plateformes["darwin-aarch64"] = {
+                  "signature": sig_mac,
+                  "url": f"{base}/Avash.app.tar.gz",
               }
           json.dump({
               "version": version,
@@ -175,7 +189,7 @@ jobs:
 
       - name: Empreintes SHA256
         run: |
-          find artefacts -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.zip' \) -print0 \
+          find artefacts -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.app.tar.gz' \) -print0 \
             | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
       # Attestation de provenance : preuve cryptographique (Sigstore) que ces
@@ -191,6 +205,8 @@ jobs:
             artefacts/**/*.AppImage
             artefacts/**/*.exe
             artefacts/**/*.zip
+            artefacts/**/*.dmg
+            artefacts/**/*.app.tar.gz
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -198,6 +214,9 @@ jobs:
             artefacts/**/*.AppImage
             artefacts/**/*.exe
             artefacts/**/*.zip
+            artefacts/**/*.dmg
+            artefacts/**/*.app.tar.gz
+            artefacts/**/*.app.tar.gz.sig
             artefacts/**/*.sig
             latest.json
             SHA256SUMS
