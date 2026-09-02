@@ -354,6 +354,16 @@ arbres de dépendances (workspace et processus RDP), dans `check.sh` comme dans
 les deux chaînes d'intégration continue. La politique est dans `deny.toml`, et
 chaque exception y est justifiée en clair.
 
+**Ce que dit Scorecard, et pourquoi.** L'OpenSSF Scorecard, joué chaque lundi,
+compte « 36 vulnérabilités » sur le dépôt. Ce sont les avis RustSec
+*non maintenu* de la pile GTK 3 (`atk`, `gdk-sys`, `gdkwayland-sys`… :
+RUSTSEC-2024-0411 à 0418) que Tauri embarque sous Linux — pas des failles, et
+pas un choix qui nous appartient : le correctif viendra avec le passage de
+Tauri à GTK 4. `cargo deny` les connaît (« unmaintained = workspace » ne bloque
+que nos dépendances directes) et l'alerte reste ouverte à dessein plutôt que
+masquée. Ses autres constats — revue de code, protection de branche, badge de
+bonnes pratiques — relèvent des réglages du dépôt, pas du code.
+
 ### Un serveur RDP est une entrée non fiable
 
 Le modèle de sécurité d'avash traitait le serveur comme un pair : on vérifie son

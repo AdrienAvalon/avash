@@ -33,7 +33,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   proposées par Dependabot sont fusionnées ; le processus RDP passe à
   tokio-tungstenite 0.30 ; deux majeures sont écartées avec leur raison
   (x509-cert, lié aux paquets IronRDP portés ; TypeScript 7, que
-  typescript-eslint n'accepte pas encore).
+  typescript-eslint n'accepte pas encore). Second lot, en une poussée :
+  checkout 7, upload-artifact 7, action-gh-release 3 (toutes trois passent
+  à Node 24) et codeql-action 4 — ses trois étapes ensemble, là où Dependabot
+  ne proposait qu'`analyze` et `upload-sarif`, et l'analyse échouait avec un
+  `init` resté en 3. Deux `Cargo.lock` orphelins dans les membres de l'espace
+  de travail, que Cargo ignorait, sont retirés : ils faisaient compter à
+  Scorecard des versions que personne ne construit.
 - **La langue suit la locale au premier lancement** : français pour un
   système en `fr*`, anglais pour les autres, jusqu'à un choix explicite ;
   les tailles s'écrivent en Ko ou en KB, les dates en jj/mm/aa ou en ISO.
