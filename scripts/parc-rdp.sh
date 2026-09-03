@@ -73,12 +73,26 @@ demarrer() { # nom
 
 raccorder() { # l'appelant est un conteneur : le raccorder au réseau du parc
   [ -n "$PARC_RESEAU" ] && [ -f /.dockerenv ] || return 0
-  $MOTEUR network connect "$PARC_RESEAU" "$(hostname)" >/dev/null 2>&1 || true
+  # L'identifiant du conteneur, pas son nom d'hôte : l'exécuteur GitLab donne
+  # aux siens un nom d'hôte qui n'est pas leur identifiant, et « network
+  # connect » ne le connaissait pas — l'échec, avalé, laissait l'attente
+  # pendre une heure sur une adresse injoignable (job 31269). Le montage de
+  # /etc/hostname porte l'identifiant.
+  local moi
+  moi=$(grep -o -m1 'containers/[0-9a-f]\{64\}' /proc/self/mountinfo 2>/dev/null | cut -d/ -f2)
+  [ -n "$moi" ] || moi="$(hostname)"
+  if $MOTEUR network inspect "$PARC_RESEAU" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null | grep -q "$moi"; then
+    return 0
+  fi
+  $MOTEUR network connect "$PARC_RESEAU" "$moi" >/dev/null 2>&1 \
+    || echo "  ✗ raccordement de ce conteneur ($moi) au réseau $PARC_RESEAU impossible" >&2
 }
 
 attendre() { # hôte port
-  for _ in $(seq 1 60); do
-    (exec 3<>"/dev/tcp/$1/$2") 2>/dev/null && { exec 3<&-; return 0; }
+  # Deux secondes par essai : une adresse injoignable ne doit pas faire
+  # attendre le délai de connexion TCP (des minutes) à chaque tour.
+  for _ in $(seq 1 30); do
+    timeout 2 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null && return 0
     sleep 1
   done
   echo "  ✗ rien n'écoute sur $1:$2" >&2; return 1

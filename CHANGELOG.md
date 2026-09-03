@@ -33,8 +33,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   conformité RDP pilote son parc xrdp sur le démon de l'hôte, plus en
   docker-in-docker : ses trois images sont construites une fois et gardées,
   ses conteneurs vivent sur un réseau Docker dédié sans rien publier, et le
-  sidecar lui vient déjà compilé du job `rust`. L'exécuteur passe à trois
-  jobs en parallèle.
+  sidecar lui vient déjà compilé du job `rust`. Le job se raccorde à ce
+  réseau par l'identifiant de son conteneur, pas par son nom d'hôte, que
+  l'exécuteur choisit autrement : le premier passage a pendu une heure sur
+  une adresse injoignable, l'attente est désormais bornée à deux secondes
+  par essai. L'exécuteur passe à trois jobs en parallèle.
 
 ## [0.7.0] - 2026-09-03
 
