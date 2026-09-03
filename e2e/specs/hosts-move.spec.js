@@ -1,4 +1,4 @@
-import { findHostRow, folderExists, openCtx } from "./helpers.js";
+import { attendreDossier, findHostRow, openCtx } from "./helpers.js";
 
 describe("Déplacer un hôte dans un dossier", () => {
   it("db-1 → « prod/db » via la modale « Déplacer vers… »", async () => {
@@ -9,7 +9,7 @@ describe("Déplacer un hôte dans un dossier", () => {
     await $("#move-new").setValue("prod/db");
     await $("#move-submit").click();
     // Le sous-dossier « db » apparaît (créé + hôte déplacé) et db-1 existe toujours.
-    await browser.waitUntil(async () => folderExists("db"), { timeout: 8000, timeoutMsg: "sous-dossier db absent" });
+    await attendreDossier("db");
     expect(await (await findHostRow("db-1")).isExisting()).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { findFolderRow, folderExists, openCtx } from "./helpers.js";
+import { attendreDossier, findFolderRow, folderExists, openCtx } from "./helpers.js";
 
 describe("Dossiers — cycle de vie complet", () => {
   it("« + dossier » ouvre askText (pas prompt) et crée le dossier", async () => {
@@ -6,7 +6,7 @@ describe("Dossiers — cycle de vie complet", () => {
     await $("#ask-modal").waitForDisplayed({ timeout: 5000 });
     await $("#ask-input").setValue("clients");
     await $("#ask-submit").click();
-    await browser.waitUntil(async () => folderExists("clients"), { timeout: 8000, timeoutMsg: "clients absent" });
+    await attendreDossier("clients");
   });
 
   it("crée un sous-dossier via le menu contextuel", async () => {
@@ -16,7 +16,7 @@ describe("Dossiers — cycle de vie complet", () => {
     await $("#ask-modal").waitForDisplayed({ timeout: 5000 });
     await $("#ask-input").setValue("acme");
     await $("#ask-submit").click();
-    await browser.waitUntil(async () => folderExists("acme"), { timeout: 8000, timeoutMsg: "sous-dossier acme absent" });
+    await attendreDossier("acme");
   });
 
   it("renomme un dossier via le menu contextuel", async () => {
@@ -26,7 +26,7 @@ describe("Dossiers — cycle de vie complet", () => {
     await $("#ask-modal").waitForDisplayed({ timeout: 5000 });
     await $("#ask-input").setValue("acme-corp");
     await $("#ask-submit").click();
-    await browser.waitUntil(async () => folderExists("acme-corp"), { timeout: 8000, timeoutMsg: "renommage échoué" });
+    await attendreDossier("acme-corp");
   });
 
   it("supprime un dossier via la modale de confirmation maison (bug WebKitGTK évité)", async () => {
@@ -45,7 +45,7 @@ describe("Dossiers — cycle de vie complet", () => {
     await $("#ask-modal").waitForDisplayed({ timeout: 5000 });
     await $("#ask-input").setValue("a-garder");
     await $("#ask-submit").click();
-    await browser.waitUntil(async () => folderExists("a-garder"), { timeout: 8000 });
+    await attendreDossier("a-garder");
 
     await openCtx(await findFolderRow("a-garder"));
     await browser.waitUntil(async () => (await $("#folder-context").getAttribute("class")).includes("open"), { timeout: 5000 });

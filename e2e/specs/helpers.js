@@ -47,6 +47,29 @@ export async function findFolderRow(name) {
 export async function folderExists(name) {
   try { await findFolderRow(name); return true; } catch { return false; }
 }
+// Les noms des dossiers affichés, pour qu'un échec dise ce qu'il y avait.
+async function listeDossiers() {
+  try {
+    return await Promise.all((await $$("#host-list .folder-row .fname")).map((e) => e.getProperty("textContent")));
+  } catch {
+    return ["(liste en reconstruction)"];
+  }
+}
+// Attend qu'un dossier apparaisse après sa création par la modale.
+//
+// Vu une fois sur l'exécuteur Windows (2026-09-03) : « clients » absent après
+// 8 s, sans qu'on sache si la création traînait ou si le nom saisi différait.
+// On attend plus longtemps, et l'échec nomme les dossiers présents.
+export async function attendreDossier(name, timeout = 15000) {
+  try {
+    await browser.waitUntil(async () => folderExists(name), { timeout });
+  } catch (e) {
+    throw new Error(
+      `dossier « ${name} » absent après ${timeout} ms ; présents : ${JSON.stringify(await listeDossiers())}`,
+      { cause: e },
+    );
+  }
+}
 // Le clic droit de WebdriverIO ne génère pas d'event `contextmenu` sous WebKitGTK :
 // on le dispatche directement sur la ligne.
 export async function openCtx(row) {

@@ -7,6 +7,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Un dossier créé par la modale s'attend plus longtemps, et l'échec dit ce
+  qu'il voyait.** Sur l'exécuteur Windows, le scénario « + dossier » a une
+  fois attendu huit secondes une ligne qui n'est pas venue, sans qu'on sache
+  si la création traînait ou si le nom saisi différait. L'attente passe à
+  quinze secondes et, si elle échoue, nomme les dossiers présents.
 - **La clé de test SSH n'est plus une course.** Le harnais d'intégration
   générait sa clé « si le fichier n'existe pas », depuis chaque test : deux
   tests en parallèle passaient tous deux ce contrôle, ou le second lisait un
