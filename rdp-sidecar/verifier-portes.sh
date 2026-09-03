@@ -12,7 +12,7 @@
 # quand la commande vient de l'extérieur.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vendor"
-for p in ironrdp-session ironrdp-connector ironrdp-pdu; do
+for p in ironrdp-session ironrdp-connector ironrdp-pdu ironrdp-graphics; do
   n=$(cd "$p" && cargo test 2>&1 | grep -oP '^test result: ok\. \K\d+' \
       | awk '{s+=$1} END {print s+0}')
   [ "$n" -ge 1 ] || { echo "aucun test exécuté pour $p" >&2; exit 1; }

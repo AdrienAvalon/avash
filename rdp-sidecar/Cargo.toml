@@ -47,3 +47,7 @@ ironrdp-connector = { path = "vendor/ironrdp-connector" }
 # Porté pour un défaut de ClearCodec, trouvé contre un Windows réel : voir
 # vendor/README.md.
 ironrdp-pdu = { path = "vendor/ironrdp-pdu" }
+# Porté pour le sous-codec NSCodec de ClearCodec, absent de l'amont : les
+# icônes de la barre des tâches de Windows arrivaient noires. Voir
+# vendor/README.md.
+ironrdp-graphics = { path = "vendor/ironrdp-graphics" }

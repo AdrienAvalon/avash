@@ -1,6 +1,6 @@
 # Correctifs portés sur IronRDP
 
-Trois crates sont copiés ici, chacun avec un ou deux changements ciblés, décrits section par section.
+Quatre crates sont copiés ici, chacun avec un ou deux changements ciblés, décrits section par section.
 
 Une retouche mécanique s'y ajoute, sans rapport avec les défauts : les
 `#[expect(lint)]` deviennent `#[allow(lint)]`. Hors de leur espace de travail
@@ -226,3 +226,46 @@ vérifié par `verifier-portes.sh`, qui éprouve chaque paquet depuis son propre
 répertoire : `cargo test -p` refuse en silence un paquet qui a des dépendances
 de développement sans appartenir à l'espace de travail — exactement le cas de
 celui-ci.
+
+## `ironrdp-pdu` — RLEX à une seule couleur
+
+Dans `src/codecs/clearcodec/rlex.rs`. Le sous-codec RLEX de ClearCodec
+([MS-RDPEGFX] 2.2.4.6.2.2) code chaque segment par un octet compacté
+(`stopIndex` sur `floor(log2(paletteCount − 1)) + 1` bits, `suiteDepth` sur le
+reste) puis une longueur de série. Le parseur amont traitait la palette à UNE
+couleur comme un cas à part, sans octet compacté : il lisait alors les octets
+de longueur avec un décalage d'un octet par segment et refusait l'image
+(« suite exceeds region pixel count »). FreeRDP (`clear_decompress_subcode_rlex`,
+table `CLEAR_LOG2_FLOOR`) donne un bit à `stopIndex` dans ce cas, et garde
+l'octet compacté. Windows Server envoie ainsi les coins unis de sa barre des
+tâches (14×64, 64×46, 50×64 : neuf refus sur un enregistrement de vingt
+secondes). Trouvé en corrélant, dans le journal du canal graphique
+(`AVASH_RDP_JOURNAL_EGFX=1`), les refus et les rectangles concernés. Un test
+compose un tel segment de 896 pixels.
+
+## `ironrdp-graphics` — le sous-codec NSCodec de ClearCodec manquait
+
+Copie d'`ironrdp-graphics` 0.9.0 avec **un seul ajout**, dans
+`src/clearcodec/` : le fichier `nscodec.rs` et le bras `SubcodecId::NsCodec`
+de `decode_subcodec_region` dans `mod.rs`, qui était un « pas encore
+implémenté » vide. Une région codée ainsi restait donc à zéro dans le
+composite, sans erreur : un rectangle noir. Or c'est par NSCodec que Windows
+Server envoie les images colorées de petite taille, à commencer par les icônes
+de la barre des tâches (68×24, 46×14). `SurfaceToCache` emportait ensuite le
+noir et `CacheToSurface` le reposait à chaque redessin de la barre : les
+« carrés noirs » signalés par le mainteneur dans un avash Windows affichant un
+bureau, reproduits sans réseau par le rejeu de son enregistrement
+(`windows-clearcodec-nscodec`, PDU 249 : deux images dont toute la charge est
+une région NSCodec).
+
+Le décodeur est un port de `nsc_rle_decode`, `nsc_rle_decompress_data` et
+`nsc_decode` de FreeRDP (`libfreerdp/codec/nsc.c`, [MS-RDPNSC]) : quatre
+plans (luma, chroma orange, chroma vert, alpha), chacun brut, compressé RLE
+ou absent (tout à 0xFF), largeur de travail arrondie à 8 et hauteur à 2 quand
+la chroma est sous-échantillonnée, récupération de la perte de couleur par
+décalage puis lecture signée, et conversion YCoCg → BGR. Quatre tests
+unitaires (RLE, image unie, chroma décalée et sous-échantillonnée, flux
+menteurs), plus la fixture.
+
+Les tests du paquet sont réactivés (`test = true`) et comptés par
+`verifier-portes.sh`, comme pour les trois autres.

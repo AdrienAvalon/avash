@@ -7,6 +7,26 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Les carrés noirs d'un bureau Windows sont corrigés : le sous-codec
+  NSCodec de ClearCodec manquait.** Reproduit sans réseau par le rejeu de
+  l'enregistrement d'un avash Windows affichant `rdp-01`
+  (`windows-clearcodec-nscodec`, sixième enregistrement de référence) : au
+  PDU 249, les icônes de la barre des tâches (68×24 et 46×14) arrivent en
+  ClearCodec, toute leur charge dans une région NSCodec, et IronRDP 0.9 les
+  « décodait » sans erreur en laissant la région à zéro. Un rectangle noir,
+  que `SurfaceToCache` emportait puis que `CacheToSurface` reposait à chaque
+  redessin de la barre. Le paquet `ironrdp-graphics` rejoint les paquets
+  portés avec un décodeur NSCodec écrit d'après FreeRDP (quatre plans, RLE,
+  perte de couleur, YCoCg, sous-échantillonnage de la chroma). Dans la
+  foulée, le parseur RLEX du paquet `ironrdp-pdu` porté lit la palette à une
+  seule couleur comme FreeRDP et la spécification (un bit pour `stopIndex`,
+  octet compacté conservé) : les coins unis de la barre des tâches (14×64,
+  64×46) n'étaient plus refusés. Le journal du canal graphique décrit
+  désormais aussi chaque image ClearCodec (couches, sous-codecs, glyphes),
+  c'est lui qui a désigné NSCodec. L'enregistrement de référence
+  `windows-egfx` avait le même rectangle noir dans sa barre des tâches, et
+  son empreinte l'entérinait : elle change. 95 tests dans le processus RDP,
+  585 dans les paquets portés, 1079 au total.
 - **Les carrés gris et les blocs flous d'un bureau Windows vu à travers un
   avash Windows sont corrigés dans le décodeur.** Le magnétoscope, enregistré
   depuis l'avash Windows du contrôleur de domaine du parc pendant qu'il

@@ -193,6 +193,56 @@ fn inspecter_progressif(flux: &[u8]) {
     }
 }
 
+/// Décrit un flux ClearCodec pour le journal : drapeaux, glyphe, couches et
+/// sous-codecs de chaque région. C'est ainsi qu'on a vu que les icônes de la
+/// barre des tâches, noires à l'écran, arrivaient en NSCodec.
+fn inspecter_clearcodec(flux: &[u8]) {
+    use ironrdp::pdu::codecs::clearcodec::{decode_subcodec_layer, ClearCodecBitmapStream};
+    let mut src = ironrdp::core::ReadCursor::new(flux);
+    match ClearCodecBitmapStream::decode(&mut src) {
+        Err(e) => eprintln!("  clearcodec : illisible ({e})"),
+        Ok(s) => {
+            eprintln!(
+                "  clearcodec : drapeaux {:#04x} séquence {} glyphe {:?}{}",
+                s.flags,
+                s.seq_number,
+                s.glyph_index,
+                if s.is_glyph_hit() {
+                    " (réutilisé)"
+                } else {
+                    ""
+                }
+            );
+            if let Some(c) = &s.composite {
+                eprintln!(
+                    "  couches : résiduelle {} octets, bandes {} octets, sous-codecs {} octets",
+                    c.residual_data.len(),
+                    c.bands_data.len(),
+                    c.subcodec_data.len()
+                );
+                if !c.subcodec_data.is_empty() {
+                    match decode_subcodec_layer(c.subcodec_data) {
+                        Err(e) => eprintln!("  sous-codecs : illisibles ({e})"),
+                        Ok(regions) => {
+                            for r in regions {
+                                eprintln!(
+                                    "  sous-codec {:?} : ({},{}) {}×{} {} octets",
+                                    r.codec_id,
+                                    r.x_start,
+                                    r.y_start,
+                                    r.width,
+                                    r.height,
+                                    r.bitmap_data.len()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Un PDU EGFX, en-tête retiré.
 #[derive(Debug)]
 pub struct Pdu {
@@ -490,6 +540,14 @@ impl Egfx {
         eprintln!("egfx {} : {detail}", nom_pdu(p.id));
         if p.id == CMD_WIRE_TO_SURFACE_2 && c.len() > 13 {
             inspecter_progressif(&c[13..]);
+        }
+        // WireToSurface1 : surface (2), codec (2), format (1), rect (8),
+        // longueur (4), puis les données.
+        if p.id == CMD_WIRE_TO_SURFACE_1
+            && c.len() > 17
+            && u16::from_le_bytes([c[2], c[3]]) == CODEC_CLEARCODEC
+        {
+            inspecter_clearcodec(&c[17..]);
         }
     }
 

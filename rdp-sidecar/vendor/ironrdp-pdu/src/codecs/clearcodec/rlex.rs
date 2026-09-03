@@ -4,7 +4,7 @@
 //! It encodes each pixel as a pair: a "run" of repeated color followed
 //! by a "suite" (sequential palette walk from startIndex to stopIndex).
 
-use ironrdp_core::{DecodeResult, ReadCursor, ensure_size, invalid_field_err};
+use ironrdp_core::{ensure_size, invalid_field_err, DecodeResult, ReadCursor};
 
 /// Maximum palette size per spec.
 pub const MAX_PALETTE_COUNT: u8 = 127;
@@ -51,7 +51,10 @@ pub fn decode_rlex(data: &[u8]) -> DecodeResult<RlexData> {
     }
 
     if palette_count > MAX_PALETTE_COUNT {
-        return Err(invalid_field_err!("paletteCount", "palette count exceeds 127"));
+        return Err(invalid_field_err!(
+            "paletteCount",
+            "palette count exceeds 127"
+        ));
     }
 
     let palette_byte_count = usize::from(palette_count) * 3;
@@ -65,10 +68,16 @@ pub fn decode_rlex(data: &[u8]) -> DecodeResult<RlexData> {
         palette.push([b, g, r]);
     }
 
-    // Compute bit widths
+    // Compute bit widths: floor(log2(paletteCount - 1)) + 1, per MS-RDPEGFX
+    // 2.2.4.6.2.2 and FreeRDP's CLEAR_LOG2_FLOOR table. A single palette
+    // entry is NOT a special case: log2 floor of 0 is taken as 0 by the
+    // table, so stopIndex still occupies one bit and every segment keeps its
+    // packed byte. The upstream shortcut (no packed byte, one run length per
+    // byte) misreads the stream by one byte per segment and fails with
+    // "suite exceeds region pixel count" on Windows' solid taskbar corners
+    // (portage avash, voir vendor/README.md).
     let stop_index_bits = if palette_count <= 1 {
-        // Edge case: only 1 palette entry
-        0
+        1
     } else {
         bit_length(u32::from(palette_count - 1))
     };
@@ -78,27 +87,15 @@ pub fn decode_rlex(data: &[u8]) -> DecodeResult<RlexData> {
     let mut segments = Vec::new();
     let remaining = src.len();
 
-    if stop_index_bits == 0 {
-        // Single palette entry: no stop/suite bits, only run lengths
-        // Each byte is a run length factor for palette[0]
-        decode_single_palette_segments(&mut src, &mut segments)?;
-    } else {
-        decode_multi_palette_segments(remaining, &mut src, stop_index_bits, suite_depth_bits, &mut segments)?;
-    }
+    decode_multi_palette_segments(
+        remaining,
+        &mut src,
+        stop_index_bits,
+        suite_depth_bits,
+        &mut segments,
+    )?;
 
     Ok(RlexData { palette, segments })
-}
-
-fn decode_single_palette_segments(src: &mut ReadCursor<'_>, segments: &mut Vec<RlexSegment>) -> DecodeResult<()> {
-    while !src.is_empty() {
-        let run_length = decode_run_length(src)?;
-        segments.push(RlexSegment {
-            start_index: 0,
-            stop_index: 0,
-            run_length,
-        });
-    }
-    Ok(())
 }
 
 fn decode_multi_palette_segments(
@@ -184,10 +181,10 @@ mod tests {
         data.push(2); // palette_count
         data.extend_from_slice(&[0x00, 0x00, 0x00]); // black BGR
         data.extend_from_slice(&[0xFF, 0xFF, 0xFF]); // white BGR
-        // Segment: packed byte, stop_index=0 (1 bit), suite_depth=0 (7 bits), run=5
+                                                     // Segment: packed byte, stop_index=0 (1 bit), suite_depth=0 (7 bits), run=5
         data.push(0x00); // packed: stop=0, depth=0
         data.push(5); // run_length=5
-        // Segment: stop_index=1, suite_depth=0, run=3
+                      // Segment: stop_index=1, suite_depth=0, run=3
         data.push(0x01); // packed: stop=1, depth=0
         data.push(3); // run_length=3
 
@@ -198,6 +195,25 @@ mod tests {
         assert_eq!(rlex.segments[0].run_length, 5);
         assert_eq!(rlex.segments[1].stop_index, 1);
         assert_eq!(rlex.segments[1].run_length, 3);
+    }
+
+    #[test]
+    fn decode_rlex_single_palette_keeps_the_packed_byte() {
+        // Portage avash. Vu contre Windows Server : les coins unis de la barre
+        // des tâches (14×64, 64×46) arrivent en RLEX à UNE couleur, et chaque
+        // segment garde son octet compacté (stopIndex sur 1 bit, suiteDepth
+        // sur 7), comme chez FreeRDP. Ici : un segment de 896 pixels, longueur
+        // sur 16 bits (0xFF puis u16), suiteDepth 0.
+        let mut data = vec![1, 0xEE, 0xEE, 0xEE];
+        data.push(0x00); // packed: stop=0, depth=0
+        data.push(0xFF); // run length on 16 bits follows
+        data.extend_from_slice(&895u16.to_le_bytes()); // + suite of 1 = 896
+        let rlex = decode_rlex(&data).unwrap();
+        assert_eq!(rlex.palette.len(), 1);
+        assert_eq!(rlex.segments.len(), 1);
+        assert_eq!(rlex.segments[0].run_length, 895);
+        assert_eq!(rlex.segments[0].start_index, 0);
+        assert_eq!(rlex.segments[0].stop_index, 0);
     }
 
     #[test]

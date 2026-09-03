@@ -246,7 +246,10 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 - **Trois codecs graphiques, pas H.264.** RemoteFX Progressive — en tuiles
   simples chez GNOME Remote Desktop, affiné par paliers de qualité chez
   Windows, avec des tuiles « en différence » dès qu'un contexte de codec est
-  rouvert sur une surface qui a déjà servi —, ClearCodec, et le non compressé.
+  rouvert sur une surface qui a déjà servi —, ClearCodec avec ses trois
+  sous-codecs (brut, NSCodec, RLEX ; NSCodec est porté dans
+  `rdp-sidecar/vendor/ironrdp-graphics`, l'amont le laissait vide et Windows
+  y met les icônes), et le non compressé.
   IronRDP fournit l'entropie et la transformée ; l'assemblage progressif est
   à nous (`rdp-sidecar/src/progressif.rs`) : l'état des tuiles vit avec la
   surface et survit à `DeleteEncodingContext`, les différences s'ajoutent aux

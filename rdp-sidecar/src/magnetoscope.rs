@@ -568,7 +568,12 @@ mod tests_enregistrements_reels {
         // disjointes du décodeur — et le parc conteneurisé n'en héberge aucun
         // des deux.
         ("gnome-remote-desktop", 0x44fd_e714_c1d2_750e),
-        ("windows-egfx", 0x92dc_087e_677a_53d4),
+        // Empreinte mise à jour avec les portages NSCodec et RLEX : cette
+        // fixture avait elle aussi un rectangle noir à la place des icônes de
+        // la barre des tâches, et l'ancienne empreinte l'entérinait. Zone
+        // x 384–575, y 470–767 : logo Windows, dossier, Edge, Server Manager
+        // et l'icône d'état verte apparaissent.
+        ("windows-egfx", 0xcc9e_c711_f32f_d566),
         // Windows encore, mais un bureau affiché par un avash Windows qui
         // tourne lui-même dans une session RDP : trois surfaces successives
         // (écran d'avertissement, bureau, redimensionnement), des contextes de
@@ -577,6 +582,12 @@ mod tests_enregistrements_reels {
         // 2026-09-03 sur le contrôleur de domaine du parc pour les carrés gris
         // et les blocs flous signalés par le mainteneur.
         ("windows-surfaces-successives", 0x1bc4_d568_23d2_08a3),
+        // Même scénario, enregistré après le correctif précédent : cette
+        // fois Windows envoie les icônes de sa barre des tâches en ClearCodec
+        // avec le sous-codec NSCodec, et ses coins unis en RLEX à une seule
+        // couleur. Les deux manquaient au décodeur (IronRDP 0.9) : icônes
+        // noires, mises en cache puis retamponnées, et coins refusés.
+        ("windows-clearcodec-nscodec", 0xf6df_6128_be91_9ec4),
     ];
 
     fn chemin(nom: &str) -> String {
@@ -627,6 +638,37 @@ mod tests_enregistrements_reels {
              a été rendue comme une image complète",
             couleurs.len()
         );
+    }
+
+    #[test]
+    fn les_icones_en_nscodec_ne_sont_pas_noires() {
+        // PDU 249 : deux images ClearCodec dont toute la charge est une région
+        // NSCodec (68×24 et 46×14, les icônes de la barre des tâches). Avant
+        // le portage, IronRDP les « décodait » sans erreur en laissant la
+        // région à zéro : un rectangle noir, que SurfaceToCache emportait puis
+        // que CacheToSurface reposait à chaque redessin de la barre. Les
+        // carrés noirs signalés par le mainteneur, reproduits sans réseau.
+        let e = lire(&chemin("windows-clearcodec-nscodec")).unwrap();
+        let (_, image) = super::rejouer_jusqu_a(&e, false, 250).unwrap();
+        let largeur = usize::from(image.width());
+        let pixels = image.data();
+        for (x0, y0, x1, y1) in [
+            (444usize, 650usize, 512usize, 674usize),
+            (666, 656, 712, 670),
+        ] {
+            let mut couleurs = std::collections::BTreeSet::new();
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let d = (y * largeur + x) * 4;
+                    couleurs.insert(&pixels[d..d + 3]);
+                }
+            }
+            assert!(
+                couleurs.len() > 50,
+                "l'icône en ({x0},{y0}) n'a que {} couleurs : région NSCodec laissée noire",
+                couleurs.len()
+            );
+        }
     }
 
     #[test]
