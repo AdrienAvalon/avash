@@ -89,10 +89,17 @@ eprouver() { # nom  port
   trace=$(sed -n 's/.*traces actives, écrites dans \(.*\) (0600).*/\1/p' "$journal" | head -1)
   annoncee=$(grep "Send ConnectInitial" "${trace:-$journal}" 2>/dev/null | grep -oE "keyboard_layout: [0-9]+" | head -1 | cut -d' ' -f2)
   [ -n "$trace" ] && rm -f "$trace"
+  # DISPOSITION_ATTENDUE : sur les chaînes d'intégration, la disposition du
+  # « poste » est posée par XKB_DEFAULT_LAYOUT (fr → 1036) et l'on exige la
+  # valeur exacte, pas seulement autre chose que 0 : c'est la preuve que la
+  # disposition traverse jusqu'au ConnectInitial. Sans cette variable, on ne
+  # sait pas ce que le poste devrait annoncer, seulement que ce n'est pas 0.
   if [ -z "$annoncee" ]; then
     rouge "disposition clavier introuvable dans la trace"
   elif [ "$annoncee" = "0" ]; then
     rouge "disposition clavier annoncée = 0 (le serveur retombera sur QWERTY)"
+  elif [ -n "${DISPOSITION_ATTENDUE:-}" ] && [ "$annoncee" != "$DISPOSITION_ATTENDUE" ]; then
+    rouge "disposition clavier annoncée : $annoncee, attendue : $DISPOSITION_ATTENDUE"
   else
     vert "disposition clavier annoncée : $annoncee"
   fi

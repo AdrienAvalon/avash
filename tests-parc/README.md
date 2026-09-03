@@ -31,6 +31,12 @@ service docker-in-docker joignable sous le nom `docker`, poser
 `PARC_HOTE=docker` : les conteneurs publient alors sur toutes les interfaces
 de ce démon et chaque contrôle s'y connecte.
 
+Le contrôle de la disposition clavier vérifie que le processus RDP annonce
+celle du poste. Sur une machine sans session ni `localectl` (un conteneur),
+poser `XKB_DEFAULT_LAYOUT` (par exemple `fr`) et `DISPOSITION_ATTENDUE` (le
+code RDP correspondant, `1036` pour `fr`) : le contrôle exige alors la valeur
+exacte. C'est ce que font les deux chaînes d'intégration.
+
 Ou intégré à la vérification complète :
 
     scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh

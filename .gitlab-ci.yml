@@ -184,6 +184,12 @@ conformite:
     # que les contrôles joignent (voir scripts/parc-rdp.sh). Premier passage
     # réel : le script attendait 127.0.0.1:3390 et n'y trouvait rien.
     PARC_HOTE: "docker"
+    # Un conteneur n'a pas de disposition clavier (ni localectl ni session) :
+    # le processus RDP annonçait 0, exactement ce que le contrôle traque. On
+    # joue un poste en français, et le contrôle exige la valeur exacte
+    # (fr → 0x040C = 1036) — même réglage que la chaîne GitHub.
+    XKB_DEFAULT_LAYOUT: "fr"
+    DISPOSITION_ATTENDUE: "1036"
   before_script:
     - apk add --no-cache bash python3 py3-numpy py3-pillow py3-websockets curl build-base
     - curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal

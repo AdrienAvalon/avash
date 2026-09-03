@@ -433,6 +433,13 @@ jobs:
 
       - name: Conformité
         run: ./scripts/conformite.sh tous
+        # L'exécuteur répond « us » par localectl, mais rien ne le garantit :
+        # on joue un poste en français et le contrôle exige la valeur exacte
+        # (fr → 0x040C = 1036), comme sur GitLab, où un conteneur sans
+        # disposition faisait annoncer 0.
+        env:
+          XKB_DEFAULT_LAYOUT: fr
+          DISPOSITION_ATTENDUE: "1036"
 
       - name: Arrêter le parc
         if: always()

@@ -49,7 +49,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   sortie du conteneur contre le pare-feu ; le job installe désormais ses
   paquets en silence. La conformité RDP, elle, parle au parc par une
   variable `PARC_HOTE` : sur GitLab le parc tourne dans un démon
-  docker-in-docker à part, et les scripts n'attendaient que `127.0.0.1`.
+  docker-in-docker à part, et les scripts n'attendaient que `127.0.0.1`. Et
+  comme un conteneur n'a pas de disposition clavier, les deux chaînes jouent
+  un poste en français (`XKB_DEFAULT_LAYOUT=fr`) et le contrôle exige
+  désormais la valeur exacte (`DISPOSITION_ATTENDUE=1036`), pas seulement
+  autre chose que 0.
   Ce même root a fait tomber le test qui
   retire les droits d'un `known_hosts` : il lit un fichier `0o000` sans
   broncher, le test constate désormais que les droits sont appliqués avant
