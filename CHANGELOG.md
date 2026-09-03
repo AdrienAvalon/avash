@@ -7,6 +7,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **La chaîne GitLab ne refait plus deux fois le même travail.** Un tag ne
+  lance plus de pipeline (celui de la branche vient de vérifier le même
+  commit, la publication est l'affaire du workflow Release de GitHub : 38
+  minutes économisées par version) ; une autre référence que `main` part du
+  cache de `main` au lieu de compiler à froid ; et la conformité, qui compile
+  en musl, a son propre cache au lieu de piétiner celui des jobs glibc.
+
 ## [0.7.0] - 2026-09-03
 
 - **Trois avis de sécurité de moins dans la suite bout en bout.** Les
