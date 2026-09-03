@@ -101,7 +101,18 @@ export async function openRdp(cible: RdpTarget) {
   wrap.appendChild(canvas);
   wrap.appendChild(hud);
   $("terminal").appendChild(wrap);
-  const ctx = canvas.getContext("2d")!;
+  // Canvas LOGICIEL, pas accéléré : `willReadFrequently` fait vivre le bitmap
+  // en mémoire centrale. Un canvas 2D accéléré est une texture GPU, et sous
+  // une session RDP le GPU est virtualisé : à chaque perte de contexte (une
+  // reconnexion suffit), Chromium efface la texture et ne repeint ensuite que
+  // les rectangles que le serveur renvoie — le reste restait NOIR, jusqu'à ce
+  // qu'un survol ou une frappe fasse renvoyer la zone. Reproduit le
+  // 2026-09-03 sur un avash Windows 0.6.2 ouvert dans une session RDP, où le
+  // bouton OK d'un avertissement de connexion manquait jusqu'au passage de la
+  // souris, dans notre client comme dans FreeRDP : la tuile était perdue côté
+  // WebView2, pas au décodage. On ne fait que des putImageData : le chemin
+  // logiciel est le bon de toute façon.
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   rdpSessions.set(id, { canvas, tab, ws: null, hostId: cible.hostId, target: cible });
   state.active = id;
 
@@ -269,7 +280,7 @@ export async function openRdp(cible: RdpTarget) {
           snap = document.createElement("canvas");
           snap.width = canvas.width;
           snap.height = canvas.height;
-          snap.getContext("2d")!.drawImage(canvas, 0, 0);
+          snap.getContext("2d", { willReadFrequently: true })!.drawImage(canvas, 0, 0);
         }
         rdpW = nw;
         rdpH = nh;

@@ -7,6 +7,22 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Plus de zones noires persistantes dans un bureau RDP affiché à travers
+  une session RDP.** Reproduit sur un avash Windows 0.6.2 ouvert dans une
+  session distante : dans son bureau `rdp-01`, le bouton OK de
+  l'avertissement de connexion manquait, noir, jusqu'à ce que la souris le
+  survole et que le serveur renvoie la zone — dans notre client comme dans
+  FreeRDP, et notre décodeur, connecté au même serveur à la même
+  résolution, l'affichait bien. La tuile se perdait donc dans WebView2 : le
+  canvas 2D est une texture GPU, le GPU d'une session RDP est virtualisé, et
+  chaque perte de contexte (une reconnexion suffit) efface la texture ;
+  Chromium ne repeint ensuite que ce que le serveur renvoie. Le canvas est
+  désormais logiciel (`willReadFrequently`), son bitmap vit en mémoire
+  centrale et survit à tout : on ne fait que des `putImageData`, c'était le
+  bon chemin de toute façon, sur toutes les plateformes. Un workflow
+  « Essai Windows », déclenché à la main, construit l'installeur sans rien
+  publier, pour éprouver un correctif sur une vraie machine avant la
+  version.
 - **Le magnétoscope s'enregistre depuis l'application, et se rejoue en image.**
   Des carrés noirs persistants sont signalés dans la fenêtre d'un avash
   Windows vu à travers une session RDP depuis un avash Linux, malgré le

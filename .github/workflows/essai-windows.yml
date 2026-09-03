@@ -1,0 +1,70 @@
+# Binaire Windows d'essai, à la demande.
+#
+# Pour éprouver un correctif sur une vraie machine Windows sans publier de
+# version : mêmes étapes que le job Windows du workflow Release, mais rien
+# n'est publié — ni release, ni manifeste de mise à jour — l'installeur est
+# un simple artefact, gardé trois jours. Première utilité : vérifier sur le
+# contrôleur de domaine du parc qu'un avash ouvert dans une session RDP ne
+# perd plus de tuiles dans son canvas (2026-09-03).
+#
+# La clé de signature des mises à jour est nécessaire à Tauri pour construire
+# (createUpdaterArtifacts) ; le .sig produit n'est pas publié.
+name: Essai Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: essai-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Front (le binaire embarque web/dist)
+        working-directory: web
+        run: npm ci && npx vite build
+
+      - name: Processus RDP
+        working-directory: rdp-sidecar
+        run: cargo build --release
+
+      - name: Placer le sidecar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path crates/avash-ui/binaries | Out-Null
+          Copy-Item rdp-sidecar/target/release/avash-rdp.exe `
+            crates/avash-ui/binaries/avash-rdp-x86_64-pc-windows-msvc.exe
+
+      - name: Outil Tauri
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Bundle Tauri
+        working-directory: crates/avash-ui
+        run: cargo tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Installeur d'essai
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: avash-essai-windows-${{ github.sha }}
+          path: target/release/bundle/nsis/*-setup.exe
+          retention-days: 3
+          if-no-files-found: error
