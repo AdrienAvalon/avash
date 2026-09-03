@@ -25,6 +25,12 @@ vivaient : le dialogue réel avec un serveur RDP.
     scripts/conformite.sh tous         # les cinq contrôles
     scripts/parc-rdp.sh down           # nettoie
 
+Les deux scripts joignent le parc à `PARC_HOTE` (`127.0.0.1` par défaut).
+Quand le démon de conteneurs est ailleurs, comme sur GitLab où il est un
+service docker-in-docker joignable sous le nom `docker`, poser
+`PARC_HOTE=docker` : les conteneurs publient alors sur toutes les interfaces
+de ce démon et chaque contrôle s'y connecte.
+
 Ou intégré à la vérification complète :
 
     scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh

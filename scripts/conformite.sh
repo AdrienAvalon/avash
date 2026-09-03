@@ -20,6 +20,10 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RDP="rdp-sidecar/target/release/avash-rdp"
 COMPTE="essai"; MDP="essai-mot-de-passe"
 DELAI=45
+# Même variable que parc-rdp.sh : 127.0.0.1 sur un poste, « docker » sur
+# GitLab où le parc tourne dans un démon à part. Exportée pour le mesureur de
+# trames (Python) et les deux exemples Rust, qui la lisent eux-mêmes.
+export PARC_HOTE="${PARC_HOTE:-127.0.0.1}"
 SORTIE="$(mktemp -d)"; trap 'rm -rf "$SORTIE"' EXIT
 echecs=0
 
@@ -28,13 +32,13 @@ rouge() { printf '  \033[31m✗\033[0m %s\n' "$1"; echecs=$((echecs+1)); }
 
 eprouver() { # nom  port
   local nom="$1" port="$2" img="$SORTIE/$1.png" journal="$SORTIE/$1.log"
-  echo "▸ $nom (127.0.0.1:$port)"
+  echo "▸ $nom ($PARC_HOTE:$port)"
 
   # 1. La connexion aboutit, et on mesure en combien de temps.
   local t0 t1
   t0=$(date +%s%N)
   if AVASH_RDP_TRACE=ironrdp_connector=debug timeout "$DELAI" "$RDP" \
-       --host 127.0.0.1 --port "$port" -u "$COMPTE" -p "$MDP" --sans-nla \
+       --host "$PARC_HOTE" --port "$port" -u "$COMPTE" -p "$MDP" --sans-nla \
        --width 1024 --height 768 --shot "$img" >"$journal" 2>&1; then
     t1=$(date +%s%N)
     vert "connexion aboutie en $(( (t1 - t0) / 1000000 )) ms"
@@ -95,7 +99,7 @@ eprouver() { # nom  port
 }
 
 eprouver_ssh() { # port
-  echo "▸ ssh (127.0.0.1:$1)"
+  echo "▸ ssh ($PARC_HOTE:$1)"
   # Ce serveur REFUSE la méthode « password » : seul le repli peut aboutir.
   cargo run -q -p avash --example ssh_conformite -- "$1" essai 'essai-mot-de-passe' \
     || echecs=$((echecs+1))

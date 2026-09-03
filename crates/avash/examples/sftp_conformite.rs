@@ -5,6 +5,9 @@
 //! parle à un OpenSSH véritable, dont le sous-système SFTP n'est pas le nôtre.
 //!
 //! Usage : cargo run -p avash --example `sftp_conformite` -- <port> <user> <mdp>
+//!
+//! L'hôte vient de `PARC_HOTE` (127.0.0.1 par défaut ; « docker » sur GitLab,
+//! où le parc tourne dans un démon à part).
 use std::process::ExitCode;
 
 #[tokio::main]
@@ -41,7 +44,8 @@ async fn main() -> ExitCode {
 }
 
 async fn eprouver(auth: &avash::ssh::ClientAuth, port: u16) -> anyhow::Result<usize> {
-    let s = avash::ssh::AvashSession::connect("127.0.0.1", port, auth).await?;
+    let hote = std::env::var("PARC_HOTE").unwrap_or_else(|_| "127.0.0.1".to_owned());
+    let s = avash::ssh::AvashSession::connect(&hote, port, auth).await?;
     let h = avash::sftp::SftpHandle::open(s).await?;
 
     // Un contenu qui n'est ni vide ni purement ASCII : les deux cas où un

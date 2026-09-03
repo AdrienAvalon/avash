@@ -34,7 +34,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   contenant la ligne de dpkg « Creating config file /etc/ssh/sshd_config »,
   et le runner abandonnait. Le déclencheur a été retrouvé en bissectant la
   sortie du conteneur contre le pare-feu ; le job installe désormais ses
-  paquets en silence. Ce même root a fait tomber le test qui
+  paquets en silence. La conformité RDP, elle, parle au parc par une
+  variable `PARC_HOTE` : sur GitLab le parc tourne dans un démon
+  docker-in-docker à part, et les scripts n'attendaient que `127.0.0.1`.
+  Ce même root a fait tomber le test qui
   retire les droits d'un `known_hosts` : il lit un fichier `0o000` sans
   broncher, le test constate désormais que les droits sont appliqués avant
   d'exiger une erreur.

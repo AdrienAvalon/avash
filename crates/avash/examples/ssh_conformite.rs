@@ -7,6 +7,9 @@
 //! qui l'a signalé, pas les tests.
 //!
 //! Usage : cargo run -p avash --example `ssh_conformite` -- <port> <user> <mdp>
+//!
+//! L'hôte vient de `PARC_HOTE` (127.0.0.1 par défaut ; « docker » sur GitLab,
+//! où le parc tourne dans un démon à part).
 use std::process::ExitCode;
 
 #[tokio::main]
@@ -28,7 +31,8 @@ async fn main() -> ExitCode {
         key_path: None,
         password: Some(mdp),
     };
-    let r = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth).await;
+    let hote = std::env::var("PARC_HOTE").unwrap_or_else(|_| "127.0.0.1".to_owned());
+    let r = avash::ssh::AvashSession::connect(&hote, port, &auth).await;
     std::fs::remove_dir_all(&bac).ok();
 
     match r {

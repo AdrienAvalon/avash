@@ -19,6 +19,14 @@ PORT_SSH=2222
 # podman en local, docker sur les serveurs d'intégration : on prend ce qui est là
 # plutôt que d'imposer l'un des deux.
 MOTEUR="${MOTEUR:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
+# Où joindre le parc. Sur un poste, le démon est local et les conteneurs
+# publient sur la boucle locale. Sur GitLab, le démon est un service à part
+# (docker-in-docker, joignable sous le nom « docker ») : ses conteneurs
+# doivent publier sur toutes ses interfaces, et c'est lui qu'on interroge —
+# le premier passage réel attendait 127.0.0.1:3390 et n'y trouvait rien.
+# Les contrôles de conformite.sh lisent la même variable.
+PARC_HOTE="${PARC_HOTE:-127.0.0.1}"
+if [ "$PARC_HOTE" = "127.0.0.1" ]; then LIAISON="127.0.0.1"; else LIAISON="0.0.0.0"; fi
 
 demarrer() { # nom  port_hote  [port_interne]
   local nom="avash-parc-$1" port="$2" interne="${3:-3389}" cf="tests-parc/Containerfile.$1"
@@ -29,16 +37,16 @@ demarrer() { # nom  port_hote  [port_interne]
     $MOTEUR build -q -t "$nom" -f "$cf" tests-parc >/dev/null
   fi
   $MOTEUR rm -f "$nom" >/dev/null 2>&1 || true
-  $MOTEUR run -d --name "$nom" -p "127.0.0.1:$port:$interne" "$nom" >/dev/null
-  echo "  $nom écoute sur 127.0.0.1:$port"
+  $MOTEUR run -d --name "$nom" -p "$LIAISON:$port:$interne" "$nom" >/dev/null
+  echo "  $nom écoute sur $PARC_HOTE:$port"
 }
 
 attendre() { # port
   for _ in $(seq 1 60); do
-    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3<&-; return 0; }
+    (exec 3<>"/dev/tcp/$PARC_HOTE/$1") 2>/dev/null && { exec 3<&-; return 0; }
     sleep 1
   done
-  echo "  ✗ rien n'écoute sur $1" >&2; return 1
+  echo "  ✗ rien n'écoute sur $PARC_HOTE:$1" >&2; return 1
 }
 
 case "${1:-status}" in

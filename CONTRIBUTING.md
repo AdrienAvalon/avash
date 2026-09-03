@@ -315,6 +315,21 @@ Le jeton d'inscription se prend dans **Paramètres → CI/CD → Runners** du pr
 et `project_id`. Il ne se colle dans aucun fichier suivi : `register` l'écrit
 lui-même dans `config.toml`.
 
+**Un travail qui meurt sans message.** GitLab est derrière le pare-feu
+applicatif de Cloudflare, qui inspecte chaque envoi de journal du runner. Une
+ligne d'allure suspecte à ses yeux (un chemin système comme
+`/etc/ssh/sshd_config`, `/etc/passwd`…) lui fait rejeter l'envoi en 403 ; le
+runner annule alors le travail, que GitLab marque échoué avec la raison
+`unknown_failure`, et la trace s'arrête net juste avant la ligne fautive. Pour
+voir ce qui a réellement été imprimé, brancher `sudo docker logs -f` sur le
+conteneur `runner-…-build` pendant que le travail tourne ; pour identifier la
+ligne, envoyer les morceaux du journal au pare-feu (`curl -X PATCH
+--data-binary @morceau https://gitlab.avalon-network.com/api/v4/jobs/1/trace`
+répond en JSON quand le morceau passe, en HTML quand Cloudflare le bloque).
+Le remède est de faire taire la commande fautive (voir l'installation
+d'`openssh-server` dans `.gitlab-ci.yml`) ou, mieux, d'exempter
+`/api/v4/jobs/*/trace` des règles du pare-feu.
+
 ## Style de code
 
 - **Commentaires en français.** Le code, les commentaires et les messages

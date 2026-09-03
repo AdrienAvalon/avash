@@ -5,6 +5,11 @@
 # un dépôt de sauvegarde, pas un garde-fou. Deux dépôts, une seule chaîne qui
 # contrôle, cela veut dire qu'une régression pouvait y dormir.
 #
+# Une seule étape de GitHub manque ici, à dessein : la régression visuelle
+# (e2e/specs/visuel.spec.js), dont les références sont des captures
+# d'ubuntu-latest. Dans un conteneur Debian les polices ne rendent pas pareil
+# et la comparaison, à 0,5 % de pixels près, ne dirait rien.
+#
 # Elle tourne sur l'exécuteur du poste du mainteneur (Docker privilégié, voir
 # CONTRIBUTING.md, section « Exécuteur GitLab ») : poste éteint, les travaux
 # attendent et reprennent au démarrage suivant.
@@ -175,6 +180,10 @@ conformite:
   variables:
     DOCKER_HOST: "tcp://docker:2375"
     DOCKER_TLS_CERTDIR: ""
+    # Le parc tourne dans le démon du service « docker », pas ici : c'est lui
+    # que les contrôles joignent (voir scripts/parc-rdp.sh). Premier passage
+    # réel : le script attendait 127.0.0.1:3390 et n'y trouvait rien.
+    PARC_HOTE: "docker"
   before_script:
     - apk add --no-cache bash python3 py3-numpy py3-pillow py3-websockets curl build-base
     - curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal

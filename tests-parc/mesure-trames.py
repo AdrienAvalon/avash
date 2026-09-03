@@ -17,8 +17,12 @@ Sortie : « trames rectangles octets ». Code 1 si rien n'a été reçu.
 Dépend de python-websockets.
 
 Usage : mesure-trames.py <port RDP> <secondes>
+Le serveur RDP est joint à PARC_HOTE (127.0.0.1 par défaut ; « docker » sur
+GitLab, où le parc tourne dans un démon à part). Le processus, lui, est
+toujours local.
 """
 import asyncio
+import os
 import subprocess
 import sys
 import time
@@ -60,7 +64,8 @@ async def mesurer(port, token, secondes):
 async def main():
     port_rdp, secondes = sys.argv[1], float(sys.argv[2])
     p = subprocess.Popen(
-        ["rdp-sidecar/target/release/avash-rdp", "--host", "127.0.0.1", "--port", port_rdp,
+        ["rdp-sidecar/target/release/avash-rdp", "--host", os.environ.get("PARC_HOTE", "127.0.0.1"),
+         "--port", port_rdp,
          "-u", "essai", "-p", "essai-mot-de-passe", "--sans-nla",
          "--width", "1280", "--height", "800"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
