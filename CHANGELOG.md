@@ -7,6 +7,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Un répertoire existant garde ses droits.** `ecrire_atomiquement`
+  resserrait à 0700 le répertoire parent de chaque fichier écrit, même quand
+  il existait déjà : un export déposé dans `~/Documents` rendait `~/Documents`
+  privé, sans un mot. Vu de la pire façon quand la suite de tests, lancée en
+  root sur le poste du mainteneur, a passé `/tmp` en 0700 par les cas qui y
+  écrivent directement, et privé tout le poste de son répertoire temporaire.
+  Ne sont désormais resserrés que les répertoires d'Avash (`~/.ssh`,
+  `~/.config/avash` et ses sous-répertoires) et ceux que l'écriture crée ;
+  deux tests fixent les deux comportements (147 tests dans le cœur, 871 au
+  total).
 - **Le miroir GitLab vérifie enfin.** Un exécuteur est enregistré sur le poste
   du mainteneur (Docker privilégié, deux travaux à la fois) : la chaîne de
   `.gitlab-ci.yml`, écrite en 0.4.0, tourne pour la première fois — et ce
@@ -18,7 +28,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   GitHub, force HTTP/1.1 pour ce clone, et met en cache les outils compilés
   (`tauri-driver`, `cargo-audit`, `cargo-deny`). Le job bout en bout, rejoué
   pièce par pièce dans un conteneur nu, crée aussi `/run/sshd` : lancé par
-  root, le `sshd` du harnais l'exige.
+  root, le `sshd` du harnais l'exige. Ce même root a fait tomber le test qui
+  retire les droits d'un `known_hosts` : il lit un fichier `0o000` sans
+  broncher, le test constate désormais que les droits sont appliqués avant
+  d'exiger une erreur.
   Le miroir, qui avait cinquante commits de retard, est rattrapé, et son
   jeton rejoint celui de GitHub dans les secrets chiffrés du poste.
   `CONTRIBUTING.md` dit comment déclarer un autre exécuteur.

@@ -1124,8 +1124,17 @@ mod tests_known_hosts_illisible {
         let p = dir.dir().join("known_hosts");
         std::fs::write(&p, "srv ssh-ed25519 AAAA\n").unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Régression vue en CI GitLab : dans le conteneur de l'exécuteur, les
+        // tests tournent en root, qui ouvre un fichier 0o000 sans broncher
+        // (CAP_DAC_OVERRIDE). Le cas n'existe pas pour lui : on le constate
+        // plutôt que d'exiger une erreur que le noyau ne produira pas.
+        let droits_appliques = std::fs::File::open(&p).is_err();
         let verdict = fichier_present_mais_illisible(&p);
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if !droits_appliques {
+            eprintln!("droits non appliqués (root ?) : cas sans objet ici");
+            return;
+        }
         assert!(verdict, "un known_hosts illisible doit être signalé");
     }
 

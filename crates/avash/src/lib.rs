@@ -782,10 +782,20 @@ pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Re
     static SUITE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
+            // Seul un répertoire que CET appel crée est resserré à 0700. On
+            // resserrait aussi celui qui existait déjà : la suite de tests
+            // lancée en root (2026-09-03), dont plusieurs cas écrivent un
+            // fichier directement sous /tmp, a passé /tmp en 0700 — plus aucun
+            // utilisateur du poste ne pouvait y entrer. Un compte ordinaire
+            // subissait la même chose, en silence, sur tout répertoire à lui
+            // où Avash déposait un fichier : un export dans ~/Documents rendait
+            // ~/Documents privé.
+            #[cfg(unix)]
+            let existait = dir.exists();
             std::fs::create_dir_all(dir)
                 .map_err(|e| anyhow::anyhow!("Création de {} : {e}", dir.display()))?;
             #[cfg(unix)]
-            {
+            if !existait {
                 use std::os::unix::fs::PermissionsExt;
                 let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
             }
@@ -865,12 +875,33 @@ pub fn restreindre_au_proprietaire(path: &std::path::Path) {
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        // Le répertoire, lui, n'est resserré que s'il est à Avash. On
+        // resserrait le parent de TOUT fichier écrit : un export déposé dans
+        // ~/Documents rendait ~/Documents privé sans un mot, et la suite de
+        // tests lancée en root sur le poste du mainteneur (2026-09-03) a passé
+        // /tmp en 0700 par les cas qui y écrivent directement — plus aucun
+        // utilisateur ne pouvait y entrer.
         if let Some(parent) = path.parent() {
-            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            if est_un_repertoire_d_avash(parent) {
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
         }
     }
     #[cfg(not(unix))]
     let _ = path;
+}
+
+/// `~/.ssh` et `~/.config/avash` (avec ses sous-répertoires, dont les
+/// enregistrements) : les seuls répertoires qu'Avash s'autorise à resserrer,
+/// parce qu'il les tient pour siens. Comparés une fois résolus, pour qu'un
+/// `~/.ssh` en lien symbolique vers un dépôt de dotfiles compte aussi.
+#[cfg(unix)]
+fn est_un_repertoire_d_avash(dir: &std::path::Path) -> bool {
+    let reel = |p: std::path::PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
+    let dir = reel(dir.to_path_buf());
+    let ssh = repertoire_personnel().map(|h| reel(h.join(".ssh")));
+    let config = repertoire_configuration().map(|c| reel(c.join("avash")));
+    ssh.is_some_and(|s| s == dir) || config.is_some_and(|c| dir.starts_with(c))
 }
 
 fn validate_config_value(label: &str, value: &str) -> anyhow::Result<()> {
@@ -988,6 +1019,45 @@ mod tests_ecriture_atomique {
                 .permissions()
                 .mode();
             assert_eq!(mode & 0o077, 0, "répertoire ouvert : {mode:o}");
+        }
+    }
+
+    /// Un répertoire qui existait déjà garde ses droits : on le resserrait à
+    /// 0700 comme s'il venait d'être créé. Vu le 2026-09-03 quand la suite,
+    /// lancée en root, a passé /tmp en 0700 par les cas qui y écrivent
+    /// directement ; un compte ordinaire subissait la même chose sur ses
+    /// propres répertoires.
+    #[test]
+    #[cfg(unix)]
+    fn un_repertoire_existant_garde_ses_droits() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = temp_home();
+        let partage = home.dir().join("partage");
+        std::fs::create_dir(&partage).unwrap();
+        std::fs::set_permissions(&partage, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ecrire_atomiquement(&partage.join("export.yaml"), b"x").unwrap();
+        let mode = std::fs::metadata(&partage).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "répertoire existant resserré : {mode:o}");
+    }
+
+    /// Les répertoires d'Avash, eux, sont resserrés même s'ils existaient
+    /// déjà : `~/.config/avash` et `~/.ssh` naissaient avec l'umask, souvent
+    /// lisibles par tous, et c'est ce que le correctif précédent ne doit pas
+    /// défaire.
+    #[test]
+    #[cfg(unix)]
+    fn les_repertoires_d_avash_sont_resserres_meme_existants() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = temp_home();
+        let ouverts = std::fs::Permissions::from_mode(0o755);
+        let config = crate::repertoire_configuration().unwrap().join("avash");
+        let ssh = home.dir().join(".ssh");
+        for (dir, fichier) in [(&config, "folders.yaml"), (&ssh, "config")] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::set_permissions(dir, ouverts.clone()).unwrap();
+            ecrire_atomiquement(&dir.join(fichier), b"x").unwrap();
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{} non resserré : {mode:o}", dir.display());
         }
     }
 
