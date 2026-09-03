@@ -369,8 +369,12 @@ RUSTSEC-2024-0411 à 0418) que Tauri embarque sous Linux — pas des failles, et
 pas un choix qui nous appartient : le correctif viendra avec le passage de
 Tauri à GTK 4. `cargo deny` les connaît (« unmaintained = workspace » ne bloque
 que nos dépendances directes) et l'alerte reste ouverte à dessein plutôt que
-masquée. Ses autres constats — revue de code, protection de branche, badge de
-bonnes pratiques — relèvent des réglages du dépôt, pas du code.
+masquée. Ses autres constats relèvent des réglages du dépôt, pas du code. La
+branche `main` est protégée depuis le 3 septembre 2026, sur GitHub comme sur
+GitLab : ni poussée forcée ni suppression, mainteneur compris, sans exiger de
+PR — un mainteneur seul pousse directement. La revue de code obligatoire et le
+badge de bonnes pratiques supposent l'un un flux par PR, l'autre une
+inscription sur bestpractices.dev : ils restent des choix du mainteneur.
 
 ### Un serveur RDP est une entrée non fiable
 

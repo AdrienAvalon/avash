@@ -15,5 +15,9 @@
   },
   "dependencies": {
     "axe-core": "^4.13.0"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.2",
+    "serialize-javascript": "^7.1.1"
   }
 }

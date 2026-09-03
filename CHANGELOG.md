@@ -7,6 +7,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Trois avis de sécurité de moins dans la suite bout en bout.** Les
+  dépendances de test (WebdriverIO 9) traînaient `deepmerge-ts` 7
+  (épuisement de pile) et `serialize-javascript` 6 (exécution de code par
+  `RegExp`) sans qu'aucune version de WebdriverIO ne les corrige ; deux
+  `overrides` npm imposent les versions corrigées, la suite tourne pareil.
+  Restent treize avis, tous par `extract-zip`, sans correctif amont : c'est
+  du code de test, jamais embarqué, et l'audit de `e2e/` ne bloque que sur
+  « critique » pour cette raison.
+- **La branche `main` est protégée**, sur GitHub comme sur GitLab : ni
+  poussée forcée ni suppression, mainteneur compris, sans exiger de PR.
 - **Un dossier créé par la modale s'attend plus longtemps, et l'échec dit ce
   qu'il voyait.** Sur l'exécuteur Windows, le scénario « + dossier » a une
   fois attendu huit secondes une ligne qui n'est pas venue, sans qu'on sache

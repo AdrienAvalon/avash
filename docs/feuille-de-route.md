@@ -369,6 +369,14 @@ réel avec un serveur RDP**. Trois conséquences pratiques :
 Et une constatation d'ordre différent : **GitLab ne vérifiait rien**. Le dépôt y
 était poussé à chaque fois, mais seule la chaîne GitHub contrôlait quoi que ce
 soit. Un miroir sans garde-fou est un endroit où une régression peut dormir.
+Réglé le 3 septembre 2026 : un exécuteur tourne sur le poste du mainteneur et
+la chaîne GitLab est verte de bout en bout, conformité RDP comprise. Son
+premier passage réel a coûté douze commits : une image sans `rustfmt`, un
+Node trop vieux, un pare-feu qui rejetait une ligne de journal, un parc RDP
+injoignable en docker-in-docker… et, au passage, un vrai défaut du cœur
+(l'écriture atomique resserrait les droits d'un répertoire existant) que
+seul un exécuteur en root pouvait révéler. Le miroir vérifie ; le détail est
+dans `CHANGELOG.md` et `CONTRIBUTING.md`.
 
 ## Franchi : le pipeline graphique (EGFX) — version 0.5.0
 

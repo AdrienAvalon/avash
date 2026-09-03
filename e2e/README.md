@@ -119,6 +119,18 @@ Linux.
   socket écoute, pas que le serveur est *revenu* l'écouter. Il traite ses
   clients l'un après l'autre, et notre sonde en est un.
 
+## Dépendances : les `overrides` de `package.json`
+
+WebdriverIO 9 tire `deepmerge-ts` 7 (épuisement de pile sur un graphe
+récursif) et, par mocha, `serialize-javascript` 6 (exécution de code par
+`RegExp.flags`), et aucune de ses versions ne les corrige : `npm audit fix` ne
+propose qu'une rétrogradation en 7.x. Les deux `overrides` imposent les
+versions corrigées ; la suite tourne pareil. Les avis restants viennent tous
+d'`extract-zip`, sans correctif amont : c'est du code de test, jamais
+embarqué, et `npm audit` n'y bloque que sur « critique » pour cette raison.
+Si une montée de WebdriverIO corrige l'un des deux, retirer l'`override`
+correspondant.
+
 ## Audit d'accessibilité (`axe.spec.js`)
 
 `axe-core` est injecté dans l'application réelle et audite la vue principale, le
