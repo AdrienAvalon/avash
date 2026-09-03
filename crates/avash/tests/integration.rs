@@ -703,16 +703,48 @@ fn virtual_home() -> std::path::PathBuf {
     home
 }
 
-/// Clé éphémère pour l'auth.
-fn temp_key_path() -> std::path::PathBuf {
+/// Clé éphémère pour l'auth, générée UNE fois par processus.
+///
+/// Elle l'était « si le fichier n'existe pas », depuis chaque test : deux
+/// tests en parallèle passaient tous deux ce contrôle, ou le second voyait
+/// le fichier à moitié écrit et lisait une clé tronquée — « Could not read
+/// key », six tests rouges d'un coup, régression vue en CI GitHub le
+/// 2026-09-03 sur un commit qui ne touchait ni au cœur ni à ces tests. Le
+/// `LazyLock` fait attendre tout le monde jusqu'à ce que la clé soit là, et
+/// le renommage garantit qu'on ne voit jamais un fichier partiel.
+static CLE_TEST: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock::new(|| {
     let path = virtual_home().join("id_ed25519");
-    if !path.exists() {
-        let key = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
-        let mut buf = Vec::new();
-        russh::keys::encode_pkcs8_pem(&key, &mut buf).unwrap();
-        std::fs::write(&path, buf).unwrap();
-    }
+    let key = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
+    let mut buf = Vec::new();
+    russh::keys::encode_pkcs8_pem(&key, &mut buf).unwrap();
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, buf).unwrap();
+    std::fs::rename(&tmp, &path).unwrap();
     path
+});
+
+fn temp_key_path() -> std::path::PathBuf {
+    CLE_TEST.clone()
+}
+
+/// Huit fils demandent la clé en même temps : un seul chemin, une clé
+/// lisible. Avec l'ancien « si le fichier n'existe pas », l'un d'eux lisait
+/// un fichier en cours d'écriture.
+#[test]
+fn la_cle_de_test_est_generee_une_fois_meme_en_parallele() {
+    let chemins: Vec<_> = (0..8)
+        .map(|_| std::thread::spawn(temp_key_path))
+        .map(|h| h.join().unwrap())
+        .collect();
+    assert!(
+        chemins.iter().all(|c| c == &chemins[0]),
+        "chemins : {chemins:?}"
+    );
+    let pem = std::fs::read_to_string(&chemins[0]).unwrap();
+    assert!(
+        russh::keys::decode_secret_key(&pem, None).is_ok(),
+        "la clé de test doit se relire"
+    );
 }
 
 /// `HOME` n'est posé qu'une fois, et toujours sur la même valeur.

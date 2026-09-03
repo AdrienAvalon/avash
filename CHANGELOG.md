@@ -7,6 +7,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **La clé de test SSH n'est plus une course.** Le harnais d'intégration
+  générait sa clé « si le fichier n'existe pas », depuis chaque test : deux
+  tests en parallèle passaient tous deux ce contrôle, ou le second lisait un
+  fichier à moitié écrit, et six tests tombaient d'un coup sur « Could not
+  read key » (vu en CI GitHub sur un commit qui ne touchait ni au cœur ni à
+  ces tests). La clé est désormais générée une fois par processus et écrite
+  par renommage ; un test à huit fils fixe le comportement (34 tests
+  d'intégration, 872 au total).
 - **Un répertoire existant garde ses droits.** `ecrire_atomiquement`
   resserrait à 0700 le répertoire parent de chaque fichier écrit, même quand
   il existait déjà : un export déposé dans `~/Documents` rendait `~/Documents`
