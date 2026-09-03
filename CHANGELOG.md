@@ -28,7 +28,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   GitHub, force HTTP/1.1 pour ce clone, et met en cache les outils compilés
   (`tauri-driver`, `cargo-audit`, `cargo-deny`). Le job bout en bout, rejoué
   pièce par pièce dans un conteneur nu, crée aussi `/run/sshd` : lancé par
-  root, le `sshd` du harnais l'exige. Ce même root a fait tomber le test qui
+  root, le `sshd` du harnais l'exige. Ce job est ensuite mort trois fois au
+  même endroit, sans message (`unknown_failure`) : GitLab est derrière le
+  pare-feu applicatif de Cloudflare, qui rejetait le morceau de journal
+  contenant la ligne de dpkg « Creating config file /etc/ssh/sshd_config »,
+  et le runner abandonnait. Le déclencheur a été retrouvé en bissectant la
+  sortie du conteneur contre le pare-feu ; le job installe désormais ses
+  paquets en silence. Ce même root a fait tomber le test qui
   retire les droits d'un `known_hosts` : il lit un fichier `0o000` sans
   broncher, le test constate désormais que les droits sont appliqués avant
   d'exiger une erreur.

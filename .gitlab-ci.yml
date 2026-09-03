@@ -31,6 +31,11 @@ default:
       - ".cargo/.crates.toml"
       - ".cargo/.crates2.json"
       - "target"
+      # Les deux paquets hors espace de travail ont leur propre cible : sans
+      # elles, le processus RDP se recompilait de zéro (plus de quatre
+      # minutes) dans trois jobs à chaque passage.
+      - "rdp-sidecar/target"
+      - "test-rdp-server/target"
   before_script:
     - apt-get update -qq
     - apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev
@@ -106,7 +111,12 @@ dependances:
   before_script:
     - git config --global http.version HTTP/1.1
   script:
-    - cargo install cargo-audit cargo-deny --locked
+    # N'installer que ce qui manque : le cache rend les binaires mais son
+    # registre (.crates.toml) n'y entre qu'après un succès, et sans registre
+    # cargo install refuse d'écraser (« binary already exists ») — le job
+    # échouait donc à chaque passage suivant, et le cache n'était jamais
+    # complété. Vu aux deuxième et troisième passages.
+    - for outil in cargo-audit cargo-deny; do test -x "$CARGO_HOME/bin/$outil" || cargo install "$outil" --locked; done
     - cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0429
     - cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
     - cargo deny check advisories licenses bans sources
@@ -119,7 +129,8 @@ bout-en-bout:
   needs: ["front"]
   script:
     - apt-get install -y -qq webkit2gtk-driver xvfb
-    - cargo install tauri-driver --locked
+    # Même garde que pour cargo-audit : le binaire en cache suffit.
+    - test -x "$CARGO_HOME/bin/tauri-driver" || cargo install tauri-driver --locked
     # CARGO_HOME est redirigé dans le projet (cache) : le harnais lance
     # `tauri-driver` par son nom, il doit le trouver sur le PATH.
     - export PATH="$CARGO_HOME/bin:$PATH"
@@ -129,7 +140,14 @@ bout-en-bout:
     - cargo build --release -p avash-ui
     # Serveur RDP de test et son certificat auto-signé (non versionné) : les
     # scénarios à serveurs locaux tournent ici aussi, comme sur GitHub.
-    - apt-get install -y -qq openssh-server openssl
+    # Installation muette : GitLab est derrière le pare-feu applicatif de
+    # Cloudflare, qui a rejeté (403) le morceau de journal contenant la ligne
+    # de dpkg « Creating config file /etc/ssh/sshd_config with new version »
+    # — un chemin système sensible à ses yeux. Le runner annule alors le job,
+    # que GitLab marque « unknown_failure » sans un mot : trois passages
+    # perdus au même endroit, le déclencheur retrouvé en bissectant la sortie
+    # du conteneur contre le pare-feu. Les erreurs restent sur stderr.
+    - apt-get install -y -qq openssh-server openssl >/dev/null
     # Ici le harnais tourne en root (conteneur), et sshd lancé par root exige
     # le répertoire de séparation de privilèges, que le paquet ne crée pas sans
     # systemd : « Missing privilege separation directory: /run/sshd ». Sur
