@@ -178,7 +178,10 @@ conformite:
   before_script:
     - apk add --no-cache bash python3 py3-numpy py3-pillow py3-websockets curl build-base
     - curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-    - . "$HOME/.cargo/env"
+    # CARGO_HOME est redirigé dans le projet pour tout le pipeline (cache) :
+    # rustup y écrit son fichier env, pas dans /root/.cargo — premier passage
+    # réel de ce job, il ne trouvait pas /root/.cargo/env.
+    - . "$CARGO_HOME/env"
   script:
     - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
     - ./scripts/parc-rdp.sh up tous
