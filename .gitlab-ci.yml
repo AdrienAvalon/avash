@@ -10,11 +10,16 @@
 # d'ubuntu-latest. Dans un conteneur Debian les polices ne rendent pas pareil
 # et la comparaison, à 0,5 % de pixels près, ne dirait rien.
 #
-# Elle tourne sur l'exécuteur du poste du mainteneur (Docker privilégié, voir
-# CONTRIBUTING.md, section « Exécuteur GitLab ») : poste éteint, les travaux
-# attendent et reprennent au démarrage suivant.
+# Elle tourne sur l'exécuteur du poste du mainteneur (Docker privilégié, socket
+# du démon monté, voir CONTRIBUTING.md, section « Exécuteur GitLab ») : poste
+# éteint, les travaux attendent et reprennent au démarrage suivant.
+#
+# Les jobs tournent dans une image de base (ci/Dockerfile) construite sur le
+# démon de l'hôte par le premier job, jamais publiée : les paquets, Node, les
+# composants Rust et les outils cargo y sont figés, au lieu d'être réinstallés
+# par chaque job à chaque passage.
 
-stages: [verifier, eprouver]
+stages: [preparer, verifier, eprouver]
 
 # Pas de pipeline sur un tag : il pointe sur un commit que la branche vient de
 # vérifier, et la publication (binaires, manifeste signé) est le travail du
@@ -28,47 +33,58 @@ workflow:
 
 variables:
   CARGO_TERM_COLOR: "always"
+  # Registre cargo et cache npm dans le projet, pour être mis en cache.
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+  IMAGE_CI: "avash-ci:bookworm"
+
+# --- Caches, découpés par usage ------------------------------------------
+# Un seul cache pour tout le monde archivait plusieurs gigaoctets à la fin de
+# CHAQUE job — quatre minutes pour le job front, qui n'en touche pas un octet.
+# Chaque job ne restaure et ne réarchive que ce qu'il utilise, et un job qui ne
+# produit rien de neuf ne réarchive pas (policy: pull). Toute autre référence
+# que main part du cache de main plutôt que de zéro.
+.cache-registre: &cache-registre
+  key: "registre-$CI_COMMIT_REF_SLUG"
+  fallback_keys: ["registre-main-protected", "registre-main"]
+  paths: [".cargo/registry", ".cargo/git", ".cargo/advisory-db", ".cargo/advisory-dbs"]
+.cache-cible: &cache-cible
+  key: "cible-$CI_COMMIT_REF_SLUG"
+  fallback_keys: ["cible-main-protected", "cible-main"]
+  paths: ["target", "test-rdp-server/target"]
+.cache-sidecar: &cache-sidecar
+  key: "sidecar-$CI_COMMIT_REF_SLUG"
+  fallback_keys: ["sidecar-main-protected", "sidecar-main"]
+  paths: ["rdp-sidecar/target"]
+.cache-npm: &cache-npm
+  key: "npm-$CI_COMMIT_REF_SLUG"
+  fallback_keys: ["npm-main-protected", "npm-main"]
+  paths: [".npm"]
 
 default:
-  image: rust:1-bookworm
-  cache:
-    key: "$CI_COMMIT_REF_SLUG"
-    # Une autre référence que main part de son cache plutôt que de zéro : sans
-    # ce repli, le premier passage d'une branche compilait tout à froid
-    # (rust : 19 minutes au lieu de moins de dix).
-    fallback_keys: ["main-protected", "main"]
-    # .cargo/bin aussi : sans lui, tauri-driver, cargo-audit et cargo-deny se
-    # recompilaient à chaque passage. Et avec lui, le registre des paquets
-    # installés (.crates.toml, .crates2.json) : sans ce registre, cargo install
-    # prend les binaires restaurés pour des intrus et refuse de les écraser
-    # (« binary already exists in destination ») — vu au deuxième passage.
-    paths:
-      - ".cargo/registry"
-      - ".cargo/git"
-      - ".cargo/bin"
-      - ".cargo/.crates.toml"
-      - ".cargo/.crates2.json"
-      - "target"
-      # Les deux paquets hors espace de travail ont leur propre cible : sans
-      # elles, le processus RDP se recompilait de zéro (plus de quatre
-      # minutes) dans trois jobs à chaque passage.
-      - "rdp-sidecar/target"
-      - "test-rdp-server/target"
-  before_script:
-    - apt-get update -qq
-    - apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev
-        libayatana-appindicator3-dev librsvg2-dev patchelf
-    # Node 22, comme la chaîne GitHub : bookworm n'en fournit que la 18, sous
-    # le plancher de stylelint et knip (20) — vu au premier passage réel.
-    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    - apt-get install -y -qq nodejs
-    # L'image rust:1 n'embarque ni rustfmt ni clippy — vu au même passage.
-    - rustup component add rustfmt clippy
+  image:
+    name: "$IMAGE_CI"
+    pull_policy: if-not-present
+
+# --- L'image de base, sur le démon de l'hôte -------------------------------
+# Quelques secondes quand rien n'a changé (couches en cache), une dizaine de
+# minutes quand ci/Dockerfile change. La sortie est tue : le pare-feu devant
+# GitLab rejette un journal qui cite le fichier sshd_config par son chemin
+# sous /etc (il a même rejeté ce fichier YAML envoyé à son linter tant que ce
+# commentaire l'écrivait en toutes lettres) ; en cas d'échec, les erreurs sont
+# montrées avec ce chemin désamorcé.
+image-ci:
+  stage: preparer
+  image: docker:27
+  cache: []
+  script:
+    - docker build -q -t "$IMAGE_CI" -f ci/Dockerfile ci >/dev/null 2>/tmp/erreurs || { sed -E 's#/etc/#/etc /#g' /tmp/erreurs; exit 1; }
+    - docker image inspect "$IMAGE_CI" --format 'image {{index .RepoTags 0}}, {{.Size}} octets'
 
 # --- Front d'abord : la compilation de avash-ui exige web/dist ------------
 front:
   stage: verifier
+  cache: [*cache-npm]
   script:
     - ./scripts/guard.sh          # restes de mise au point
     - cd web && npm ci
@@ -87,6 +103,7 @@ front:
 rust:
   stage: verifier
   needs: ["front"]
+  cache: [*cache-registre, *cache-cible, *cache-sidecar]
   script:
     # Le processus RDP est déclaré en ressource embarquée : son binaire doit
     # exister AVANT toute compilation de avash-ui.
@@ -104,10 +121,7 @@ rust:
 # --- Processus RDP : hors espace de travail, donc invisible de --workspace --
 processus-rdp:
   stage: verifier
-  # Ni WebKit ni Node ici : le processus RDP ne dépend d'aucune bibliothèque
-  # système. Seuls les composants de la chaîne Rust manquent à l'image.
-  before_script:
-    - rustup component add rustfmt clippy
+  cache: [*cache-registre, *cache-sidecar]
   script:
     - cd rdp-sidecar
     - cargo fmt --check
@@ -122,20 +136,8 @@ processus-rdp:
 # --- Chaîne d'approvisionnement ------------------------------------------
 dependances:
   stage: verifier
-  # Les deux outils lisent les Cargo.lock : rien à installer sur le système.
-  # cargo-deny clone la base d'avis avec le git de la ligne de commande, et le
-  # git 2.39 de bookworm reçoit un 401 de GitHub sur le POST git-upload-pack
-  # en HTTP/2 (le GET passe ; cargo-audit, en gix, passe) — vu au premier
-  # passage réel, reproduit dans un conteneur nu.
-  before_script:
-    - git config --global http.version HTTP/1.1
+  cache: [*cache-registre]
   script:
-    # N'installer que ce qui manque : le cache rend les binaires mais son
-    # registre (.crates.toml) n'y entre qu'après un succès, et sans registre
-    # cargo install refuse d'écraser (« binary already exists ») — le job
-    # échouait donc à chaque passage suivant, et le cache n'était jamais
-    # complété. Vu aux deuxième et troisième passages.
-    - for outil in cargo-audit cargo-deny; do test -x "$CARGO_HOME/bin/$outil" || cargo install "$outil" --locked; done
     - cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0429
     - cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
     - cargo deny check advisories licenses bans sources
@@ -146,39 +148,21 @@ dependances:
 bout-en-bout:
   stage: eprouver
   needs: ["front"]
+  cache: [*cache-registre, *cache-cible, *cache-sidecar, *cache-npm]
   script:
-    - apt-get install -y -qq webkit2gtk-driver xvfb
-    # Même garde que pour cargo-audit : le binaire en cache suffit.
-    - test -x "$CARGO_HOME/bin/tauri-driver" || cargo install tauri-driver --locked
-    # CARGO_HOME est redirigé dans le projet (cache) : le harnais lance
-    # `tauri-driver` par son nom, il doit le trouver sur le PATH.
-    - export PATH="$CARGO_HOME/bin:$PATH"
     - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
     - mkdir -p crates/avash-ui/binaries
     - cp rdp-sidecar/target/release/avash-rdp crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
     - cargo build --release -p avash-ui
     # Serveur RDP de test et son certificat auto-signé (non versionné) : les
     # scénarios à serveurs locaux tournent ici aussi, comme sur GitHub.
-    # Installation muette : GitLab est derrière le pare-feu applicatif de
-    # Cloudflare, qui a rejeté (403) le morceau de journal contenant la ligne
-    # de dpkg « Creating config file /etc/ssh/sshd_config with new version »
-    # — un chemin système sensible à ses yeux. Le runner annule alors le job,
-    # que GitLab marque « unknown_failure » sans un mot : trois passages
-    # perdus au même endroit, le déclencheur retrouvé en bissectant la sortie
-    # du conteneur contre le pare-feu. Les erreurs restent sur stderr.
-    # libopus-dev et cmake : le serveur RDP de test dépend de libopus_sys, qui
-    # sans Opus système le compile lui-même par CMake — absent de l'image,
-    # d'où « is cmake not installed? » au quatrième passage. Avec la
-    # bibliothèque de Debian, pkg-config la trouve et rien n'est compilé.
-    - apt-get install -y -qq openssh-server openssl libopus-dev cmake >/dev/null
-    # Ici le harnais tourne en root (conteneur), et sshd lancé par root exige
-    # le répertoire de séparation de privilèges, que le paquet ne crée pas sans
-    # systemd : « Missing privilege separation directory: /run/sshd ». Sur
-    # GitHub le harnais est un utilisateur ordinaire et sshd s'en passe.
-    - mkdir -p /run/sshd
     - cargo build --release --manifest-path test-rdp-server/Cargo.toml
     - openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost"
         -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
+    # Ici le harnais tourne en root (conteneur), et sshd lancé par root exige
+    # le répertoire de séparation de privilèges. L'image le crée ; on s'en
+    # assure, /run pouvant être remonté.
+    - mkdir -p /run/sshd
     - cd e2e && npm ci
     - npm audit --audit-level=critical   # code de test seulement : on ne bloque que sur « critique »
     - xvfb-run -a npm test
@@ -187,37 +171,27 @@ bout-en-bout:
 # Les trois défauts RDP de la 0.3.3 — image cisaillée, clavier en QWERTY,
 # connexion suspendue — ont été signalés par l'usage. Aucun n'était visible
 # depuis les tests. Ce travail est le seul qui les aurait vus.
+#
+# Le parc tourne sur le démon Docker de l'hôte (socket monté par l'exécuteur),
+# plus en docker-in-docker : ses trois images, longues à construire, sont
+# construites une fois et gardées. Ses conteneurs vivent sur un réseau Docker
+# dédié, sans publier de port ; le job s'y raccorde et les joint par leur
+# adresse sur ce réseau (voir scripts/parc-rdp.sh). Rien n'écoute sur le
+# réseau du poste.
 conformite:
   stage: eprouver
-  image: docker:27
-  services: ["docker:27-dind"]
-  # Son propre cache : ce job compile en musl (Alpine), et partager la cible
-  # avec les jobs glibc faisait piétiner l'un l'autre — le sidecar se
-  # recompilait de zéro (cinq minutes et demie) à chaque passage.
   cache:
-    key: "alpine-$CI_COMMIT_REF_SLUG"
-    fallback_keys: ["alpine-main-protected", "alpine-main"]
-    paths: [".cargo/registry", ".cargo/git", "rdp-sidecar/target"]
+    - *cache-registre
+    - <<: *cache-sidecar
+      policy: pull   # le job rust vient de construire le même binaire release
   variables:
-    DOCKER_HOST: "tcp://docker:2375"
-    DOCKER_TLS_CERTDIR: ""
-    # Le parc tourne dans le démon du service « docker », pas ici : c'est lui
-    # que les contrôles joignent (voir scripts/parc-rdp.sh). Premier passage
-    # réel : le script attendait 127.0.0.1:3390 et n'y trouvait rien.
-    PARC_HOTE: "docker"
+    PARC_RESEAU: "avash-parc"
     # Un conteneur n'a pas de disposition clavier (ni localectl ni session) :
     # le processus RDP annonçait 0, exactement ce que le contrôle traque. On
     # joue un poste en français, et le contrôle exige la valeur exacte
     # (fr → 0x040C = 1036) — même réglage que la chaîne GitHub.
     XKB_DEFAULT_LAYOUT: "fr"
     DISPOSITION_ATTENDUE: "1036"
-  before_script:
-    - apk add --no-cache bash python3 py3-numpy py3-pillow py3-websockets curl build-base
-    - curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-    # CARGO_HOME est redirigé dans le projet pour tout le pipeline (cache) :
-    # rustup y écrit son fichier env, pas dans /root/.cargo — premier passage
-    # réel de ce job, il ne trouvait pas /root/.cargo/env.
-    - . "$CARGO_HOME/env"
   script:
     - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
     - ./scripts/parc-rdp.sh up tous

@@ -10,9 +10,19 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 - **La chaîne GitLab ne refait plus deux fois le même travail.** Un tag ne
   lance plus de pipeline (celui de la branche vient de vérifier le même
   commit, la publication est l'affaire du workflow Release de GitHub : 38
-  minutes économisées par version) ; une autre référence que `main` part du
-  cache de `main` au lieu de compiler à froid ; et la conformité, qui compile
-  en musl, a son propre cache au lieu de piétiner celui des jobs glibc.
+  minutes économisées par version), et une autre référence que `main` part
+  du cache de `main` au lieu de compiler à froid. Les jobs tournent dans une
+  image de base (`ci/Dockerfile`) construite sur le démon Docker du poste par
+  le premier job du pipeline : paquets, Node 22, rustfmt, clippy, outils
+  cargo et client Docker y sont figés au lieu d'être réinstallés cinq fois
+  par passage. Les caches sont découpés par usage (registre, cibles,
+  sidecar, npm) : un seul cache archivait plusieurs gigaoctets à la fin de
+  chaque job, quatre minutes pour le job front qui n'en touchait rien. La
+  conformité RDP pilote son parc xrdp sur le démon de l'hôte, plus en
+  docker-in-docker : ses trois images sont construites une fois et gardées,
+  ses conteneurs vivent sur un réseau Docker dédié sans rien publier, et le
+  sidecar lui vient déjà compilé du job `rust`. L'exécuteur passe à trois
+  jobs en parallèle.
 
 ## [0.7.0] - 2026-09-03
 

@@ -288,11 +288,28 @@ vérifiait quoi que ce soit : GitLab recevait chaque poussée sans rien contrôl
 et le miroir avait pris cinquante commits de retard. La chaîne équivalente de
 `.gitlab-ci.yml` tourne depuis le 3 septembre 2026 sur un exécuteur enregistré
 sur le poste du mainteneur (`avalon-cachyos`, runner 18 du projet) : Docker
-privilégié — le travail de conformité RDP monte des conteneurs dans le
-conteneur —, image par défaut `rust:1-bookworm`, deux travaux en parallèle. Sa
-configuration vit dans `/etc/gitlab-runner/config.toml` (jeton d'enregistrement
-compris, lisible par personne d'autre), le service est `gitlab-runner.service`.
-Le poste éteint, les travaux attendent ; ils reprennent au démarrage suivant.
+privilégié, socket du démon monté dans les travaux, trois travaux en parallèle.
+Sa configuration vit dans `/etc/gitlab-runner/config.toml` (jeton
+d'enregistrement compris, lisible par personne d'autre), le service est
+`gitlab-runner.service`. Le poste éteint, les travaux attendent ; ils
+reprennent au démarrage suivant.
+
+Les travaux tournent dans une image de base, `avash-ci:bookworm`, décrite par
+`ci/Dockerfile` : paquets système, Node 22, rustfmt, clippy, les outils cargo et
+le client Docker y sont figés, au lieu d'être réinstallés par chaque travail à
+chaque passage. Elle n'est publiée nulle part (l'instance n'a pas de registre
+de conteneurs, et le pare-feu devant elle limite la taille des envois) : le
+premier travail de chaque pipeline, `image-ci`, la construit sur le démon
+Docker de l'hôte — quelques secondes quand rien n'a changé — et les autres la
+prennent sur place (`pull_policy: if-not-present`). Le travail de conformité
+pilote le parc xrdp sur ce même démon : les trois images du parc sont
+construites une fois et gardées, et leurs conteneurs vivent sur un réseau
+Docker dédié, sans publier de port, auquel le travail se raccorde ; rien
+n'écoute sur le réseau du poste.
+
+Ce montage donne à chaque travail la main sur le démon Docker de l'hôte, ce
+qui vaut la racine : c'est déjà le cas d'un exécuteur privilégié, et le code
+qui y tourne est celui du dépôt. Ne pas y enregistrer un exécuteur partagé.
 
 Pour en déclarer un autre :
 
@@ -305,9 +322,16 @@ sudo gitlab-runner register \
   --url https://gitlab.avalon-network.com \
   --executor docker \
   --docker-image rust:1-bookworm \
-  --docker-privileged            # requis par le travail de conformité RDP (dind)
+  --docker-privileged \
+  --docker-volumes /cache \
+  --docker-volumes /var/run/docker.sock:/var/run/docker.sock
+# Puis, dans /etc/gitlab-runner/config.toml : concurrent = 3 en tête, et
+# allowed_pull_policies = ["always", "if-not-present"] sous [runners.docker].
 sudo systemctl enable --now gitlab-runner
 ```
+
+Le premier pipeline construit l'image de base sur ce nouvel hôte ; rien
+d'autre à préparer.
 
 Le jeton d'inscription se prend dans **Paramètres → CI/CD → Runners** du projet
 (« Nouveau runner de projet »), ou par l'API avec un jeton personnel portant

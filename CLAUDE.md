@@ -24,6 +24,7 @@ ce qui n'est pas ici n'existe pas pour eux.
 | `test-rdp-server/` | serveur RDP de test pour la suite bout en bout |
 | `e2e/` | suite WebdriverIO sur la vraie application (Linux : tauri-driver + WebKitWebDriver ; Windows et macOS : serveur WebDriver embarqué) |
 | `fuzz/` | cibles cargo-fuzz (nightly), hors espace de travail |
+| `ci/` | `Dockerfile` de l'image de base de la chaîne GitLab, construite sur le démon Docker du runner par le premier job de chaque pipeline |
 | `docs/` | `architecture.md`, `feuille-de-route.md` ; `CHANGELOG.md`, `SECURITY.md`, `CONTRIBUTING.md`, `RELEASE.md` à la racine |
 | `secrets/` | fichiers chiffrés sops (jeton GitHub, aide git-credential) ; **jamais en clair, jamais commités déchiffrés** |
 

@@ -25,11 +25,17 @@ vivaient : le dialogue réel avec un serveur RDP.
     scripts/conformite.sh tous         # les cinq contrôles
     scripts/parc-rdp.sh down           # nettoie
 
-Les deux scripts joignent le parc à `PARC_HOTE` (`127.0.0.1` par défaut).
-Quand le démon de conteneurs est ailleurs, comme sur GitLab où il est un
-service docker-in-docker joignable sous le nom `docker`, poser
-`PARC_HOTE=docker` : les conteneurs publient alors sur toutes les interfaces
-de ce démon et chaque contrôle s'y connecte.
+Sur un poste, le parc publie ses ports sur `PARC_HOTE` (`127.0.0.1` par
+défaut ; une autre adresse IPv4 sert aussi de liaison, un nom d'hôte fait
+publier sur toutes les interfaces du démon). Quand les scripts tournent
+eux-mêmes dans un conteneur qui pilote le démon de l'hôte par son socket,
+comme sur GitLab, poser plutôt `PARC_RESEAU=<nom>` : les conteneurs du parc
+tournent sur ce réseau Docker dédié sans publier de port, le script raccorde
+le conteneur appelant à ce réseau et chaque contrôle joint les serveurs par
+leur adresse interne (`scripts/parc-rdp.sh cible <nom>` la donne). Rien
+n'écoute sur le réseau du poste. Depuis un conteneur, un port publié sur le
+pont Docker de l'hôte ne répond pas : les règles de Docker ne traduisent pas
+le trafic qui vient du pont lui-même.
 
 Le contrôle de la disposition clavier vérifie que le processus RDP annonce
 celle du poste. Sur une machine sans session ni `localectl` (un conteneur),

@@ -20,25 +20,29 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RDP="rdp-sidecar/target/release/avash-rdp"
 COMPTE="essai"; MDP="essai-mot-de-passe"
 DELAI=45
-# Même variable que parc-rdp.sh : 127.0.0.1 sur un poste, « docker » sur
-# GitLab où le parc tourne dans un démon à part. Exportée pour le mesureur de
-# trames (Python) et les deux exemples Rust, qui la lisent eux-mêmes.
-export PARC_HOTE="${PARC_HOTE:-127.0.0.1}"
+# Où joindre chaque serveur : parc-rdp.sh le sait (« cible <nom> » rend
+# « hôte port »), qu'il publie sur la boucle locale du poste ou, sur GitLab,
+# qu'il tourne sur un réseau Docker dédié auquel le job s'est raccordé. L'hôte
+# est passé au mesureur de trames (Python) et aux deux exemples Rust par
+# PARC_HOTE, qu'ils lisent eux-mêmes.
+cible() { scripts/parc-rdp.sh cible "$1"; }
 SORTIE="$(mktemp -d)"; trap 'rm -rf "$SORTIE"' EXIT
 echecs=0
 
 vert()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 rouge() { printf '  \033[31m✗\033[0m %s\n' "$1"; echecs=$((echecs+1)); }
 
-eprouver() { # nom  port
-  local nom="$1" port="$2" img="$SORTIE/$1.png" journal="$SORTIE/$1.log"
-  echo "▸ $nom ($PARC_HOTE:$port)"
+eprouver() { # nom
+  local nom="$1" hote port img="$SORTIE/$1.png" journal="$SORTIE/$1.log"
+  read -r hote port <<<"$(cible "$nom")"
+  export PARC_HOTE="$hote"
+  echo "▸ $nom ($hote:$port)"
 
   # 1. La connexion aboutit, et on mesure en combien de temps.
   local t0 t1
   t0=$(date +%s%N)
   if AVASH_RDP_TRACE=ironrdp_connector=debug timeout "$DELAI" "$RDP" \
-       --host "$PARC_HOTE" --port "$port" -u "$COMPTE" -p "$MDP" --sans-nla \
+       --host "$hote" --port "$port" -u "$COMPTE" -p "$MDP" --sans-nla \
        --width 1024 --height 768 --shot "$img" >"$journal" 2>&1; then
     t1=$(date +%s%N)
     vert "connexion aboutie en $(( (t1 - t0) / 1000000 )) ms"
@@ -105,21 +109,24 @@ eprouver() { # nom  port
   fi
 }
 
-eprouver_ssh() { # port
-  echo "▸ ssh ($PARC_HOTE:$1)"
+eprouver_ssh() {
+  local hote port
+  read -r hote port <<<"$(cible ssh)"
+  export PARC_HOTE="$hote"
+  echo "▸ ssh ($hote:$port)"
   # Ce serveur REFUSE la méthode « password » : seul le repli peut aboutir.
-  cargo run -q -p avash --example ssh_conformite -- "$1" essai 'essai-mot-de-passe' \
+  cargo run -q -p avash --example ssh_conformite -- "$port" essai 'essai-mot-de-passe' \
     || echecs=$((echecs+1))
   # SFTP contre un VRAI OpenSSH : les tests d'intégration parlent à un serveur
   # monté en mémoire, c'est-à-dire à notre propre compréhension du protocole.
-  cargo run -q -p avash --example sftp_conformite -- "$1" essai 'essai-mot-de-passe' \
+  cargo run -q -p avash --example sftp_conformite -- "$port" essai 'essai-mot-de-passe' \
     || echecs=$((echecs+1))
 }
 
 quoi="${1:-xfce}"
-[ "$quoi" = "xfce"  ] || [ "$quoi" = "tous" ] && eprouver xfce  3390
-[ "$quoi" = "gnome" ] || [ "$quoi" = "tous" ] && eprouver gnome 3391
-[ "$quoi" = "ssh"   ] || [ "$quoi" = "tous" ] && eprouver_ssh 2222
+[ "$quoi" = "xfce"  ] || [ "$quoi" = "tous" ] && eprouver xfce
+[ "$quoi" = "gnome" ] || [ "$quoi" = "tous" ] && eprouver gnome
+[ "$quoi" = "ssh"   ] || [ "$quoi" = "tous" ] && eprouver_ssh
 
 echo
 if [ "$echecs" -eq 0 ]; then
