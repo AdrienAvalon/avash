@@ -7,6 +7,19 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Une panne du registre npm ne fait plus tomber les chaînes.** Le
+  2026-09-03, le job bout en bout de GitLab est tombé sur « 503 Service
+  Unavailable » du point d'audit de registry.npmjs.org, après sept minutes
+  d'attente, sans qu'aucune vulnérabilité soit en cause. Les six appels de
+  `npm audit` (`check.sh`, GitHub, GitLab) passent par
+  `scripts/npm-audit.sh`, qui réessaie trois fois, avec des délais de réseau
+  bornés, quand le registre est indisponible, et jamais sur une faille.
+- **`SHA256SUMS` publié avec les seuls noms de fichiers.** Depuis la 0.7.0,
+  chaque ligne portait le chemin du fichier dans la chaîne
+  (`artefacts/avash-linux/target/…`) : `sha256sum -c SHA256SUMS` depuis le
+  dossier de téléchargement, comme le README le promet, ne trouvait rien. Les
+  prochaines versions écrivent le nom seul.
+
 ## [0.7.1] - 2026-09-04
 
 - **Le processus RDP ne vide plus son image quand le chemin classique

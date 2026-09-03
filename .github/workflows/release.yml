@@ -191,10 +191,17 @@ jobs:
           PY
           cat latest.json
 
+      # Chaque ligne porte le seul nom du fichier, pas son chemin dans la
+      # chaîne (`artefacts/avash-linux/target/…`) : `sha256sum -c SHA256SUMS`
+      # depuis le dossier de téléchargement, comme le README le promet, ne
+      # trouvait aucun fichier (constaté sur la 0.7.1).
       - name: Empreintes SHA256
         run: |
+          : > SHA256SUMS
           find artefacts -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.app.tar.gz' \) -print0 \
-            | xargs -0 sha256sum > SHA256SUMS
+            | while IFS= read -r -d '' f; do
+                (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
+              done >> SHA256SUMS
           cat SHA256SUMS
       # Attestation de provenance : preuve cryptographique (Sigstore) que ces
       # binaires ont bien été produits par ce dépôt, à ce commit, par ce

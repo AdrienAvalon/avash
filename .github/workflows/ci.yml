@@ -56,7 +56,7 @@ jobs:
       # ne l'était pas. On échoue sur une vulnérabilité « high » ou pire.
       - name: Front — audit des dépendances
         working-directory: web
-        run: npm audit --audit-level=high
+        run: ../scripts/npm-audit.sh high
 
       # Garde anti-etourderie : bloque les restes de mise au point (harnais de test,
       # debugger, dialogues natifs confirm()/prompt() inoperants sous WebKitGTK).
@@ -359,7 +359,7 @@ jobs:
       # des avis « haute » sans correctif en amont.
       - name: E2E — audit des dépendances
         working-directory: e2e
-        run: npm audit --audit-level=critical
+        run: ../scripts/npm-audit.sh critical
 
       # Les serveurs locaux tournent ici aussi. Sept scénarios sur vingt et un
       # — connexion SSH réelle, SFTP, les trois RDP, les onglets mixtes,

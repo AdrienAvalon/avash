@@ -106,12 +106,12 @@ run "typage"             "$WEB" npx tsc --noEmit
 # bout sur la machine de développement : les deux arbres sont audités, au
 # niveau « haute » et au-delà — un avis modéré sur un outil de test ne doit
 # pas bloquer une correction, mais doit se voir.
-run "audit npm (front)"  "$WEB" npm audit --audit-level=high
+run "audit npm (front)"  "$WEB" "$ROOT/scripts/npm-audit.sh" high
 # La suite bout en bout dépend de WebdriverIO 9, dont quelques dépendances
 # transitives (extract-zip, deepmerge-ts, serialize-javascript) portent des
 # avis « haute » sans correctif en amont : ce code ne tourne que sur la
 # machine de test, jamais chez l'utilisateur. On ne bloque que sur « critique ».
-run "audit npm (e2e)"    "$ROOT/e2e" npm audit --audit-level=critical
+run "audit npm (e2e)"    "$ROOT/e2e" "$ROOT/scripts/npm-audit.sh" critical
 run "tests"              "$WEB" npx vitest run
 run "build"              "$WEB" npx vite build
 
