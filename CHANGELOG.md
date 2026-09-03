@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.7.0] - 2026-09-03
+
 - **Trois avis de sécurité de moins dans la suite bout en bout.** Les
   dépendances de test (WebdriverIO 9) traînaient `deepmerge-ts` 7
   (épuisement de pile) et `serialize-javascript` 6 (exécution de code par
@@ -1061,3 +1063,5 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
 [0.5.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.5.0
 [0.6.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.6.0
 [0.6.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.6.1
+[0.6.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.6.2
+[0.7.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.7.0
