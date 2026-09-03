@@ -6,7 +6,7 @@ use crate::capture::{run_shot, Graphique};
 use crate::connexion::{connect, session_close_par_le_serveur, NLA_INDISPONIBLE};
 use crate::entrees::{input_ops, lock_sync_event};
 use crate::presse_papiers::{ClipBackend, ClipReq, LocalClip};
-use crate::trames::{ajouter_rect, frame_msg, frames_msg};
+use crate::trames::{ajouter_rect, frame_msg, frames_msg, nouvelle_taille};
 use crate::{egfx, magnetoscope};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -292,10 +292,7 @@ pub(crate) async fn executer(
         () => {{
             let sortie = std::mem::take(&mut *file_egfx.lock().unwrap());
             if let Some((nl, nh)) = sortie.taille {
-                if (nl, nh) != (image.width(), image.height()) {
-                    image = DecodedImage::new(PixelFormat::RgbA32, nl, nh);
-                    dirty.clear();
-                    awaiting_ack = false;
+                if nouvelle_taille(&mut image, &mut dirty, &mut awaiting_ack, nl, nh) {
                     let mut hello = vec![1u8];
                     hello.extend_from_slice(&nl.to_le_bytes());
                     hello.extend_from_slice(&nh.to_le_bytes());
@@ -554,18 +551,20 @@ pub(crate) async fn executer(
                                 }
                             };
                             let (nw, nh) = taille_sure(size.width, size.height)?;
-                            image = DecodedImage::new(PixelFormat::RgbA32, nw, nh);
-                            // Annonce la nouvelle taille à Avash (réutilise CONNECTED [1][w][h]).
-                            let mut msg = vec![1u8];
-                            msg.extend_from_slice(&nw.to_le_bytes());
-                            msg.extend_from_slice(&nh.to_le_bytes());
-                            sink.send(Message::Binary(msg.into())).await.context("annonce resize")?;
-                            // Réinitialise le cadencement : une image en attente à
-                            // l'ancienne taille n'a plus de sens, et un ACK laissé en
-                            // suspens gèlerait la reprise. Le serveur va renvoyer un
+                            // Sur un serveur qui dessine par le canal graphique, le
+                            // ResetGraphics est déjà passé par là : l'image est à la
+                            // bonne taille et porte les premières trames de la
+                            // nouvelle surface. La recréer ici les effaçait — voir
+                            // `nouvelle_taille`. Sur le chemin classique, la taille
+                            // change vraiment et le serveur renvoie un
                             // rafraîchissement complet.
-                            dirty.clear();
-                            awaiting_ack = false;
+                            if nouvelle_taille(&mut image, &mut dirty, &mut awaiting_ack, nw, nh) {
+                                // Annonce la nouvelle taille à Avash (réutilise CONNECTED [1][w][h]).
+                                let mut msg = vec![1u8];
+                                msg.extend_from_slice(&nw.to_le_bytes());
+                                msg.extend_from_slice(&nh.to_le_bytes());
+                                sink.send(Message::Binary(msg.into())).await.context("annonce resize")?;
+                            }
                         }
                         _ => {}
                     }

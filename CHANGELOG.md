@@ -7,6 +7,23 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Plus de rectangle noir persistant après un redimensionnement du bureau
+  RDP.** Avec le sous-codec NSCodec en place, un rectangle noir subsistait
+  encore dans la barre des tâches du bureau affiché par l'avash Windows du
+  parc, entre Edge et la zone de notification, et xfreerdp le voyait sur
+  l'écran du poste alors que le rejeu de l'enregistrement était propre : le
+  noir naissait donc entre le décodage et le canvas. Deux chemins annoncent
+  la même nouvelle taille l'un après l'autre, le canal graphique
+  (`ResetGraphics`) puis le chemin classique (`DeactivateAll`) ; le second
+  recréait l'image vide alors que les premières trames de la nouvelle
+  surface y étaient déjà peintes et attendaient un accusé, les jetait, et les
+  rectangles suivants, fusionnés en boîtes englobantes, emportaient le noir
+  de l'image vide vers l'interface. Le processus RDP ne recrée l'image que
+  si la taille change vraiment, et repart alors de l'ancienne étirée, comme
+  l'interface avec son canvas, pour qu'une fusion de rectangles ne fasse
+  plus fuir que du contenu plausible. Trois tests (taille inchangée
+  préservée, image étirée sans noir, réductions et tailles nulles). 98 tests
+  dans le processus RDP, 1082 au total.
 - **Les carrés noirs d'un bureau Windows sont corrigés : le sous-codec
   NSCodec de ClearCodec manquait.** Reproduit sans réseau par le rejeu de
   l'enregistrement d'un avash Windows affichant `rdp-01`

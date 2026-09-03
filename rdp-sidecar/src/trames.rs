@@ -1,10 +1,142 @@
 //! Trames vers l'interface : zone sale bornée, format binaire des rectangles.
 
+use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::geometry::InclusiveRectangle;
 use ironrdp::session::image::DecodedImage;
 
 /// Nombre maximal de rectangles portés par une trame.
 const RECTS_MAX: usize = 8;
+
+/// Nouvelle taille d'écran annoncée par le serveur : ne remplace l'image que si
+/// la taille change vraiment, et dit s'il faut l'annoncer à l'interface.
+///
+/// Deux chemins annoncent la même nouvelle taille, l'un après l'autre : le
+/// canal graphique (`ResetGraphics`) et le chemin classique (`DeactivateAll`
+/// après un Display Control accepté). Recréer l'image au second passage la
+/// vidait alors que les premières trames de la nouvelle surface y étaient
+/// déjà peintes et attendaient un accusé : `dirty.clear()` les jetait, et les
+/// rectangles suivants, fusionnés en boîtes englobantes par `ajouter_rect`,
+/// emportaient le noir de l'image vide vers l'interface. Rectangle noir
+/// persistant entre les icônes de la barre des tâches d'un bureau affiché par
+/// un avash Windows dans une session RDP (2026-09-03), confirmé par xfreerdp
+/// sur l'écran du poste, alors que le rejeu de l'enregistrement était propre.
+///
+/// Quand la taille change, l'image repart de l'ancienne étirée, comme
+/// l'interface le fait avec son canvas : ce qu'une fusion de rectangles fait
+/// fuir avant que le serveur ait tout repeint est alors du contenu plausible,
+/// pas du noir.
+pub(crate) fn nouvelle_taille(
+    image: &mut DecodedImage,
+    dirty: &mut Vec<InclusiveRectangle>,
+    awaiting_ack: &mut bool,
+    largeur: u16,
+    hauteur: u16,
+) -> bool {
+    if (largeur, hauteur) == (image.width(), image.height()) {
+        return false;
+    }
+    *image = etirer(image, largeur, hauteur);
+    // Une trame en vol à l'ancienne taille n'a plus de sens, et un accusé
+    // laissé en suspens gèlerait la reprise.
+    dirty.clear();
+    *awaiting_ack = false;
+    true
+}
+
+/// L'image au plus proche voisin dans une autre taille.
+pub(crate) fn etirer(image: &DecodedImage, largeur: u16, hauteur: u16) -> DecodedImage {
+    let mut nouvelle = DecodedImage::new(PixelFormat::RgbA32, largeur, hauteur);
+    let (al, ah) = (usize::from(image.width()), usize::from(image.height()));
+    let (nl, nh) = (usize::from(largeur), usize::from(hauteur));
+    if al == 0 || ah == 0 || nl == 0 || nh == 0 {
+        return nouvelle;
+    }
+    let src = image.data();
+    let mut pixels = Vec::with_capacity(nl * nh * 4);
+    for y in 0..nh {
+        let sy = y * ah / nh;
+        for x in 0..nl {
+            let sx = x * al / nl;
+            let d = (sy * al + sx) * 4;
+            pixels.extend_from_slice(&src[d..d + 4]);
+        }
+    }
+    nouvelle.peindre_rgba(0, 0, largeur, hauteur, &pixels);
+    nouvelle
+}
+
+#[cfg(test)]
+mod tests_nouvelle_taille {
+    use super::{etirer, nouvelle_taille};
+    use ironrdp::graphics::image_processing::PixelFormat;
+    use ironrdp::pdu::geometry::InclusiveRectangle;
+    use ironrdp::session::image::DecodedImage;
+
+    fn image_2x2() -> DecodedImage {
+        let mut i = DecodedImage::new(PixelFormat::RgbA32, 2, 2);
+        i.peindre_rgba(
+            0,
+            0,
+            2,
+            2,
+            &[1, 1, 1, 255, 2, 2, 2, 255, 3, 3, 3, 255, 4, 4, 4, 255],
+        );
+        i
+    }
+
+    #[test]
+    fn une_taille_inchangee_garde_l_image_et_la_zone_sale() {
+        // Le cas vu sur le poste : ResetGraphics a déjà redimensionné et peint,
+        // puis DeactivateAll annonce la même taille. Rien ne doit bouger.
+        let mut image = image_2x2();
+        let avant = image.data().to_vec();
+        let mut dirty = vec![InclusiveRectangle {
+            left: 0,
+            top: 0,
+            right: 1,
+            bottom: 1,
+        }];
+        let mut attente = true;
+        assert!(!nouvelle_taille(&mut image, &mut dirty, &mut attente, 2, 2));
+        assert_eq!(image.data(), &avant[..], "l'image a été vidée");
+        assert_eq!(dirty.len(), 1, "la zone sale a été jetée");
+        assert!(attente);
+    }
+
+    #[test]
+    fn une_taille_nouvelle_repart_de_l_image_etiree() {
+        let mut image = image_2x2();
+        let mut dirty = vec![InclusiveRectangle {
+            left: 0,
+            top: 0,
+            right: 1,
+            bottom: 1,
+        }];
+        let mut attente = true;
+        assert!(nouvelle_taille(&mut image, &mut dirty, &mut attente, 4, 4));
+        assert_eq!((image.width(), image.height()), (4, 4));
+        assert!(dirty.is_empty());
+        assert!(!attente);
+        // Coins : l'ancien pixel (0,0) en haut à gauche, l'ancien (1,1) en bas
+        // à droite. Pas de noir.
+        let px = |x: usize, y: usize| &image.data()[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
+        assert_eq!(px(0, 0), [1, 1, 1, 255]);
+        assert_eq!(px(3, 3), [4, 4, 4, 255]);
+        assert_eq!(px(3, 0), [2, 2, 2, 255]);
+        assert!(image.data().chunks(4).all(|p| p[3] == 255 && p[0] != 0));
+    }
+
+    #[test]
+    fn etirer_supporte_les_reductions_et_les_tailles_nulles() {
+        let image = image_2x2();
+        let petite = etirer(&image, 1, 1);
+        assert_eq!(petite.data(), [1, 1, 1, 255]);
+        let vide = etirer(&image, 0, 3);
+        assert_eq!((vide.width(), vide.height()), (0, 3));
+        let depuis_vide = etirer(&DecodedImage::new(PixelFormat::RgbA32, 0, 0), 2, 1);
+        assert_eq!(depuis_vide.data().len(), 8);
+    }
+}
 
 /// En-tête d'un rectangle dans le message : x, y, largeur, hauteur (u16).
 const ENTETE_RECT: usize = 8;
