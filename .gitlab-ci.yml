@@ -20,8 +20,17 @@ default:
   cache:
     key: "$CI_COMMIT_REF_SLUG"
     # .cargo/bin aussi : sans lui, tauri-driver, cargo-audit et cargo-deny se
-    # recompilaient à chaque passage.
-    paths: [".cargo/registry", ".cargo/git", ".cargo/bin", "target"]
+    # recompilaient à chaque passage. Et avec lui, le registre des paquets
+    # installés (.crates.toml, .crates2.json) : sans ce registre, cargo install
+    # prend les binaires restaurés pour des intrus et refuse de les écraser
+    # (« binary already exists in destination ») — vu au deuxième passage.
+    paths:
+      - ".cargo/registry"
+      - ".cargo/git"
+      - ".cargo/bin"
+      - ".cargo/.crates.toml"
+      - ".cargo/.crates2.json"
+      - "target"
   before_script:
     - apt-get update -qq
     - apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev
