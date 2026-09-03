@@ -147,7 +147,11 @@ bout-en-bout:
     # que GitLab marque « unknown_failure » sans un mot : trois passages
     # perdus au même endroit, le déclencheur retrouvé en bissectant la sortie
     # du conteneur contre le pare-feu. Les erreurs restent sur stderr.
-    - apt-get install -y -qq openssh-server openssl >/dev/null
+    # libopus-dev et cmake : le serveur RDP de test dépend de libopus_sys, qui
+    # sans Opus système le compile lui-même par CMake — absent de l'image,
+    # d'où « is cmake not installed? » au quatrième passage. Avec la
+    # bibliothèque de Debian, pkg-config la trouve et rien n'est compilé.
+    - apt-get install -y -qq openssh-server openssl libopus-dev cmake >/dev/null
     # Ici le harnais tourne en root (conteneur), et sshd lancé par root exige
     # le répertoire de séparation de privilèges, que le paquet ne crée pas sans
     # systemd : « Missing privilege separation directory: /run/sshd ». Sur
