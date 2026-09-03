@@ -86,6 +86,14 @@ pub(crate) async fn run_shot(
             break;
         }
     }
+    ecrire_png(image, path)?;
+    eprintln!("capture : {path}");
+    Ok(Suite::Fini)
+}
+
+/// Écrit une image décodée en PNG. Partagé avec le rejeu du magnétoscope
+/// (`--rejouer … --image`), qui produit la même image sans réseau.
+pub(crate) fn ecrire_png(image: &DecodedImage, path: &str) -> Result<()> {
     let buf: image::ImageBuffer<image::Rgba<u8>, _> = image::ImageBuffer::from_raw(
         u32::from(image.width()),
         u32::from(image.height()),
@@ -93,6 +101,5 @@ pub(crate) async fn run_shot(
     )
     .context("image invalide")?;
     buf.save(path)?;
-    eprintln!("capture : {path}");
-    Ok(Suite::Fini)
+    Ok(())
 }

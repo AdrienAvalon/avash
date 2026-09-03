@@ -112,17 +112,28 @@ async fn main() -> Result<()> {
             }
         }
     }
+    // `--rejouer <enregistrement> [--image <png>]` : rejoue sans réseau et,
+    // sur demande, écrit l'image finale — le moyen de voir si un défaut
+    // d'affichage vient de notre décodage.
     if let Some(chemin) = std::env::args()
         .nth(1)
         .filter(|a| a == "--rejouer")
         .and(std::env::args().nth(2))
     {
         let e = magnetoscope::lire(&chemin)?;
-        let r = magnetoscope::rejouer(&e, false)?;
+        let (r, image) = magnetoscope::rejouer_image(&e, false)?;
         println!(
             "rejeu : {} acceptés, {} graphiques refusés, {} hors périmètre, {} rectangles, empreinte {:016x}",
             r.acceptes, r.refuses, r.hors_perimetre, r.rectangles, r.empreinte
         );
+        if let Some(png) = std::env::args()
+            .nth(3)
+            .filter(|a| a == "--image")
+            .and(std::env::args().nth(4))
+        {
+            capture::ecrire_png(&image, &png)?;
+            println!("image : {png} ({}×{})", image.width(), image.height());
+        }
         return Ok(());
     }
     let args = parse_args()?;

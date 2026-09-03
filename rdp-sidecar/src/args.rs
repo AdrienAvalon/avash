@@ -13,7 +13,12 @@ pub(crate) struct Args {
     /// L'utilisateur a accepté de se passer de NLA pour ce serveur.
     pub(crate) sans_nla: bool,
     pub(crate) layout: u32,
+    /// Fichier du magnétoscope (`--enregistrer`, ou `AVASH_RDP_ENREGISTRER`
+    /// dans l'environnement : l'interface ne passe pas cette option, la
+    /// variable permet d'enregistrer une session depuis l'application normale).
     pub(crate) enregistrer: Option<String>,
+    /// Plafond de l'enregistrement en octets (`AVASH_RDP_ENREGISTRER_PLAFOND`).
+    pub(crate) plafond_enregistrement: u64,
     pub(crate) width: u16,
     pub(crate) height: u16,
     pub(crate) shot: Option<String>,
@@ -88,8 +93,29 @@ fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(800),
         shot: a.opt("--shot"),
-        enregistrer: a.opt("--enregistrer"),
+        enregistrer: a
+            .opt("--enregistrer")
+            .or_else(|| std::env::var("AVASH_RDP_ENREGISTRER").ok())
+            .filter(|c| !c.is_empty()),
+        plafond_enregistrement: plafond_depuis(
+            std::env::var("AVASH_RDP_ENREGISTRER_PLAFOND")
+                .ok()
+                .as_deref(),
+        ),
     })
+}
+
+/// Plafond d'un enregistrement, en octets. Le défaut (4 Mio) convient à une
+/// fixture de dépôt ; pour capturer un défaut vu à l'usage — des carrés noirs
+/// dans une fenêtre qui bouge beaucoup, signalés le 2026-09-03 — il faut
+/// plusieurs minutes de flux, donc bien davantage : la variable le fixe.
+/// Une valeur illisible ou nulle rend le défaut, pas une erreur : on
+/// enregistre quand même.
+fn plafond_depuis(valeur: Option<&str>) -> u64 {
+    valeur
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&p| p > 0)
+        .unwrap_or(crate::magnetoscope::PLAFOND_DEFAUT)
 }
 
 /// Sépare un domaine éventuellement collé au nom d'utilisateur.
@@ -340,5 +366,24 @@ mod tests_identifiants {
             split_credentials("adrien@exemple.local", Some("AUTRE")),
             ("adrien@exemple.local".to_owned(), Some("AUTRE".to_owned()))
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_enregistrement {
+    use super::plafond_depuis;
+    use crate::magnetoscope::PLAFOND_DEFAUT;
+
+    /// Le plafond vient de l'environnement ; tout ce qui n'est pas un entier
+    /// strictement positif rend le défaut, sans jamais empêcher d'enregistrer.
+    #[test]
+    fn le_plafond_lit_un_entier_et_retombe_sur_le_defaut_sinon() {
+        assert_eq!(plafond_depuis(Some("268435456")), 268_435_456);
+        assert_eq!(plafond_depuis(Some(" 1024 ")), 1024);
+        assert_eq!(plafond_depuis(None), PLAFOND_DEFAUT);
+        assert_eq!(plafond_depuis(Some("")), PLAFOND_DEFAUT);
+        assert_eq!(plafond_depuis(Some("0")), PLAFOND_DEFAUT);
+        assert_eq!(plafond_depuis(Some("beaucoup")), PLAFOND_DEFAUT);
+        assert_eq!(plafond_depuis(Some("-5")), PLAFOND_DEFAUT);
     }
 }

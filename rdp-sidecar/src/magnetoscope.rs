@@ -23,6 +23,17 @@
 //! est une **entrée non fiable**. Un serveur malveillant, ou simplement abîmé,
 //! ne doit pas pouvoir faire tomber le client.
 //!
+//! # Utilisation
+//!
+//! Depuis l'application normale, poser `AVASH_RDP_ENREGISTRER=<fichier>` dans
+//! l'environnement d'avash : le processus RDP, qui en hérite, enregistre la
+//! session suivante. Le plafond vaut 4 Mio (une fixture de dépôt) ; pour un
+//! défaut vu à l'usage, `AVASH_RDP_ENREGISTRER_PLAFOND=<octets>` l'élargit.
+//! Puis `avash-rdp --rejouer <fichier> --image <png>` rejoue sans réseau et
+//! écrit l'image finale : si le défaut y est, il vient de notre décodage.
+//! Le fichier contient tout ce que le serveur a affiché — il naît en 0600 et
+//! ne doit pas quitter le poste sans y penser.
+//!
 //! # Format
 //!
 //! ```text
@@ -114,8 +125,19 @@ impl Enregistreur {
         debut.extend_from_slice(MAGIE);
         debut.push(VERSION);
         entete.ecrire(&mut debut);
-        let mut fichier =
-            std::fs::File::create(chemin).with_context(|| format!("création de {chemin}"))?;
+        // Un enregistrement contient tout ce que le serveur a affiché — un
+        // bureau entier, ses fenêtres, ce qui s'y tape. Il naît privé, comme
+        // les fichiers de configuration, plutôt que sous l'umask.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut fichier = options
+            .open(chemin)
+            .with_context(|| format!("création de {chemin}"))?;
         fichier.write_all(&debut)?;
         Ok(Self {
             fichier,
@@ -256,7 +278,20 @@ impl ironrdp::cliprdr::backend::CliprdrBackend for PressePapiersMuet {
 /// `tolerant` : continuer après un PDU FastPath refusé. C'est ce que fait le
 /// fuzzing, qui mute exprès les octets ; un rejeu de vérification, lui, exige
 /// que tout le chemin graphique passe.
+///
+/// Le binaire passe par [`rejouer_image`] ; seuls les tests, qui comparent des
+/// résumés, se contentent de celui-ci.
+#[cfg(test)]
 pub fn rejouer(e: &Enregistrement, tolerant: bool) -> Result<Resume> {
+    rejouer_image(e, tolerant).map(|(r, _)| r)
+}
+
+/// Comme [`rejouer`], et rend aussi l'image finale : c'est elle qu'on regarde
+/// quand un défaut d'affichage est signalé (des carrés noirs persistants dans
+/// une fenêtre distante, le 2026-09-03) — si le rejeu, sans réseau ni
+/// serveur, les reproduit, la cause est dans notre décodage ; sinon elle est
+/// chez le serveur ou dans ce qu'il affiche.
+pub fn rejouer_image(e: &Enregistrement, tolerant: bool) -> Result<(Resume, DecodedImage)> {
     let mut image = DecodedImage::new(PixelFormat::RgbA32, e.entete.largeur, e.entete.hauteur);
     // Mêmes canaux, même ordre que la session réelle : drdynvc puis cliprdr.
     let mut canaux = ironrdp::svc::StaticChannelSet::new();
@@ -317,7 +352,7 @@ pub fn rejouer(e: &Enregistrement, tolerant: bool) -> Result<Resume> {
         }
     }
     r.empreinte = empreinte(image.data());
-    Ok(r)
+    Ok((r, image))
 }
 
 /// Empreinte FNV-1a : ni cryptographique ni destinée à l'être, seulement
@@ -335,7 +370,7 @@ pub fn empreinte(octets: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{empreinte, lire, rejouer, Enregistrement, Enregistreur, Entete};
+    use super::{empreinte, lire, rejouer, rejouer_image, Enregistrement, Enregistreur, Entete};
     use ironrdp::pdu::Action;
 
     fn entete() -> Entete {
@@ -433,6 +468,41 @@ mod tests {
     fn l_empreinte_distingue_deux_images() {
         assert_ne!(empreinte(&[1, 2, 3]), empreinte(&[1, 2, 4]));
         assert_eq!(empreinte(&[1, 2, 3]), empreinte(&[1, 2, 3]));
+    }
+
+    /// L'image rendue par le rejeu a les dimensions de l'en-tête et, sans
+    /// aucun PDU, reste vierge : c'est elle qu'on écrit en PNG pour examiner
+    /// un défaut d'affichage signalé (carrés noirs, 2026-09-03).
+    #[test]
+    fn le_rejeu_rend_une_image_aux_dimensions_de_l_entete() {
+        let e = Enregistrement {
+            entete: entete(),
+            pdus: Vec::new(),
+        };
+        let (resume, image) = rejouer_image(&e, false).unwrap();
+        assert_eq!((image.width(), image.height()), (64, 32));
+        assert_eq!(image.data().len(), 64 * 32 * 4);
+        assert!(
+            image.data().iter().all(|&o| o == 0),
+            "sans PDU, rien n'est peint"
+        );
+        assert_eq!(resume.empreinte, empreinte(image.data()));
+    }
+
+    /// Un enregistrement contient tout ce que le serveur a affiché : il naît
+    /// lisible par son seul propriétaire, quel que soit l'umask.
+    #[test]
+    #[cfg(unix)]
+    fn un_enregistrement_nait_prive() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let p = chemin("prive");
+        let _e = Enregistreur::nouveau(&p, &entete(), 1024).unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        std::fs::remove_file(&p).ok();
+        assert_eq!(
+            mode, 0o600,
+            "enregistrement lisible par d'autres : {mode:o}"
+        );
     }
 }
 

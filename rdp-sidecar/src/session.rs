@@ -126,8 +126,11 @@ pub(crate) async fn executer(
                 canal_clip: canal_clip.unwrap_or(0),
             };
             let e =
-                magnetoscope::Enregistreur::nouveau(chemin, &entete, magnetoscope::PLAFOND_DEFAUT)?;
-            eprintln!("enregistrement : {chemin}");
+                magnetoscope::Enregistreur::nouveau(chemin, &entete, args.plafond_enregistrement)?;
+            eprintln!(
+                "enregistrement : {chemin} (plafond {} octets)",
+                args.plafond_enregistrement
+            );
             Some(e)
         }
         None => None,

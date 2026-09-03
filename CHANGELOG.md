@@ -7,6 +7,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le magnétoscope s'enregistre depuis l'application, et se rejoue en image.**
+  Des carrés noirs persistants sont signalés dans la fenêtre d'un avash
+  Windows vu à travers une session RDP depuis un avash Linux, malgré le
+  correctif de la 0.6.1. Pour trancher entre notre décodage et le rendu
+  distant, il fallait le flux : `AVASH_RDP_ENREGISTRER=<fichier>` dans
+  l'environnement d'avash fait enregistrer la session par le processus RDP
+  (l'interface ne passait pas `--enregistrer`), avec un plafond réglable par
+  `AVASH_RDP_ENREGISTRER_PLAFOND` (4 Mio par défaut, taillé pour une fixture,
+  pas pour des minutes de flux), et `avash-rdp --rejouer <fichier> --image
+  <png>` écrit l'image finale du rejeu sans réseau. L'enregistrement, qui
+  contient tout ce que le serveur a affiché, naît désormais en 0600 (89
+  tests dans le processus RDP, 875 au total).
 - **La chaîne GitLab ne refait plus deux fois le même travail.** Un tag ne
   lance plus de pipeline (celui de la branche vient de vérifier le même
   commit, la publication est l'affaire du workflow Release de GitHub : 38
