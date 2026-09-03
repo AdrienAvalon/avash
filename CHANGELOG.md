@@ -7,6 +7,31 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Les carrés gris et les blocs flous d'un bureau Windows vu à travers un
+  avash Windows sont corrigés dans le décodeur.** Le magnétoscope, enregistré
+  depuis l'avash Windows du contrôleur de domaine du parc pendant qu'il
+  affichait `rdp-01`, rejoue le défaut sans réseau : `windows-surfaces-
+  successives`, cinquième enregistrement de référence. Deux causes, toutes
+  deux dans le codec RemoteFX Progressive, toutes deux tranchées en relisant
+  FreeRDP, l'implémentation de référence. D'abord, quand Windows referme un
+  contexte de codec et en rouvre un sur la même surface, ses premières
+  tuiles sont « en différence » : elles ne portent que l'écart avec les
+  coefficients déjà gardés, et le décodeur (comme IronRDP 0.9) les prenait
+  pour des images complètes ; un coin de bureau inchangé devenait un carré
+  gris uniforme, la dernière colonne de tuiles une bouillie de blocs. L'écart
+  s'ajoute désormais à l'état, qui vit avec la surface et survit à
+  `DeleteEncodingContext`. Ensuite, les paliers d'affinage (`upgrade`)
+  repartaient du début des flux SRL et brut à chaque sous-bande, avec un
+  décodeur SRL qui n'était pas celui de la spécification et un décalage qui
+  oubliait le quantificateur de base : ils n'affinaient rien (netteté mesurée
+  identique à la passe grossière) ou abîmaient. Le palier est réécrit d'après
+  FreeRDP, un seul ruban par composante sur les dix bandes, LL3 en brut, et
+  l'image gagne réellement en netteté (de 3,9 à 5,5 au laplacien sur
+  l'enregistrement). Pour le diagnostic : `AVASH_RDP_JOURNAL_EGFX=1` fait
+  décrire chaque commande du canal graphique, `--jusqu-a N` arrête le rejeu
+  après N PDU pour bissecter en regardant les images, et le rejeu suit les
+  redimensionnements (`ResetGraphics`). 94 tests dans le processus RDP, 880
+  au total.
 - **Plus de zones noires persistantes dans un bureau RDP affiché à travers
   une session RDP.** Reproduit sur un avash Windows 0.6.2 ouvert dans une
   session distante : dans son bureau `rdp-01`, le bouton OK de

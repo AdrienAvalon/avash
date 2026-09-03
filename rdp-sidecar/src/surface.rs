@@ -14,6 +14,9 @@ pub struct Surface {
     pub largeur: u16,
     pub hauteur: u16,
     pub pixels: Vec<u8>,
+    /// Le contexte d'affinage progressif de CETTE surface — il disparaît avec
+    /// elle, et une surface recréée repart de rien (voir `progressif::Tuiles`).
+    pub tuiles: crate::progressif::Tuiles,
 }
 
 /// Rectangle en pixels, bornes hautes exclues.
@@ -73,6 +76,7 @@ impl Surface {
             largeur,
             hauteur,
             pixels: vec![0; usize::from(largeur) * usize::from(hauteur) * 4],
+            tuiles: crate::progressif::Tuiles::default(),
         }
     }
 

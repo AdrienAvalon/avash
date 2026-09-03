@@ -245,7 +245,15 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
   devant une ferme Windows, où l'accepter produirait un écran noir.
 - **Trois codecs graphiques, pas H.264.** RemoteFX Progressive — en tuiles
   simples chez GNOME Remote Desktop, affiné par paliers de qualité chez
-  Windows —, ClearCodec, et le non compressé. Le client annonce toutes les
+  Windows, avec des tuiles « en différence » dès qu'un contexte de codec est
+  rouvert sur une surface qui a déjà servi —, ClearCodec, et le non compressé.
+  IronRDP fournit l'entropie et la transformée ; l'assemblage progressif est
+  à nous (`rdp-sidecar/src/progressif.rs`) : l'état des tuiles vit avec la
+  surface et survit à `DeleteEncodingContext`, les différences s'ajoutent aux
+  coefficients gardés, et le palier d'affinage est réécrit d'après FreeRDP,
+  la référence, là où IronRDP 0.9 s'écarte de la spécification (un seul
+  ruban SRL et brut par composante sur les dix bandes, LL3 en brut, décalage
+  base + progressif − 1). Le client annonce toutes les
   versions de capacités jusqu'à la 10.7 mais y pose `AVC_DISABLED` : décoder
   H.264 supposerait une dépendance à un décodeur vidéo, pour un gain nul sur des
   bureaux de travail. Sans ce drapeau, un serveur qui retiendrait l'une de ces

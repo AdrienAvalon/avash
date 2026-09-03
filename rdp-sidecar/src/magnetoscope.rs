@@ -279,8 +279,8 @@ impl ironrdp::cliprdr::backend::CliprdrBackend for PressePapiersMuet {
 /// fuzzing, qui mute exprès les octets ; un rejeu de vérification, lui, exige
 /// que tout le chemin graphique passe.
 ///
-/// Le binaire passe par [`rejouer_image`] ; seuls les tests, qui comparent des
-/// résumés, se contentent de celui-ci.
+/// Le binaire passe par [`rejouer_jusqu_a`] ; seuls les tests, qui comparent
+/// des résumés, se contentent de celui-ci.
 #[cfg(test)]
 pub fn rejouer(e: &Enregistrement, tolerant: bool) -> Result<Resume> {
     rejouer_image(e, tolerant).map(|(r, _)| r)
@@ -291,7 +291,21 @@ pub fn rejouer(e: &Enregistrement, tolerant: bool) -> Result<Resume> {
 /// une fenêtre distante, le 2026-09-03) — si le rejeu, sans réseau ni
 /// serveur, les reproduit, la cause est dans notre décodage ; sinon elle est
 /// chez le serveur ou dans ce qu'il affiche.
+#[cfg(test)]
 pub fn rejouer_image(e: &Enregistrement, tolerant: bool) -> Result<(Resume, DecodedImage)> {
+    rejouer_jusqu_a(e, tolerant, usize::MAX)
+}
+
+/// Rejoue au plus `limite` PDU (tous, avec `usize::MAX`) et rend le résumé et
+/// l'image finale. Avec une limite, c'est la bissection d'un défaut : on
+/// rejoue de plus en plus loin et on regarde chaque image jusqu'à trouver
+/// l'échange qui la corrompt — c'est ainsi que la trame 19 de
+/// `windows-surfaces-successives` a été isolée, en quatre images.
+pub fn rejouer_jusqu_a(
+    e: &Enregistrement,
+    tolerant: bool,
+    limite: usize,
+) -> Result<(Resume, DecodedImage)> {
     let mut image = DecodedImage::new(PixelFormat::RgbA32, e.entete.largeur, e.entete.hauteur);
     // Mêmes canaux, même ordre que la session réelle : drdynvc puis cliprdr.
     let mut canaux = ironrdp::svc::StaticChannelSet::new();
@@ -326,7 +340,14 @@ pub fn rejouer_image(e: &Enregistrement, tolerant: bool) -> Result<(Resume, Deco
     .build();
 
     let mut r = Resume::default();
-    for (action, charge) in &e.pdus {
+    // AVASH_RDP_JOURNAL_EGFX : numérote chaque PDU sur stderr, pour mettre en
+    // regard le journal des commandes graphiques (voir egfx.rs) et une
+    // bissection par --jusqu-a.
+    let journal = std::env::var_os("AVASH_RDP_JOURNAL_EGFX").is_some();
+    for (n, (action, charge)) in e.pdus.iter().take(limite).enumerate() {
+        if journal {
+            eprintln!("pdu {n} ({action:?}, {} octets)", charge.len());
+        }
         match active.process(&mut image, *action, charge) {
             Ok(sorties) => {
                 r.acceptes += 1;
@@ -335,7 +356,18 @@ pub fn rejouer_image(e: &Enregistrement, tolerant: bool) -> Result<(Resume, Deco
                         r.rectangles += 1;
                     }
                 }
-                for t in std::mem::take(&mut *file.lock().unwrap()).trames {
+                let sortie = std::mem::take(&mut *file.lock().unwrap());
+                // Un redimensionnement (ResetGraphics) : même geste que la
+                // session vivante, l'image repart à la nouvelle taille. Sans
+                // cela, un enregistrement pris pendant qu'on agrandit la
+                // fenêtre rejouait tronqué — et c'est précisément après un
+                // agrandissement qu'un bureau imbriqué s'est abîmé (2026-09-03).
+                if let Some((nl, nh)) = sortie.taille {
+                    if (nl, nh) != (image.width(), image.height()) {
+                        image = DecodedImage::new(PixelFormat::RgbA32, nl, nh);
+                    }
+                }
+                for t in sortie.trames {
                     image.peindre_rgba(t.x, t.y, t.largeur, t.hauteur, &t.pixels);
                     r.rectangles += 1;
                 }
@@ -537,6 +569,14 @@ mod tests_enregistrements_reels {
         // des deux.
         ("gnome-remote-desktop", 0x44fd_e714_c1d2_750e),
         ("windows-egfx", 0x92dc_087e_677a_53d4),
+        // Windows encore, mais un bureau affiché par un avash Windows qui
+        // tourne lui-même dans une session RDP : trois surfaces successives
+        // (écran d'avertissement, bureau, redimensionnement), des contextes de
+        // codec refermés puis rouverts, des tuiles `first` en différence et
+        // des paliers d'affinage qui touchent plusieurs bandes. Enregistré le
+        // 2026-09-03 sur le contrôleur de domaine du parc pour les carrés gris
+        // et les blocs flous signalés par le mainteneur.
+        ("windows-surfaces-successives", 0x1bc4_d568_23d2_08a3),
     ];
 
     fn chemin(nom: &str) -> String {
@@ -559,6 +599,34 @@ mod tests_enregistrements_reels {
                  l'empreinte ; sinon, c'est une régression du décodage."
             );
         }
+    }
+
+    #[test]
+    fn une_tuile_en_difference_garde_le_coin_du_bureau() {
+        // Trame 19 (PDU 280) : le serveur rouvre un contexte de codec et envoie
+        // quinze tuiles `first` en différence. Avant le correctif, le coin
+        // (0, 0) — la Corbeille du bureau — devenait un carré gris uniforme
+        // (128 ± 1 sur les trois canaux) : on rendait l'écart au lieu de
+        // l'ajouter aux coefficients gardés. Ce test regarde la variété des
+        // couleurs de cette tuile juste après la trame, pas une empreinte :
+        // il dit CE qui doit être vrai, quel que soit le reste du décodage.
+        let e = lire(&chemin("windows-surfaces-successives")).unwrap();
+        let (_, image) = super::rejouer_jusqu_a(&e, false, 281).unwrap();
+        let largeur = usize::from(image.width());
+        let pixels = image.data();
+        let mut couleurs = std::collections::BTreeSet::new();
+        for y in 0..64 {
+            for x in 0..64 {
+                let d = (y * largeur + x) * 4;
+                couleurs.insert(&pixels[d..d + 3]);
+            }
+        }
+        assert!(
+            couleurs.len() > 200,
+            "le coin du bureau n'a que {} couleurs : une tuile en différence \
+             a été rendue comme une image complète",
+            couleurs.len()
+        );
     }
 
     #[test]

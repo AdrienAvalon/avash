@@ -121,16 +121,22 @@ async fn main() -> Result<()> {
         .and(std::env::args().nth(2))
     {
         let e = magnetoscope::lire(&chemin)?;
-        let (r, image) = magnetoscope::rejouer_image(&e, false)?;
+        let args: Vec<String> = std::env::args().collect();
+        let option = |nom: &str| {
+            args.iter()
+                .position(|a| a == nom)
+                .and_then(|i| args.get(i + 1).cloned())
+        };
+        // --jusqu-a N : ne rejouer que les N premiers PDU (bissection d'un défaut).
+        let limite = option("--jusqu-a")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(usize::MAX);
+        let (r, image) = magnetoscope::rejouer_jusqu_a(&e, false, limite)?;
         println!(
             "rejeu : {} acceptés, {} graphiques refusés, {} hors périmètre, {} rectangles, empreinte {:016x}",
             r.acceptes, r.refuses, r.hors_perimetre, r.rectangles, r.empreinte
         );
-        if let Some(png) = std::env::args()
-            .nth(3)
-            .filter(|a| a == "--image")
-            .and(std::env::args().nth(4))
-        {
+        if let Some(png) = option("--image") {
             capture::ecrire_png(&image, &png)?;
             println!("image : {png} ({}×{})", image.width(), image.height());
         }

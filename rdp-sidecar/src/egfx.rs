@@ -162,11 +162,29 @@ fn inspecter_progressif(flux: &[u8]) {
                                 ProgressiveTile::Upgrade(_) => "upgrade",
                             })
                             .collect::<std::collections::BTreeSet<_>>();
+                        // Le drapeau de différence (bit 0) change tout le sens
+                        // d'une tuile : ses coefficients s'ajoutent aux précédents.
+                        let differences = r
+                            .tiles
+                            .iter()
+                            .filter(|t| match t {
+                                ProgressiveTile::Simple(t) => t.flags & 1 != 0,
+                                ProgressiveTile::First(t) => t.flags & 1 != 0,
+                                ProgressiveTile::Upgrade(_) => false,
+                            })
+                            .count();
                         eprintln!(
-                            "  bloc Region : {} rect, {} tuiles ({genres:?}), extrapolation {}",
+                            "  bloc Region : {} rect {:?}, {} tuiles ({genres:?}, {differences} en différence), \
+                             extrapolation {}, {} quantificateurs, {} paliers",
                             r.rects.len(),
+                            r.rects
+                                .iter()
+                                .map(|z| (z.x, z.y, z.width, z.height))
+                                .collect::<Vec<_>>(),
                             r.tiles.len(),
-                            r.uses_reduce_extrapolate()
+                            r.uses_reduce_extrapolate(),
+                            r.quant_vals.len(),
+                            r.quant_prog_vals.len(),
                         );
                     }
                 }
@@ -357,6 +375,10 @@ pub struct Egfx {
     zgfx: ironrdp::graphics::zgfx::Decompressor,
     /// Compte des PDU reçus, par identifiant.
     pub vus: std::collections::BTreeMap<u16, usize>,
+    /// `AVASH_RDP_JOURNAL_EGFX` posé : chaque commande est décrite sur stderr.
+    /// C'est ainsi qu'on lit ce qu'un serveur a réellement demandé, en regard
+    /// d'une bissection du magnétoscope (`--jusqu-a`).
+    journal: bool,
 }
 
 ironrdp::core::impl_as_any!(Egfx);
@@ -370,6 +392,7 @@ impl Egfx {
             Self {
                 canal: canal.clone(),
                 file: file.clone(),
+                journal: std::env::var_os("AVASH_RDP_JOURNAL_EGFX").is_some(),
                 ..Default::default()
             },
             canal,
@@ -377,8 +400,104 @@ impl Egfx {
         )
     }
 
+    /// Décrit une commande sur stderr : nom, surfaces, rectangles, codec — ce
+    /// qu'il faut pour comprendre une image fausse sans deviner.
+    fn journaliser(p: &Pdu) {
+        let c = &p.charge;
+        let u16le = |i: usize| {
+            c.get(i..i + 2)
+                .map_or(0, |o| u16::from_le_bytes([o[0], o[1]]))
+        };
+        let u32le = |i: usize| {
+            c.get(i..i + 4)
+                .map_or(0, |o| u32::from_le_bytes([o[0], o[1], o[2], o[3]]))
+        };
+        let rect = |i: usize| {
+            format!(
+                "[{},{} → {},{}]",
+                u16le(i),
+                u16le(i + 2),
+                u16le(i + 4),
+                u16le(i + 6)
+            )
+        };
+        let detail = match p.id {
+            CMD_WIRE_TO_SURFACE_1 => format!(
+                "surface {} codec {:#06x} format {} rect {} {} octets",
+                u16le(0),
+                u16le(2),
+                c.get(4).copied().unwrap_or(0),
+                rect(5),
+                u32le(13)
+            ),
+            CMD_WIRE_TO_SURFACE_2 => format!(
+                "surface {} codec {:#06x} contexte {} format {} {} octets",
+                u16le(0),
+                u16le(2),
+                u32le(4),
+                c.get(8).copied().unwrap_or(0),
+                u32le(9)
+            ),
+            CMD_DELETE_ENCODING_CONTEXT => format!("surface {} contexte {}", u16le(0), u32le(2)),
+            CMD_SOLIDFILL => format!(
+                "surface {} couleur {:#010x} {} rect, premier {}",
+                u16le(0),
+                u32le(2),
+                u16le(6),
+                rect(8)
+            ),
+            CMD_SURFACE_TO_SURFACE => format!(
+                "de {} vers {} rect {} {} point(s), premier ({},{})",
+                u16le(0),
+                u16le(2),
+                rect(4),
+                u16le(12),
+                u16le(14),
+                u16le(16)
+            ),
+            CMD_SURFACE_TO_CACHE => format!(
+                "surface {} clé {:#x} case {} rect {}",
+                u16le(0),
+                u64::from(u32le(2)) | (u64::from(u32le(6)) << 32),
+                u16le(10),
+                rect(12)
+            ),
+            CMD_CACHE_TO_SURFACE => format!(
+                "case {} vers surface {} {} point(s), premier ({},{})",
+                u16le(0),
+                u16le(2),
+                u16le(4),
+                u16le(6),
+                u16le(8)
+            ),
+            CMD_EVICT_CACHE_ENTRY => format!("case {}", u16le(0)),
+            CMD_CREATE_SURFACE => format!(
+                "surface {} {}×{} format {}",
+                u16le(0),
+                u16le(2),
+                u16le(4),
+                c.get(6).copied().unwrap_or(0)
+            ),
+            CMD_DELETE_SURFACE => format!("surface {}", u16le(0)),
+            CMD_START_FRAME => format!("horodatage {} trame {}", u32le(0), u32le(4)),
+            CMD_END_FRAME => format!("trame {}", u32le(0)),
+            CMD_RESET_GRAPHICS => format!("{}×{} {} moniteur(s)", u32le(0), u32le(4), u32le(8)),
+            CMD_MAP_SURFACE_TO_OUTPUT => {
+                format!("surface {} origine ({},{})", u16le(0), u32le(4), u32le(8))
+            }
+            _ => format!("{} octets", c.len()),
+        };
+        eprintln!("egfx {} : {detail}", nom_pdu(p.id));
+        if p.id == CMD_WIRE_TO_SURFACE_2 && c.len() > 13 {
+            inspecter_progressif(&c[13..]);
+        }
+    }
+
     /// Traite un PDU du serveur. Rend un accusé de trame le cas échéant.
     fn traiter(&mut self, p: &Pdu) -> Option<Vec<u8>> {
+        if self.journal {
+            Self::journaliser(p);
+        }
         let c = &p.charge;
         match p.id {
             CMD_CREATE_SURFACE if c.len() >= 7 => {
@@ -416,6 +535,11 @@ impl Egfx {
                         self.file.lock().unwrap().taille = Some((l, h));
                     }
                 }
+                // La scène repart de zéro : plus aucun palier en cours n'a de
+                // suite, quelle que soit la surface.
+                for s in self.surfaces.values_mut() {
+                    s.tuiles.oublier();
+                }
             }
             CMD_WIRE_TO_SURFACE_1 if c.len() > 17 => self.wire_to_surface_1(c),
             CMD_WIRE_TO_SURFACE_2 if c.len() > 13 => self.decoder_surface(c),
@@ -423,7 +547,16 @@ impl Egfx {
             CMD_SURFACE_TO_SURFACE if c.len() >= 14 => self.surface_vers_surface(c),
             CMD_SURFACE_TO_CACHE if c.len() >= 20 => self.surface_vers_cache(c),
             CMD_CACHE_TO_SURFACE if c.len() >= 6 => self.cache_vers_surface(c),
-            CMD_DELETE_ENCODING_CONTEXT => self.decodeur.oublier_tuiles(),
+            // Le serveur referme un contexte de codec (surfaceId, puis
+            // codecContextId). Ce n'est PAS l'état des tuiles progressives :
+            // Windows enchaîne aussitôt un nouveau contexte dont les premières
+            // tuiles sont « en différence », c'est-à-dire relatives aux
+            // coefficients gardés pour la surface — ceux du contexte qu'il
+            // vient de fermer. Les oublier ici rend un carré gris en (0, 0) et
+            // une dernière colonne de tuiles abîmée (`windows-surfaces-
+            // successives`, trame 19). FreeRDP l'ignore de même ; l'état vit
+            // avec la surface et meurt avec elle.
+            CMD_DELETE_ENCODING_CONTEXT => {}
             CMD_EVICT_CACHE_ENTRY if c.len() >= 2 => {
                 self.cache.oublier(u16::from_le_bytes([c[0], c[1]]));
             }
