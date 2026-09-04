@@ -19,7 +19,7 @@ application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1085%20verts-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1115%20verts-brightgreen.svg)](docs/qualite.md)
 
 <img src="docs/captures/demo.webp" alt="Démonstration : un terminal SSH, puis un bureau Windows 11, dans avash" width="880">
 
@@ -31,6 +31,7 @@ application, qui lit votre `~/.ssh/config` tel quel.
 |---|---|
 | **SSH** | terminal complet (xterm.js), onglets, `ProxyJump` en chaîne, agent, clés générées et déployées depuis l'application |
 | **RDP** | bureaux Windows, xrdp et GNOME Remote Desktop intégrés (IronRDP), redimensionnement natif sans zoom d'image, presse-papiers partagé sur demande |
+| **VNC** | les bureaux VNC dans la même fenêtre (ZRLE, clavier en keysyms, presse-papiers), par le même processus que le RDP |
 | **SFTP** | panneau de fichiers sur la session du terminal : parcourir, envoyer, télécharger, renommer, supprimer |
 | **Tunnels** | locaux (`-L`), distants (`-R`) et SOCKS (`-D`), avec leur état en direct |
 | **Organisation** | dossiers par glisser-déposer, étiquettes, recherche instantanée, palette de commandes, snippets, santé des hôtes, enregistrement de session |
@@ -143,7 +144,7 @@ enchaîne validation, construction et empreintes.
 
 | | avash | PuTTY | MobaXterm | Remmina | Termius |
 |---|:-:|:-:|:-:|:-:|:-:|
-| SSH, RDP et SFTP dans la même fenêtre | ✓ | SSH | ✓ | ✓ | SSH, SFTP |
+| SSH, RDP, VNC et SFTP dans la même fenêtre | ✓ | SSH | ✓ | ✓ | SSH, SFTP |
 | Lit et écrit `~/.ssh/config` | ✓ | – | – | – | import |
 | Linux, Windows, macOS | ✓ | Windows, Unix | Windows | Linux | ✓ |
 | Natif, sans Electron | ✓ | ✓ | ✓ | ✓ | – |
@@ -176,17 +177,17 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1085 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
+**1115 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
 sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 
 | Niveau | Tests | En un mot |
 |---|---:|---|
-| Cœur Rust et intégration contre un vrai sshd | 181 | parseurs, import, SFTP, tunnels, rebonds |
-| Interface Tauri | 62 | commandes, magasin de sessions, clavier |
-| Processus RDP | 101 | négociation, canal graphique, rejeu d'enregistrements réels, fuzzing par mutation |
-| Paquets IronRDP portés | 585 | nos correctifs et les tests amont qui ne s'exécutaient nulle part |
-| Front (Vitest) | 104 | logique pure, traductions |
-| Bout en bout (WebdriverIO) | 52 | l'application réelle, connexions SSH et RDP effectives, audit `axe-core` |
+| Cœur Rust et intégration contre un vrai sshd | 183 | parseurs, import, SFTP, tunnels, rebonds |
+| Interface Tauri | 63 | commandes, magasin de sessions, clavier |
+| Processus RDP | 110 | négociation, canal graphique, session VNC, rejeu d'enregistrements réels, fuzzing par mutation |
+| Paquets IronRDP et vnc-rs portés | 595 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
+| Front (Vitest) | 110 | logique pure, keysyms VNC, traductions |
+| Bout en bout (WebdriverIO) | 54 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, le Scorecard de l'OpenSSF,
@@ -197,9 +198,10 @@ que chaque dispositif a réellement trouvé : [docs/qualite.md](docs/qualite.md)
 ## Architecture
 
 Trois composants : un cœur SSH réutilisable (`crates/avash`), l'application
-Tauri (`crates/avash-ui`), et un processus RDP séparé (`rdp-sidecar`, IronRDP)
-qui parle à l'interface par WebSocket binaire local. Quatre paquets IronRDP
-sont portés avec des correctifs ciblés, documentés dans
+Tauri (`crates/avash-ui`), et un processus de bureau distant séparé
+(`rdp-sidecar` : IronRDP pour le RDP, vnc-rs pour le VNC) qui parle à
+l'interface par WebSocket binaire local. Quatre paquets IronRDP et le client
+VNC sont portés avec des correctifs ciblés, documentés dans
 [rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md). Le reste est dans
 [docs/architecture.md](docs/architecture.md).
 
@@ -212,10 +214,11 @@ flowchart LR
         front <-->|IPC Tauri| ui
         ui --> coeur
     end
-    sidecar["avash-rdp (Rust)<br/>IronRDP, codecs, magnétoscope"]
+    sidecar["avash-rdp (Rust)<br/>IronRDP, vnc-rs, codecs, magnétoscope"]
     front <-->|WebSocket binaire local| sidecar
     coeur -->|SSH, SFTP| ssh[("Serveurs SSH")]
     sidecar -->|RDP, TLS, NLA| rdp[("Windows, xrdp,<br/>GNOME Remote Desktop")]
+    sidecar -->|VNC| vnc[("Serveurs VNC")]
 ```
 
 ## Contribuer

@@ -9,6 +9,38 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Le protocole d'un bureau distant. Les deux partagent le fichier, le
+/// formulaire, le trousseau et le processus qui les sert ; seul le dialogue
+/// avec le serveur change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocole {
+    #[default]
+    Rdp,
+    Vnc,
+}
+
+impl Protocole {
+    /// Port par défaut du protocole.
+    #[must_use]
+    pub fn port_par_defaut(self) -> u16 {
+        match self {
+            Protocole::Rdp => 3389,
+            Protocole::Vnc => 5900,
+        }
+    }
+
+    /// Lit « rdp » ou « vnc » ; tout autre texte (ou rien) vaut RDP, le
+    /// protocole des fichiers écrits avant l'arrivée du VNC.
+    #[must_use]
+    pub fn depuis(texte: Option<&str>) -> Self {
+        match texte.map(str::trim) {
+            Some("vnc") => Protocole::Vnc,
+            _ => Protocole::Rdp,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RdpHost {
     pub id: String,
@@ -27,6 +59,9 @@ pub struct RdpHost {
     /// version antérieure : on ne relâche jamais une garde en silence.
     #[serde(default)]
     pub sans_nla: bool,
+    /// RDP sauf mention contraire : un fichier antérieur n'a pas ce champ.
+    #[serde(default)]
+    pub protocole: Protocole,
 }
 
 impl RdpHost {
@@ -36,10 +71,12 @@ impl RdpHost {
         let user = user.trim().to_string();
         let name = {
             let n = name.trim();
-            if n.is_empty() {
-                format!("{user}@{host}")
-            } else {
+            if !n.is_empty() {
                 n.to_string()
+            } else if user.is_empty() {
+                host.clone()
+            } else {
+                format!("{user}@{host}")
             }
         };
         Self {
@@ -52,7 +89,21 @@ impl RdpHost {
             height,
             folder: String::new(),
             sans_nla: false,
+            protocole: Protocole::Rdp,
         }
+    }
+
+    /// Le même bureau, en VNC.
+    #[must_use]
+    pub fn en(mut self, protocole: Protocole) -> Self {
+        self.protocole = protocole;
+        self
+    }
+
+    /// Identifiant du mot de passe de ce bureau dans le trousseau.
+    #[must_use]
+    pub fn compte_trousseau(&self) -> String {
+        keyring_account_pour(self.protocole, &self.user, &self.host, self.port)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -69,7 +120,9 @@ impl RdpHost {
         if self.host.contains([' ', '\t', '\n', '\r', '\0']) {
             bail!("L'adresse du serveur RDP contient un caractère interdit (espace ou saut de ligne).");
         }
-        if self.user.trim().is_empty() {
+        // L'authentification VNC classique n'a qu'un mot de passe : le nom
+        // d'utilisateur y est facultatif.
+        if self.protocole == Protocole::Rdp && self.user.trim().is_empty() {
             bail!("L'utilisateur RDP est vide.");
         }
         Ok(())
@@ -79,7 +132,19 @@ impl RdpHost {
 /// Identifiant trousseau d'un compte RDP (distinct des comptes SSH).
 #[must_use]
 pub fn keyring_account(user: &str, host: &str, port: u16) -> String {
-    format!("rdp:{}@{}:{}", user.trim(), host.trim(), port)
+    keyring_account_pour(Protocole::Rdp, user, host, port)
+}
+
+/// Identifiant trousseau d'un compte de bureau distant, préfixé par son
+/// protocole : un serveur VNC et un serveur RDP sur la même machine n'ont
+/// pas le même mot de passe.
+#[must_use]
+pub fn keyring_account_pour(protocole: Protocole, user: &str, host: &str, port: u16) -> String {
+    let prefixe = match protocole {
+        Protocole::Rdp => "rdp",
+        Protocole::Vnc => "vnc",
+    };
+    format!("{prefixe}:{}@{}:{}", user.trim(), host.trim(), port)
 }
 
 /// `~/.config/avash/rdp.yaml`
@@ -198,6 +263,40 @@ mod tests {
         assert!(RdpHost::new("x", " ", 3389, "u", 1, 1).validate().is_err());
         assert!(RdpHost::new("x", "h", 3389, " ", 1, 1).validate().is_err());
         assert!(RdpHost::new("x", "h", 3389, "u", 1, 1).validate().is_ok());
+    }
+
+    /// L'authentification VNC classique n'a qu'un mot de passe : un bureau
+    /// VNC sans utilisateur est valide, et son nom par défaut est l'adresse.
+    #[test]
+    fn un_bureau_vnc_se_passe_d_utilisateur() {
+        let v = RdpHost::new("", "10.0.0.9", 5900, "", 0, 0).en(Protocole::Vnc);
+        assert!(v.validate().is_ok());
+        assert_eq!(v.name, "10.0.0.9");
+        assert_eq!(v.compte_trousseau(), "vnc:@10.0.0.9:5900");
+        // Même adresse, même port : un compte RDP et un compte VNC ne se
+        // marchent pas dessus dans le trousseau.
+        let r = RdpHost::new("", "10.0.0.9", 5900, "", 0, 0);
+        assert_ne!(r.compte_trousseau(), v.compte_trousseau());
+        assert!(r.validate().is_err(), "le RDP exige un utilisateur");
+    }
+
+    /// Un fichier écrit avant le VNC n'a pas de champ `protocole` : il se
+    /// relit en RDP, et un fichier avec le champ le garde.
+    #[test]
+    fn le_protocole_est_rdp_par_defaut_et_survit_a_l_aller_retour() {
+        let ancien =
+            "- id: r-1\n  name: A\n  host: h\n  port: 3389\n  user: u\n  width: 0\n  height: 0\n";
+        let lus: Vec<RdpHost> = serde_yaml::from_str(ancien).unwrap();
+        assert_eq!(lus[0].protocole, Protocole::Rdp);
+        let v = RdpHost::new("V", "h", 5900, "", 0, 0).en(Protocole::Vnc);
+        let texte = serde_yaml::to_string(std::slice::from_ref(&v)).unwrap();
+        assert!(texte.contains("protocole: vnc"), "{texte}");
+        let relus: Vec<RdpHost> = serde_yaml::from_str(&texte).unwrap();
+        assert_eq!(relus, vec![v]);
+        assert_eq!(Protocole::depuis(Some("vnc")), Protocole::Vnc);
+        assert_eq!(Protocole::depuis(Some("autre")), Protocole::Rdp);
+        assert_eq!(Protocole::depuis(None), Protocole::Rdp);
+        assert_eq!(Protocole::Vnc.port_par_defaut(), 5900);
     }
 
     #[test]

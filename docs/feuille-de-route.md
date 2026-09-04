@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 04/09/2026 |
 |---|---|
-| Tests | 344 Rust (147 cœur, 34 intégration, 62 interface, 101 processus RDP) · 585 dans les paquets IronRDP portés · 104 front · 52 scénarios bout en bout dans 26 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 356 Rust (149 cœur, 34 intégration, 63 interface, 110 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 110 front · 54 scénarios bout en bout dans 27 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -330,7 +330,14 @@ Par ordre de valeur décroissante :
 
 1. **Enregistrement de session** (format asciinema) — **fait** : depuis le menu du terminal, un fichier asciicast v2 par session dans le répertoire de configuration, en 0600 ; la sortie et les redimensionnements, jamais les frappes ; relu par un scénario bout en bout sur la session SSH réelle.
 2. **Santé des hôtes** — **fait** : une connexion TCP jusqu'au port de chaque hôte SSH et RDP, seize à la fois, bornée à 1,5 s, lancée depuis la palette ; voyant vert ou rouge sur la ligne, latence ou raison en infobulle ; un hôte derrière un rebond n'est pas sondé. Scénario bout en bout sur le sshd local et une adresse sans route.
-3. **VNC** — complète la couverture des bureaux distants.
+3. **VNC** — **fait** (04/09/2026) : RFB 3.8 par le même processus, le même
+   canal et le même canvas que le RDP (client `vnc-rs` porté et durci dans
+   `rdp-sidecar/vendor/`), clavier en keysyms, presse-papiers, mot de passe au
+   trousseau ; un serveur VNC de test réagit aux entrées et le scénario bout
+   en bout mesure les pixels (clic → carré magenta, « g » → bureau vert,
+   « é » → keysym 0xe9). Pas de chiffrement : dit dans le formulaire et dans
+   `SECURITY.md`, tunnel SSH recommandé. Reste à faire : VeNCrypt/TLS, le
+   pseudo-codage curseur, Tight (JPEG).
 4. **Port série** — utile en environnement réseau et industriel.
 5. **Transfert de fichiers par RDP** — le presse-papiers texte fonctionne, les
    fichiers restent à faire.
@@ -344,7 +351,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 52 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 54 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
 | Régressions arrivées à l'utilisateur | — | zéro |

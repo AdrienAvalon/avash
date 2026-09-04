@@ -68,7 +68,14 @@ Le fichier `Cargo.toml` à la racine définit un workspace de deux crates, et en
   (utilisé par le cœur SSH). Cohabiter dans le même arbre de dépendances est
   donc impossible. La séparation en processus distinct résout le conflit :
   chaque binaire résout ses dépendances indépendamment. C'est le sens du
-  `exclude = ["rdp-sidecar", "test-rdp-server"]` dans le `Cargo.toml` racine.
+  `exclude = ["rdp-sidecar", "test-rdp-server", "test-vnc-server", "fuzz"]`
+  dans le `Cargo.toml` racine.
+
+  Le même processus sert aussi les bureaux **VNC** (`--vnc`, `src/vnc.rs`) :
+  client `vnc-rs` (copie portée dans `vendor/`, voir son README), même poste
+  local, même protocole avec l'interface, même image et même cadencement sur
+  accusé de réception que le RDP. Seuls changent le dialogue avec le serveur
+  et le clavier, en keysyms (message `14`).
 
 Au moment de la release, le sidecar est compilé puis embarqué dans l'AppImage
 via le mécanisme `externalBin` de Tauri, à côté de l'exécutable principal.
@@ -157,6 +164,7 @@ Entiers en little-endian.
 | `10` | État des verrous clavier | `bits:u8` (Verr. num / maj / défil.) |
 | `11` | Onglet visible ou en pause | `pause:u8` |
 | `12` | Partage du presse-papiers autorisé | `autorise:u8` |
+| `14` | Clavier VNC | `keysym:u32`, `pressé:u8` (VNC seulement ; le RDP garde le `4`) |
 
 ### Sidecar → application
 

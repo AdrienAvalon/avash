@@ -17,7 +17,10 @@
 //!                     · [9]REFRESH · [10]LOCKS bits:u8 · [11]PAUSE pause:u8
 //!                     · [12]CLIPBOARD_AUTORISE autorise:u8
 //!
+//!                     · [14]KEYSYM keysym:u32,down (VNC seulement)
+//!
 //! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png] [--layout fr]
+//!         avash-rdp --vnc --host H [--port 5900] [-u USER] (mot de passe sur stdin)
 
 // Lints stylistiques assumés pour ce petit binaire d'orchestration :
 // noms de produits en prose (doc_markdown), main() qui séquence tout le
@@ -49,6 +52,7 @@ mod progressif;
 mod session;
 mod surface;
 mod trames;
+mod vnc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -143,6 +147,11 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let args = parse_args()?;
+    // VNC : même poste local, même protocole avec l'interface, un autre
+    // dialogue avec le serveur ; ni redirection ni canal graphique.
+    if args.vnc {
+        return vnc::executer(&args).await;
+    }
     // Une redirection oblige à tout refaire : nouvelle connexion TCP, nouvelle
     // négociation, en présentant cette fois le jeton de routage. GNOME Remote
     // Desktop s'en sert pour remettre le client du démon système au démon de la

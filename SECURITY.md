@@ -59,7 +59,12 @@ répondent.
   d'hôte SSH et de l'empreinte du certificat RDP dès le premier contact, avec
   refus explicite au changement ; NLA exigé en RDP, sans repli silencieux vers
   TLS seul ; aucun secret ne quitte la machine autrement que par le protocole
-  chiffré négocié.
+  chiffré négocié. **Exception assumée : VNC.** Le RFB classique ne chiffre
+  rien et n'a rien à épingler ; le mot de passe y est protégé par un DES à
+  56 bits qui ne résiste à personne, et l'image passe en clair. Avash le dit
+  dans le formulaire et ne prétend pas mieux : hors d'un réseau que vous
+  contrôlez, ouvrez un tunnel SSH (`Tunnels`) vers le port du serveur et
+  connectez le bureau VNC sur `127.0.0.1`.
 - **Un serveur malveillant, compromis ou simplement défaillant.** Une fois la
   session établie, tout ce qu'il envoie est traité comme une entrée non fiable :
   tailles bornées, rectangles rognés, décodeurs graphiques exercés par fuzzing à

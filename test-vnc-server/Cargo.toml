@@ -1,0 +1,15 @@
+[package]
+name = "test-vnc-server"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Avash — serveur VNC de test pour la suite bout en bout"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+# Serveur RFB complet (ZRLE, Tight, Raw, authentification VNC) : ce que le
+# client d'avash rencontre en face d'un vrai serveur, sans machine de plus.
+rustvncserver = { version = "2.2.1", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+pico-args = "0.5"
+anyhow = "1"

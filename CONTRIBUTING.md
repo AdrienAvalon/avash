@@ -237,7 +237,10 @@ Les tests de bout en bout pilotent la **vraie application compilée** via
 
 ```bash
 # Recompiler l'app d'abord : le binaire release embarque le front
-cargo build --release -p avash-ui -p test-rdp-server
+cargo build --release -p avash-ui
+# Les serveurs de test (RDP, VNC), hors espace de travail
+cargo build --release --manifest-path test-rdp-server/Cargo.toml
+cargo build --release --manifest-path test-vnc-server/Cargo.toml
 
 cd e2e && npm install   # une fois
 npm test                # toute la suite

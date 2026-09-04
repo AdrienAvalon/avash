@@ -22,6 +22,10 @@ pub(crate) struct Args {
     pub(crate) width: u16,
     pub(crate) height: u16,
     pub(crate) shot: Option<String>,
+    /// `--vnc` : le serveur parle RFB, pas RDP. L'utilisateur devient
+    /// facultatif (l'authentification VNC classique n'a qu'un mot de passe) et
+    /// le port par défaut est 5900.
+    pub(crate) vnc: bool,
 }
 
 struct Pa(Vec<String>);
@@ -73,10 +77,21 @@ pub(crate) fn parse_args_de(args: &[&str], pass: &str) -> Result<Args> {
 }
 
 fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
+    let vnc = a.drapeau("--vnc");
     Ok(Args {
         host: a.opt("--host").context("argument requis : --host")?,
-        port: a.opt("--port").and_then(|s| s.parse().ok()).unwrap_or(3389),
-        user: a.req2("-u", "--username")?,
+        port: a
+            .opt("--port")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(if vnc { 5900 } else { 3389 }),
+        user: if vnc {
+            a.opt("-u")
+                .or_else(|| a.opt("--username"))
+                .unwrap_or_default()
+        } else {
+            a.req2("-u", "--username")?
+        },
+        vnc,
         pass,
         domain: a.opt("--domain"),
         sans_nla: a.drapeau("--sans-nla"),
@@ -266,6 +281,32 @@ pub(crate) fn taille_sure(w: u16, h: u16) -> anyhow::Result<(u16, u16)> {
         "Le serveur annonce une résolution inacceptable ({w}x{h})."
     );
     Ok((w, h))
+}
+
+#[cfg(test)]
+mod tests_vnc {
+    use super::parse_args_de;
+
+    /// L'authentification VNC classique n'a qu'un mot de passe : l'utilisateur
+    /// n'est plus requis, et le port par défaut change.
+    #[test]
+    fn en_vnc_l_utilisateur_est_facultatif_et_le_port_vaut_5900() {
+        let a = parse_args_de(&["--vnc", "--host", "h"], "s").unwrap();
+        assert!(a.vnc);
+        assert_eq!(a.port, 5900);
+        assert_eq!(a.user, "");
+        assert_eq!(a.pass, "s");
+        let a = parse_args_de(&["--vnc", "--host", "h", "--port", "5901", "-u", "x"], "s").unwrap();
+        assert_eq!((a.port, a.user.as_str()), (5901, "x"));
+    }
+
+    #[test]
+    fn en_rdp_l_utilisateur_reste_requis_et_le_port_vaut_3389() {
+        assert!(parse_args_de(&["--host", "h"], "s").is_err());
+        let a = parse_args_de(&["--host", "h", "-u", "x"], "s").unwrap();
+        assert!(!a.vnc);
+        assert_eq!(a.port, 3389);
+    }
 }
 
 #[cfg(test)]

@@ -18,6 +18,10 @@ avash = { path = "../crates/avash" }
 # Le décodeur ClearCodec porté (sous-codec NSCodec) ; son parseur vient du
 # paquet ironrdp-pdu porté lui aussi (RLEX à une couleur), par le patch.
 ironrdp-graphics = { path = "../rdp-sidecar/vendor/ironrdp-graphics" }
+# Le client VNC porté (bornes sur ce qu'un serveur fait allouer) ; son
+# scénario tourne sur un moteur tokio à un seul fil.
+vnc-rs = { path = "../rdp-sidecar/vendor/vnc-rs" }
+tokio = { version = "1", features = ["rt", "io-util", "time", "macros"] }
 
 [patch.crates-io]
 ironrdp-pdu = { path = "../rdp-sidecar/vendor/ironrdp-pdu" }
@@ -65,6 +69,13 @@ bench = false
 [[bin]]
 name = "clearcodec"
 path = "fuzz_targets/clearcodec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vnc_serveur"
+path = "fuzz_targets/vnc_serveur.rs"
 test = false
 doc = false
 bench = false

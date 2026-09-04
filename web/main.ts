@@ -211,8 +211,12 @@ function rdpHostElement(h: RdpHostT): HTMLElement {
   dotRdp.className = "dot" + (live ? " live" : " " + classeSante(`rdp:${h.id}`));
   dotRdp.title = titreSante(`rdp:${h.id}`);
   el.querySelector(".alias")!.textContent = h.name;
-  el.querySelector(".meta")!.textContent = `${h.user}@${h.host}:${h.port}`;
-  el.title = `${h.name} · ${h.user}@${h.host}:${h.port} — ${gestesLigne()}`;
+  // Un bureau VNC se lit comme tel dans la liste ; l'utilisateur y est
+  // facultatif, on ne montre pas un « @ » orphelin.
+  const cible = `${h.user ? `${h.user}@` : ""}${h.host}:${h.port}`;
+  const meta = h.protocole === "vnc" ? `VNC · ${cible}` : cible;
+  el.querySelector(".meta")!.textContent = meta;
+  el.title = `${h.name} · ${meta} — ${gestesLigne()}`;
   if (h.id === state.pickedRdp) el.classList.add("picked");
   el.addEventListener("click", () => {
     state.pickedRdp = h.id;

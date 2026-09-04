@@ -1,6 +1,6 @@
 //! La session établie : boucle d'événements, cadencement des trames, redimensionnement, presse-papiers, statistiques.
 
-use crate::acces_local::{jetons_egaux, verifier_origine, Poste, PosteSplit};
+use crate::acces_local::{etablir_poste, Poste};
 use crate::args::{taille_sure, Args};
 use crate::capture::{run_shot, Graphique};
 use crate::connexion::{connect, session_close_par_le_serveur, NLA_INDISPONIBLE};
@@ -24,8 +24,6 @@ use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_tokio::single_sequence_step;
 use ironrdp_tokio::FramedWrite as _;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
 /// Filet anti-gel : si un ACK de rendu se perd, on renvoie l'état courant
@@ -156,79 +154,7 @@ pub(crate) async fn executer(
     // Établi au premier passage seulement : une redirection de serveur rappelle
     // cette fonction, et rouvrir un port neuf laisserait l'interface parler dans
     // le vide, attachée à l'ancien.
-    if poste.is_none() {
-        // Serveur WebSocket local : un seul client (Avash), jeton obligatoire.
-        let listener = TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .context("écoute WebSocket")?;
-        let port = listener.local_addr()?.port();
-        let token = format!("{:016x}", rand::random::<u64>());
-        // Annonce le point de connexion à Avash.
-        let mut out = tokio::io::stdout();
-        out.write_all(format!("{port} {token}\n").as_bytes())
-            .await?;
-        out.flush().await?;
-
-        // On boucle sur les connexions au lieu d'en accepter une seule. Le port est
-        // ouvert avant même que l'interface n'en soit avertie : n'importe quel
-        // processus local — ou une page web, les WebSocket n'étant pas soumises à
-        // la politique d'origine pour *établir* la connexion — pouvait s'y
-        // présenter le premier. Un message quelconque faisait quitter le sidecar,
-        // détruisant une session RDP déjà authentifiée (TLS + NLA refaits) ; une
-        // connexion TCP laissée sans poignée de main WebSocket consommait la seule
-        // place d'`accept` et l'interface n'arrivait jamais à se connecter.
-        // Le jeton (64 bits) reste hors de portée : c'était un déni de service, pas
-        // un détournement. On rejette maintenant l'intrus et on attend le suivant,
-        // avec un délai de garde par tentative pour qu'un client muet ne bloque pas
-        // la file.
-        const DELAI_POIGNEE: Duration = Duration::from_secs(10);
-        // Chaque validation (poignée WebSocket + premier message) dans SA tâche,
-        // et l'acceptation continue en parallèle : un client muet n'immobilise
-        // plus la file, ce qui fermait la porte à un déni de service par une page
-        // web ou un processus local qui ouvrait des connexions sans rien envoyer.
-        // On retient le premier client qui présente le bon jeton, puis on cesse
-        // d'accepter (les tâches encore en vol tombent avec le canal).
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<PosteSplit>(1);
-        let (sink, stream) = loop {
-            tokio::select! {
-                Some(pair) = rx.recv() => break pair,
-                accepte = listener.accept() => {
-                    let Ok((tcp, _)) = accepte else { continue };
-                    tcp.set_nodelay(true).ok();
-                    let tx = tx.clone();
-                    let token = token.clone();
-                    tokio::spawn(async move {
-                        // Contrôle d'origine (verifier_origine) : une page web réelle
-                        // porte http(s)://<domaine> et se voit refusée ; la webview
-                        // (tauri://… ou tauri.localhost, localhost en dev) passe. Le
-                        // jeton reste requis.
-                        let Ok(Ok(ws)) = tokio::time::timeout(
-                            DELAI_POIGNEE,
-                            tokio_tungstenite::accept_hdr_async(tcp, verifier_origine),
-                        )
-                        .await
-                        else {
-                            return; // poignée absente, trop lente, ou origine refusée
-                        };
-                        let (sink, mut stream) = ws.split();
-                        // Premier message = le jeton, comparé à temps constant.
-                        if let Ok(Some(Ok(Message::Binary(t)))) =
-                            tokio::time::timeout(DELAI_POIGNEE, stream.next()).await
-                        {
-                            if jetons_egaux(&t, token.as_bytes()) {
-                                let _ = tx.send((sink, stream)).await;
-                            }
-                        }
-                    });
-                }
-            }
-        };
-        *poste = Some(Poste {
-            _listener: listener,
-            sink,
-            stream,
-        });
-    }
+    etablir_poste(poste).await?;
     let Poste { sink, stream, .. } = poste.as_mut().expect("poste établi juste au-dessus");
 
     // CONNECTED [1][w][h]

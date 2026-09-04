@@ -38,6 +38,92 @@ pub(crate) type PosteSplit = (
     futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>,
 );
 
+/// Ouvre l'écoute locale, annonce « PORT JETON » sur la sortie standard et
+/// attend le premier client qui présente le jeton. Sans effet si le poste
+/// existe déjà : une redirection RDP rappelle la session, et rouvrir un port
+/// neuf laisserait l'interface parler dans le vide, attachée à l'ancien.
+pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<()> {
+    use anyhow::Context as _;
+    use futures_util::StreamExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    if poste.is_some() {
+        return Ok(());
+    }
+    // Serveur WebSocket local : un seul client (Avash), jeton obligatoire.
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .context("écoute WebSocket")?;
+    let port = listener.local_addr()?.port();
+    let token = format!("{:016x}", rand::random::<u64>());
+    // Annonce le point de connexion à Avash.
+    let mut out = tokio::io::stdout();
+    out.write_all(format!("{port} {token}\n").as_bytes())
+        .await?;
+    out.flush().await?;
+
+    // On boucle sur les connexions au lieu d'en accepter une seule. Le port est
+    // ouvert avant même que l'interface n'en soit avertie : n'importe quel
+    // processus local — ou une page web, les WebSocket n'étant pas soumises à
+    // la politique d'origine pour *établir* la connexion — pouvait s'y
+    // présenter le premier. Un message quelconque faisait quitter le sidecar,
+    // détruisant une session RDP déjà authentifiée (TLS + NLA refaits) ; une
+    // connexion TCP laissée sans poignée de main WebSocket consommait la seule
+    // place d'`accept` et l'interface n'arrivait jamais à se connecter.
+    // Le jeton (64 bits) reste hors de portée : c'était un déni de service, pas
+    // un détournement. On rejette maintenant l'intrus et on attend le suivant,
+    // avec un délai de garde par tentative pour qu'un client muet ne bloque pas
+    // la file.
+    const DELAI_POIGNEE: std::time::Duration = std::time::Duration::from_secs(10);
+    // Chaque validation (poignée WebSocket + premier message) dans SA tâche,
+    // et l'acceptation continue en parallèle : un client muet n'immobilise
+    // plus la file, ce qui fermait la porte à un déni de service par une page
+    // web ou un processus local qui ouvrait des connexions sans rien envoyer.
+    // On retient le premier client qui présente le bon jeton, puis on cesse
+    // d'accepter (les tâches encore en vol tombent avec le canal).
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<PosteSplit>(1);
+    let (sink, stream) = loop {
+        tokio::select! {
+            Some(pair) = rx.recv() => break pair,
+            accepte = listener.accept() => {
+                let Ok((tcp, _)) = accepte else { continue };
+                tcp.set_nodelay(true).ok();
+                let tx = tx.clone();
+                let token = token.clone();
+                tokio::spawn(async move {
+                    // Contrôle d'origine (verifier_origine) : une page web réelle
+                    // porte http(s)://<domaine> et se voit refusée ; la webview
+                    // (tauri://… ou tauri.localhost, localhost en dev) passe. Le
+                    // jeton reste requis.
+                    let Ok(Ok(ws)) = tokio::time::timeout(
+                        DELAI_POIGNEE,
+                        tokio_tungstenite::accept_hdr_async(tcp, verifier_origine),
+                    )
+                    .await
+                    else {
+                        return; // poignée absente, trop lente, ou origine refusée
+                    };
+                    let (sink, mut stream) = ws.split();
+                    // Premier message = le jeton, comparé à temps constant.
+                    if let Ok(Some(Ok(Message::Binary(t)))) =
+                        tokio::time::timeout(DELAI_POIGNEE, stream.next()).await
+                    {
+                        if jetons_egaux(&t, token.as_bytes()) {
+                            let _ = tx.send((sink, stream)).await;
+                        }
+                    }
+                });
+            }
+        }
+    };
+    *poste = Some(Poste {
+        _listener: listener,
+        sink,
+        stream,
+    });
+    Ok(())
+}
+
 /// Compare deux jetons en temps constant : la durée ne dépend pas de la position
 /// du premier octet qui diffère. Le `==` de tranches s'arrête au premier écart,
 /// ce qui, en théorie, laisse deviner le jeton octet par octet. Non exploitable

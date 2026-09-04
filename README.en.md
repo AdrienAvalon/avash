@@ -19,7 +19,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1085%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1115%20passing-brightgreen.svg)](docs/qualite.md)
 
 <img src="docs/captures/demo.webp" alt="Demo: an SSH terminal, then a Windows 11 desktop, inside avash" width="880">
 
@@ -35,6 +35,7 @@ application, which reads your `~/.ssh/config` as it is.
 |---|---|
 | **SSH** | full terminal (xterm.js), tabs, chained `ProxyJump`, agent, keys generated and deployed from the app |
 | **RDP** | Windows, xrdp and GNOME Remote Desktop desktops built in (IronRDP), native resizing with no image scaling, clipboard shared on request |
+| **VNC** | VNC desktops in the same window (ZRLE, keyboard as keysyms, clipboard), through the same process as RDP |
 | **SFTP** | a file panel on the terminal's own session: browse, upload, download, rename, delete |
 | **Tunnels** | local (`-L`), remote (`-R`) and SOCKS (`-D`), with live status |
 | **Organisation** | drag-and-drop folders, tags, instant search, command palette, snippets, host health, session recording |
@@ -144,7 +145,7 @@ runs validation, build and checksums in one go.
 
 | | avash | PuTTY | MobaXterm | Remmina | Termius |
 |---|:-:|:-:|:-:|:-:|:-:|
-| SSH, RDP and SFTP in one window | ✓ | SSH | ✓ | ✓ | SSH, SFTP |
+| SSH, RDP, VNC and SFTP in one window | ✓ | SSH | ✓ | ✓ | SSH, SFTP |
 | Reads and writes `~/.ssh/config` | ✓ | – | – | – | import |
 | Linux, Windows, macOS | ✓ | Windows, Unix | Windows | Linux | ✓ |
 | Native, no Electron | ✓ | ✓ | ✓ | ✓ | – |
@@ -177,17 +178,17 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1085 tests** on every commit, on two independent pipelines (GitHub Actions on
+**1115 tests** on every commit, on two independent pipelines (GitHub Actions on
 Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 
 | Level | Tests | In a word |
 |---|---:|---|
-| Rust core and integration against a real sshd | 181 | parsers, import, SFTP, tunnels, jump hosts |
-| Tauri interface | 62 | commands, session store, keyboard |
-| RDP process | 101 | negotiation, graphics pipeline, replay of real recordings, mutation fuzzing |
-| Vendored IronRDP crates | 585 | our fixes and the upstream tests that ran nowhere |
-| Front (Vitest) | 104 | pure logic, translations |
-| End to end (WebdriverIO) | 52 | the real application, actual SSH and RDP connections, `axe-core` audit |
+| Rust core and integration against a real sshd | 183 | parsers, import, SFTP, tunnels, jump hosts |
+| Tauri interface | 63 | commands, session store, keyboard |
+| RDP process | 110 | negotiation, graphics pipeline, VNC session, replay of real recordings, mutation fuzzing |
+| Vendored IronRDP and vnc-rs crates | 595 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
+| Front (Vitest) | 110 | pure logic, VNC keysyms, translations |
+| End to end (WebdriverIO) | 54 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, the OpenSSF Scorecard, six
@@ -198,9 +199,10 @@ device actually found: [docs/qualite.md](docs/qualite.md) (in French).
 ## Architecture
 
 Three components: a reusable SSH core (`crates/avash`), the Tauri application
-(`crates/avash-ui`), and a separate RDP process (`rdp-sidecar`, IronRDP) that
-talks to the interface over a local binary WebSocket. Four IronRDP crates are
-vendored with targeted fixes, documented in
+(`crates/avash-ui`), and a separate remote-desktop process (`rdp-sidecar`:
+IronRDP for RDP, vnc-rs for VNC) that talks to the interface over a local
+binary WebSocket. Four IronRDP crates and the VNC client are vendored with
+targeted fixes, documented in
 [rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md). The rest is in
 [docs/architecture.md](docs/architecture.md).
 
@@ -213,10 +215,11 @@ flowchart LR
         front <-->|Tauri IPC| ui
         ui --> core
     end
-    sidecar["avash-rdp (Rust)<br/>IronRDP, codecs, recorder"]
+    sidecar["avash-rdp (Rust)<br/>IronRDP, vnc-rs, codecs, recorder"]
     front <-->|local binary WebSocket| sidecar
     core -->|SSH, SFTP| ssh[("SSH servers")]
     sidecar -->|RDP, TLS, NLA| rdp[("Windows, xrdp,<br/>GNOME Remote Desktop")]
+    sidecar -->|VNC| vnc[("VNC servers")]
 ```
 
 ## Contributing

@@ -51,7 +51,7 @@ variables:
 .cache-cible: &cache-cible
   key: "cible-$CI_COMMIT_REF_SLUG"
   fallback_keys: ["cible-main-protected", "cible-main"]
-  paths: ["target", "test-rdp-server/target"]
+  paths: ["target", "test-rdp-server/target", "test-vnc-server/target"]
 .cache-sidecar: &cache-sidecar
   key: "sidecar-$CI_COMMIT_REF_SLUG"
   fallback_keys: ["sidecar-main-protected", "sidecar-main"]
@@ -169,6 +169,8 @@ bout-en-bout:
     - cargo build --release --manifest-path test-rdp-server/Cargo.toml
     - openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost"
         -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
+    # Le serveur VNC de test, pour le scénario VNC.
+    - cargo build --release --manifest-path test-vnc-server/Cargo.toml
     # Ici le harnais tourne en root (conteneur), et sshd lancé par root exige
     # le répertoire de séparation de privilèges. L'image le crée ; on s'en
     # assure, /run pouvant être remonté.

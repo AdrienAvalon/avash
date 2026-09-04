@@ -84,6 +84,9 @@ fn sidecar_path() -> Option<std::path::PathBuf> {
 /// `sans_nla` : l'utilisateur a accepté de se passer d'authentification réseau
 /// pour ce serveur. Refusé par défaut — c'est une décision qui lui appartient,
 /// pas un repli silencieux.
+///
+/// `vnc` : le serveur parle RFB. Même processus, même canal local ; le port
+/// par défaut devient 5900 et l'utilisateur peut être vide.
 #[tauri::command]
 pub async fn rdp_open(
     state: tauri::State<'_, RdpStore>,
@@ -95,13 +98,18 @@ pub async fn rdp_open(
     width: u16,
     height: u16,
     sans_nla: bool,
+    vnc: bool,
 ) -> Result<RdpConn, String> {
     use std::process::Stdio;
+    let protocole = if vnc {
+        rdphost::Protocole::Vnc
+    } else {
+        rdphost::Protocole::Rdp
+    };
+    let port = port.unwrap_or(protocole.port_par_defaut());
     let password = if password.is_empty() {
-        avash::secrets::load(&rdphost::keyring_account(
-            &user,
-            &host,
-            port.unwrap_or(3389),
+        avash::secrets::load(&rdphost::keyring_account_pour(
+            protocole, &user, &host, port,
         ))
         .unwrap_or_default()
     } else {
@@ -112,7 +120,8 @@ pub async fn rdp_open(
     // connexion manuelle, ou un rdp.yaml écrit par une version antérieure, la
     // contournait entièrement — et une espace dans l'adresse suffit à casser
     // `rdp_known_hosts`, donc à désarmer le TOFU en silence.
-    avash::rdphost::RdpHost::new("", &host, port.unwrap_or(3389), &user, width, height)
+    avash::rdphost::RdpHost::new("", &host, port, &user, width, height)
+        .en(protocole)
         .validate()
         .map_err(|e| format!("{e:#}"))?;
     let Some(bin) = sidecar_path() else {
@@ -127,7 +136,7 @@ pub async fn rdp_open(
         "--host",
         &host,
         "--port",
-        &port.unwrap_or(3389).to_string(),
+        &port.to_string(),
         "-u",
         &user,
         "--width",
@@ -140,6 +149,7 @@ pub async fn rdp_open(
     } else {
         &[][..]
     })
+    .args(if vnc { &["--vnc"][..] } else { &[][..] })
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
@@ -351,6 +361,8 @@ pub fn rdp_hosts() -> Result<Vec<RdpHost>, String> {
 }
 
 /// Cree (`id` absent) ou modifie une connexion RDP enregistree.
+///
+/// `protocole` : « rdp » (défaut) ou « vnc ».
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn rdp_host_save(
@@ -362,8 +374,10 @@ pub fn rdp_host_save(
     width: u16,
     height: u16,
     folder: Option<String>,
+    protocole: Option<String>,
 ) -> Result<RdpHost, String> {
-    let mut h = RdpHost::new(&name, &host, port, &user, width, height);
+    let mut h = RdpHost::new(&name, &host, port, &user, width, height)
+        .en(rdphost::Protocole::depuis(protocole.as_deref()));
     if let Some(id) = id.filter(|i| !i.is_empty()) {
         h.id = id;
     }
@@ -395,11 +409,17 @@ pub fn rdp_host_delete(id: String) -> Result<(), String> {
     // Retrouver l'hote pour oublier son mot de passe avant suppression.
     if let Ok(hosts) = rdphost::load_hosts() {
         if let Some(h) = hosts.iter().find(|h| h.id == id) {
-            let _ = avash::secrets::forget(&rdphost::keyring_account(&h.user, &h.host, h.port));
+            let _ = avash::secrets::forget(&h.compte_trousseau());
         }
     }
     rdphost::remove_host_in(&rdphost::hosts_path(), &id).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Le compte du trousseau d'un bureau, d'après le protocole que le front
+/// nomme (« rdp » par défaut, « vnc »).
+fn compte(protocole: Option<&str>, user: &str, host: &str, port: u16) -> String {
+    rdphost::keyring_account_pour(rdphost::Protocole::depuis(protocole), user, host, port)
 }
 
 #[tauri::command]
@@ -408,8 +428,9 @@ pub fn rdp_password_save(
     port: u16,
     user: String,
     password: String,
+    protocole: Option<String>,
 ) -> Result<(), String> {
-    let id = rdphost::keyring_account(&user, &host, port);
+    let id = compte(protocole.as_deref(), &user, &host, port);
     avash::secrets::save(&id, &password).map_err(|e| format!("{e:#}"))
 }
 
@@ -421,8 +442,13 @@ pub fn rdp_password_save(
 /// et n'entre pas dans le tas de la webview, où il survivait jusque-là toute la
 /// durée de l'onglet (conservé pour la reconnexion). Le volet SSH procède ainsi
 /// depuis toujours (`password_known`).
-pub fn rdp_password_known(host: String, port: u16, user: String) -> bool {
-    avash::secrets::load(&rdphost::keyring_account(&user, &host, port)).is_some()
+pub fn rdp_password_known(
+    host: String,
+    port: u16,
+    user: String,
+    protocole: Option<String>,
+) -> bool {
+    avash::secrets::load(&compte(protocole.as_deref(), &user, &host, port)).is_some()
 }
 
 /// Déplace le secret d'un compte vers un autre lors d'une modification de bureau.
@@ -431,6 +457,7 @@ pub fn rdp_password_known(host: String, port: u16, user: String) -> bool {
 /// réécrire : le secret traversait l'IPC deux fois de plus, à la seule fin de
 /// changer de clé. Le trousseau est ici manipulé sans que le secret ne quitte
 /// le processus natif.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn rdp_password_move(
     old_host: String,
@@ -439,12 +466,14 @@ pub fn rdp_password_move(
     host: String,
     port: u16,
     user: String,
+    old_protocole: Option<String>,
+    protocole: Option<String>,
 ) -> Result<(), String> {
-    let ancien = rdphost::keyring_account(&old_user, &old_host, old_port);
+    let ancien = compte(old_protocole.as_deref(), &old_user, &old_host, old_port);
     let Some(secret) = avash::secrets::load(&ancien) else {
         return Ok(()); // rien à déplacer
     };
-    let nouveau = rdphost::keyring_account(&user, &host, port);
+    let nouveau = compte(protocole.as_deref(), &user, &host, port);
     avash::secrets::save(&nouveau, &secret).map_err(|e| format!("{e:#}"))?;
     // L'oubli n'a lieu qu'après une écriture réussie : l'inverse perdrait le
     // secret si le trousseau refusait la nouvelle entrée.
@@ -468,8 +497,13 @@ pub fn rdp_host_set_sans_nla(id: String, valeur: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn rdp_password_forget(host: String, port: u16, user: String) -> Result<(), String> {
-    let id = rdphost::keyring_account(&user, &host, port);
+pub fn rdp_password_forget(
+    host: String,
+    port: u16,
+    user: String,
+    protocole: Option<String>,
+) -> Result<(), String> {
+    let id = compte(protocole.as_deref(), &user, &host, port);
     avash::secrets::forget(&id).map_err(|e| format!("{e:#}"))
 }
 
@@ -533,6 +567,7 @@ mod tests_ouverture {
             800,
             600,
             false,
+            false,
         )
         .await;
         let Err(e) = issue else {
@@ -540,6 +575,33 @@ mod tests_ouverture {
         };
         assert!(e.contains("caractère interdit"), "{e}");
         assert!(app.state::<RdpStore>().inner.lock().unwrap().is_empty());
+    }
+
+    /// En VNC l'utilisateur est facultatif : ce n'est pas lui qui doit
+    /// arrêter la connexion. L'adresse, elle, reste contrôlée.
+    #[tokio::test]
+    async fn en_vnc_un_utilisateur_vide_ne_bloque_pas_mais_l_adresse_reste_controlee() {
+        let app = app_de_test();
+        let issue = rdp_open(
+            app.state::<RdpStore>(),
+            2,
+            "hote avec espace".into(),
+            None,
+            String::new(),
+            "p".into(),
+            800,
+            600,
+            false,
+            true,
+        )
+        .await;
+        let Err(e) = issue else {
+            panic!("une adresse à espace a été acceptée en VNC")
+        };
+        assert!(
+            e.contains("caractère interdit"),
+            "utilisateur vide refusé avant l'adresse : {e}"
+        );
     }
 
     #[tokio::test]

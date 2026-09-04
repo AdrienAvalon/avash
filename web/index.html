@@ -1079,7 +1079,9 @@
         <div class="auth-switch" style="margin-bottom:2px">
           <label class="radio" data-i18n="ssh"><input type="radio" name="proto" value="ssh" checked /> SSH</label>
           <label class="radio" data-i18n="rdp"><input type="radio" name="proto" value="rdp" /> RDP <code>bureau</code></label>
+          <label class="radio" data-i18n="vnc"><input type="radio" name="proto" value="vnc" /> VNC</label>
         </div>
+        <p class="modal-hint" id="m-vnc-hint" hidden data-i18n="vnc-sans-chiffrement">VNC ne chiffre rien : hors de ton réseau, passe par un tunnel SSH.</p>
         <label data-i18n="adresse-ou-ip">Adresse ou IP
           <input id="m-addr" name="addr" placeholder="192.168.1.10" required />
         </label>
@@ -1409,6 +1411,13 @@
       <form class="modal" id="rdp-edit-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="rdp-edit-modal-title">
         <h2 id="rdp-edit-modal-title" data-i18n="modifier-le-bureau-rdp">Modifier le bureau RDP</h2>
         <input type="hidden" id="re-id" />
+        <label data-i18n="protocole">Protocole
+          <select id="re-proto">
+            <option value="rdp">RDP</option>
+            <option value="vnc">VNC</option>
+          </select>
+        </label>
+        <p class="modal-hint" id="re-vnc-hint" hidden data-i18n="vnc-sans-chiffrement">VNC ne chiffre rien : hors de ton réseau, passe par un tunnel SSH.</p>
         <label data-i18n="nom">Nom
           <input id="re-name" required />
         </label>
@@ -1419,7 +1428,7 @@
           <input id="re-port" type="number" min="1" max="65535" placeholder="3389" />
         </label>
         <label data-i18n="utilisateur">Utilisateur
-          <input id="re-user" required />
+          <input id="re-user" />
         </label>
         <label><span data-i18n="mot-de-passe">Mot de passe <span class="field-hint" data-i18n="laisser-vide-pour-ne-pas-changer">(laisser vide pour ne pas changer)</span></span>
           <input id="re-password" type="password" />

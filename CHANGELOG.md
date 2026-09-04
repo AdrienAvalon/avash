@@ -7,6 +7,30 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **VNC.** Avash ouvre les bureaux VNC (RFB 3.8, authentification VNC
+  classique, ZRLE, CopyRect, Raw, taille de bureau suivie) par le même
+  processus, le même canal local et le même canvas que le RDP : « Connexion
+  directe » et le formulaire d'un bureau enregistré ont un protocole, VNC met
+  le port à 5900 et rend l'utilisateur facultatif, le mot de passe va dans le
+  trousseau sous un compte `vnc:`. Le clavier voyage en keysyms X11 (le
+  caractère obtenu, « a » sur un AZERTY comme sur un QWERTY, message `[14]`)
+  là où le RDP transporte la touche physique ; un cran de molette est un
+  bouton virtuel ; le presse-papiers passe dans les deux sens (Latin-1, ce que
+  le protocole classique sait faire). Le client est `vnc-rs`, copié dans
+  `rdp-sidecar/vendor/` avec ce qu'une relecture a rendu nécessaire avant de
+  l'embarquer : toute allocation dictée par le serveur bornée à 8192 × 8192
+  pixels, un `transmute` sur le résultat d'authentification et deux paniques
+  remplacés par des erreurs, la file des événements détachée du verrou du
+  client (une frappe ne pouvait pas partir tant qu'aucune image n'arrivait),
+  un refus sans raison qui s'affichait « unexpected end of file », le
+  presse-papiers en Latin-1 au lieu d'UTF-8 doublé ; le flux entier d'un
+  serveur hostile a sa cible cargo-fuzz. Un serveur VNC de test
+  (`test-vnc-server/`, rustvncserver, ZRLE) sert une image connue et réagit
+  aux entrées ; le scénario bout en bout mesure les pixels : rouge et bleu au
+  départ, un carré magenta là où l'on clique, tout vert après « g », le
+  keysym 0xe9 reçu pour « é », et un mauvais mot de passe refusé avec sa
+  raison. VNC ne chiffre rien : le formulaire le dit, et `SECURITY.md`
+  recommande un tunnel SSH hors du réseau local.
 - **Avash se soumet à winget.** `scripts/winget-manifeste.sh <version>` écrit
   les quatre manifestes du paquet `AdrienCros.Avash` (version, installeur
   NSIS par utilisateur avec sa clé de désinstallation, locales en-US et

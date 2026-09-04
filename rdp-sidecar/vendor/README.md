@@ -1,6 +1,6 @@
-# Correctifs portés sur IronRDP
+# Correctifs portés sur IronRDP et vnc-rs
 
-Quatre crates sont copiés ici, chacun avec un ou deux changements ciblés, décrits section par section.
+Cinq crates sont copiés ici, chacun avec un ou deux changements ciblés, décrits section par section.
 
 Une retouche mécanique s'y ajoute, sans rapport avec les défauts : les
 `#[expect(lint)]` deviennent `#[allow(lint)]`. Hors de leur espace de travail
@@ -269,3 +269,38 @@ menteurs), plus la fixture.
 
 Les tests du paquet sont réactivés (`test = true`) et comptés par
 `verifier-portes.sh`, comme pour les trois autres.
+
+## `vnc-rs` — un serveur VNC hostile, et une file qu'on ne peut pas attendre
+
+Copie de `vnc-rs` 0.5.3 (client RFB : poignée de main, authentification VNC
+classique, ZRLE, Tight, Raw, CopyRect), qui sert la session VNC d'avash
+(`src/vnc.rs`). Les dépendances de développement (`minifb`, qui tire X11) et
+le profil de compilation, ignoré hors racine, sont retirés du `Cargo.toml`.
+Trois familles de changements, relevés en relisant le code avant de
+l'embarquer, chacun avec son test dans `src/client/tests_hostiles.rs` (un
+serveur entier scénarisé dans un tampon) :
+
+- **Ce qu'un serveur fait allouer.** Chaque longueur lue sur le fil (ZRLE,
+  Tight, texte du presse-papiers) et chaque rectangle devenaient une
+  allocation à la taille dictée par le serveur, dans un `Vec` non initialisé
+  (`set_len`) : 65535 × 65535 × 4, soit 17 Gio, et le processus meurt avec la
+  session. `codec::tampon` borne toute allocation à 8192 × 8192 × 4 octets et
+  la met à zéro ; la résolution annoncée (à l'entrée et par le pseudo-codage
+  DesktopSize) est refusée au-delà de 8192 dans chaque dimension ; un
+  rectangle qui déborde du cadre est refusé avant qu'un décodeur n'alloue.
+- **Deux comportements indéfinis et deux paniques.** Le résultat
+  d'authentification (un `u32` du serveur) était transmuté vers une
+  énumération à deux variantes ; un message `SetColorMapEntries` tombait sur
+  `unimplemented!` ; une liste de types de sécurité vide sur `assert!`. Tout
+  cela devient une erreur qui ferme la session en le disant.
+- **La file des événements et le verrou.** `recv_event` garde le verrou du
+  client pendant toute son attente : une tâche qui attend une image empêche
+  toute autre d'envoyer une frappe par `input`, jusqu'à l'image suivante.
+  `VncClient::take_events` détache la file ; l'appelant attend sans verrou et
+  ne prend le verrou que pour écrire. `set_screen` suit la taille du cadre
+  pour que les demandes de mise à jour couvrent tout le bureau après un
+  agrandissement.
+
+Et un détail de protocole : le texte du presse-papiers voyage en Latin-1
+(RFC 6143, 7.5.6), un octet par caractère ; le paquet envoyait et lisait de
+l'UTF-8, et « é » arrivait en « Ã© ».

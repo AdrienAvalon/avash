@@ -32,8 +32,10 @@ dans la liste des spécifications.
 ## Lancer
 
 ```bash
-# Depuis la racine : construire l'app (le binaire EMBARQUE le front) + le serveur RDP de test
-cargo build --release -p avash-ui -p test-rdp-server
+# Depuis la racine : construire l'app (le binaire EMBARQUE le front) et les serveurs de test
+cargo build --release -p avash-ui
+cargo build --release --manifest-path test-rdp-server/Cargo.toml
+cargo build --release --manifest-path test-vnc-server/Cargo.toml
 cd e2e && npm test                    # toute la suite
 npx wdio run wdio.conf.js --spec specs/rdp.spec.js   # un seul fichier
 ```
@@ -46,9 +48,11 @@ npx wdio run wdio.conf.js --spec specs/rdp.spec.js   # un seul fichier
 `wdio.conf.js` (`onPrepare`) crée un `HOME`/`XDG_CONFIG_HOME` temporaire et y **sème**
 une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) — aucun
 effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
-(`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`.
+(`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`, et
+`vnc.spec.js` lance le **serveur VNC de test** (`test-vnc-server/`, port 35900,
+mot de passe `test`), qui sert une image connue et réagit aux entrées.
 
-## Couverture (52 scénarios, 26 fichiers)
+## Couverture (54 scénarios, 27 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -67,6 +71,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 | `rdp.spec.js`         | **connexion RDP réelle** (serveur dédié) → handshake CredSSP + canvas (`.state.live`) |
 | `rdp-clipboard.spec.js` | **presse-papiers RDP** (distant → poste) : pilote le sidecar sur son WebSocket, sans toucher au presse-papiers du système |
 | `rdp-reconnect.spec.js` | **overlay de reconnexion** quand le serveur RDP coupe |
+| `vnc.spec.js`         | **connexion VNC réelle** (serveur dédié, ZRLE) : pixels rouge et bleu, carré magenta au clic, bureau vert après « g », keysym 0xe9 pour « é », mauvais mot de passe refusé avec sa raison |
 | `clavier.spec.js`     | palette aux flèches, `Ctrl+K` bloqué par-dessus une boîte, Échap ne ferme qu'une boîte à la fois |
 | `liste-clavier.spec.js` | **barre latérale au clavier** : un seul arrêt de tabulation, flèches et Origine/Fin, focus qui vaut sélection, `Maj+F10` et navigation dans le menu |
 | `prefs.spec.js`       | réglage du **partage de presse-papiers** : présent à la palette, bascule, retenu, libellé qui annonce l'état courant |
@@ -84,7 +89,7 @@ Serveurs locaux : chaque spec RDP démarre son propre serveur de test (aucun cou
 un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spec`.
 
 En CI (`E2E_NO_RDP=1`), la configuration **exclut** les fichiers qui exigent
-un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`,
+un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`, `vnc`,
 `onglets-mixtes`, `enregistrer-et-connecter`, `enregistrement`, `sante`).
 C'est une exclusion et non une énumération de ce qui tourne :
 la liste énumérative prenait du retard à chaque scénario ajouté, et cinq

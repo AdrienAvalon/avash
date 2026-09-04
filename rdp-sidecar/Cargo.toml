@@ -27,6 +27,8 @@ futures-util = "0.3.34"
 rand = "0.10.2"
 sha2 = "0.11"
 dirs = "6"
+# Client VNC (RFB 3.8, ZRLE, CopyRect, Raw) : copie portée, voir vendor/README.md.
+vnc-rs = "0.5.3"
 
 # O_NOFOLLOW pour l'ouverture sûre du fichier de trace (fuite du mot de passe
 # sinon possible via un lien symbolique planté dans /tmp). Unix seulement.
@@ -60,3 +62,7 @@ ironrdp-pdu = { path = "vendor/ironrdp-pdu" }
 # icônes de la barre des tâches de Windows arrivaient noires. Voir
 # vendor/README.md.
 ironrdp-graphics = { path = "vendor/ironrdp-graphics" }
+# Porté pour borner ce qu'un serveur VNC fait allouer, retirer deux
+# comportements indéfinis et détacher la file des événements du verrou du
+# client. Voir vendor/README.md.
+vnc-rs = { path = "vendor/vnc-rs" }

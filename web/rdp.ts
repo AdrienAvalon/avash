@@ -6,6 +6,7 @@ import { readText as clipReadText, writeText as clipWriteText } from "@tauri-app
 import { ic } from "./icons";
 import { partageClipboard } from "./prefs";
 import { rdpScancode, le16, rdpMousePos } from "./filters";
+import { keysymDe, messageKeysym } from "./vnc-clavier";
 import { $, type RdpHostT, state } from "./etat";
 import { askConfirm, askPassword } from "./dialogues";
 import { closeAllContextMenus, placerMenu } from "./menu-hote";
@@ -19,7 +20,10 @@ import { t } from "./i18n";
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
 
-type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string; sansNla?: boolean };
+type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string; sansNla?: boolean; vnc?: boolean };
+
+/** Le protocole d'un bureau enregistré, tel que le cœur le nomme. */
+const protocoleDe = (h: RdpHostT): "rdp" | "vnc" => (h.protocole === "vnc" ? "vnc" : "rdp");
 
 /** Serveurs pour lesquels on a accepté de se passer de NLA, le temps de la
  *  session. Un bureau enregistré, lui, retient ce choix dans son fichier. */
@@ -71,7 +75,7 @@ export async function openRdp(cible: RdpTarget) {
   // Même règle que les onglets SSH : le nom de l'hôte enregistré, et à défaut
   // « utilisateur@adresse » pour une connexion directe. Les deux protocoles se
   // lisent ainsi de la même façon dans la barre d'onglets.
-  tab.querySelector(".label")!.textContent = cible.name ?? `${cible.user}@${cible.host}`;
+  tab.querySelector(".label")!.textContent = cible.name ?? (cible.user ? `${cible.user}@${cible.host}` : cible.host);
   tab.querySelector(".close")!.innerHTML = ic("x");
   tabs.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
   tabs.appendChild(tab);
@@ -157,6 +161,17 @@ export async function openRdp(cible: RdpTarget) {
   // navigateur ET la remontée vers #terminal (qui ouvrirait le menu d'Avash).
   canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); });
   canvas.addEventListener("wheel", (e) => { e.preventDefault(); const d = e.deltaY > 0 ? -120 : 120; send([3, ...le16(d & 0xffff), 0, 0, 0, 0]); });
+  // RDP transporte la touche physique (scancode), VNC le caractère obtenu
+  // (keysym) : même écouteur, deux messages.
+  const touche = (e: KeyboardEvent, enfonce: boolean) => {
+    if (cible.vnc) {
+      const ks = keysymDe(e);
+      if (ks !== null) send(messageKeysym(ks, enfonce));
+    } else {
+      const sc = rdpScancode(e.code);
+      if (sc) send([4, ...le16(sc), enfonce ? 1 : 0]);
+    }
+  };
   canvas.addEventListener("keydown", (e) => {
     if (e.code === "F11") { e.preventDefault(); return; } // géré globalement (plein écran)
     e.preventDefault();
@@ -164,9 +179,9 @@ export async function openRdp(cible: RdpTarget) {
     // sous WebKitGTK, et renvoyer sa valeur éteindrait le pavé numérique du
     // distant dès la première frappe. Verr.Num est de toute façon transmise
     // comme n'importe quelle touche : le bureau distant bascule lui-même.
-    const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 1]);
+    touche(e, true);
   });
-  canvas.addEventListener("keyup", (e) => { e.preventDefault(); const sc = rdpScancode(e.code); if (sc) send([4, ...le16(sc), 0]); });
+  canvas.addEventListener("keyup", (e) => { e.preventDefault(); touche(e, false); });
   // Focus du bureau distant = l'utilisateur va sans doute coller : on lui pousse
   // le presse-papiers local à jour (fiabilise le collage local->distant).
   canvas.addEventListener("focus", () => {
@@ -211,6 +226,7 @@ export async function openRdp(cible: RdpTarget) {
       id, host: cible.host, port: cible.port, user: cible.user, password: cible.password,
       width: rdpW, height: rdpH,
       sansNla: cible.sansNla === true || sansNlaAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
+      vnc: cible.vnc === true,
     });
     // L'onglet a pu être fermé pendant la connexion (TLS + NLA prennent du
     // temps) : sans cette garde, l'affectation levait une exception, attrapée
@@ -509,14 +525,15 @@ export async function connectRdpSaved(h: RdpHostT) {
   // un mot de passe vide indique à `rdp_open` de le lire lui-même dans le
   // trousseau. Il ne traverse donc pas l'IPC et ne séjourne pas dans le tas de
   // la webview pour toute la durée de l'onglet.
-  const connu = await invoke<boolean>("rdp_password_known", { host: h.host, port: h.port, user: h.user }).catch(() => false);
+  const protocole = protocoleDe(h);
+  const connu = await invoke<boolean>("rdp_password_known", { host: h.host, port: h.port, user: h.user, protocole }).catch(() => false);
   let pw = "";
   if (!connu) {
-    const rep = await askPassword(`${h.user}@${h.host}:${h.port}`);
+    const rep = await askPassword(`${h.user ? `${h.user}@` : ""}${h.host}:${h.port}`);
     if (!rep) return;
     pw = rep.password;
     if (rep.remember && pw) {
-      const memorise = await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw })
+      const memorise = await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw, protocole })
         .then(() => true)
         .catch(() => false);
       // Une fois au trousseau, le secret n'a plus aucune raison de continuer sa
@@ -532,6 +549,7 @@ export async function connectRdpSaved(h: RdpHostT) {
     hostId: h.id, name: h.name,
     // Choix déjà donné pour ce bureau : on ne le redemande pas à chaque fois.
     sansNla: h.sans_nla === true,
+    vnc: protocole === "vnc",
   });
 }
 
@@ -554,7 +572,7 @@ $("rdp-context").addEventListener("click", async (e) => {
   else if (act === "move") openMoveModal("rdp", h.id);
   else if (act === "forget") {
     // cf. le volet SSH : une action muette ne se distingue pas d'un clic raté.
-    await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user })
+    await invoke("rdp_password_forget", { host: h.host, port: h.port, user: h.user, protocole: protocoleDe(h) })
       .then(() => notify(t("hote-mdp-oublie", { alias: h.name }), "succes"))
       .catch((err) => notifyErreur(t("hote-mdp-non-oublie", { e: String(err) })));
   } else if (act === "delete") {
@@ -571,6 +589,9 @@ function openEditRdp(h: RdpHostT) {
   f.dataset.oldHost = h.host;
   f.dataset.oldPort = String(h.port);
   f.dataset.oldUser = h.user;
+  f.dataset.oldProto = protocoleDe(h);
+  ($("re-proto") as HTMLSelectElement).value = protocoleDe(h);
+  syncProtoEdition();
   ($("re-id") as HTMLInputElement).value = h.id;
   ($("re-name") as HTMLInputElement).value = h.name;
   ($("re-addr") as HTMLInputElement).value = h.host;
@@ -586,6 +607,14 @@ export function closeEditRdp() {
   $("rdp-edit-modal").classList.remove("open");
 }
 
+/** Le formulaire suit le protocole choisi : port par défaut, avertissement VNC. */
+function syncProtoEdition() {
+  const vnc = ($("re-proto") as HTMLSelectElement).value === "vnc";
+  $("re-vnc-hint").hidden = !vnc;
+  ($("re-port") as HTMLInputElement).placeholder = vnc ? "5900" : "3389";
+}
+$("re-proto").addEventListener("change", syncProtoEdition);
+
 $("re-cancel").addEventListener("click", closeEditRdp);
 $("rdp-edit-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -596,32 +625,37 @@ $("rdp-edit-form").addEventListener("submit", async (e) => {
   const name = val("re-name");
   const host = val("re-addr");
   const user = val("re-user");
+  const protocole = ($("re-proto") as HTMLSelectElement).value === "vnc" ? "vnc" : "rdp";
   const portRaw = val("re-port");
-  const port = portRaw ? Number(portRaw) : 3389;
+  const port = portRaw ? Number(portRaw) : (protocole === "vnc" ? 5900 : 3389);
   const pw = ($("re-password") as HTMLInputElement).value;
-  if (!name || !host || !user) {
-    err.textContent = t("rdp-nom-adresse-utilisateur-requis");
+  // L'authentification VNC classique n'a qu'un mot de passe : l'utilisateur
+  // n'y est pas requis.
+  if (!name || !host || (!user && protocole !== "vnc")) {
+    err.textContent = t(protocole === "vnc" ? "rdp-nom-adresse-requis" : "rdp-nom-adresse-utilisateur-requis");
     err.hidden = false;
     return;
   }
   submit.disabled = true;
   try {
-    await invoke("rdp_host_save", { id: val("re-id"), name, host, port, user, width: 0, height: 0, folder: ($("rdp-edit-form") as HTMLFormElement).dataset.folder ?? null });
-    // Le compte du trousseau dépend de host/port/user : si l'un change, on
-    // migre (ou remplace) le mot de passe mémorisé vers le nouveau compte.
+    await invoke("rdp_host_save", { id: val("re-id"), name, host, port, user, width: 0, height: 0, folder: ($("rdp-edit-form") as HTMLFormElement).dataset.folder ?? null, protocole });
+    // Le compte du trousseau dépend de host/port/user et du protocole : si
+    // l'un change, on migre (ou remplace) le mot de passe mémorisé vers le
+    // nouveau compte.
     const oldHost = f.dataset.oldHost ?? host;
     const oldPort = Number(f.dataset.oldPort ?? String(port));
     const oldUser = f.dataset.oldUser ?? user;
-    const accountChanged = oldHost !== host || oldPort !== port || oldUser !== user;
+    const oldProtocole = f.dataset.oldProto ?? protocole;
+    const accountChanged = oldHost !== host || oldPort !== port || oldUser !== user || oldProtocole !== protocole;
     if (pw) {
-      await invoke("rdp_password_save", { host, port, user, password: pw }).catch(() => {});
+      await invoke("rdp_password_save", { host, port, user, password: pw, protocole }).catch(() => {});
       if (accountChanged) {
-        await invoke("rdp_password_forget", { host: oldHost, port: oldPort, user: oldUser }).catch(() => {});
+        await invoke("rdp_password_forget", { host: oldHost, port: oldPort, user: oldUser, protocole: oldProtocole }).catch(() => {});
       }
     } else if (accountChanged) {
       // Migration confiée au cœur : le secret n'a aucune raison de faire
       // l'aller-retour par l'interface pour changer de clé de trousseau.
-      await invoke("rdp_password_move", { oldHost, oldPort, oldUser, host, port, user }).catch(() => {});
+      await invoke("rdp_password_move", { oldHost, oldPort, oldUser, host, port, user, oldProtocole, protocole }).catch(() => {});
     }
     closeEditRdp();
     await loadHosts();

@@ -384,11 +384,12 @@ jobs:
       # ce sont ceux qui traversent réellement les protocoles. Le harnais monte
       # lui-même un sshd non-root (clé, port 2223) ; le serveur RDP de test se
       # construit ici, et son certificat auto-signé, non versionné, se génère.
-      - name: Serveur RDP de test
+      - name: Serveurs RDP et VNC de test
         run: |
           cargo build --release --manifest-path test-rdp-server/Cargo.toml
           openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost" \
             -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
+          cargo build --release --manifest-path test-vnc-server/Cargo.toml
 
       - name: E2E — suite complète (sshd et serveur RDP locaux compris)
         working-directory: e2e

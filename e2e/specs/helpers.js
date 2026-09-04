@@ -89,6 +89,18 @@ export function startRdpServer(port) {
     { cwd: resolve("../test-rdp-server"), stdio: "ignore" });
 }
 
+// Démarre le serveur VNC de test (mot de passe « test ») sur `port`. Sa sortie
+// standard, une ligne par entrée reçue, va à `surLigne` : c'est par elle que
+// le scénario lit ce que le serveur a compris d'une frappe.
+export function startVncServer(port, surLigne) {
+  const p = spawn("./target/release/test-vnc-server",
+    ["--port", String(port), "--pass", "test"],
+    { cwd: resolve("../test-vnc-server"), stdio: ["ignore", "pipe", "ignore"] });
+  p.stdout.setEncoding("utf8");
+  p.stdout.on("data", (d) => surLigne?.(String(d)));
+  return p;
+}
+
 // Attend que `port` soit prêt à recevoir l'app.
 //
 // Une seule connexion réussie ne suffit pas : elle prouve que le socket écoute,

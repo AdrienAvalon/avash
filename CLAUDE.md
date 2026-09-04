@@ -20,8 +20,9 @@ ce qui n'est pas ici n'existe pas pour eux.
 | `crates/avash` | cœur : config SSH, clés, secrets, import PuTTY/MobaXterm, enregistrement asciicast, santé des hôtes, tunnels, snippets |
 | `crates/avash-ui` | interface Tauri ; commandes dans `src/commands/` (un fichier par domaine), `src/rdp.rs`, `src/langue.rs` |
 | `web/` | front TypeScript (Vite, Vitest, ESLint, stylelint, knip) ; i18n dans `web/i18n.ts` |
-| `rdp-sidecar/` | processus RDP (IronRDP), **hors espace de travail**, avec des paquets IronRDP portés dans `rdp-sidecar/vendor/` |
+| `rdp-sidecar/` | processus de bureau distant (RDP par IronRDP, VNC par vnc-rs dans `src/vnc.rs`), **hors espace de travail**, avec des paquets IronRDP et vnc-rs portés dans `rdp-sidecar/vendor/` |
 | `test-rdp-server/` | serveur RDP de test pour la suite bout en bout |
+| `test-vnc-server/` | serveur VNC de test (rustvncserver), hors espace de travail, qui réagit aux entrées pour que le scénario mesure les pixels |
 | `e2e/` | suite WebdriverIO sur la vraie application (Linux : tauri-driver + WebKitWebDriver ; Windows et macOS : serveur WebDriver embarqué) |
 | `fuzz/` | cibles cargo-fuzz (nightly), hors espace de travail |
 | `ci/` | `Dockerfile` de l'image de base de la chaîne GitLab, construite sur le démon Docker du runner par le premier job de chaque pipeline |

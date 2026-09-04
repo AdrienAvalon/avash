@@ -26,20 +26,30 @@ export function manualOpen() {
   ($("m-addr") as HTMLInputElement).focus();
 }
 
-/** Adapte le formulaire au protocole : RDP n'a ni clé, ni sauvegarde config. */
+/** Le protocole choisi dans le formulaire. */
+function protocoleChoisi(): "ssh" | "rdp" | "vnc" {
+  const v = (document.querySelector('input[name="proto"]:checked') as HTMLInputElement | null)?.value;
+  return v === "rdp" || v === "vnc" ? v : "ssh";
+}
+
+/** Adapte le formulaire au protocole : un bureau (RDP ou VNC) n'a ni clé, ni
+ *  sauvegarde config ; en VNC l'utilisateur est facultatif. */
 function manualSyncProto() {
-  const rdp = (document.querySelector('input[name="proto"]:checked') as HTMLInputElement | null)?.value === "rdp";
-  $("m-auth-switch").hidden = rdp;
-  $("m-key-row").hidden = rdp || (document.querySelector('input[name="auth"]:checked') as HTMLInputElement | null)?.value !== "key";
-  $("m-save-row").hidden = rdp;
-  $("m-alias-row").hidden = rdp || !($("m-save") as HTMLInputElement).checked;
-  // Mot de passe toujours visible en RDP (seule auth), sinon selon le mode.
-  if (rdp) $("m-password-row").hidden = false;
+  const proto = protocoleChoisi();
+  const bureau = proto !== "ssh";
+  $("m-auth-switch").hidden = bureau;
+  $("m-key-row").hidden = bureau || (document.querySelector('input[name="auth"]:checked') as HTMLInputElement | null)?.value !== "key";
+  $("m-save-row").hidden = bureau;
+  $("m-alias-row").hidden = bureau || !($("m-save") as HTMLInputElement).checked;
+  // Mot de passe toujours visible pour un bureau (seule auth), sinon selon le mode.
+  if (bureau) $("m-password-row").hidden = false;
   else manualSyncAuthRows();
-  $("m-rdp-remember-row").hidden = !rdp;
-  $("m-rdp-save-row").hidden = !rdp;
-  $("m-rdp-name-row").hidden = !rdp || !($("m-rdp-save") as HTMLInputElement).checked;
-  ($("m-port") as HTMLInputElement).placeholder = rdp ? "3389" : "22";
+  $("m-rdp-remember-row").hidden = !bureau;
+  $("m-rdp-save-row").hidden = !bureau;
+  $("m-rdp-name-row").hidden = !bureau || !($("m-rdp-save") as HTMLInputElement).checked;
+  $("m-vnc-hint").hidden = proto !== "vnc";
+  ($("m-user") as HTMLInputElement).required = proto !== "vnc";
+  ($("m-port") as HTMLInputElement).placeholder = proto === "rdp" ? "3389" : proto === "vnc" ? "5900" : "22";
   ($("m-password") as HTMLInputElement).placeholder = "";
 }
 
@@ -78,16 +88,21 @@ function manualReadForm(): ManualTarget {
 async function manualSubmit(ev: Event) {
   ev.preventDefault();
   const submit = $("m-submit") as HTMLButtonElement;
-  const proto = (document.querySelector('input[name="proto"]:checked') as HTMLInputElement | null)?.value ?? "ssh";
-  if (proto === "rdp") {
+  const proto = protocoleChoisi();
+  if (proto !== "ssh") {
     // Bureau distant : on passe par le sidecar, pas de sauvegarde ~/.ssh.
+    const vnc = proto === "vnc";
     const addr = ($("m-addr") as HTMLInputElement).value.trim();
     const user = ($("m-user") as HTMLInputElement).value.trim();
     const password = ($("m-password") as HTMLInputElement).value;
-    if (!addr || !user) { manualError().textContent = t("cd-adresse-utilisateur-requis"); manualError().hidden = false; return; }
+    // L'authentification VNC classique n'a qu'un mot de passe.
+    if (!addr || (!user && !vnc)) {
+      manualError().textContent = t(vnc ? "cd-adresse-requise" : "cd-adresse-utilisateur-requis");
+      manualError().hidden = false;
+      return;
+    }
     const portRaw = ($("m-port") as HTMLInputElement).value.trim();
-    const rport2 = portRaw ? Number(portRaw) : 3389;
-    const rport = rport2;
+    const rport = portRaw ? Number(portRaw) : (vnc ? 5900 : 3389);
     const enregistrer = ($("m-rdp-save") as HTMLInputElement).checked;
     const memoriser = ($("m-rdp-remember") as HTMLInputElement).checked;
     const nomRdp = ($("m-rdp-name") as HTMLInputElement).value.trim();
@@ -106,14 +121,14 @@ async function manualSubmit(ev: Event) {
       if (enregistrer) {
         await invoke("rdp_host_save", {
           id: null, name: nomRdp,
-          host: addr, port: rport, user, width: 0, height: 0,
+          host: addr, port: rport, user, width: 0, height: 0, protocole: proto,
         });
       }
       // « Mémoriser le mot de passe » était imbriqué dans « Enregistrer la
       // connexion » : cochée seule, la case ne faisait rien et le mot de passe
       // était redemandé à la connexion suivante, sans le moindre message.
       if (memoriser && password) {
-        await invoke("rdp_password_save", { host: addr, port: rport, user, password });
+        await invoke("rdp_password_save", { host: addr, port: rport, user, password, protocole: proto });
       }
       if (enregistrer || memoriser) await loadHosts();
     } catch (e) {
@@ -125,7 +140,7 @@ async function manualSubmit(ev: Event) {
       submit.textContent = libelleRdp;
     }
     manualClose();
-    await openRdp({ host: addr, port: rport, user, password });
+    await openRdp({ host: addr, port: rport, user, password, vnc });
     return;
   }
   const target = manualReadForm();
