@@ -181,6 +181,15 @@ Trois allocations n'avaient aucun plafond, toutes pilotables par un serveur :
   (`largeur × hauteur × 4`), soit 17 Gio pour un 65535×65535, rejouable à
   volonté par renégociation. Plafond : 8192×8192.
 - le presse-papiers reçu du serveur était déjà borné à 8 Mio.
+- sur le canal graphique (MS-RDPEGFX), le même 65535×65535 pouvait passer par
+  `CreateSurface`, hors de toute négociation : même plafond. Une image posée
+  sur une surface (`WireToSurface1`) était décodée aux dimensions annoncées
+  avant d'être rognée, et ClearCodec avec ses quatre plans NSCodec alloue à
+  cette taille : une image qui ne tient pas dans sa surface est refusée avant
+  décodage. L'état des tuiles du codec progressif (trente-six kilooctets par
+  tuile) n'est gardé que pour les tuiles de la surface, jusqu'à 16 384, ce
+  qu'une surface au plafond peut contenir. Ce qu'un serveur peut faire
+  allouer suit donc la surface qu'il a déclarée, elle-même bornée.
 
 ### Le canal local du processus RDP n'est plus coupable d'un seul message
 
