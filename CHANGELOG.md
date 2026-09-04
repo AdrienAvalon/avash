@@ -19,7 +19,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   contre un `internal-sftp` d'OpenSSH, et **refusé** : la bibliothèque
   pipeline déjà huit écritures, et huit descripteurs en parallèle étaient
   quatre fois plus lents en réseau local pour 1,2 × à 40 ms d'aller-retour
-  (les chiffres sont dans la feuille de route). Les transferts vont dans une file, trois à
+  (les chiffres sont dans la feuille de route). Un serveur qui nomme une
+  entrée « ../x » ou « a/b » dans un dossier parcouru est refusé : rien ne
+  s'écrit hors du dossier de réception ni hors du dossier cible d'un relais
+  (relevé par la revue de sécurité du commit, avec le test qui le joue). Les transferts vont dans une file, trois à
   la fois, chacun avec sa ligne, sa progression, sa vitesse et son bouton
   d'annulation. « Copier vers un autre hôte… » dans le menu d'un fichier ou
   d'un dossier le copie vers un autre onglet SSH : par défaut les octets

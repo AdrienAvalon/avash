@@ -501,6 +501,15 @@ impl SftpHandle {
                 if e.name == "." || e.name == ".." {
                     continue;
                 }
+                // Le nom vient du serveur : un « ../x » ou un « a/b » y
+                // deviendrait un chemin qui sort du dossier de réception (ou
+                // du dossier cible, pour un relais). On s'arrête, plutôt que
+                // d'ignorer une entrée d'un serveur qui ment.
+                anyhow::ensure!(
+                    nom_d_entree_sur(&e.name),
+                    "Le serveur annonce une entrée au nom interdit sous {chemin} : {:?}",
+                    e.name
+                );
                 anyhow::ensure!(
                     entrees.len() < ENTREES_MAX,
                     "Plus de {ENTREES_MAX} entrées sous {racine} : le parcours s'arrête."
@@ -1091,6 +1100,17 @@ impl SftpHandle {
     }
 }
 
+/// Un nom d'entrée qu'on accepte de recopier tel quel sous un dossier :
+/// un seul composant, sans séparateur ni octet nul, ni `.` ni `..`. Un
+/// serveur SFTP peut annoncer n'importe quoi ; c'est ici que ça s'arrête.
+fn nom_d_entree_sur(nom: &str) -> bool {
+    !nom.is_empty()
+        && nom != "."
+        && nom != ".."
+        && !nom.contains(['/', '\\', '\0'])
+        && !(cfg!(windows) && nom.contains(':'))
+}
+
 /// Concatène un dossier distant et un chemin relatif (séparateur `/`).
 fn joindre(dir: &str, rel: &str) -> String {
     if dir.is_empty() || dir == "." {
@@ -1160,6 +1180,22 @@ mod tests_bandes {
         assert!(!r.vaut_pour(11, Some(5)));
         assert!(!r.vaut_pour(10, Some(6)));
         assert!(!r.vaut_pour(10, None));
+    }
+
+    /// Trouvé par la revue de sécurité du commit : un serveur hostile qui
+    /// nomme une entrée « ../évasion » ferait écrire hors du dossier local.
+    #[test]
+    fn un_nom_d_entree_qui_sort_du_dossier_est_refuse() {
+        use super::nom_d_entree_sur;
+        assert!(nom_d_entree_sur("rapport.md"));
+        assert!(nom_d_entree_sur("..rapport"));
+        assert!(!nom_d_entree_sur(".."));
+        assert!(!nom_d_entree_sur("."));
+        assert!(!nom_d_entree_sur(""));
+        assert!(!nom_d_entree_sur("../evasion"));
+        assert!(!nom_d_entree_sur("a/b"));
+        assert!(!nom_d_entree_sur("a\\b"));
+        assert!(!nom_d_entree_sur("nul\0"));
     }
 
     #[test]

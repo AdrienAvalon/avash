@@ -742,6 +742,18 @@ impl russh_sftp::server::Handler for TestSftpSession {
                     return Err(StatusCode::Eof);
                 }
                 let mut files = Vec::new();
+                // Un dossier menteur : une entrée dont le nom sort du dossier.
+                if chemin == "/fs/hostile" {
+                    files.push(File {
+                        filename: "../evasion.txt".into(),
+                        longname: String::new(),
+                        attrs: FileAttributes {
+                            size: Some(3),
+                            permissions: Some(0o100_644),
+                            ..Default::default()
+                        },
+                    });
+                }
                 for (c, contenu) in fs_fichiers().as_ref().unwrap() {
                     if parent_de(c) == chemin {
                         files.push(File {
@@ -2165,5 +2177,28 @@ async fn un_transfert_annule_avant_de_partir_le_dit() {
         .expect_err("annulé");
     assert!(e.to_string().contains(avash::sftp::ANNULE), "{e:#}");
     let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
+
+/// Trouvé par la revue de sécurité du commit : un serveur qui nomme une
+/// entrée « ../evasion.txt » ne doit rien faire écrire hors du dossier local.
+#[tokio::test]
+async fn un_serveur_qui_nomme_une_entree_hors_du_dossier_est_refuse() {
+    fs_dossiers()
+        .as_mut()
+        .unwrap()
+        .insert("/fs/hostile".to_owned());
+    let sftp = sftp_de_test().await;
+    let local = dossier_temp("hostile").join("recu");
+    let e = sftp
+        .download_dir_with("/fs/hostile", &local, None, |_| {})
+        .await
+        .expect_err("le nom doit être refusé");
+    assert!(e.to_string().contains("nom interdit"), "{e:#}");
+    assert!(
+        !local.parent().unwrap().join("evasion.txt").exists(),
+        "un fichier a été écrit hors du dossier de réception"
+    );
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
     sftp.close().await.unwrap();
 }

@@ -76,7 +76,9 @@ répondent.
   chemins assainis par IronRDP (jamais absolus, jamais de `..`), sans écraser
   un fichier existant et sans rien exécuter. Dans l'autre sens, seuls les
   fichiers que vous déposez ou choisissez sont offerts ; le distant n'en voit
-  ni le chemin absolu ni rien d'autre du poste.
+  ni le chemin absolu ni rien d'autre du poste. Un **serveur SFTP** qui nomme
+  une entrée « ../x » ou « a/b » dans un dossier que vous téléchargez ou
+  relayez est refusé : rien ne s'écrit hors du dossier choisi.
 - **L'agent SSH du poste, prêté à un serveur.** La copie directe d'un hôte à
   un autre (case à cocher dans « Copier vers un autre hôte… ») lance `scp`
   chez l'hôte source avec la redirection d'agent : pendant cette commande, et
