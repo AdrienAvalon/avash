@@ -51,12 +51,8 @@ jobs:
         working-directory: web
         run: npm ci
 
-      # La chaîne Rust est auditée (cargo audit + deny) ; le front, périmètre de
-      # confiance réel (une dépendance npm hostile exécute du code dans la webview),
-      # ne l'était pas. On échoue sur une vulnérabilité « high » ou pire.
-      - name: Front — audit des dépendances
-        working-directory: web
-        run: ../scripts/npm-audit.sh high
+      # L'audit npm du front vit dans le job « audit-npm » : ce job-ci nourrit
+      # le job E2E, et une panne du registre les faisait tomber tous les deux.
 
       # Garde anti-etourderie : bloque les restes de mise au point (harnais de test,
       # debugger, dialogues natifs confirm()/prompt() inoperants sous WebKitGTK).
@@ -169,6 +165,34 @@ jobs:
   # `keyboard-interactive`, signalée par l'usage réel et non par nous. Les tests
   # d'intégration montent un vrai serveur SSH en mémoire : ils tournent aussi
   # bien ici, et couvrent l'authentification, le PTY, SFTP et les tunnels.
+  # Les audits npm dans leur propre job, comme l'audit cargo : rien n'en
+  # dépend. Le point d'audit du registre a expiré pendant des heures le
+  # 2026-09-04 ; logés dans « build » et « e2e », les audits sautaient alors
+  # tout le reste sans qu'aucune faille soit en cause. Le script réessaie ;
+  # une faille reste une erreur. Le front est le périmètre de confiance réel
+  # (une dépendance npm hostile exécute du code dans la webview) : « haute »
+  # et au-delà ; la suite bout en bout ne tourne que sur la machine de test,
+  # et WebdriverIO 9 traîne des avis « haute » sans correctif : « critique ».
+  audit-npm:
+    name: Audit npm (front, suite bout en bout)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - name: Front — audit des dépendances
+        working-directory: web
+        run: npm ci && ../scripts/npm-audit.sh high
+      - name: Suite bout en bout — audit des dépendances
+        working-directory: e2e
+        run: npm ci && ../scripts/npm-audit.sh critical
+
   windows-coeur:
     name: Cœur — tests Windows
     runs-on: windows-latest
@@ -353,13 +377,6 @@ jobs:
       - name: E2E — dépendances
         working-directory: e2e
         run: npm ci
-
-      # Ce code ne tourne que sur la machine de test, jamais chez l'utilisateur :
-      # on ne bloque que sur « critique », comme check.sh — WebdriverIO 9 traîne
-      # des avis « haute » sans correctif en amont.
-      - name: E2E — audit des dépendances
-        working-directory: e2e
-        run: ../scripts/npm-audit.sh critical
 
       # Les serveurs locaux tournent ici aussi. Sept scénarios sur vingt et un
       # — connexion SSH réelle, SFTP, les trois RDP, les onglets mixtes,

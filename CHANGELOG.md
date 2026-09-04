@@ -34,7 +34,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   d'attente, sans qu'aucune vulnérabilité soit en cause. Les six appels de
   `npm audit` (`check.sh`, GitHub, GitLab) passent par
   `scripts/npm-audit.sh`, qui réessaie trois fois, avec des délais de réseau
-  bornés, quand le registre est indisponible, et jamais sur une faille.
+  bornés, quand le registre est indisponible, et jamais sur une faille. La
+  panne ayant duré des heures le lendemain, les audits npm quittent les jobs
+  de construction pour un job à eux dans chaque chaîne (`audit-npm` sur
+  GitHub, `dependances` sur GitLab, avec l'audit cargo) : logés dans le job
+  du front, dont dépendent la construction Rust et la suite bout en bout, ils
+  sautaient tout le reste. Une panne ne rougit plus que ce job.
 - **`SHA256SUMS` publié avec les seuls noms de fichiers.** Depuis la 0.7.0,
   chaque ligne portait le chemin du fichier dans la chaîne
   (`artefacts/avash-linux/target/…`) : `sha256sum -c SHA256SUMS` depuis le

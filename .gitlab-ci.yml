@@ -88,9 +88,8 @@ front:
   script:
     - ./scripts/guard.sh          # restes de mise au point
     - cd web && npm ci
-    # Le front est le périmètre de confiance réel ; le script réessaie si le
-    # registre est indisponible (503 vu le 2026-09-03), jamais sur une faille.
-    - ../scripts/npm-audit.sh high
+    # L'audit npm vit dans « dependances », pas ici : rust et bout-en-bout
+    # dépendent de ce job, et une panne du registre les sautait tous.
     - npx eslint .                   # tous les modules, pas une liste qui prend du retard
     - npx stylelint index.html       # le CSS vit dans la page
     - npx knip                       # fichiers jamais importés, exports jamais lus
@@ -138,12 +137,21 @@ processus-rdp:
 # --- Chaîne d'approvisionnement ------------------------------------------
 dependances:
   stage: verifier
-  cache: [*cache-registre]
+  cache: [*cache-registre, *cache-npm]
   script:
     - cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0429
     - cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file rdp-sidecar/Cargo.lock
     - cargo deny check advisories licenses bans sources
     - cargo deny --manifest-path rdp-sidecar/Cargo.toml check advisories licenses bans sources
+    # Les audits npm vivent ici, avec ceux de cargo, et non dans les jobs qui
+    # construisent : le point d'audit du registre a expiré pendant des heures
+    # le 2026-09-04, et chaque échec de « front » sautait rust, bout-en-bout
+    # et conformite, sans qu'aucune faille soit en cause. Ici, une panne ne
+    # fait rougir que ce job ; le script réessaie, une faille reste une erreur.
+    # Le front est le périmètre de confiance réel : « haute » et au-delà ; la
+    # suite bout en bout ne tourne que sur la machine de test : « critique ».
+    - (cd web && npm ci && ../scripts/npm-audit.sh high)
+    - (cd e2e && npm ci && ../scripts/npm-audit.sh critical)
   allow_failure: false
 
 # --- Bout en bout : l'application réelle, sans affichage ------------------
@@ -166,7 +174,6 @@ bout-en-bout:
     # assure, /run pouvant être remonté.
     - mkdir -p /run/sshd
     - cd e2e && npm ci
-    - ../scripts/npm-audit.sh critical   # code de test seulement : on ne bloque que sur « critique »
     - xvfb-run -a npm test
 
 # --- Conformité RDP : de VRAIS serveurs xrdp -----------------------------
