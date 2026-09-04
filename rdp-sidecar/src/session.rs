@@ -7,6 +7,7 @@ use crate::connexion::{connect, session_close_par_le_serveur, NLA_INDISPONIBLE};
 use crate::entrees::{input_ops, lock_sync_event};
 use crate::fichiers::{self, Offre, Reception};
 use crate::presse_papiers::{ClipBackend, ClipReq, LocalClip};
+use crate::son::{Son, SonBackend};
 use crate::trames::{ajouter_rect, frame_msg, frames_msg, nouvelle_taille};
 use crate::{egfx, magnetoscope};
 use anyhow::{Context, Result};
@@ -58,6 +59,10 @@ pub(crate) async fn executer(
         local_text: local_text.clone(),
         tx: clip_tx.clone(),
     };
+    // Le son : le canal n'est offert que si l'utilisateur ne l'a pas coupé.
+    let (son_tx, mut son_rx) = tokio::sync::mpsc::unbounded_channel::<Son>();
+    let son_backend = (!args.sans_son).then(|| SonBackend::new(son_tx));
+    let formats_son = crate::son::formats();
     // Une tentative de connexion doit être BORNÉE. Sans cela le processus reste
     // pendu indéfiniment, sans un mot : constaté contre un xrdp qui annonce NLA
     // mais ne mène jamais l'échange CredSSP à son terme — TLS est monté, les
@@ -65,7 +70,13 @@ pub(crate) async fn executer(
     const DELAI_CONNEXION: Duration = Duration::from_secs(25);
     let (result, mut framed, canal_egfx, file_egfx) = match tokio::time::timeout(
         DELAI_CONNEXION,
-        connect(args, clip_backend, redirection.as_deref(), graphique),
+        connect(
+            args,
+            clip_backend,
+            son_backend,
+            redirection.as_deref(),
+            graphique,
+        ),
     )
     .await
     {
@@ -552,6 +563,17 @@ pub(crate) async fn executer(
                     stat_frames = 0;
                     stat_bytes = 0;
                     stat_window = Instant::now();
+                }
+            }
+            Some(son) = son_rx.recv() => {
+                // Ondes et volume vers l'interface, tels que le canal les a
+                // reçus ; un bloc hors format ou hors borne est ignoré.
+                let m = match son {
+                    Son::Onde { format_no, ts, pcm } => crate::son::message_onde(&formats_son, format_no, ts, &pcm),
+                    Son::Volume { gauche, droit } => Some(crate::son::message_volume(gauche, droit)),
+                };
+                if let Some(m) = m {
+                    sink.send(Message::Binary(m.into())).await.context("envoi son")?;
                 }
             }
             Some(req) = clip_rx.recv() => {

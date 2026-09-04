@@ -19,7 +19,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1156%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1164%20passing-brightgreen.svg)](docs/qualite.md)
 
 <img src="docs/captures/demo.webp" alt="Demo: an SSH terminal, then a Windows 11 desktop, inside avash" width="880">
 
@@ -34,7 +34,7 @@ application, which reads your `~/.ssh/config` as it is.
 | | |
 |---|---|
 | **SSH** | full terminal (xterm.js), tabs, chained `ProxyJump`, agent, keys generated and deployed from the app |
-| **RDP** | Windows, xrdp and GNOME Remote Desktop desktops built in (IronRDP), native resizing with no image scaling, clipboard shared on request, files copied and pasted both ways |
+| **RDP** | Windows, xrdp and GNOME Remote Desktop desktops built in (IronRDP), native resizing with no image scaling, clipboard shared on request, files copied and pasted both ways, remote sound |
 | **VNC** | VNC desktops in the same window (ZRLE, keyboard as keysyms, clipboard), through the same process as RDP |
 | **SFTP** | a file panel on the terminal's own session: browse, upload and download files or whole folders, resume an interrupted transfer, a transfer queue with speeds, host-to-host copy without touching the local disk |
 | **Serial** | the console of a switch, a router or a board in a terminal tab, ports detected on the machine, speed of your choice |
@@ -199,17 +199,17 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1156 tests** on every commit, on two independent pipelines (GitHub Actions on
+**1164 tests** on every commit, on two independent pipelines (GitHub Actions on
 Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 
 | Level | Tests | In a word |
 |---|---:|---|
 | Rust core and integration against a real sshd | 197 | parsers, import, SFTP, tunnels, jump hosts |
 | Tauri interface | 70 | commands, session store, keyboard |
-| RDP process | 119 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
+| RDP process | 122 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
 | Vendored IronRDP and vnc-rs crates | 595 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
-| Front (Vitest) | 112 | pure logic, VNC keysyms, translations |
-| End to end (WebdriverIO) | 63 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
+| Front (Vitest) | 115 | pure logic, VNC keysyms, translations |
+| End to end (WebdriverIO) | 65 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, the OpenSSF Scorecard, seven

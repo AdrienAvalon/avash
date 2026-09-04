@@ -6,7 +6,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic } from "./icons";
-import { partageClipboard } from "./prefs";
+import { partageClipboard, sonBureau } from "./prefs";
+import { LecteurAudio } from "./audio";
 import { rdpScancode, le16, rdpMousePos, humanSize } from "./filters";
 import { langue } from "./i18n";
 import { keysymDe, messageKeysym } from "./vnc-clavier";
@@ -71,7 +72,7 @@ async function pushLocalClipboard(force = false): Promise<void> {
  *  processus les annonce (message [15]). Rien n'est téléchargé avant l'accord. */
 type FichiersDistants = { dossier: string; octets: number; fichiers: { chemin: string; taille: number; dossier: boolean }[] };
 
-export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean }>();
+export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean; audio?: LecteurAudio }>();
 
 /** Envoie un message JSON au processus (fichiers par le presse-papiers). */
 function envoyerJson(ws: WebSocket | null, code: number, valeur: unknown): boolean {
@@ -330,6 +331,7 @@ export async function openRdp(cible: RdpTarget) {
       width: rdpW, height: rdpH,
       sansNla: cible.sansNla === true || sansNlaAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
       vnc: cible.vnc === true,
+      sansSon: !sonBureau(),
     });
     // L'onglet a pu être fermé pendant la connexion (TLS + NLA prennent du
     // temps) : sans cette garde, l'affectation levait une exception, attrapée
@@ -428,6 +430,14 @@ export async function openRdp(cible: RdpTarget) {
       } else if (kind === 3) {
         tab.querySelector(".state")!.className = "state closed";
         notifyErreur(`RDP : ${new TextDecoder().decode(new Uint8Array(buf, 1))}`);
+      } else if (kind === 20 || kind === 21) {
+        // Son du distant : blocs PCM joués à la suite, volume demandé.
+        const s = rdpSessions.get(id);
+        if (s) {
+          s.audio ??= new LecteurAudio();
+          if (kind === 20) s.audio.jouer(buf);
+          else if (buf.byteLength >= 5) s.audio.volume(dv.getUint16(1, true), dv.getUint16(3, true));
+        }
       } else if (kind === 15 || kind === 17 || kind === 18) {
         // Fichiers par le presse-papiers : la liste copiée sur le distant, la
         // progression d'une réception, le bilan d'une réception ou d'une offre.
@@ -592,6 +602,7 @@ export function closeRdp(id: number) {
   s.ro?.disconnect();
   s.detachRect?.();
   s.ws?.close();
+  s.audio?.fermer();
   invoke("rdp_close", { id }).catch(() => {});
   s.canvas.parentElement?.remove();
   s.tab.remove();

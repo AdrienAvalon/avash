@@ -7,6 +7,20 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le son du bureau distant.** Le processus RDP annonce le canal `rdpsnd`
+  (MS-RDPEA) avec du PCM 16 bits seulement (44,1 et 48 kHz, stéréo et mono)
+  et relaie chaque bloc d'ondes à l'interface (message `[20]`, cadence et
+  canaux en tête, un mégaoctet au plus par bloc), qui le joue par WebAudio
+  bout à bout sur un curseur de temps, avec le volume que le serveur demande
+  (`[21]`). Aucun périphérique audio ni bibliothèque native dans le
+  processus : rien à embarquer dans l'AppImage, rien à réclamer au bac à
+  sable Flatpak, et pas de codec à faire décoder à un serveur hostile. La
+  palette coupe ou rétablit le son pour les prochaines connexions (le canal
+  n'est alors pas annoncé, `--sans-son`). Trois tests dans le processus
+  (formats, message, relais), trois en Vitest (en-tête, désentrelacement,
+  gain), et un scénario bout en bout qui pilote le processus contre le
+  serveur de test, lequel joue un la 440 Hz : PCM 44,1 kHz stéréo relayé en
+  temps réel, pas du silence, et rien avec `--sans-son`.
 - **Un onglet fermé laissait son conteneur.** `closeSession` demandait le
   conteneur du terminal après l'avoir disposé, quand xterm avait déjà
   détaché son élément : chaque onglet de terminal fermé laissait un

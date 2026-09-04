@@ -15,9 +15,11 @@ path = "src/main.rs"
 
 [dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr", "pdu", "core"] }
+ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr", "rdpsnd", "pdu", "core"] }
 ironrdp-tokio = { version = "0.10", features = ["reqwest"] }
 ironrdp-tls = { version = "0.2", features = ["rustls"] }
+# VeNCrypt (VNC sous TLS) : le même rustls qu'ironrdp-tls, même fournisseur.
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "tls12"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }

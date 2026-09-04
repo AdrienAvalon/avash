@@ -99,6 +99,7 @@ pub async fn rdp_open(
     height: u16,
     sans_nla: bool,
     vnc: bool,
+    sans_son: bool,
 ) -> Result<RdpConn, String> {
     use std::process::Stdio;
     let protocole = if vnc {
@@ -150,6 +151,13 @@ pub async fn rdp_open(
         &[][..]
     })
     .args(if vnc { &["--vnc"][..] } else { &[][..] })
+    // Le son du bureau distant se coupe dans la palette : le processus
+    // n'annonce alors pas le canal, plutôt que de recevoir pour rien.
+    .args(if sans_son {
+        &["--sans-son"][..]
+    } else {
+        &[][..]
+    })
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
@@ -598,6 +606,7 @@ mod tests_ouverture {
             600,
             false,
             false,
+            false,
         )
         .await;
         let Err(e) = issue else {
@@ -623,6 +632,7 @@ mod tests_ouverture {
             600,
             false,
             true,
+            false,
         )
         .await;
         let Err(e) = issue else {

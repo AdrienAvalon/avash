@@ -196,6 +196,15 @@ Entiers en little-endian.
 | `15` | Fichiers copiés sur le distant | JSON `{ dossier, octets, fichiers: [{ chemin, taille, dossier }] }` : la liste seulement, jamais le contenu |
 | `17` | Progression d'une réception | JSON `{ fichier, fait, total, termines, nombre }` |
 | `18` | Bilan d'une réception ou d'une offre | JSON `{ sens: "reception" \| "offre", dossier?, fichiers, octets, erreurs: [] }` |
+| `20` | Bloc de son | `format:u8`, `ts:u32`, `cadence:u32`, `canaux:u8`, `bits:u8`, puis PCM 16 bits entrelacé (un mégaoctet au plus) |
+| `21` | Volume demandé par le serveur | `gauche:u16`, `droit:u16` |
+
+Le son passe par le canal statique RDPSND ([MS-RDPEA]) : `rdp-sidecar/src/son.rs`
+n'annonce que du PCM 16 bits (44,1 et 48 kHz, stéréo puis mono), reçoit les
+blocs d'ondes et les relaie tels quels ; `web/audio.ts` les joue par WebAudio
+bout à bout sur un curseur de temps, et applique le volume. Le processus ne
+touche à aucun périphérique audio. `--sans-son` (réglage de la palette) retire
+le canal de la négociation.
 
 Les fichiers passent par le canal CLIPRDR ([MS-RDPECLIP] 2.2.5 : liste
 `FileGroupDescriptorW`, flux `FileContentsRequest` / `Response`, verrous), porté
@@ -379,6 +388,7 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Sidecar RDP — entrées (souris, clavier, verrous) | `rdp-sidecar/src/entrees.rs` |
 | Sidecar RDP — trames vers l'interface (zone sale, format binaire) | `rdp-sidecar/src/trames.rs` |
 | Sidecar RDP — presse-papiers CLIPRDR | `rdp-sidecar/src/presse_papiers.rs` |
+| Sidecar RDP — son RDPSND, et sa lecture WebAudio | `rdp-sidecar/src/son.rs`, `web/audio.ts` |
 | Sidecar RDP — capture `--shot` | `rdp-sidecar/src/capture.rs` |
 | Canal graphique RDP (MS-RDPEGFX) | `rdp-sidecar/src/egfx.rs` |
 | Codec RemoteFX Progressive | `rdp-sidecar/src/progressif.rs` |

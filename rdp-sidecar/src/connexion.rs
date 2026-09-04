@@ -259,6 +259,7 @@ where
 pub(crate) async fn connect(
     a: &Args,
     clip_backend: ClipBackend,
+    son: Option<crate::son::SonBackend>,
     redirection: Option<&ironrdp::session::redirection::Redirection>,
     graphique: egfx::Politique,
 ) -> Result<(
@@ -289,6 +290,13 @@ pub(crate) async fn connect(
         .with_static_channel(dvc)
         // Canal CLIPRDR : presse-papiers partagé poste <-> bureau distant (texte).
         .with_static_channel(CliprdrClient::new(Box::new(clip_backend)));
+    // Canal RDPSND : le son du distant, joué par la webview. Pas annoncé quand
+    // l'utilisateur l'a coupé (--sans-son) : un canal absent ne coûte rien au
+    // serveur, un canal muet lui ferait encoder pour personne.
+    if let Some(son) = son {
+        connector =
+            connector.with_static_channel(ironrdp::rdpsnd::client::Rdpsnd::new(Box::new(son)));
+    }
     let should_upgrade = match ironrdp_tokio::connect_begin(&mut framed, &mut connector).await {
         Ok(v) => v,
         // Le serveur a refusé la négociation alors que nous n'annoncions que

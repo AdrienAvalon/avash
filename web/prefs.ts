@@ -34,6 +34,27 @@ export function setPartageClipboard(actif: boolean): void {
   }
 }
 
+/** Le son des bureaux distants : joué par défaut, coupé dans la palette. Le
+ *  réglage vaut pour les prochaines connexions (le canal se négocie à
+ *  l'ouverture). */
+const SON_KEY = "avash.rdp.son";
+
+export function sonBureau(): boolean {
+  try {
+    return localStorage.getItem(SON_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function setSonBureau(actif: boolean): void {
+  try {
+    localStorage.setItem(SON_KEY, actif ? "1" : "0");
+  } catch {
+    /* stockage indisponible : le réglage vaut pour la session en cours */
+  }
+}
+
 /** Sonder la santé des hôtes au démarrage : coupé par défaut — une sonde
  *  ouvre une connexion vers chaque serveur, ce n'est pas anodin partout. */
 export const SANTE_DEMARRAGE_KEY = "avash.sante.demarrage";

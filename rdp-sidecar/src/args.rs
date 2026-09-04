@@ -26,6 +26,8 @@ pub(crate) struct Args {
     /// facultatif (l'authentification VNC classique n'a qu'un mot de passe) et
     /// le port par défaut est 5900.
     pub(crate) vnc: bool,
+    /// `--sans-son` : ne pas annoncer le canal audio (réglage de l'interface).
+    pub(crate) sans_son: bool,
 }
 
 struct Pa(Vec<String>);
@@ -95,6 +97,7 @@ fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
         pass,
         domain: a.opt("--domain"),
         sans_nla: a.drapeau("--sans-nla"),
+        sans_son: a.drapeau("--sans-son"),
         layout: a
             .opt("--layout")
             .and_then(|v| analyser_disposition(&v))

@@ -54,6 +54,7 @@ mod magnetoscope;
 mod presse_papiers;
 mod progressif;
 mod session;
+mod son;
 mod surface;
 mod trames;
 mod vnc;

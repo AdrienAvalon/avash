@@ -13,7 +13,7 @@ import { majMemoireOnglets, proposerRestauration } from "./onglets-restauration"
 import { appliquerVue, basculerPartage, ongletsAffiches, surFermeture, surFocus, vuePartagee } from "./vue-partagee";
 import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
-import { partageClipboard, setPartageClipboard, setSondeAuDemarrage, sondeAuDemarrage } from "./prefs";
+import { partageClipboard, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage } from "./prefs";
 import { filterHosts, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode } from "./filters";
 import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, hostSessionState, renderTagBar, terminalTheme } from "./theme";
@@ -1055,6 +1055,15 @@ function commandesPalette(): EntreePalette[] {
         // qu'à partir de la prochaine connexion.
         for (const s of rdpSessions.values()) if (s.ws) annoncerPartageClip(s.ws);
         notify(actif ? t("clip-plus-echange") : t("clip-echange"));
+      },
+    },
+    {
+      nom: t(sonBureau() ? "palette-son-off" : "palette-son-on"),
+      detail: t("palette-son-detail"),
+      icone: "copy",
+      ouvrir: () => {
+        setSonBureau(!sonBureau());
+        notify(t(sonBureau() ? "son-active" : "son-coupe"), "succes");
       },
     },
     {

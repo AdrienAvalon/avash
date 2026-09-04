@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 04/09/2026 |
 |---|---|
-| Tests | 386 Rust (155 cœur, 42 intégration, 70 interface, 119 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 112 front · 63 scénarios bout en bout dans 32 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 389 Rust (155 cœur, 42 intégration, 70 interface, 122 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 65 scénarios bout en bout dans 33 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -443,8 +443,10 @@ Par ordre de valeur décroissante :
    deux sessions SSH.
 9. **VeNCrypt** — TLS pour le VNC, avec la même règle de confiance au premier
    contact que le RDP.
-10. **Audio RDP** — le son du bureau distant (canal `rdpsnd`), joué par la
-    webview.
+10. **Audio RDP** — **fait** (05/09/2026) : canal `rdpsnd` en PCM 16 bits
+    seulement, blocs relayés à la webview (`[20]`) qui les joue par WebAudio,
+    volume du serveur (`[21]`), coupure dans la palette. Scénario bout en bout
+    sur le la 440 Hz du serveur de test.
 11. **Redirection de lecteur (RDPDR)** — un dossier du poste visible depuis le
     bureau distant.
 
@@ -457,7 +459,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 63 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 65 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |
