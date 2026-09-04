@@ -279,10 +279,25 @@ flatpak-builder --user --install --force-clean build-flatpak \
 flatpak run io.github.AdrienAvalon.avash
 ```
 
-Le linter signale deux droits qui demandent une exception, à justifier dans la
-PR de soumission (dépôt `flathub/flathub`, branche `new-pr`, le manifeste et
-les JSON à la racine) : `--socket=ssh-auth` (l'agent SSH du poste, avec ses
-clés, et prêté le temps d'une copie directe) et `--filesystem=home`
+Le linter signale trois droits qui demandent une exception, à justifier dans
+la PR de soumission (dépôt `flathub/flathub`, branche `new-pr`, le manifeste
+et les JSON à la racine) : `--socket=ssh-auth` (l'agent SSH du poste, avec ses
+clés, et prêté le temps d'une copie directe), `--filesystem=home`
 (`~/.ssh/config`, clés, `known_hosts`, transferts SFTP et fichiers RDP dans
-les deux sens). Les mises à jour suivantes se font par PR sur le dépôt
+les deux sens) et `--own-name=dev.avash.app` (l'identifiant que Tauri
+enregistre sur D-Bus). Les mises à jour suivantes se font par PR sur le dépôt
 `flathub/io.github.AdrienAvalon.avash` que Flathub crée à l'acceptation.
+
+**La soumission est un geste du mainteneur en personne.** Le modèle de PR de
+Flathub porte une liste à cocher que son robot exige complète (une première
+PR ouverte sans elle, la #10077 du 05/09/2026, a été fermée aussitôt), et sa
+[politique sur l'IA générative](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
+demande de **déclarer le contenu produit par IA** (ici : une large part du
+code et de l'empaquetage a été écrite avec Claude Code, sous relecture et
+essai du mainteneur ; le manifeste et ses JSON compris) et **interdit qu'un
+agent IA ouvre la PR ou y réponde**. Il faut aussi joindre une vidéo de
+l'application en Flatpak sous Linux. La branche est prête sur le fork
+(`AdrienAvalon/flathub`, branche `io.github.AdrienAvalon.avash`, quatre
+fichiers) : ouvrir la PR contre `new-pr`, coller le modèle, cocher chaque
+point avec la déclaration ci-dessus, joindre la vidéo, demander les trois
+exceptions.

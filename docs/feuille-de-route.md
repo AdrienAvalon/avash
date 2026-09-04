@@ -239,10 +239,13 @@ qui est en place, et ce qui attend :
 - **Flathub** : manifeste `packaging/flathub/io.github.AdrienAvalon.avash.yml`,
   construction hors ligne (GNOME 49, Rust stable et Node 22 du SDK, sources
   cargo et npm figées), construit, installé et lancé sur le poste par
-  `flatpak-builder` ; le linter Flathub passe hormis trois droits qui
-  demandent une exception justifiée (agent SSH, dossier personnel, nom D-Bus
-  de Tauri). À soumettre sur `flathub/flathub` une fois la 0.8.0 taguée
-  (le manifeste pointe sur un tag et son commit).
+  `flatpak-builder`, depuis le tag v0.8.0 ; le linter Flathub passe hormis
+  trois droits qui demandent une exception justifiée (agent SSH, dossier
+  personnel, nom D-Bus de Tauri). La branche de soumission est prête sur le
+  fork ; la PR elle-même revient au mainteneur en personne : la politique de
+  Flathub sur l'IA générative exige de déclarer le code écrit avec Claude et
+  interdit qu'un agent ouvre la PR (la #10077, ouverte sans la liste à cocher
+  du modèle, a été fermée par le robot ; voir RELEASE.md).
 - **Vitrine** : https://adrienavalon.github.io/avash/ (et `/en/`), publiée par
   GitHub Pages à chaque changement de `site/` ; les fichiers de la dernière
   version y sont listés par système.
