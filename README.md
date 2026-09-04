@@ -1,279 +1,225 @@
 <div align="center">
 
-<img src="web/public/hero.svg" alt="avash" width="200">
+<img src="web/public/hero.svg" alt="avash" width="150">
 
 # avash
 
-**Gestionnaire graphique de connexions SSH et RDP — natif, rapide, sécurisé.**
+**Gestionnaire de connexions SSH et RDP, natif, rapide, sécurisé.**
 
-[![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.2-8b7cf6.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-1085%20verts-brightgreen.svg)](#qualité)
+Vos terminaux SSH, vos bureaux Windows et vos transferts de fichiers dans une seule
+application, qui lit votre `~/.ssh/config` tel quel.
+
+[Français](README.md) · [English](README.en.md)
+
+[![Version](https://img.shields.io/github/v/release/AdrienAvalon/avash?label=version&color=8b7cf6)](https://github.com/AdrienAvalon/avash/releases/latest)
+[![Téléchargements](https://img.shields.io/github/downloads/AdrienAvalon/avash/total?label=t%C3%A9l%C3%A9chargements&color=2ea44f)](https://github.com/AdrienAvalon/avash/releases)
+[![Plateformes](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-plateformes-informational)](#installation)
+[![Licence](https://img.shields.io/github/license/AdrienAvalon/avash?label=licence)](LICENSE)
+
+[![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
+[![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
+[![Tests](https://img.shields.io/badge/tests-1085%20verts-brightgreen.svg)](docs/qualite.md)
+
+<img src="docs/captures/bureau-rdp.png" alt="Un bureau Windows 11 affiché dans avash, la liste des hôtes à gauche" width="880">
 
 </div>
 
----
+## En bref
 
-## Qu'est-ce que c'est
+| | |
+|---|---|
+| **SSH** | terminal complet (xterm.js), onglets, `ProxyJump` en chaîne, agent, clés générées et déployées depuis l'application |
+| **RDP** | bureaux Windows, xrdp et GNOME Remote Desktop intégrés (IronRDP), redimensionnement natif sans zoom d'image, presse-papiers partagé sur demande |
+| **SFTP** | panneau de fichiers sur la session du terminal : parcourir, envoyer, télécharger, renommer, supprimer |
+| **Tunnels** | locaux (`-L`), distants (`-R`) et SOCKS (`-D`), avec leur état en direct |
+| **Organisation** | dossiers par glisser-déposer, étiquettes, recherche instantanée, palette de commandes, snippets, santé des hôtes, enregistrement de session |
+| **Import** | PuTTY (fichiers ou registre) et MobaXterm, bureaux RDP et dossiers compris |
+| **Sécurité** | mots de passe dans le trousseau du système, clés d'hôte vérifiées en SSH **et** en RDP avant le moindre identifiant, aucune télémétrie |
 
-avash réunit vos connexions SSH, vos bureaux RDP et vos transferts de fichiers
-dans une seule application native. Il lit directement votre `~/.ssh/config` —
-aucune migration, aucun format propriétaire : les hôtes déjà déclarés
-apparaissent au premier lancement, et les modifications faites depuis avash
-restent lisibles par `ssh` en ligne de commande.
+## Pourquoi avash
 
-Construit avec Tauri 2 et Rust (pas d'Electron) : l'application pèse une
-vingtaine de mégaoctets et démarre en une fraction de seconde.
+- **Rien à migrer.** avash lit `~/.ssh/config` et y écrit ce que vous ajoutez, au
+  format d'OpenSSH : vos hôtes apparaissent au premier lancement, et `ssh` en
+  ligne de commande continue de voir la même chose.
+- **Natif.** Tauri 2 et Rust, pas d'Electron : une vingtaine de mégaoctets, un
+  démarrage en une fraction de seconde, un bureau distant qui suit la fenêtre
+  au pixel près.
+- **Sûr par défaut.** Un serveur dont la clé change est refusé, en SSH comme en
+  RDP, et un serveur RDP ne peut pas obtenir un mot de passe sans
+  authentification mutuelle. Les secrets vivent dans le trousseau, jamais dans
+  un fichier.
+- **Libre.** AGPL-3.0, code auditable, binaires reproductibles avec attestation
+  de provenance.
 
-## Fonctionnalités
-
-**Connexions**
-- **SSH** — terminal complet (xterm.js), plusieurs sessions en onglets, `ProxyJump` en chaîne
-- **RDP** — bureaux distants intégrés (IronRDP), redimensionnement natif : le bureau distant s'adapte réellement à la fenêtre, sans zoom d'image
-- **Windows, xrdp et GNOME Remote Desktop** — y compris les serveurs qui redirigent la connexion vers une autre session (RDSTLS) et ceux qui ne dessinent que par le canal graphique (MS-RDPEGFX : ClearCodec, RemoteFX Progressive, cache de surfaces)
-- **SFTP** — panneau de fichiers distants : parcourir, envoyer, télécharger, renommer, supprimer
-- **Tunnels SSH** — locaux (`-L`), distants (`-R`) et SOCKS (`-D`), avec leur état en direct
-
-**Organisation**
-- Arborescence de dossiers pour ranger hôtes SSH et bureaux RDP ensemble, par glisser-déposer
-- Étiquettes, recherche instantanée et palette de commandes (`Ctrl+K`)
-- Snippets : commandes réutilisables avec variables, envoyables sur plusieurs sessions
-- Interface en **français** et en **anglais** : suit la locale, bascule dans la palette mémorisée, ou `AVASH_LANGUE=fr|en` dans l'environnement
-- **Santé des hôtes** : une sonde TCP par hôte depuis la palette, ou au démarrage sur option, voyant vert ou rouge sur chaque ligne mémorisé d'un lancement à l'autre
-- **Enregistrement de session** au format asciicast v2 (menu du terminal), rejouable avec `asciinema play` ; l'écran tel qu'il est au départ, la sortie ensuite, jamais les frappes ; la liste des enregistrements dans la palette
-- Import des sessions **PuTTY** (fichiers ou registre) et **MobaXterm** (`MobaXterm.ini`, `.mxtsessions`), bureaux RDP et dossiers compris, doublons signalés, clés `.ppk` converties par `puttygen` s'il est là
-- **Utilisable au clavier de bout en bout** — la barre latérale se parcourt aux flèches, `Entrée` ouvre, `Maj+F10` donne le menu
-
-**Sécurité**
-- Mots de passe conservés uniquement dans le **trousseau du système** — jamais en clair sur le disque, et jamais transmis à l'interface : le cœur natif les lit au moment de connecter
-- Vérification des clés d'hôte SSH (TOFU) : connexion refusée si la clé change, **y compris quand seul l'algorithme diffère** — un cas où l'aide fournie par notre bibliothèque SSH répondait « hôte inconnu », donc « premier contact »
-- Vérification du serveur RDP par la même règle, **avant** que CredSSP ne transmette le moindre identifiant. Le repli de NLA vers TLS seul est refusé : un serveur ne peut pas nous faire livrer un mot de passe sans authentification mutuelle
-- Mot de passe RDP transmis au processus RDP par entrée standard, jamais en argument de commande — invisible dans la liste des processus
-- Presse-papiers partagé avec les bureaux distants **seulement si vous le voulez**, dans les deux sens, révocable à tout moment (`Ctrl+K`)
-- `~/.ssh/config`, `known_hosts` et les fichiers de configuration sont écrits atomiquement : une coupure ne peut pas les laisser vides
-- Aucune télémétrie, aucun appel réseau autre que vos connexions
-
-Le modèle de sécurité, ce qu'il couvre et ce qu'il ne couvre pas, est détaillé
-dans [SECURITY.md](SECURITY.md).
+<div align="center">
+<img src="docs/captures/terminal-ssh.png" alt="Une session SSH dans avash" width="880">
+</div>
 
 ## Installation
 
-### Linux (AppImage)
+Les binaires sont sur la [page des versions](https://github.com/AdrienAvalon/avash/releases/latest),
+signés pour la mise à jour automatique et accompagnés de leurs empreintes.
+
+### Linux
 
 ```bash
 chmod +x Avash_0.7.2_amd64.AppImage
 ./Avash_0.7.2_amd64.AppImage
 ```
 
+L'AppImage embarque tout ce qu'il faut, WebKitGTK compris : rien à installer.
+
 ### Windows
 
-Deux formes au choix :
+- **Installeur** `Avash_x.y.z_x64-setup.exe`, installation classique.
+- **Portable** `avash-x.y.z-windows-x64.zip`, à décompresser et lancer, sans
+  installation ni écriture dans la base de registre. Garder `avash-rdp.exe` à
+  côté d'`avash.exe`.
 
-- **Installeur** (`Avash_x.y.z_x64-setup.exe`) — installation classique.
-- **Version portable** (`avash-x.y.z-windows-x64.zip`) — à décompresser et
-  lancer, sans installation ni écriture dans la base de registre. Garder
-  `avash-rdp.exe` à côté d'`avash.exe` : c'est le processus qui assure le RDP.
+Windows affiche un avertissement au premier lancement : avash n'est pas signé
+par un certificat Authenticode. « Informations complémentaires », puis
+« Exécuter quand même ».
 
-Windows affiche un avertissement au lancement de l'installeur : **avash n'est pas
-signé numériquement**. C'est le comportement normal pour un logiciel sans
-certificat de signature de code (Authenticode) — cliquer sur « Informations
-complémentaires » puis « Exécuter quand même ».
+### macOS
 
-### macOS (image disque)
+`Avash_x.y.z_aarch64.dmg` pour les Mac à puce Apple. L'application n'est pas
+notarisée : clic droit sur l'application, **Ouvrir**, une fois. La version
+macOS est construite et testée en intégration continue mais n'a pas encore été
+éprouvée sur une machine réelle : les retours sont bienvenus.
 
-`Avash_x.y.z_aarch64.dmg`, pour les Mac à puce Apple. L'application n'est pas
-notarisée : au premier lancement, Gatekeeper refuse d'ouvrir un logiciel « d'un
-développeur non identifié ». Clic droit sur l'application → **Ouvrir**, une
-fois ; ou, dans un terminal :
-
-```bash
-xattr -d com.apple.quarantine /Applications/Avash.app
-```
-
-La version macOS est construite et testée par la chaîne d'intégration
-continue (cœur, processus RDP, interface), mais **n'a pas encore été éprouvée
-sur une machine réelle** : les retours sont bienvenus.
-
-Deux moyens de vérifier qu'un fichier téléchargé est bien le nôtre :
+### Vérifier ce que vous avez téléchargé
 
 ```bash
-# 1. Empreinte : compare avec le fichier SHA256SUMS publié avec la version
-sha256sum Avash_0.7.2_x64-setup.exe
-
-# 2. Provenance : preuve cryptographique que le binaire vient de ce dépôt,
-#    de ce commit, produit par notre chaîne d'intégration continue
-gh attestation verify Avash_0.7.2_x64-setup.exe --repo AdrienAvalon/avash
+sha256sum -c SHA256SUMS                                             # intégrité
+gh attestation verify Avash_0.7.2_amd64.AppImage --repo AdrienAvalon/avash   # provenance
 ```
 
-La seconde vérification est plus forte que la première : elle ne dit pas
-seulement que le fichier est intact, mais **d'où il vient**.
+La seconde vérification prouve que le fichier vient de ce dépôt, de ce commit,
+produit par notre chaîne d'intégration continue (attestation Sigstore).
 
-### Compiler depuis les sources
+### Depuis les sources
 
-Prérequis : Rust stable, Node.js 22+, et les dépendances système de Tauri.
+Rust stable, Node.js 22 et les dépendances système de Tauri suffisent ; les
+étapes sont dans [CONTRIBUTING.md](CONTRIBUTING.md). `./scripts/release.sh`
+enchaîne validation, construction et empreintes.
 
-```bash
-# Debian / Ubuntu
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
-    libayatana-appindicator3-dev librsvg2-dev patchelf
+## Au quotidien
 
-git clone https://github.com/AdrienAvalon/avash.git avash && cd avash
-
-# 1. Le front : le binaire l'embarque
-(cd web && npm install && npx vite build)
-
-# 2. Le processus RDP : avash-ui le déclare en ressource embarquée, son binaire
-#    doit exister avant la compilation (le dossier binaires/ n'est pas versionné)
-cargo build --release --manifest-path rdp-sidecar/Cargo.toml
-mkdir -p crates/avash-ui/binaries
-cp rdp-sidecar/target/release/avash-rdp \
-   crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
-
-# 3. L'application
-cargo build --release -p avash-ui
-./target/release/avash-ui
-```
-
-Le script `./scripts/release.sh` enchaîne ces étapes et produit l'AppImage.
-
-## Raccourcis
+<div align="center">
+<img src="docs/captures/accueil.png" alt="L'accueil d'avash : hôtes rangés par dossiers, raccourcis" width="880">
+</div>
 
 | Raccourci | Action |
 |---|---|
-| `Ctrl+K` | Palette de commandes |
-| `Ctrl+W` | Fermer l'onglet |
-| `Ctrl+Tab` | Onglet suivant |
-| `Ctrl+1`…`9` | Aller à un onglet |
+| `Ctrl+K` | Palette de commandes : hôtes, actions, langue, santé, enregistrements |
+| `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Fermer, suivant, aller à un onglet |
 | `Ctrl+B` | Panneau de fichiers (SFTP) |
+| `↑` `↓` `Entrée` `Maj+F10` | La barre latérale entière au clavier |
 
-Dans la barre latérale, une seule tabulation suffit pour y entrer ; ensuite :
+- Interface en **français** et en **anglais** : suit la locale, se change dans la
+  palette, ou `AVASH_LANGUE=fr|en`.
+- **Santé des hôtes** : une sonde TCP par hôte, à la demande ou au démarrage,
+  voyant sur chaque ligne.
+- **Enregistrement de session** au format asciicast v2, rejouable avec
+  `asciinema play` ; la sortie, jamais les frappes.
+- **Accessible** : navigation complète au clavier, contrastes vérifiés par
+  `axe-core` sur les deux thèmes.
 
-| Touche | Action |
-|---|---|
-| `↑` `↓` | Hôte ou dossier précédent / suivant |
-| `Origine` `Fin` | Première / dernière ligne |
-| `Entrée` | Se connecter, ou plier un dossier |
-| `Maj+F10` | Menu contextuel — qui se parcourt aussi aux flèches |
-| `Échap` | Refermer le menu, en rendant le focus à la ligne |
+## Face aux autres outils
+
+| | avash | PuTTY | MobaXterm | Remmina | Termius |
+|---|:-:|:-:|:-:|:-:|:-:|
+| SSH, RDP et SFTP dans la même fenêtre | ✓ | SSH | ✓ | ✓ | SSH, SFTP |
+| Lit et écrit `~/.ssh/config` | ✓ | – | – | – | import |
+| Linux, Windows, macOS | ✓ | Windows, Unix | Windows | Linux | ✓ |
+| Natif, sans Electron | ✓ | ✓ | ✓ | ✓ | – |
+| Clé d'hôte RDP vérifiée avant les identifiants | ✓ | – | – | ✓ | – |
+| Mots de passe dans le trousseau du système | ✓ | – | chiffrés | ✓ | nuage |
+| Libre | AGPL-3.0 | MIT | freemium | GPL-2.0 | abonnement |
+
+D'après la documentation publique de chaque outil, septembre 2026. Corrigez-nous
+par une issue si une case est fausse.
+
+## Sécurité
+
+- Mots de passe **uniquement dans le trousseau du système**, jamais en clair sur
+  le disque ni transmis à l'interface : le cœur natif les lit au moment de
+  connecter, et le mot de passe RDP part par l'entrée standard du processus RDP,
+  invisible dans la liste des processus.
+- Clés d'hôte SSH vérifiées (TOFU), connexion refusée si la clé change, **y
+  compris quand seul l'algorithme diffère**. Même règle pour le serveur RDP,
+  **avant** que CredSSP ne transmette le moindre identifiant ; le repli de NLA
+  vers TLS seul est refusé.
+- Presse-papiers partagé avec les bureaux distants seulement si vous le voulez,
+  dans les deux sens, révocable à tout moment.
+- Écritures atomiques de `~/.ssh/config`, `known_hosts` et des fichiers de
+  configuration ; rien d'illimité ne vient du réseau (résolution, surfaces,
+  images, sortie de commande, presse-papiers, tous plafonnés).
+- Aucune télémétrie, aucun appel réseau autre que vos connexions.
+
+Le modèle de sécurité, ce qu'il couvre et ce qu'il ne couvre pas, et comment
+signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1085 tests** couvrent le projet, tous exécutés à chaque commit :
+**1085 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
+sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 
-| Niveau | Nombre | Ce qui est vérifié |
-|---|---|---|
-| Cœur (`crates/avash`) | 147 | parseur `~/.ssh/config` et son **fuzzing par mutation** (plus six cibles cargo-fuzz dans `fuzz/`, dont le décodeur ClearCodec du canal graphique), import PuTTY et MobaXterm, enregistrement asciicast, sonde de santé, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
-| Intégration | 34 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP sur la session du terminal, tunnels, rebonds `ProxyJump` ; l'outil en ligne de commande exercé comme binaire |
-| Interface (`crates/avash-ui`) | 62 | commandes Tauri, import de sessions, enregistrement, santé des hôtes, magasin de sessions sur moteur factice (annulation pendant la connexion, éviction par époque), résolution des rebonds `ProxyJump`, décodage UTF-8 en flux, verrous clavier, annonce du processus RDP, variables d'environnement de la webview |
-| Processus RDP | 101 | empreinte du serveur, fichier des empreintes, écriture atomique, plafond de résolution, négociation, identifiants et domaine, format binaire des trames, nouvelle taille d'écran sans image vidée, configuration après redirection, origine WebSocket, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique (surfaces bornées, image refusée hors surface, cache, ClearCodec, RemoteFX Progressive : décodeur SRL, paliers d'affinage, tuiles en différence, tuile hors surface sans état), magnétoscope, rejeu d'enregistrements réels (icônes NSCodec non noires), fuzzing par mutation sur cinq enregistrements |
-| Paquets IronRDP portés | 585 | nos correctifs — remplissage des tuiles, bande passante, redirection de serveur, capacités précoces, **ordre des champs de ClearCodec**, RLEX à une couleur, **sous-codec NSCodec** — et les tests amont de `ironrdp-pdu` et `ironrdp-graphics`, qui ne s'exécutaient nulle part (voir [rdp-sidecar/vendor](rdp-sidecar/vendor/README.md)) |
-| Front (Vitest) | 104 | logique pure : arborescence, chemins de dossiers, filtres, scancodes, mappage souris, réglages, collage sûr, traductions (couverture des deux dictionnaires, variables, page) |
-| Bout en bout (WebdriverIO) | 52 | l'application réelle : connexion SSH et RDP effectives, SFTP, enregistrement asciicast, santé des hôtes, presse-papiers RDP, dossiers, import PuTTY, langue, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
+| Niveau | Tests | En un mot |
+|---|---:|---|
+| Cœur Rust et intégration contre un vrai sshd | 181 | parseurs, import, SFTP, tunnels, rebonds |
+| Interface Tauri | 62 | commandes, magasin de sessions, clavier |
+| Processus RDP | 101 | négociation, canal graphique, rejeu d'enregistrements réels, fuzzing par mutation |
+| Paquets IronRDP portés | 585 | nos correctifs et les tests amont qui ne s'exécutaient nulle part |
+| Front (Vitest) | 104 | logique pure, traductions |
+| Bout en bout (WebdriverIO) | 52 | l'application réelle, connexions SSH et RDP effectives, audit `axe-core` |
 
-S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
-qui ne voient pas le même code — ESLint typé, stylelint, knip (code mort),
-`cargo audit`, `cargo deny` et `npm audit` sur tous les arbres de dépendances,
-et une garde qui interdit les motifs dangereux. Sur le dépôt : CodeQL,
-gitleaks, le Scorecard de l'OpenSSF et Dependabot (voir
-[CONTRIBUTING.md](CONTRIBUTING.md)). Deux chaînes indépendantes jouent tout
-cela à chaque poussée : GitHub Actions (Linux, Windows, macOS) et le miroir
-GitLab, sur un exécuteur du mainteneur (Linux, conformité RDP contre de vrais
-serveurs xrdp comprise).
-
-### Accessibilité : un juge extérieur
-
-Les vérifications écrites à la main couvrent ce à quoi on a pensé — rôles des
-modales, piège à focus, retour du focus. `axe-core` couvre ce à quoi on n'a pas
-pensé, et il a trouvé du premier coup : un texte secondaire à **3,15:1** au lieu
-de 4,5, des initiales d'avatar à 4,44, un champ sans étiquette visible, un rôle
-ARIA interdit sur un `<form>`. Le thème clair était **pire encore** — 2,45:1 —
-et aucun test ne l'aurait montré : ils tournent tous en sombre.
-
-Corrigé par le calcul, pas à l'œil : chaque couleur retenue tient 4,5:1 sur
-*toutes* les surfaces où elle apparaît, et l'encre des initiales mêle la teinte
-de l'hôte à la couleur de texte du thème, de sorte que la lisibilité suive
-automatiquement.
-
-### Rejouer un serveur disparu
-
-Le dialogue d'un vrai serveur est capturé une fois, puis rejoué sans réseau :
-**5 millisecondes contre 5 secondes de connexion**. Une machine du parc devient
-une fixture permanente, et le rendu obtenu est comparé à une empreinte de
-référence — en débranchant le correctif du cisaillement, elle change.
-
-Surtout, ces enregistrements servent de graines à un **fuzzing par mutation**.
-Muter des octets au hasard ne franchit jamais les premières validations ; muter
-du trafic authentique atteint le décodeur d'images. Il y a trouvé deux façons
-pour un serveur hostile de faire tomber le client — une écriture hors tampon et
-un débordement arithmétique — l'une et l'autre corrigées. Détails dans
-[SECURITY.md](SECURITY.md).
-
-### Conformité RDP : de vrais serveurs, pas des simulacres
-
-Trois défauts RDP corrigés en 0.3.3 — image cisaillée en diagonale, clavier
-interprété en QWERTY, connexion suspendue sans fin — ont **tous** été signalés
-par l'usage, et **aucun** n'était visible depuis les tests. Les tests unitaires
-vérifiaient nos fonctions, la suite bout en bout vérifiait l'interface ; entre
-les deux se trouvait le seul endroit où ces défauts vivaient : le dialogue réel
-avec un serveur RDP.
-
-Un parc de serveurs en conteneur comble ce vide : deux bureaux xrdp — XFCE et
-GNOME, parce qu'ils ne dessinent pas de la même façon — et un sshd qui refuse la
-méthode `password`, pour éprouver le repli `keyboard-interactive` dont l'absence
-empêchait tout compte de domaine de se connecter.
-
-```bash
-scripts/parc-rdp.sh up tous        # XFCE 3390, GNOME 3391, sshd 2222
-scripts/conformite.sh tous         # connexion, image, trafic, clavier, SSH, SFTP
-scripts/parc-rdp.sh down
-```
-
-Le détecteur de cisaillement est lui-même éprouvé : en désactivant le correctif
-porté, il annonce `CISAILLÉE décalage=-2 (96% des lignes)` ; correctif remis,
-`saine décalage=+0 (100%)`. Détails dans
-[tests-parc/README.md](tests-parc/README.md).
-
-Une règle tient lieu de discipline : **un nouveau test doit avoir été vu
-échouer**. On débranche ce qu'il couvre et on vérifie qu'il tombe — un test qui
-ne peut pas échouer ne protège rien.
-
-```bash
-./check.sh              # tout valider
-./check.sh --quick      # sans le build release
-cd e2e && npm test      # tests bout en bout (ouvre des fenêtres)
-
-# conformité RDP contre de vrais serveurs xrdp
-scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
-```
+Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo
+audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, le Scorecard de l'OpenSSF,
+six cibles cargo-fuzz et un parc RDP en conteneurs. Une règle tient lieu de
+discipline : **un nouveau test doit avoir été vu échouer.** Le détail, avec ce
+que chaque dispositif a réellement trouvé : [docs/qualite.md](docs/qualite.md).
 
 ## Architecture
 
 Trois composants : un cœur SSH réutilisable (`crates/avash`), l'application
-Tauri (`crates/avash-ui`), et un processus RDP séparé (`rdp-sidecar`) qui
-communique par WebSocket binaire local. Détails dans
+Tauri (`crates/avash-ui`), et un processus RDP séparé (`rdp-sidecar`, IronRDP)
+qui parle à l'interface par WebSocket binaire local. Quatre paquets IronRDP
+sont portés avec des correctifs ciblés, documentés dans
+[rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md). Le reste est dans
 [docs/architecture.md](docs/architecture.md).
+
+## Contribuer
+
+Les défauts et les propositions se déposent dans les
+[issues](https://github.com/AdrienAvalon/avash/issues/new/choose), les questions
+dans les [discussions](https://github.com/AdrienAvalon/avash/discussions). Avant
+une PR : [CONTRIBUTING.md](CONTRIBUTING.md) (outillage, `./check.sh`, règles de
+test) et [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). En français ou en anglais.
 
 ## Documentation
 
-- [docs/feuille-de-route.md](docs/feuille-de-route.md) — le cap, les priorités et les règles de travail
-- [CHANGELOG.md](CHANGELOG.md) — historique des versions
-- [CONTRIBUTING.md](CONTRIBUTING.md) — développer et contribuer
-- [SECURITY.md](SECURITY.md) — signaler une vulnérabilité, modèle de sécurité
-- [docs/architecture.md](docs/architecture.md) — architecture technique
-- [docs/journal-de-bord.md](docs/journal-de-bord.md) — journal de développement (archive)
-- [tests-parc/README.md](tests-parc/README.md) — parc RDP local et conformité
-- [rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md) — correctifs portés sur IronRDP
+- [CHANGELOG.md](CHANGELOG.md), l'historique des versions
+- [docs/feuille-de-route.md](docs/feuille-de-route.md), le cap et les priorités
+- [docs/qualite.md](docs/qualite.md), les tests et ce qu'ils ont trouvé
+- [docs/architecture.md](docs/architecture.md), l'architecture technique
+- [SECURITY.md](SECURITY.md), le modèle de sécurité
+- [tests-parc/README.md](tests-parc/README.md), le parc RDP local
+- [RELEASE.md](RELEASE.md), construire et distribuer
 
 ## Licence
 
-avash est distribué sous licence **[AGPL-3.0-or-later](LICENSE)**.
+avash est distribué sous licence **[AGPL-3.0-or-later](LICENSE)** : libre de
+l'utiliser, de l'étudier, de le modifier et de le redistribuer, à condition de
+publier toute version modifiée sous la même licence, y compris mise à
+disposition comme service en réseau. Une licence commerciale est disponible
+pour l'intégrer dans un produit propriétaire : adrien.cros@outlook.com.
 
-Vous pouvez l'utiliser, l'étudier, le modifier et le redistribuer librement. En
-contrepartie, toute version modifiée — y compris **mise à disposition comme
-service en réseau** — doit être publiée sous la même licence.
+© 2026 Adrien Cros.
 
-**Licence commerciale.** Pour intégrer avash dans un produit propriétaire ou
-l'exploiter comme service sans publier vos modifications, une licence
-commerciale distincte est disponible. Contact : adrien.cros@outlook.com
+<div align="center">
 
-© 2026 Adrien Cros. Tous droits réservés.
+[![Historique des étoiles](https://api.star-history.com/svg?repos=AdrienAvalon/avash&type=Date)](https://star-history.com/#AdrienAvalon/avash&Date)
+
+</div>

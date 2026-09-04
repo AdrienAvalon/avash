@@ -219,8 +219,43 @@ jobs:
             artefacts/**/*.dmg
             artefacts/**/*.app.tar.gz
 
+      # Les notes de la release sont la section du CHANGELOG de cette version,
+      # telle quelle : c'est ce que voient les visiteurs de la page des
+      # releases et le courriel des abonnés, et jusqu'ici la page était vide
+      # sous la liste des fichiers. Une section absente fait échouer la
+      # publication plutôt que de publier sans un mot.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
+          path: source
+      - name: Notes de la release depuis le CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { dedans = 1; next }
+            dedans && /^## \[/ { exit }
+            dedans { print }
+          ' source/CHANGELOG.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::Aucune section [$version] dans CHANGELOG.md : la release aurait des notes vides."
+            exit 1
+          fi
+          {
+            echo "## Avash $version"
+            echo
+            cat notes.md
+            echo
+            echo "---"
+            echo
+            echo "Vérifier un fichier téléchargé : \`sha256sum -c SHA256SUMS\` depuis le dossier de téléchargement, et \`gh attestation verify <fichier> --repo ${GITHUB_REPOSITORY}\` pour sa provenance. Mise à jour automatique depuis une version installée : pastille de version, « vérifier les mises à jour »."
+          } > notes-release.md
+          cat notes-release.md
+
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          name: Avash ${{ github.ref_name }}
+          body_path: notes-release.md
           files: |
             artefacts/**/*.AppImage
             artefacts/**/*.exe

@@ -1,0 +1,75 @@
+name: Rapport de défaut
+description: Quelque chose ne fait pas ce qu'il devrait. / Something does not work as it should.
+title: "[défaut] "
+labels: ["défaut"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci. Un bon rapport tient en trois choses : ce que tu as fait, ce que tu attendais, ce qui s'est passé.
+        En français ou en anglais, comme tu préfères. / French or English, as you prefer.
+
+        **Une faille de sécurité ne se signale pas ici** : voir [SECURITY.md](../blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Version d'avash
+      description: Pastille en haut de la barre latérale, ou `avash --version`.
+      placeholder: "0.7.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: systeme
+    attributes:
+      label: Système
+      options:
+        - Linux (AppImage)
+        - Linux (compilé depuis les sources)
+        - Windows (installeur)
+        - Windows (portable)
+        - macOS
+    validations:
+      required: true
+  - type: dropdown
+    id: domaine
+    attributes:
+      label: Domaine
+      options:
+        - SSH (terminal)
+        - RDP (bureau distant)
+        - SFTP (fichiers)
+        - Tunnels
+        - Import (PuTTY, MobaXterm)
+        - Interface, clavier, accessibilité
+        - Mise à jour, installation
+        - Autre
+    validations:
+      required: true
+  - type: textarea
+    id: etapes
+    attributes:
+      label: Étapes pour reproduire
+      placeholder: |
+        1. Ouvrir…
+        2. Cliquer sur…
+        3. Observer…
+    validations:
+      required: true
+  - type: textarea
+    id: attendu
+    attributes:
+      label: Ce qui était attendu, et ce qui s'est passé
+    validations:
+      required: true
+  - type: textarea
+    id: serveur
+    attributes:
+      label: Serveur en face (pour SSH et RDP)
+      description: OpenSSH, xrdp, GNOME Remote Desktop, Windows Server 2022, Windows 11… et sa version si tu la connais.
+  - type: textarea
+    id: journal
+    attributes:
+      label: Journal, capture d'écran
+      description: |
+        Une capture vaut mieux qu'une description. Pour un défaut d'affichage RDP, un enregistrement rejouable aide énormément : voir « Un défaut d'affichage » dans [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md). **Relis avant de coller** : un enregistrement contient l'écran du serveur, et les traces `AVASH_RDP_TRACE` contiennent le mot de passe.
+      render: text

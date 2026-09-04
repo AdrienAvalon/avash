@@ -7,6 +7,27 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le dépôt se présente comme les projets qu'on adopte.** README refondu
+  sur le modèle des dépôts les plus suivis : accroche, badges réels (version,
+  téléchargements, chaînes, Scorecard de l'OpenSSF, licence), une vraie
+  capture en tête, une grille de fonctionnalités, l'installation par système
+  avec la vérification des fichiers, un tableau face à PuTTY, MobaXterm,
+  Remmina et Termius, et la qualité résumée en un tableau dont le détail (ce
+  que chaque dispositif a trouvé) part dans `docs/qualite.md`. Une version
+  anglaise, `README.en.md`, avec un sélecteur de langue en tête des deux. Les
+  captures (`docs/captures/`) sont prises sur l'application réelle par le
+  harnais bout en bout, bac à sable semé d'hôtes plausibles, session SSH
+  ouverte sur le sshd local, bureau Windows du parc ; `scripts/captures-
+  readme.sh` les régénère, mot de passe lu dans le trousseau. Une image
+  d'aperçu social (1280 × 640) attend d'être déposée dans les réglages
+  GitHub. Côté dépôt : description accentuée, vingt sujets, page d'accueil
+  vers la dernière version, discussions ouvertes, gabarits d'issue (défaut,
+  proposition, faille redirigée vers la divulgation privée) et de PR, code
+  de conduite. Les notes de chaque release reprennent désormais la section
+  du CHANGELOG de la version, avec les commandes de vérification ; une
+  section absente fait échouer la publication plutôt que de publier sans un
+  mot.
+
 ## [0.7.2] - 2026-09-04
 
 - **La suite bout en bout relance son pilote s'il meurt en route.** Chaîne

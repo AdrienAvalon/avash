@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Signaler une faille de sécurité / Report a vulnerability
+    url: https://github.com/AdrienAvalon/avash/security/advisories/new
+    about: En privé, jamais dans une issue publique. Modèle de sécurité et périmètre dans SECURITY.md.
+  - name: Question, idée, retour d'usage / Questions and feedback
+    url: https://github.com/AdrienAvalon/avash/discussions
+    about: Pour tout ce qui n'est ni un défaut ni une proposition précise.

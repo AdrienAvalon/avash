@@ -1,0 +1,36 @@
+name: Proposition
+description: Une fonctionnalité ou une amélioration. / A feature or an improvement.
+title: "[proposition] "
+labels: ["proposition"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        avash tient à trois exigences, dans cet ordre : sûreté, justesse, vitesse. Le confort passe après.
+        Une proposition qui dit **quel problème** elle règle a plus de chances qu'une liste de fonctionnalités.
+        En français ou en anglais. / French or English.
+  - type: textarea
+    id: probleme
+    attributes:
+      label: Le problème
+      description: Ce que tu fais aujourd'hui, et ce qui te gêne.
+    validations:
+      required: true
+  - type: textarea
+    id: proposition
+    attributes:
+      label: La proposition
+      description: Ce que ferait avash, vu de l'utilisateur.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Ce que tu as essayé ou envisagé
+      description: Un autre outil, un contournement, une autre façon de faire.
+  - type: checkboxes
+    id: cadre
+    attributes:
+      label: Cadre
+      options:
+        - label: J'ai lu la [feuille de route](../blob/main/docs/feuille-de-route.md) et cette proposition n'y figure pas déjà.

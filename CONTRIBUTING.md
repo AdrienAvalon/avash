@@ -90,6 +90,21 @@ porte encodé en UTF-16, lisible tel quel. C'est pourquoi elles ne s'activent pa
 sur `RUST_LOG`, que beaucoup exportent globalement, mais sur une variable qui
 n'appartient qu'à nous. Relis avant de coller quoi que ce soit.
 
+### Les captures d'écran du README
+
+Elles sont prises sur l'application réelle, par le harnais de la suite bout
+en bout, et se régénèrent après un build release (la pastille de version est
+celle du binaire) :
+
+```bash
+scripts/captures-readme.sh                       # accueil et terminal SSH
+scripts/captures-readme.sh 192.0.2.10            # plus un bureau Windows (mot de passe dans le trousseau)
+```
+
+Le bac à sable est semé d'hôtes plausibles (adresses documentaires), l'invite
+du terminal est neutre : rien du poste ni du parc n'apparaît. `README.en.md`
+partage les mêmes images.
+
 ### Un défaut d'affichage : enregistrer, rejouer, bissecter
 
 Un bureau qui s'affiche mal se juge sur pièces, pas à l'œil. Le magnétoscope

@@ -59,8 +59,9 @@ ce qui n'est pas ici n'existe pas pour eux.
   `fuzz/seeds/`. Quatre défauts ont été trouvés en moins d'une minute chacun.
 - Le sidecar RDP est hors espace de travail : `cargo test --workspace` ne le
   voit pas, `check.sh` et la CI le lancent séparément.
-- Les compteurs de tests figurent dans `README.md` (badge et section Qualité)
-  et `docs/feuille-de-route.md` : les mettre à jour quand ils changent.
+- Les compteurs de tests figurent dans `README.md` et `README.en.md` (badge et
+  section Qualité), `docs/qualite.md` et `docs/feuille-de-route.md` : les
+  mettre à jour quand ils changent.
 
 ## Sécurité et secrets
 
@@ -96,8 +97,11 @@ ce qui n'est pas ici n'existe pas pour eux.
 ## Documentation à tenir à jour
 
 À chaque changement visible : `CHANGELOG.md` (`[Non publié]`), puis selon le
-cas `README.md`, `docs/feuille-de-route.md` (axes et compteurs),
+cas `README.md` **et sa traduction `README.en.md`** (même structure, mêmes
+chiffres), `docs/qualite.md`, `docs/feuille-de-route.md` (axes et compteurs),
 `docs/architecture.md`, `CONTRIBUTING.md`, `e2e/README.md`, `SECURITY.md`.
+Les captures du README se régénèrent par `scripts/captures-readme.sh` après
+un build release (la version affichée est celle du binaire).
 Les commentaires de code expliquent le **pourquoi** et l'histoire du cas
 (le bug vu, la mesure faite), pas le quoi.
 
