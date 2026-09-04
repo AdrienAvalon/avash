@@ -189,6 +189,11 @@ bout-en-bout:
 # réseau du poste.
 conformite:
   stage: eprouver
+  # Sans `needs`, un job de cette étape attend TOUTE l'étape précédente, audit
+  # des dépendances compris : le pipeline #3381 l'a sauté pour une panne du
+  # registre npm. Il ne dépend que du binaire du sidecar, que « rust » vient
+  # de construire et de mettre en cache.
+  needs: ["rust"]
   cache:
     - *cache-registre
     - <<: *cache-sidecar
