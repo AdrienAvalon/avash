@@ -39,6 +39,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   le fork du mainteneur, par l'API, sans cloner le dépôt. La procédure, et
   l'automatisation possible depuis le workflow Release, sont dans
   `RELEASE.md`.
+- **Le front est mesuré, sur la vraie application.** `scripts/mesures-front.sh`
+  lance le harnais bout en bout et relève, machine au repos, le démarrage
+  (189 ms d'exécution des modules JavaScript en médiane, 101 ms avant le
+  premier contenu peint) et la latence à la frappe sur le sshd local (11 ms
+  jusqu'à l'écho, 18 ms jusqu'à l'image suivante, médianes sur quarante
+  touches). La feuille de route reprend ces chiffres : le cap de 16 ms à la
+  frappe est tenu ; le découpage du paquet front attend une mesure qui
+  sépare la compilation de xterm.js de l'initialisation d'avash.
 - **Arch Linux, macOS et les logithèques : les paquets sont prêts.** Un
   `PKGBUILD` (`packaging/aur/avash/`) construit Avash depuis l'archive de la
   version publiée, front, processus RDP et application, à jeu de dépendances

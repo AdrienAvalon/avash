@@ -84,21 +84,29 @@ describe("Mesures du front", () => {
     // Sonde posée dans la page : le keydown en phase de capture précède le
     // gestionnaire de xterm.js ; l'écho arrive par l'événement Tauri que le
     // front écoute lui-même, et l'image d'après par requestAnimationFrame.
+    // L'application n'expose pas l'API Tauri globale (`window.__TAURI__` est
+    // vide) : on s'abonne par les internes de la webview, comme le fait
+    // `@tauri-apps/api` lui-même.
     await browser.execute(async () => {
       const m = { frappes: [], attente: null, derniereSortie: performance.now(), sorties: 0 };
       window.__mesure = m;
       document.addEventListener("keydown", (e) => {
         if (e.key.length === 1) m.attente = { t0: performance.now(), touche: e.key };
       }, true);
-      await window.__TAURI__.event.listen("pty-output", (ev) => {
-        m.derniereSortie = performance.now();
-        m.sorties++;
-        const a = m.attente;
-        if (a && String(ev.payload.data).includes(a.touche)) {
-          const t1 = performance.now();
-          m.attente = null;
-          requestAnimationFrame(() => m.frappes.push({ echo: t1 - a.t0, image: performance.now() - a.t0 }));
-        }
+      const i = window.__TAURI_INTERNALS__;
+      await i.invoke("plugin:event|listen", {
+        event: "pty-output",
+        target: { kind: "Any" },
+        handler: i.transformCallback((ev) => {
+          m.derniereSortie = performance.now();
+          m.sorties++;
+          const a = m.attente;
+          if (a && String(ev.payload.data).includes(a.touche)) {
+            const t1 = performance.now();
+            m.attente = null;
+            requestAnimationFrame(() => m.frappes.push({ echo: t1 - a.t0, image: performance.now() - a.t0 }));
+          }
+        }),
       });
     });
     // L'invite du shell : la sortie s'est tue depuis un moment.

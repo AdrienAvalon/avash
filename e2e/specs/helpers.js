@@ -151,7 +151,12 @@ export async function attendreBureauConnecte(quoi = "le bureau RDP") {
     });
   } catch (e) {
     const diag = await browser.execute(async () => {
-      const { invoke } = window.__TAURI__?.core ?? {};
+      // L'application n'expose pas l'API Tauri globale (`window.__TAURI__`
+      // est un objet vide) : ce diagnostic répondait toujours « interface non
+      // instrumentée ». Les internes de la webview portent `invoke`, comme
+      // pour `@tauri-apps/api` lui-même (vu en écrivant la sonde de mesure du
+      // front, 2026-09-04).
+      const invoke = window.__TAURI_INTERNALS__?.invoke;
       if (!invoke) return "(interface non instrumentée)";
       const ids = [...document.querySelectorAll(".tab")].map((_, i) => i + 1);
       const out = [];

@@ -253,9 +253,28 @@ sur des mesures de ce qui coûte réellement.
   test pose désormais un plancher sur le décodeur UTF-8 en flux, large (dix
   fois sous la mesure en profil de test) pour ne pas rougir sous charge, mais
   qui verrait une régression algorithmique.
-- **Découpage du paquet front.** 577 Ko en un seul module, surtout xterm.js. Un
-  chargement différé du terminal accélérerait le premier affichage — à mesurer
-  avant de décider : le gain peut être négligeable pour une application locale.
+- **Mesuré (04/09/2026), sur la vraie application** par
+  `scripts/mesures-front.sh` (harnais bout en bout, machine au repos, cinq
+  lancements, quarante frappes sur le sshd local) :
+
+  | Mesure | Médiane | p95 / max |
+  |---|---:|---:|
+  | Exécution des modules JavaScript (domInteractive → DOMContentLoaded) | 189 ms | max 1 122 ms (premier lancement à froid) |
+  | DOMContentLoaded depuis la navigation | 205 ms | max 1 155 ms |
+  | Premier contenu peint | 101 ms | max 1 077 ms |
+  | Frappe → écho reçu du serveur (keydown → événement `pty-output`) | 11 ms | p95 16 ms, max 19 ms |
+  | Frappe → image suivante (keydown → `requestAnimationFrame` après l'écho) | 18 ms | p95 27 ms, max 29 ms |
+
+  La latence à la frappe passe sous le cap de 16 ms pour l'écho ; l'image qui
+  le montre vient une trame plus tard, à la cadence de l'écran. Rien à
+  optimiser sur ce chemin.
+- **Découpage du paquet front.** 642 Ko en un seul module, surtout xterm.js.
+  L'exécution des modules coûte 189 ms au démarrage, soit l'essentiel du
+  délai avant DOMContentLoaded : ce n'est pas négligeable. Mais la sonde ne
+  sépare pas encore la compilation de xterm.js de l'initialisation d'avash
+  (écouteurs, dictionnaires, premier rendu) ; c'est cette part-là qu'un
+  chargement différé du terminal ferait gagner, et elle reste à mesurer avant
+  de découper.
 
 *Principe* : aucune optimisation n'est retenue sans une mesure avant/après.
 
@@ -353,7 +372,7 @@ Ces mesures sont à relever à chaque version :
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
 | Scénarios bout en bout | 54 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
-| Latence à la frappe (SSH local) | non mesurée | mesurée, < 16 ms |
+| Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |
 
 Le dernier indicateur est le seul qui compte vraiment. Les autres servent à le tenir.
