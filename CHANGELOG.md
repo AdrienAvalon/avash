@@ -7,6 +7,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Avash se soumet à winget.** `scripts/winget-manifeste.sh <version>` écrit
+  les quatre manifestes du paquet `AdrienCros.Avash` (version, installeur
+  NSIS par utilisateur avec sa clé de désinstallation, locales en-US et
+  fr-FR) depuis la release GitHub et son `SHA256SUMS` ; ceux de la 0.7.2
+  sont dans `packaging/winget/` et soumis à `microsoft/winget-pkgs` depuis
+  le fork du mainteneur, par l'API, sans cloner le dépôt. La procédure, et
+  l'automatisation possible depuis le workflow Release, sont dans
+  `RELEASE.md`.
 - **Chaîne d'approvisionnement : l'image de la chaîne GitLab est épinglée et
   Node y est installé sans rien exécuter de téléchargé.** Le Scorecard de
   l'OpenSSF, désormais affiché sur le README, relevait deux choses dans

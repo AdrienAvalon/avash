@@ -183,3 +183,32 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # si passphrase
 cd crates/avash-ui && NO_STRIP=1 cargo tauri build
 ```
 `scripts/release.sh` exporte déjà cette clé si elle est présente.
+
+## 8. Canaux de distribution
+
+### winget (Windows)
+
+Le paquet est `AdrienCros.Avash` sur le dépôt communautaire
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) ; les
+utilisateurs l'installent par `winget install AdrienCros.Avash`. Chaque version
+publiée s'y soumet par une PR contenant quatre manifestes (version, installeur,
+locales en-US et fr-FR), générés depuis la release GitHub :
+
+```bash
+scripts/winget-manifeste.sh 0.7.2      # écrit packaging/winget/AdrienCros.Avash/0.7.2/
+```
+
+Puis, sans cloner le dépôt (plusieurs centaines de mégaoctets), depuis le fork
+`AdrienAvalon/winget-pkgs` : une branche `AdrienCros.Avash-<version>` créée sur
+le `master` amont par l'API, les quatre fichiers déposés dans
+`manifests/a/AdrienCros/Avash/<version>/`, et une PR titrée
+`Update: AdrienCros.Avash to <version>` (`New package:` pour la première). Le
+robot du dépôt valide le manifeste et installe réellement le paquet ; le
+mainteneur doit avoir signé une fois le CLA de Microsoft (le robot le demande
+dans la PR). Les manifestes de la première soumission sont commités dans
+`packaging/winget/` pour référence.
+
+Automatiser depuis le workflow Release est possible avec l'action
+`vedantmgoyal9/winget-releaser` sur un exécuteur Windows ; elle exige un jeton
+personnel (`public_repo`) capable de pousser sur le fork, à déposer en secret
+`WINGET_TOKEN`. À faire quand une version aura été acceptée à la main.
