@@ -7,6 +7,26 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Des fichiers par le presse-papiers RDP, dans les deux sens.** Quand le
+  bureau distant copie des fichiers, Avash n'en demande que la liste (noms,
+  tailles) et la montre dans une pastille sous le bureau ; un clic, une
+  confirmation qui dit combien, quelle taille et où, et les fichiers
+  arrivent dans le dossier des téléchargements, par morceaux d'un mégaoctet,
+  quatre en vol, dans un `.part` promu une fois complet, sans jamais écraser
+  un fichier existant (« (2) »). Dans l'autre sens, des fichiers déposés sur
+  le bureau (ou choisis par la palette, « Envoyer des fichiers au bureau
+  distant… ») lui sont offerts : ils se collent dans son Explorateur, les
+  dossiers avec leur arborescence, et le poste sert les octets demandés, y
+  compris sur la copie verrouillée par le distant si le presse-papiers change
+  entre-temps. Le protocole est celui de mstsc (`FileGroupDescriptorW`,
+  flux `FileContentsRequest`, verrous), porté par IronRDP ; le processus
+  d'Avash tient le découpage et l'écriture (`rdp-sidecar/src/fichiers.rs`,
+  neuf tests, dont l'écriture dans le désordre, le refus d'un fichier, la
+  réponse courte et le parcours des dossiers). Le serveur RDP de test offre
+  un fichier et reçoit ceux du client ; le scénario bout en bout compare les
+  octets d'un fichier de 2,5 Mo dans un sens et de 300 Ko dans l'autre. Les
+  chemins reçus sont assainis par IronRDP (ni absolu, ni `..`), et le contenu
+  n'est jamais téléchargé sans accord.
 - **VNC.** Avash ouvre les bureaux VNC (RFB 3.8, authentification VNC
   classique, ZRLE, CopyRect, Raw, taille de bureau suivie) par le même
   processus, le même canal local et le même canvas que le RDP : « Connexion

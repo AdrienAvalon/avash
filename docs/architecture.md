@@ -165,6 +165,8 @@ Entiers en little-endian.
 | `11` | Onglet visible ou en pause | `pause:u8` |
 | `12` | Partage du presse-papiers autorisé | `autorise:u8` |
 | `14` | Clavier VNC | `keysym:u32`, `pressé:u8` (VNC seulement ; le RDP garde le `4`) |
+| `16` | Recevoir les fichiers copiés sur le distant | JSON `{ "dossier"?: chemin }` (sinon le dossier des téléchargements) |
+| `19` | Offrir des fichiers du poste au distant | JSON `[chemins absolus]` (fichiers ou dossiers) |
 
 ### Sidecar → application
 
@@ -176,6 +178,16 @@ Entiers en little-endian.
 | `7`  | Statistiques | `fps:u16`, `débit:u32` (Ko/s), `latence:u16` (ms) |
 | `8`  | Presse-papiers (distant → poste) | texte UTF-8 |
 | `13` | Écran, plusieurs rectangles | `n:u8`, puis `n` fois (`x:u16`, `y:u16`, `w:u16`, `h:u16`, pixels RGBA) |
+| `15` | Fichiers copiés sur le distant | JSON `{ dossier, octets, fichiers: [{ chemin, taille, dossier }] }` : la liste seulement, jamais le contenu |
+| `17` | Progression d'une réception | JSON `{ fichier, fait, total, termines, nombre }` |
+| `18` | Bilan d'une réception ou d'une offre | JSON `{ sens: "reception" \| "offre", dossier?, fichiers, octets, erreurs: [] }` |
+
+Les fichiers passent par le canal CLIPRDR ([MS-RDPECLIP] 2.2.5 : liste
+`FileGroupDescriptorW`, flux `FileContentsRequest` / `Response`, verrous), porté
+par IronRDP ; `rdp-sidecar/src/fichiers.rs` découpe une réception en morceaux
+d'un mégaoctet (quatre en vol), écrit chaque réponse à sa position dans un
+`.part` promu une fois complet, et parcourt les dossiers offerts pour servir
+les octets que le distant demande.
 
 Le code `3` est géré par le front mais **n'est jamais émis** : un échec survenu
 avant la connexion sort sur l'erreur standard du processus et remonte comme

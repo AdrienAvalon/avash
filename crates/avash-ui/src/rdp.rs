@@ -342,6 +342,19 @@ fn tuer(state: &tauri::State<'_, RdpStore>, id: u64, msg: String) -> String {
     msg
 }
 
+/// Ouvre dans le gestionnaire de fichiers le dossier où des fichiers venus
+/// d'un bureau distant ont été reçus. Le chemin vient du processus RDP, par
+/// l'interface : on n'ouvre qu'un dossier qui existe, jamais un fichier (un
+/// fichier reçu ne doit pas s'exécuter d'un clic sur une notification).
+#[tauri::command]
+pub fn rdp_ouvrir_dossier(chemin: String) -> Result<(), String> {
+    let p = std::path::Path::new(&chemin);
+    if !p.is_absolute() || !p.is_dir() {
+        return Err(format!("{chemin} n'est pas un dossier existant."));
+    }
+    open::that(p).map_err(|e| format!("Ouverture impossible : {e}"))
+}
+
 #[tauri::command]
 pub fn rdp_close(state: tauri::State<'_, RdpStore>, id: u64) -> Result<(), String> {
     if let Some(mut child) = state.inner.lock().unwrap().remove(&id) {

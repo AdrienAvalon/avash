@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 04/09/2026 |
 |---|---|
-| Tests | 356 Rust (149 cœur, 34 intégration, 63 interface, 110 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 110 front · 54 scénarios bout en bout dans 27 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 365 Rust (149 cœur, 34 intégration, 63 interface, 119 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 110 front · 55 scénarios bout en bout dans 28 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -358,8 +358,14 @@ Par ordre de valeur décroissante :
    `SECURITY.md`, tunnel SSH recommandé. Reste à faire : VeNCrypt/TLS, le
    pseudo-codage curseur, Tight (JPEG).
 4. **Port série** — utile en environnement réseau et industriel.
-5. **Transfert de fichiers par RDP** — le presse-papiers texte fonctionne, les
-   fichiers restent à faire.
+5. **Transfert de fichiers par RDP** — **fait** (04/09/2026), par le
+   presse-papiers, comme mstsc : la liste des fichiers copiés sur le distant
+   arrive dans une pastille, un clic et une confirmation les reçoivent (par
+   morceaux, quatre en vol, sans écraser) ; des fichiers déposés sur le bureau
+   se collent dans son Explorateur, dossiers compris. Le scénario bout en bout
+   compare les octets dans les deux sens contre le serveur de test. Reste à
+   faire : la redirection de lecteur (RDPDR), pour parcourir un dossier du
+   poste depuis le distant.
 
 ---
 
@@ -370,7 +376,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 54 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 55 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |

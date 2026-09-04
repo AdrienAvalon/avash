@@ -15,28 +15,32 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
-use ironrdp::connector::DesktopSize;
-use ironrdp::rdpsnd::pdu::{AudioFormat, WaveFormat};
-use ironrdp::rdpsnd::server::{NegotiatedFormat, RdpsndError, RdpsndServerHandler, RdpsndServerMessage};
-use ironrdp::server::tokio::sync::mpsc::UnboundedSender;
-use ironrdp::server::tokio::time::{self, Duration, sleep};
-use ironrdp::server::{
-    BitmapUpdate, CliprdrServerFactory, Credentials, DisplayUpdate, KeyboardEvent, MouseEvent, PixelFormat, RdpServer,
-    RdpServerDisplay, RdpServerDisplayUpdates, RdpServerInputHandler, ServerEvent, ServerEventSender,
-    SoundServerFactory, TlsIdentityCtx, tokio,
-};
-use ironrdp::cliprdr::backend::{CliprdrBackend, CliprdrBackendFactory, ClipboardMessage};
+use ironrdp::cliprdr::backend::{ClipboardMessage, CliprdrBackend, CliprdrBackendFactory};
 use ironrdp::cliprdr::pdu::{
-    ClipboardFormat, ClipboardFormatId, ClipboardGeneralCapabilityFlags, FileContentsRequest,
-    FileContentsResponse, FormatDataRequest, FormatDataResponse, LockDataId,
+    ClipboardFileAttributes, ClipboardFormat, ClipboardFormatId, ClipboardFormatName,
+    ClipboardGeneralCapabilityFlags, FileContentsFlags, FileContentsRequest, FileContentsResponse,
+    FileDescriptor, FormatDataRequest, FormatDataResponse, LockDataId,
 };
+use ironrdp::connector::DesktopSize;
 use ironrdp::core::IntoOwned as _;
+use ironrdp::rdpsnd::pdu::{AudioFormat, WaveFormat};
+use ironrdp::rdpsnd::server::{
+    NegotiatedFormat, RdpsndError, RdpsndServerHandler, RdpsndServerMessage,
+};
+use ironrdp::server::tokio::sync::mpsc::UnboundedSender;
+use ironrdp::server::tokio::time::{self, sleep, Duration};
+use ironrdp::server::{
+    tokio, BitmapUpdate, CliprdrServerFactory, Credentials, DisplayUpdate, KeyboardEvent,
+    MouseEvent, PixelFormat, RdpServer, RdpServerDisplay, RdpServerDisplayUpdates,
+    RdpServerInputHandler, ServerEvent, ServerEventSender, SoundServerFactory, TlsIdentityCtx,
+};
 use rand::prelude::*;
 use tracing::{debug, info, warn};
 
 const HELP: &str = "\
 USAGE:
   cargo run --example=server -- [--bind-addr <SOCKET ADDRESS>] [--cert <CERTIFICATE>] [--key <CERTIFICATE KEY>] [--user USERNAME] [--pass PASSWORD] [--sec tls|hybrid]
+                                [--offrir <FICHIER>] [--recevoir-dans <DOSSIER>]
 ";
 
 #[tokio::main(flavor = "current_thread")]
@@ -63,7 +67,21 @@ async fn main() -> Result<(), anyhow::Error> {
             pass,
             cert,
             key,
-        } => run(bind_addr, hybrid, user, pass, cert, key).await,
+            offrir,
+            recevoir_dans,
+        } => {
+            run(
+                bind_addr,
+                hybrid,
+                user,
+                pass,
+                cert,
+                key,
+                offrir,
+                recevoir_dans,
+            )
+            .await
+        }
     }
 }
 
@@ -77,6 +95,11 @@ enum Action {
         pass: String,
         cert: Option<PathBuf>,
         key: Option<PathBuf>,
+        /// Fichier offert par le presse-papiers quand le client copie le
+        /// texte déclencheur.
+        offrir: Option<PathBuf>,
+        /// Dossier où reçoivent les fichiers que le client offre.
+        recevoir_dans: Option<PathBuf>,
     },
 }
 
@@ -86,11 +109,15 @@ fn parse_args() -> anyhow::Result<Action> {
     let action = if args.contains(["-h", "--help"]) {
         Action::ShowHelp
     } else {
-        let bind_addr = args
-            .opt_value_from_str("--bind-addr")?
-            .unwrap_or_else(|| "127.0.0.1:3389".parse().expect("valid hardcoded SocketAddr string"));
+        let bind_addr = args.opt_value_from_str("--bind-addr")?.unwrap_or_else(|| {
+            "127.0.0.1:3389"
+                .parse()
+                .expect("valid hardcoded SocketAddr string")
+        });
 
-        let sec = args.opt_value_from_str("--sec")?.unwrap_or_else(|| "hybrid".to_owned());
+        let sec = args
+            .opt_value_from_str("--sec")?
+            .unwrap_or_else(|| "hybrid".to_owned());
         let hybrid = match sec.as_ref() {
             "tls" => false,
             "hybrid" => true,
@@ -100,8 +127,14 @@ fn parse_args() -> anyhow::Result<Action> {
         let cert = args.opt_value_from_str("--cert")?;
         let key = args.opt_value_from_str("--key")?;
 
-        let user = args.opt_value_from_str("--user")?.unwrap_or_else(|| "user".to_owned());
-        let pass = args.opt_value_from_str("--pass")?.unwrap_or_else(|| "pass".to_owned());
+        let user = args
+            .opt_value_from_str("--user")?
+            .unwrap_or_else(|| "user".to_owned());
+        let pass = args
+            .opt_value_from_str("--pass")?
+            .unwrap_or_else(|| "pass".to_owned());
+        let offrir = args.opt_value_from_str("--offrir")?;
+        let recevoir_dans = args.opt_value_from_str("--recevoir-dans")?;
 
         Action::Run {
             bind_addr,
@@ -110,6 +143,8 @@ fn parse_args() -> anyhow::Result<Action> {
             pass,
             cert,
             key,
+            offrir,
+            recevoir_dans,
         }
     };
 
@@ -118,8 +153,8 @@ fn parse_args() -> anyhow::Result<Action> {
 
 fn setup_logging() -> anyhow::Result<()> {
     use tracing::metadata::LevelFilter;
-    use tracing_subscriber::EnvFilter;
     use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
 
     let fmt_layer = tracing_subscriber::fmt::layer().compact();
 
@@ -220,7 +255,6 @@ impl RdpServerDisplay for Handler {
     }
 }
 
-
 #[derive(Debug)]
 pub struct Inner {
     ev_sender: Option<UnboundedSender<ServerEvent>>,
@@ -230,11 +264,38 @@ pub struct Inner {
 /// bout-en-bout vérifie qu'il arrive bien jusqu'au poste local.
 pub const CLIP_TEXT: &str = "avash-cliprdr-test";
 
+/// Texte que le client copie pour que le serveur de test lui offre le fichier
+/// `--offrir` : c'est le seul moyen, pour un scénario, de déclencher la copie
+/// de fichiers « sur le bureau distant ».
+pub const DECLENCHEUR_OFFRE: &str = "avash-offre-fichiers";
+
+/// Morceau demandé au client quand le serveur reçoit ses fichiers.
+const MORCEAU: u32 = 64 * 1024;
+
+/// Réception, côté serveur, des fichiers que le client a offerts.
+#[derive(Debug)]
+struct Reception {
+    files: Vec<FileDescriptor>,
+    index: usize,
+    dossier: PathBuf,
+    fichier: Option<std::fs::File>,
+    position: u64,
+    flux: u32,
+    data_id: Option<u32>,
+}
+
 /// Presse-papiers du serveur de test : annonce du texte dès que le canal est
-/// prêt, et le sert quand le client le réclame. Texte seul (CF_UNICODETEXT).
+/// prêt, le sert quand le client le réclame ; offre un fichier quand le
+/// client copie le texte déclencheur ; et reçoit les fichiers que le client
+/// offre, dans le dossier `--recevoir-dans`, en disant sur la sortie standard
+/// ce qu'il a reçu.
 #[derive(Debug)]
 struct ClipBackend {
     sender: Option<UnboundedSender<ServerEvent>>,
+    offrir: Option<PathBuf>,
+    recevoir_dans: Option<PathBuf>,
+    reception: Option<Reception>,
+    prochain_flux: u32,
 }
 
 ironrdp::core::impl_as_any!(ClipBackend);
@@ -245,6 +306,65 @@ impl ClipBackend {
             let _ = tx.send(ServerEvent::Clipboard(msg));
         }
     }
+
+    /// Demande le morceau suivant du fichier en cours, ou passe au suivant.
+    fn demander_suivant(&mut self) {
+        loop {
+            let Some(r) = self.reception.as_mut() else {
+                return;
+            };
+            if r.index >= r.files.len() {
+                println!("réception terminée : {} entrées", r.files.len());
+                self.reception = None;
+                return;
+            }
+            let d = &r.files[r.index];
+            let est_dossier = d
+                .attributes
+                .is_some_and(|a| a.contains(ClipboardFileAttributes::DIRECTORY));
+            let mut cible = r.dossier.clone();
+            if let Some(rel) = d.relative_path.as_deref().filter(|p| !p.is_empty()) {
+                for c in rel.split('\\') {
+                    cible.push(c);
+                }
+            }
+            cible.push(&d.name);
+            if est_dossier {
+                let _ = std::fs::create_dir_all(&cible);
+                println!("reçu : dossier {}", cible.display());
+                r.index += 1;
+                continue;
+            }
+            if r.fichier.is_none() {
+                if let Some(p) = cible.parent() {
+                    let _ = std::fs::create_dir_all(p);
+                }
+                r.fichier = std::fs::File::create(&cible).ok();
+                r.position = 0;
+            }
+            let taille = d.file_size.unwrap_or(0);
+            if r.position >= taille {
+                r.fichier = None;
+                println!("reçu : {} ({taille} octets)", cible.display());
+                r.index += 1;
+                continue;
+            }
+            let longueur =
+                u32::try_from((taille - r.position).min(u64::from(MORCEAU))).unwrap_or(MORCEAU);
+            r.flux = self.prochain_flux;
+            self.prochain_flux += 1;
+            let req = FileContentsRequest {
+                stream_id: r.flux,
+                index: i32::try_from(r.index).unwrap_or(i32::MAX),
+                flags: FileContentsFlags::RANGE,
+                position: r.position,
+                requested_size: longueur,
+                data_id: r.data_id,
+            };
+            self.send(ClipboardMessage::SendFileContentsRequest(req));
+            return;
+        }
+    }
 }
 
 impl CliprdrBackend for ClipBackend {
@@ -253,21 +373,44 @@ impl CliprdrBackend for ClipBackend {
         "."
     }
     fn client_capabilities(&self) -> ClipboardGeneralCapabilityFlags {
-        ClipboardGeneralCapabilityFlags::empty()
+        ClipboardGeneralCapabilityFlags::STREAM_FILECLIP_ENABLED
+            | ClipboardGeneralCapabilityFlags::CAN_LOCK_CLIPDATA
+            | ClipboardGeneralCapabilityFlags::HUGE_FILE_SUPPORT_ENABLED
     }
     fn on_ready(&mut self) {
         // Le bureau distant « a copié quelque chose » : on l'annonce au client.
-        self.send(ClipboardMessage::SendInitiateCopy(vec![ClipboardFormat::new(
-            ClipboardFormatId::CF_UNICODETEXT,
-        )]));
+        self.send(ClipboardMessage::SendInitiateCopy(vec![
+            ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
+        ]));
     }
     fn on_request_format_list(&mut self) {
-        self.send(ClipboardMessage::SendInitiateCopy(vec![ClipboardFormat::new(
-            ClipboardFormatId::CF_UNICODETEXT,
-        )]));
+        self.send(ClipboardMessage::SendInitiateCopy(vec![
+            ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
+        ]));
     }
     fn on_process_negotiated_capabilities(&mut self, _caps: ClipboardGeneralCapabilityFlags) {}
-    fn on_remote_copy(&mut self, _formats: &[ClipboardFormat]) {}
+    fn on_remote_copy(&mut self, formats: &[ClipboardFormat]) {
+        // Le client a copié : des fichiers (on demande leur liste, puis leur
+        // contenu si un dossier de réception est donné), ou du texte (on le lit,
+        // pour y reconnaître le déclencheur de l'offre).
+        let liste = formats.iter().find(|f| {
+            f.name
+                .as_ref()
+                .is_some_and(|n| n.value() == ClipboardFormatName::FILE_LIST.value())
+        });
+        if let Some(f) = liste {
+            if self.recevoir_dans.is_some() {
+                self.send(ClipboardMessage::SendInitiatePaste(f.id));
+            }
+        } else if formats
+            .iter()
+            .any(|f| f.id == ClipboardFormatId::CF_UNICODETEXT)
+        {
+            self.send(ClipboardMessage::SendInitiatePaste(
+                ClipboardFormatId::CF_UNICODETEXT,
+            ));
+        }
+    }
     fn on_format_data_request(&mut self, req: FormatDataRequest) {
         // Le client réclame le texte : on le sert.
         let resp = if req.format == ClipboardFormatId::CF_UNICODETEXT {
@@ -277,9 +420,101 @@ impl CliprdrBackend for ClipBackend {
         };
         self.send(ClipboardMessage::SendFormatData(resp));
     }
-    fn on_format_data_response(&mut self, _resp: FormatDataResponse<'_>) {}
-    fn on_file_contents_request(&mut self, _req: FileContentsRequest) {}
-    fn on_file_contents_response(&mut self, _resp: FileContentsResponse<'_>) {}
+    fn on_format_data_response(&mut self, resp: FormatDataResponse<'_>) {
+        if resp.is_error() {
+            return;
+        }
+        let Ok(texte) = resp.to_unicode_string() else {
+            return;
+        };
+        println!("texte du client : {texte}");
+        if texte == DECLENCHEUR_OFFRE {
+            if let Some(p) = self.offrir.clone() {
+                let nom = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let taille = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                println!("offre : {nom} ({taille} octets)");
+                self.send(ClipboardMessage::SendInitiateFileCopy(vec![
+                    FileDescriptor::new(nom)
+                        .with_file_size(taille)
+                        .with_attributes(ClipboardFileAttributes::NORMAL),
+                ]));
+            }
+        }
+    }
+    fn on_remote_file_list(&mut self, files: &[FileDescriptor], clip_data_id: Option<u32>) {
+        let Some(dossier) = self.recevoir_dans.clone() else {
+            return;
+        };
+        println!("liste du client : {} entrées", files.len());
+        self.reception = Some(Reception {
+            files: files.to_vec(),
+            index: 0,
+            dossier,
+            fichier: None,
+            position: 0,
+            flux: 0,
+            data_id: clip_data_id,
+        });
+        self.demander_suivant();
+    }
+    fn on_file_contents_request(&mut self, req: FileContentsRequest) {
+        // Le client colle le fichier offert : on sert la taille ou la plage.
+        let erreur = FileContentsResponse::new_error(req.stream_id);
+        let Some(p) = self.offrir.clone().filter(|_| req.index == 0) else {
+            self.send(ClipboardMessage::SendFileContentsResponse(erreur));
+            return;
+        };
+        let resp = if req.flags.contains(FileContentsFlags::SIZE) {
+            match std::fs::metadata(&p) {
+                Ok(m) => FileContentsResponse::new_size_response(req.stream_id, m.len()),
+                Err(_) => erreur,
+            }
+        } else {
+            match std::fs::read(&p) {
+                Ok(tout) => {
+                    let debut = usize::try_from(req.position)
+                        .unwrap_or(usize::MAX)
+                        .min(tout.len());
+                    let fin = debut
+                        .saturating_add(req.requested_size as usize)
+                        .min(tout.len());
+                    FileContentsResponse::new_data_response(
+                        req.stream_id,
+                        tout[debut..fin].to_vec(),
+                    )
+                }
+                Err(_) => erreur,
+            }
+        };
+        self.send(ClipboardMessage::SendFileContentsResponse(resp));
+    }
+    fn on_file_contents_response(&mut self, resp: FileContentsResponse<'_>) {
+        let Some(r) = self.reception.as_mut() else {
+            return;
+        };
+        if resp.stream_id() != r.flux {
+            return;
+        }
+        if resp.is_error() {
+            println!("refus du client sur l'entrée {}", r.index);
+            r.fichier = None;
+            r.index += 1;
+        } else {
+            use std::io::Write as _;
+            if let Some(f) = r.fichier.as_mut() {
+                let _ = f.write_all(resp.data());
+            }
+            r.position += resp.data().len() as u64;
+            if resp.data().is_empty() {
+                r.index += 1;
+                r.fichier = None;
+            }
+        }
+        self.demander_suivant();
+    }
     fn on_lock(&mut self, _id: LockDataId) {}
     fn on_unlock(&mut self, _id: LockDataId) {}
 }
@@ -287,6 +522,8 @@ impl CliprdrBackend for ClipBackend {
 #[derive(Debug, Clone)]
 struct ClipFactory {
     sender: Option<UnboundedSender<ServerEvent>>,
+    offrir: Option<PathBuf>,
+    recevoir_dans: Option<PathBuf>,
 }
 
 impl ServerEventSender for ClipFactory {
@@ -299,6 +536,10 @@ impl CliprdrBackendFactory for ClipFactory {
     fn build_cliprdr_backend(&self) -> Box<dyn CliprdrBackend> {
         Box::new(ClipBackend {
             sender: self.sender.clone(),
+            offrir: self.offrir.clone(),
+            recevoir_dans: self.recevoir_dans.clone(),
+            reception: None,
+            prochain_flux: 1,
         })
     }
 }
@@ -355,7 +596,10 @@ impl RdpsndServerHandler for SndHandler {
         ]
     }
 
-    fn choose_format<'a>(&mut self, common: &'a [NegotiatedFormat]) -> Option<&'a NegotiatedFormat> {
+    fn choose_format<'a>(
+        &mut self,
+        common: &'a [NegotiatedFormat],
+    ) -> Option<&'a NegotiatedFormat> {
         debug!(?common);
 
         // The crate hands us the formats common to both peers in our preference
@@ -372,10 +616,15 @@ impl RdpsndServerHandler for SndHandler {
                 2 => opus2::Channels::Stereo,
                 // Init failure: decline the format instead of leaving the channel
                 // negotiated-but-silent (the crate logs the error and skips audio).
-                n => return Err(Box::new(io::Error::other(format!("invalid OPUS channels: {n}")))),
+                n => {
+                    return Err(Box::new(io::Error::other(format!(
+                        "invalid OPUS channels: {n}"
+                    ))))
+                }
             };
 
-            match opus2::Encoder::new(fmt.n_samples_per_sec, n_channels, opus2::Application::Audio) {
+            match opus2::Encoder::new(fmt.n_samples_per_sec, n_channels, opus2::Application::Audio)
+            {
                 Ok(enc) => Some(enc),
                 Err(err) => {
                     return Err(Box::new(io::Error::other(format!(
@@ -405,7 +654,9 @@ impl RdpsndServerHandler for SndHandler {
                         }
                     }
                 } else {
-                    wave.into_iter().flat_map(|value| value.to_le_bytes()).collect()
+                    wave.into_iter()
+                        .flat_map(|value| value.to_le_bytes())
+                        .collect()
                 };
 
                 let inner = inner.lock().expect("poisoned");
@@ -427,7 +678,12 @@ impl RdpsndServerHandler for SndHandler {
     }
 }
 
-fn generate_sine_wave(sample_rate: u32, frequency: f32, duration_ms: u64, phase: &mut f32) -> Vec<i16> {
+fn generate_sine_wave(
+    sample_rate: u32,
+    frequency: f32,
+    duration_ms: u64,
+    phase: &mut f32,
+) -> Vec<i16> {
     use core::f32::consts::PI;
 
     let total_samples = (u64::from(sample_rate) * duration_ms) / 1000;
@@ -458,6 +714,7 @@ fn generate_sine_wave(sample_rate: u32, frequency: f32, duration_ms: u64, phase:
     samples
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     bind_addr: SocketAddr,
     hybrid: bool,
@@ -465,6 +722,8 @@ async fn run(
     password: String,
     cert: Option<PathBuf>,
     key: Option<PathBuf>,
+    offrir: Option<PathBuf>,
+    recevoir_dans: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     info!(%bind_addr, ?cert, ?key, "run");
 
@@ -473,8 +732,11 @@ async fn run(
     let server_builder = RdpServer::builder().with_addr(bind_addr);
 
     let server_builder = if let Some((cert_path, key_path)) = cert.as_deref().zip(key.as_deref()) {
-        let identity = TlsIdentityCtx::init_from_paths(cert_path, key_path).context("failed to init TLS identity")?;
-        let acceptor = identity.make_acceptor().context("failed to build TLS acceptor")?;
+        let identity = TlsIdentityCtx::init_from_paths(cert_path, key_path)
+            .context("failed to init TLS identity")?;
+        let acceptor = identity
+            .make_acceptor()
+            .context("failed to build TLS acceptor")?;
 
         if hybrid {
             server_builder.with_hybrid(acceptor, identity.pub_key)
@@ -492,7 +754,11 @@ async fn run(
     let mut server = server_builder
         .with_input_handler(handler.clone())
         .with_display_handler(handler.clone())
-        .with_cliprdr_factory(Some(Box::new(ClipFactory { sender: None })))
+        .with_cliprdr_factory(Some(Box::new(ClipFactory {
+            sender: None,
+            offrir,
+            recevoir_dans,
+        })))
         .with_sound_factory(Some(sound))
         .build();
 

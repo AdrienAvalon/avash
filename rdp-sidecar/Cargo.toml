@@ -29,6 +29,9 @@ sha2 = "0.11"
 dirs = "6"
 # Client VNC (RFB 3.8, ZRLE, CopyRect, Raw) : copie portée, voir vendor/README.md.
 vnc-rs = "0.5.3"
+# Les listes de fichiers du presse-papiers voyagent en JSON vers l'interface.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # O_NOFOLLOW pour l'ouverture sûre du fichier de trace (fuite du mot de passe
 # sinon possible via un lien symbolique planté dans /tmp). Unix seulement.

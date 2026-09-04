@@ -2,9 +2,9 @@
 
 use ironrdp::cliprdr::backend::CliprdrBackend;
 use ironrdp::cliprdr::pdu::{
-    ClipboardFormat, ClipboardFormatId, ClipboardGeneralCapabilityFlags, FileContentsRequest,
-    FileContentsResponse, FormatDataRequest, FormatDataResponse, LockDataId,
-    OwnedFormatDataResponse,
+    ClipboardFormat, ClipboardFormatId, ClipboardFormatName, ClipboardGeneralCapabilityFlags,
+    FileContentsRequest, FileContentsResponse, FileDescriptor, FormatDataRequest,
+    FormatDataResponse, LockDataId, OwnedFormatDataResponse,
 };
 use ironrdp::core::IntoOwned;
 
@@ -24,10 +24,22 @@ pub(crate) enum ClipReq {
     RequestPaste(ClipboardFormatId),
     /// Texte reçu du serveur → à pousser vers le presse-papiers du poste.
     RemoteText(String),
+    /// Le distant a copié des fichiers : leur liste (chemins déjà assainis par
+    /// IronRDP) et le verrou posé sur son presse-papiers, à porter dans les
+    /// requêtes de contenu.
+    FichiersDistants(Vec<FileDescriptor>, Option<u32>),
+    /// Un morceau de fichier demandé au distant est arrivé (`None` : refus).
+    ContenuRecu(u32, Option<Vec<u8>>),
+    /// Le distant réclame un morceau d'un fichier que le poste lui a offert.
+    ServirContenu(FileContentsRequest),
+    /// Le distant verrouille (ou libère) la liste offerte : la boucle garde une
+    /// copie de l'offre sous cet identifiant, servie même si l'offre change.
+    Verrou(LockDataId),
+    Deverrou(LockDataId),
 }
 
-/// Pont entre le canal CLIPRDR et le presse-papiers du poste (via le front).
-/// Texte seulement (CF_UNICODETEXT).
+/// Pont entre le canal CLIPRDR et le presse-papiers du poste (via le front) :
+/// texte (CF_UNICODETEXT) et fichiers (FileGroupDescriptorW par flux).
 #[derive(Debug)]
 pub(crate) struct ClipBackend {
     pub(crate) local_text: LocalClip,
@@ -48,13 +60,32 @@ impl ClipBackend {
     }
 }
 
+/// Le format « liste de fichiers » parmi ceux qu'annonce le distant, s'il y est.
+pub(crate) fn format_liste_de_fichiers(formats: &[ClipboardFormat]) -> Option<ClipboardFormatId> {
+    formats
+        .iter()
+        .find(|f| {
+            f.name
+                .as_ref()
+                .is_some_and(|n| n.value() == ClipboardFormatName::FILE_LIST.value())
+        })
+        .map(|f| f.id)
+}
+
 impl CliprdrBackend for ClipBackend {
     #[allow(clippy::unnecessary_literal_bound)]
     fn temporary_directory(&self) -> &str {
         "."
     }
+    /// Les fichiers passent en flux (`STREAM_FILECLIP_ENABLED`), le distant
+    /// peut verrouiller notre liste (`CAN_LOCK_CLIPDATA`), les fichiers de
+    /// plus de 2 Gio ont droit à leur position (`HUGE_FILE_SUPPORT_ENABLED`),
+    /// et jamais de chemin absolu dans une liste (`FILECLIP_NO_FILE_PATHS`).
     fn client_capabilities(&self) -> ClipboardGeneralCapabilityFlags {
-        ClipboardGeneralCapabilityFlags::empty()
+        ClipboardGeneralCapabilityFlags::STREAM_FILECLIP_ENABLED
+            | ClipboardGeneralCapabilityFlags::CAN_LOCK_CLIPDATA
+            | ClipboardGeneralCapabilityFlags::HUGE_FILE_SUPPORT_ENABLED
+            | ClipboardGeneralCapabilityFlags::FILECLIP_NO_FILE_PATHS
     }
     fn on_ready(&mut self) {
         if self.partage_actif() && self.local_text.lock().is_ok_and(|t| t.is_some()) {
@@ -71,7 +102,12 @@ impl CliprdrBackend for ClipBackend {
         if !self.partage_actif() {
             return; // on ne réclame même pas les données au serveur
         }
-        if formats
+        // Des fichiers : on demande leur liste (noms et tailles, quelques
+        // kilooctets), jamais leur contenu ; c'est l'utilisateur qui décide de
+        // recevoir, depuis l'interface. Du texte : on le demande tel quel.
+        if let Some(id) = format_liste_de_fichiers(formats) {
+            let _ = self.tx.send(ClipReq::RequestPaste(id));
+        } else if formats
             .iter()
             .any(|f| f.id == ClipboardFormatId::CF_UNICODETEXT)
         {
@@ -102,8 +138,50 @@ impl CliprdrBackend for ClipBackend {
             }
         }
     }
-    fn on_file_contents_request(&mut self, _req: FileContentsRequest) {}
-    fn on_file_contents_response(&mut self, _resp: FileContentsResponse<'_>) {}
-    fn on_lock(&mut self, _id: LockDataId) {}
-    fn on_unlock(&mut self, _id: LockDataId) {}
+    fn on_remote_file_list(&mut self, files: &[FileDescriptor], clip_data_id: Option<u32>) {
+        if self.partage_actif() {
+            let _ = self
+                .tx
+                .send(ClipReq::FichiersDistants(files.to_vec(), clip_data_id));
+        }
+    }
+    fn on_file_contents_request(&mut self, req: FileContentsRequest) {
+        if self.partage_actif() {
+            let _ = self.tx.send(ClipReq::ServirContenu(req));
+        }
+    }
+    fn on_file_contents_response(&mut self, resp: FileContentsResponse<'_>) {
+        let donnees = (!resp.is_error()).then(|| resp.data().to_vec());
+        let _ = self
+            .tx
+            .send(ClipReq::ContenuRecu(resp.stream_id(), donnees));
+    }
+    fn on_lock(&mut self, id: LockDataId) {
+        let _ = self.tx.send(ClipReq::Verrou(id));
+    }
+    fn on_unlock(&mut self, id: LockDataId) {
+        let _ = self.tx.send(ClipReq::Deverrou(id));
+    }
+}
+
+#[cfg(test)]
+mod tests_formats {
+    use super::format_liste_de_fichiers;
+    use ironrdp::cliprdr::pdu::{ClipboardFormat, ClipboardFormatId, ClipboardFormatName};
+
+    /// Le distant choisit l'identifiant de son format de liste : seul le nom
+    /// « FileGroupDescriptorW » le désigne.
+    #[test]
+    fn la_liste_de_fichiers_se_reconnait_a_son_nom() {
+        let formats = [
+            ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
+            ClipboardFormat::new(ClipboardFormatId::new(0xC0A1))
+                .with_name(ClipboardFormatName::FILE_LIST),
+        ];
+        assert_eq!(
+            format_liste_de_fichiers(&formats),
+            Some(ClipboardFormatId::new(0xC0A1))
+        );
+        assert_eq!(format_liste_de_fichiers(&formats[..1]), None);
+    }
 }

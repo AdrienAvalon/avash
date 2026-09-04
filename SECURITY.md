@@ -70,7 +70,13 @@ répondent.
   tailles bornées, rectangles rognés, décodeurs graphiques exercés par fuzzing à
   partir de trafic réel, redirections plafonnées. Le pire qu'il puisse obtenir
   est une session qui se ferme, jamais une écriture hors de l'image ni une
-  exécution de code.
+  exécution de code. Les **fichiers copiés sur le bureau distant** ne sont
+  jamais téléchargés sans votre accord : Avash n'en demande que la liste, la
+  montre, et n'écrit qu'après confirmation, dans le dossier annoncé, sous des
+  chemins assainis par IronRDP (jamais absolus, jamais de `..`), sans écraser
+  un fichier existant et sans rien exécuter. Dans l'autre sens, seuls les
+  fichiers que vous déposez ou choisissez sont offerts ; le distant n'en voit
+  ni le chemin absolu ni rien d'autre du poste.
 - **Un autre compte sur votre machine.** Fichiers d'état, empreintes, clés
   générées et traces sont créés en 0600 dans un répertoire en 0700 ; le canal
   entre l'interface et le processus RDP n'écoute que sur l'adresse locale, avec

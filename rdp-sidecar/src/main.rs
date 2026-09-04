@@ -16,8 +16,11 @@
 //!                     · [4]KEY sc:u16,down · [5]RESIZE w,h · [6]ACK · [8]CLIPBOARD utf8
 //!                     · [9]REFRESH · [10]LOCKS bits:u8 · [11]PAUSE pause:u8
 //!                     · [12]CLIPBOARD_AUTORISE autorise:u8
-//!
 //!                     · [14]KEYSYM keysym:u32,down (VNC seulement)
+//!                     · [16]RECEVOIR json {dossier?} · [19]OFFRIR json [chemins]
+//!                     (fichiers par le presse-papiers ; en retour
+//!                      [15]FICHIERS_DISTANTS, [17]FICHIERS_PROGRESSION,
+//!                      [18]FICHIERS_TERMINE, en JSON)
 //!
 //! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png] [--layout fr]
 //!         avash-rdp --vnc --host H [--port 5900] [-u USER] (mot de passe sur stdin)
@@ -46,6 +49,7 @@ mod connexion;
 mod egfx;
 mod empreintes;
 mod entrees;
+mod fichiers;
 mod magnetoscope;
 mod presse_papiers;
 mod progressif;

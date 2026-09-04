@@ -52,7 +52,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 `vnc.spec.js` lance le **serveur VNC de test** (`test-vnc-server/`, port 35900,
 mot de passe `test`), qui sert une image connue et réagit aux entrées.
 
-## Couverture (54 scénarios, 27 fichiers)
+## Couverture (55 scénarios, 28 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -71,6 +71,7 @@ mot de passe `test`), qui sert une image connue et réagit aux entrées.
 | `rdp.spec.js`         | **connexion RDP réelle** (serveur dédié) → handshake CredSSP + canvas (`.state.live`) |
 | `rdp-clipboard.spec.js` | **presse-papiers RDP** (distant → poste) : pilote le sidecar sur son WebSocket, sans toucher au presse-papiers du système |
 | `rdp-reconnect.spec.js` | **overlay de reconnexion** quand le serveur RDP coupe |
+| `rdp-fichiers.spec.js` | **fichiers par le presse-papiers RDP**, dans les deux sens : liste annoncée sans contenu, réception après accord (2,5 Mo, octets comparés), offre d'un fichier du poste reçu par le serveur (300 Ko) |
 | `vnc.spec.js`         | **connexion VNC réelle** (serveur dédié, ZRLE) : pixels rouge et bleu, carré magenta au clic, bureau vert après « g », keysym 0xe9 pour « é », mauvais mot de passe refusé avec sa raison |
 | `clavier.spec.js`     | palette aux flèches, `Ctrl+K` bloqué par-dessus une boîte, Échap ne ferme qu'une boîte à la fois |
 | `liste-clavier.spec.js` | **barre latérale au clavier** : un seul arrêt de tabulation, flèches et Origine/Fin, focus qui vaut sélection, `Maj+F10` et navigation dans le menu |
@@ -89,7 +90,7 @@ Serveurs locaux : chaque spec RDP démarre son propre serveur de test (aucun cou
 un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spec`.
 
 En CI (`E2E_NO_RDP=1`), la configuration **exclut** les fichiers qui exigent
-un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`, `vnc`,
+un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`, `rdp-fichiers`, `vnc`,
 `onglets-mixtes`, `enregistrer-et-connecter`, `enregistrement`, `sante`).
 C'est une exclusion et non une énumération de ce qui tourne :
 la liste énumérative prenait du retard à chaque scénario ajouté, et cinq

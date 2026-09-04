@@ -91,6 +91,7 @@ pub fn run() {
             commands::tunnel_status,
             rdp::rdp_open,
             rdp::rdp_close,
+            rdp::rdp_ouvrir_dossier,
             rdp::rdp_hosts,
             rdp::rdp_host_save,
             rdp::rdp_host_delete,

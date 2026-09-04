@@ -1,11 +1,14 @@
 // Bureaux RDP : sessions (canvas), entrées, presse-papiers, bureaux enregistrés.
 
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic } from "./icons";
 import { partageClipboard } from "./prefs";
-import { rdpScancode, le16, rdpMousePos } from "./filters";
+import { rdpScancode, le16, rdpMousePos, humanSize } from "./filters";
+import { langue } from "./i18n";
 import { keysymDe, messageKeysym } from "./vnc-clavier";
 import { $, type RdpHostT, state } from "./etat";
 import { askConfirm, askPassword } from "./dialogues";
@@ -62,7 +65,94 @@ async function pushLocalClipboard(force = false): Promise<void> {
 // serveur RDP ouvert, sans le moindre geste de l'utilisateur, et à chaque
 // bascule de fenêtre. Il ne part plus que sur un collage explicite (Ctrl+V) ou
 // quand le serveur le réclame, dans l'onglet actif.
-export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget }>();
+/** Ce que le bureau distant a copié en dernier : liste et total, tels que le
+ *  processus les annonce (message [15]). Rien n'est téléchargé avant l'accord. */
+type FichiersDistants = { dossier: string; octets: number; fichiers: { chemin: string; taille: number; dossier: boolean }[] };
+
+export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean }>();
+
+/** Envoie un message JSON au processus (fichiers par le presse-papiers). */
+function envoyerJson(ws: WebSocket | null, code: number, valeur: unknown): boolean {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  const corps = new TextEncoder().encode(JSON.stringify(valeur));
+  const m = new Uint8Array(1 + corps.length);
+  m[0] = code;
+  m.set(corps, 1);
+  ws.send(m);
+  return true;
+}
+
+/** L'onglet de bureau distant actif, s'il y en a un. */
+export function bureauActif(): number | null {
+  return state.active !== null && rdpSessions.has(state.active) ? state.active : null;
+}
+
+/** Le bureau actif a-t-il des fichiers copiés à recevoir ? */
+export function fichiersARecevoir(): boolean {
+  const id = bureauActif();
+  return id !== null && !!rdpSessions.get(id)?.fichiers;
+}
+
+/** Demande à recevoir ce que le bureau distant a copié, après confirmation :
+ *  la liste (noms, tailles) est déjà là, le contenu ne vient qu'ensuite. */
+export async function recevoirFichiers(id: number): Promise<void> {
+  const s = rdpSessions.get(id);
+  if (!s) return;
+  const f = s.fichiers;
+  if (!f) { notify(t("rdp-fichiers-aucun")); return; }
+  if (s.reception) return;
+  const ok = await askConfirm(
+    `${t("rdp-fichiers-recevoir-titre")}\n\n${t("rdp-fichiers-recevoir-detail", { n: f.fichiers.length, taille: humanSize(f.octets, langue()), dossier: f.dossier })}`,
+    { ok: t("rdp-fichiers-recevoir-bouton"), danger: false },
+  );
+  if (!ok) return;
+  if (envoyerJson(s.ws, 16, {})) {
+    s.reception = true;
+    if (s.badge) { s.badge.classList.add("en-cours"); s.badge.textContent = "⬇︎ …"; }
+  }
+}
+
+/** Propose des fichiers du poste au bureau distant : ils se collent là-bas. */
+function offrirFichiers(id: number, chemins: string[]): void {
+  const s = rdpSessions.get(id);
+  if (!s || chemins.length === 0) return;
+  envoyerJson(s.ws, 19, chemins);
+}
+
+/** Sélecteur de fichiers, puis offre au bureau actif. */
+export async function choisirEtOffrirFichiers(): Promise<void> {
+  const id = bureauActif();
+  if (id === null) return;
+  let choisis: string[] | string | null;
+  try {
+    choisis = await openDialog({ multiple: true, directory: false, title: t("rdp-fichiers-a-envoyer") });
+  } catch (e) {
+    notifyErreur(t("selecteur-indisponible", { e: String(e) }));
+    return;
+  }
+  if (!choisis) return;
+  offrirFichiers(id, Array.isArray(choisis) ? choisis : [choisis]);
+}
+
+/** Bilan d'une réception ou d'une offre (message [18]). */
+async function bilanFichiers(id: number, b: { sens: string; dossier?: string; fichiers: number; octets: number; erreurs: string[] }): Promise<void> {
+  const s = rdpSessions.get(id);
+  if (!s) return;
+  if (b.sens === "offre") {
+    if (b.erreurs.length) notifyErreur(t("rdp-fichiers-offre-impossible", { e: b.erreurs.join(" · ") }));
+    else notify(t("rdp-fichiers-offerts", { n: b.fichiers, taille: humanSize(b.octets, langue()) }), "succes");
+    return;
+  }
+  s.reception = false;
+  s.fichiers = null;
+  if (s.badge) { s.badge.hidden = true; s.badge.classList.remove("en-cours"); }
+  if (b.erreurs.length) notifyErreur(t("rdp-fichiers-erreurs", { e: b.erreurs.join(" · ") }));
+  const ouvrir = await askConfirm(
+    `${t("rdp-fichiers-recus-titre", { n: b.fichiers })}\n\n${t("rdp-fichiers-recus-detail", { taille: humanSize(b.octets, langue()), dossier: b.dossier ?? "" })}`,
+    { ok: t("rdp-ouvrir-dossier"), danger: false },
+  );
+  if (ouvrir && b.dossier) await invoke("rdp_ouvrir_dossier", { chemin: b.dossier }).catch((e) => notifyErreur(String(e)));
+}
 
 export async function openRdp(cible: RdpTarget) {
   const id = state.nextId++;
@@ -102,8 +192,15 @@ export async function openRdp(cible: RdpTarget) {
   hud.className = "rdp-hud";
   hud.title = t("rdp-hud-titre");
   hud.addEventListener("click", () => hud.classList.toggle("mini"));
+  // Pastille des fichiers copiés sur le bureau distant : un clic pour recevoir.
+  const badge = document.createElement("button");
+  badge.type = "button";
+  badge.className = "rdp-fichiers";
+  badge.hidden = true;
+  badge.addEventListener("click", () => void recevoirFichiers(id));
   wrap.appendChild(canvas);
   wrap.appendChild(hud);
+  wrap.appendChild(badge);
   $("terminal").appendChild(wrap);
   // Canvas LOGICIEL, pas accéléré : `willReadFrequently` fait vivre le bitmap
   // en mémoire centrale. Un canvas 2D accéléré est une texture GPU, et sous
@@ -117,7 +214,7 @@ export async function openRdp(cible: RdpTarget) {
   // WebView2, pas au décodage. On ne fait que des putImageData : le chemin
   // logiciel est le bon de toute façon.
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-  rdpSessions.set(id, { canvas, tab, ws: null, hostId: cible.hostId, target: cible });
+  rdpSessions.set(id, { canvas, tab, ws: null, hostId: cible.hostId, target: cible, badge, fichiers: null });
   state.active = id;
 
   tab.addEventListener("click", () => focusRdp(id));
@@ -325,6 +422,28 @@ export async function openRdp(cible: RdpTarget) {
       } else if (kind === 3) {
         tab.querySelector(".state")!.className = "state closed";
         notifyErreur(`RDP : ${new TextDecoder().decode(new Uint8Array(buf, 1))}`);
+      } else if (kind === 15 || kind === 17 || kind === 18) {
+        // Fichiers par le presse-papiers : la liste copiée sur le distant, la
+        // progression d'une réception, le bilan d'une réception ou d'une offre.
+        let corps: unknown;
+        try { corps = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))); } catch { return; }
+        const s = rdpSessions.get(id);
+        if (!s) return;
+        if (kind === 15) {
+          const f = corps as FichiersDistants;
+          s.fichiers = f;
+          s.reception = false;
+          badge.classList.remove("en-cours");
+          badge.textContent = t(f.fichiers.length === 1 && !f.fichiers[0].dossier ? "rdp-fichier-copie" : "rdp-fichiers-copies", { n: f.fichiers.length, taille: humanSize(f.octets, langue()) });
+          badge.hidden = false;
+        } else if (kind === 17) {
+          const p = corps as { fichier: string; fait: number; total: number; termines: number; nombre: number };
+          badge.classList.add("en-cours");
+          badge.textContent = t("rdp-fichiers-en-cours", { fichier: p.fichier, fait: humanSize(p.fait, langue()), total: humanSize(p.total, langue()), termines: p.termines, nombre: p.nombre });
+          badge.hidden = false;
+        } else {
+          void bilanFichiers(id, corps as { sens: string; dossier?: string; fichiers: number; octets: number; erreurs: string[] });
+        }
       }
     };
     ws.onclose = () => {
@@ -680,5 +799,19 @@ async function toggleRdpFullscreen() {
 window.addEventListener("keydown", (e) => {
   if (e.key === "F11") { e.preventDefault(); void toggleRdpFullscreen(); }
 });
+
+// ----- Glisser-déposer sur le bureau distant -----
+//
+// Des fichiers déposés depuis le poste sur un bureau actif lui sont offerts
+// par le presse-papiers : ils se collent ensuite dans son Explorateur. Le
+// panneau SFTP a son propre écouteur, qui ne réagit que sur un onglet SSH.
+getCurrentWebview()
+  .onDragDropEvent((ev) => {
+    if (ev.payload.type !== "drop") return;
+    const id = bureauActif();
+    if (id === null) return;
+    offrirFichiers(id, ev.payload.paths);
+  })
+  .catch(() => { /* hors Tauri (tests) : pas de glisser-déposer */ });
 
 /** Table minimale code clavier → scancode PC (set 1). Suffisant pour saisir. */

@@ -16,7 +16,7 @@ import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost,
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, hostSessionState, renderTagBar, terminalTheme } from "./theme";
 import { MENUS_CONTEXTUELS, openHostMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { type ManualTarget } from "./connexion-directe";
-import { annoncerPartageClip, connectRdpSaved, marquerVisibilite, openRdpMenu, rdpSessions } from "./rdp";
+import { annoncerPartageClip, bureauActif, choisirEtOffrirFichiers, connectRdpSaved, fichiersARecevoir, marquerVisibilite, openRdpMenu, rdpSessions, recevoirFichiers } from "./rdp";
 import { askConfirm, askPassword, collerDansTerminal } from "./dialogues";
 import { focusTab, orderedTabs } from "./raccourcis";
 import { notify, notifyErreur } from "./notifications";
@@ -1010,6 +1010,25 @@ function commandesPalette(): EntreePalette[] {
       icone: "film",
       ouvrir: () => void enregistrementsOpen(),
     },
+    // Fichiers par le presse-papiers RDP : seulement sur un bureau distant actif.
+    ...(bureauActif() !== null
+      ? [
+          {
+            nom: t("palette-rdp-envoyer-fichiers"),
+            detail: t("palette-rdp-envoyer-fichiers-detail"),
+            icone: "copy",
+            ouvrir: () => void choisirEtOffrirFichiers(),
+          },
+          ...(fichiersARecevoir()
+            ? [{
+                nom: t("palette-rdp-recevoir-fichiers"),
+                detail: t("palette-rdp-recevoir-fichiers-detail"),
+                icone: "copy",
+                ouvrir: () => { const id = bureauActif(); if (id !== null) void recevoirFichiers(id); },
+              }]
+            : []),
+        ]
+      : []),
     {
       nom: t("palette-sante"),
       detail: t("palette-sante-detail"),

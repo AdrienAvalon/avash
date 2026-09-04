@@ -5,6 +5,7 @@ use crate::args::{taille_sure, Args};
 use crate::capture::{run_shot, Graphique};
 use crate::connexion::{connect, session_close_par_le_serveur, NLA_INDISPONIBLE};
 use crate::entrees::{input_ops, lock_sync_event};
+use crate::fichiers::{self, Offre, Reception};
 use crate::presse_papiers::{ClipBackend, ClipReq, LocalClip};
 use crate::trames::{ajouter_rect, frame_msg, frames_msg, nouvelle_taille};
 use crate::{egfx, magnetoscope};
@@ -188,6 +189,21 @@ pub(crate) async fn executer(
     let mut stat_window = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut ticks: u32 = 0;
+
+    // --- Fichiers par le presse-papiers (voir fichiers.rs) -------------------
+    // Ce que le distant a copié (liste et verrou), en attente que l'utilisateur
+    // demande à recevoir ; la réception en cours ; l'offre du poste, et ses
+    // copies verrouillées par le distant (servies même si l'offre change).
+    let mut fichiers_distants: Option<(Vec<ironrdp::cliprdr::pdu::FileDescriptor>, Option<u32>)> =
+        None;
+    let mut reception: Option<Reception> = None;
+    let mut offre: Option<std::sync::Arc<Offre>> = None;
+    let mut offres_verrouillees: std::collections::HashMap<u32, std::sync::Arc<Offre>> =
+        std::collections::HashMap::new();
+    // Chaque réception prend ses identifiants de flux dans une plage à elle :
+    // une réponse tardive d'une réception passée ne peut pas en usurper une.
+    let mut plage_flux: u32 = 1;
 
     // Envoie la zone accumulée si la voie est libre. `sink`/`image`/compteurs
     // viennent du scope englobant (macro non hygiénique volontairement).
@@ -256,6 +272,59 @@ pub(crate) async fn executer(
             framed.write_all(&bytes).await.context("écriture SVC")?;
         }};
     }
+    // Un message JSON vers l'interface (fichiers par le presse-papiers).
+    #[allow(clippy::items_after_statements)]
+    macro_rules! envoyer_json {
+        ($code:expr, $valeur:expr) => {{
+            let mut m = vec![$code];
+            m.extend_from_slice(
+                serde_json::to_string(&$valeur)
+                    .unwrap_or_default()
+                    .as_bytes(),
+            );
+            sink.send(Message::Binary(m.into()))
+                .await
+                .context("envoi fichiers")?;
+        }};
+    }
+    // Les requêtes de contenu d'une réception, vers le serveur.
+    #[allow(clippy::items_after_statements)]
+    macro_rules! demander_contenus {
+        ($reqs:expr) => {{
+            for req in $reqs {
+                let msgs = active
+                    .get_svc_processor_mut::<CliprdrClient>()
+                    .and_then(|c| c.request_file_contents(req).ok());
+                if let Some(msgs) = msgs {
+                    send_svc!(msgs);
+                }
+            }
+        }};
+    }
+    // Où en est la réception ; et, quand elle est finie, son bilan.
+    #[allow(clippy::items_after_statements)]
+    macro_rules! suivre_reception {
+        () => {{
+            if let Some(r) = reception.as_ref() {
+                envoyer_json!(17u8, r.progression());
+                if r.terminee() {
+                    let r = reception.take().expect("réception présente");
+                    let p = r.progression();
+                    plage_flux = plage_flux.wrapping_add(1 << 20).max(1);
+                    envoyer_json!(
+                        18u8,
+                        serde_json::json!({
+                            "sens": "reception",
+                            "dossier": r.dossier().to_string_lossy(),
+                            "fichiers": p.termines,
+                            "octets": p.fait,
+                            "erreurs": r.erreurs(),
+                        })
+                    );
+                }
+            }
+        }};
+    }
 
     loop {
         tokio::select! {
@@ -284,13 +353,93 @@ pub(crate) async fn executer(
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&8) => {
                         // Presse-papiers du poste : on mémorise le texte et on
                         // l'annonce au serveur (collage possible dans le distant).
+                        // Le même texte renvoyé (l'interface le pousse à chaque
+                        // retour sur l'onglet) n'est pas réannoncé : une annonce
+                        // remplace la liste de fichiers offerte, et l'utilisateur
+                        // n'a rien copié de neuf.
                         if partage_clip.load(std::sync::atomic::Ordering::Relaxed) {
                             if let Ok(text) = std::str::from_utf8(&b[1..]) {
-                                if let Ok(mut g) = local_text.lock() {
-                                    *g = Some(text.to_owned());
+                                let inchange = local_text
+                                    .lock()
+                                    .is_ok_and(|g| g.as_deref() == Some(text));
+                                if !(inchange && offre.is_some()) {
+                                    if let Ok(mut g) = local_text.lock() {
+                                        *g = Some(text.to_owned());
+                                    }
+                                    offre = None;
+                                    let _ = clip_tx.send(ClipReq::Advertise);
                                 }
-                                let _ = clip_tx.send(ClipReq::Advertise);
                             }
+                        }
+                    }
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&16) => {
+                        // RECEVOIR : l'utilisateur a accepté les fichiers que le
+                        // distant a copiés. Le dossier vient du message, sinon
+                        // celui des téléchargements.
+                        #[derive(serde::Deserialize, Default)]
+                        struct Demande {
+                            dossier: Option<String>,
+                        }
+                        let demande: Demande = serde_json::from_slice(&b[1..]).unwrap_or_default();
+                        if reception.is_none() {
+                            if let Some((liste, data_id)) = fichiers_distants.clone() {
+                                let dossier = demande
+                                    .dossier
+                                    .filter(|d| !d.trim().is_empty())
+                                    .map_or_else(fichiers::dossier_par_defaut, std::path::PathBuf::from);
+                                let mut r = Reception::nouvelle(dossier, liste, data_id, plage_flux);
+                                let reqs = r.demarrer().await;
+                                reception = Some(r);
+                                demander_contenus!(reqs);
+                                suivre_reception!();
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&19) => {
+                        // OFFRIR : des fichiers du poste, déposés sur le bureau,
+                        // à annoncer au distant ; il en demandera le contenu
+                        // quand l'utilisateur collera là-bas.
+                        let chemins: Vec<std::path::PathBuf> =
+                            serde_json::from_slice::<Vec<String>>(&b[1..])
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(std::path::PathBuf::from)
+                                .filter(|p| p.is_absolute())
+                                .collect();
+                        match fichiers::preparer_offre(&chemins).await {
+                            Ok(o) => {
+                                let o = std::sync::Arc::new(o);
+                                let msgs = active
+                                    .get_svc_processor_mut::<CliprdrClient>()
+                                    .map(|c| c.initiate_file_copy(o.descripteurs()));
+                                match msgs {
+                                    Some(Ok(msgs)) => {
+                                        send_svc!(msgs);
+                                        envoyer_json!(
+                                            18u8,
+                                            serde_json::json!({
+                                                "sens": "offre",
+                                                "fichiers": o.fichiers.len(),
+                                                "octets": o.taille_totale(),
+                                                "erreurs": Vec::<String>::new(),
+                                            })
+                                        );
+                                        offre = Some(o);
+                                    }
+                                    Some(Err(e)) => envoyer_json!(
+                                        18u8,
+                                        serde_json::json!({ "sens": "offre", "fichiers": 0, "octets": 0, "erreurs": [e.to_string()] })
+                                    ),
+                                    None => envoyer_json!(
+                                        18u8,
+                                        serde_json::json!({ "sens": "offre", "fichiers": 0, "octets": 0, "erreurs": ["le canal du presse-papiers n'est pas ouvert"] })
+                                    ),
+                                }
+                            }
+                            Err(e) => envoyer_json!(
+                                18u8,
+                                serde_json::json!({ "sens": "offre", "fichiers": 0, "octets": 0, "erreurs": [format!("{e:#}")] })
+                            ),
                         }
                     }
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&12) && b.len() >= 2 => {
@@ -375,6 +524,17 @@ pub(crate) async fn executer(
                     awaiting_ack = false;
                 }
                 flush_dirty!();
+                // Toutes les cinq secondes, IronRDP libère les verrous de
+                // presse-papiers expirés et clôt les transferts sans réponse.
+                ticks = ticks.wrapping_add(1);
+                if ticks.is_multiple_of(50) {
+                    let msgs = active
+                        .get_svc_processor_mut::<CliprdrClient>()
+                        .and_then(|c| c.drive_timeouts().ok());
+                    if let Some(msgs) = msgs {
+                        send_svc!(msgs);
+                    }
+                }
                 if stat_window.elapsed() >= Duration::from_secs(1) {
                     let secs = stat_window.elapsed().as_secs_f32();
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
@@ -425,6 +585,57 @@ pub(crate) async fn executer(
                         let mut m = vec![8u8];
                         m.extend_from_slice(text.as_bytes());
                         sink.send(Message::Binary(m.into())).await.context("envoi presse-papiers")?;
+                    }
+                    ClipReq::FichiersDistants(liste, data_id) => {
+                        // Le distant a copié des fichiers : l'interface le montre,
+                        // l'utilisateur décide. Rien n'est téléchargé d'ici.
+                        let octets: u64 = liste.iter().filter_map(|d| d.file_size).sum();
+                        envoyer_json!(
+                            15u8,
+                            serde_json::json!({
+                                "dossier": fichiers::dossier_par_defaut().to_string_lossy(),
+                                "fichiers": fichiers::annonce(&liste),
+                                "octets": octets,
+                            })
+                        );
+                        fichiers_distants = Some((liste, data_id));
+                    }
+                    ClipReq::ContenuRecu(flux, donnees) => {
+                        if let Some(r) = reception.as_mut() {
+                            let reqs = r.recevoir(flux, donnees.as_deref()).await;
+                            demander_contenus!(reqs);
+                            suivre_reception!();
+                        }
+                    }
+                    ClipReq::ServirContenu(req) => {
+                        // Le distant colle : il demande un morceau d'un fichier
+                        // offert, de la copie verrouillée si le verrou est nommé.
+                        let source = req
+                            .data_id
+                            .and_then(|id| offres_verrouillees.get(&id).cloned())
+                            .or_else(|| offre.clone());
+                        let reponse = match source {
+                            Some(o) => o.servir(&req).await,
+                            None => ironrdp::cliprdr::pdu::FileContentsResponse::new_error(req.stream_id),
+                        };
+                        let msgs = active
+                            .get_svc_processor_mut::<CliprdrClient>()
+                            .and_then(|c| c.submit_file_contents(reponse).ok());
+                        if let Some(msgs) = msgs {
+                            send_svc!(msgs);
+                        }
+                    }
+                    ClipReq::Verrou(id) => {
+                        // Au plus cent copies : un distant qui verrouille sans fin
+                        // ne fait pas grossir la mémoire.
+                        if let Some(o) = offre.as_ref() {
+                            if offres_verrouillees.len() < 100 {
+                                offres_verrouillees.insert(id.0, o.clone());
+                            }
+                        }
+                    }
+                    ClipReq::Deverrou(id) => {
+                        offres_verrouillees.remove(&id.0);
                     }
                 }
             }

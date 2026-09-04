@@ -221,7 +221,7 @@ export const config = {
     : [
         "./specs/ssh.spec.js", "./specs/sftp.spec.js",
         "./specs/rdp.spec.js", "./specs/rdp-reconnect.spec.js",
-        "./specs/rdp-clipboard.spec.js", "./specs/vnc.spec.js",
+        "./specs/rdp-clipboard.spec.js", "./specs/rdp-fichiers.spec.js", "./specs/vnc.spec.js",
         "./specs/onglets-mixtes.spec.js", "./specs/enregistrer-et-connecter.spec.js",
         "./specs/enregistrement.spec.js", "./specs/sante.spec.js",
       ],

@@ -512,6 +512,14 @@
       background: rgb(16, 18, 24, .88); backdrop-filter: blur(4px);
       box-shadow: 0 2px 8px rgb(0,0,0,.35); transition: opacity .2s; }
     .rdp-hud:empty { display: none; }
+
+    /* Fichiers copiés sur le bureau distant : une pastille sous le HUD, cliquable. */
+    .rdp-fichiers { position: absolute; top: 34px; left: 50%; transform: translateX(-50%);
+      max-width: 80%; padding: 4px 12px; border-radius: 999px; font-size: 12px; line-height: 1.5;
+      background: rgb(20 24 32 / 88%); color: #eef1f6; border: 1px solid rgb(255 255 255 / 18%);
+      cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 5; }
+    .rdp-fichiers[hidden] { display: none; }
+    .rdp-fichiers.en-cours { cursor: default; }
     .rdp-hud.mini { opacity: .12; }
     .rdp-hud b { font-weight: 700; color: #eef1f6; }
     .rdp-hud .q-ok { color: #5ad18a; }
