@@ -15,6 +15,12 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 avash = { path = "../crates/avash" }
+# Le décodeur ClearCodec porté (sous-codec NSCodec) ; son parseur vient du
+# paquet ironrdp-pdu porté lui aussi (RLEX à une couleur), par le patch.
+ironrdp-graphics = { path = "../rdp-sidecar/vendor/ironrdp-graphics" }
+
+[patch.crates-io]
+ironrdp-pdu = { path = "../rdp-sidecar/vendor/ironrdp-pdu" }
 
 [workspace]
 
@@ -52,6 +58,13 @@ bench = false
 [[bin]]
 name = "asciicast"
 path = "fuzz_targets/asciicast.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "clearcodec"
+path = "fuzz_targets/clearcodec.rs"
 test = false
 doc = false
 bench = false

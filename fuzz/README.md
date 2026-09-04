@@ -1,11 +1,14 @@
-# Fuzzing des parseurs du cœur
+# Fuzzing des parseurs du cœur et du canal graphique
 
 Ce que le cœur lit depuis un fichier écrit par quelqu'un d'autre — l'utilisateur
 à la main, un outil tiers, un dépôt de dotfiles, un enregistrement rapporté d'une
-autre machine — passe ici sous un générateur guidé par la couverture
+autre machine — et ce que le processus RDP décode depuis le serveur passent ici
+sous un générateur guidé par la couverture
 ([cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz), libFuzzer, nightly).
-Le test de mutation déterministe de `crates/avash/src/lib.rs` reste la garde
-rapide, jouée à chaque commit ; le fuzzing va plus loin, plus longtemps.
+Les tests de mutation déterministes — `crates/avash/src/lib.rs` pour le
+parseur SSH, `rdp-sidecar/src/magnetoscope.rs` pour les cinq enregistrements
+réels du canal graphique — restent la garde rapide, jouée à chaque commit ; le
+fuzzing va plus loin, plus longtemps.
 
 | Cible | Entrée | Ce qui doit tenir |
 |---|---|---|
@@ -14,6 +17,7 @@ rapide, jouée à chaque commit ; le fuzzing va plus loin, plus longtemps.
 | `reg_query` | la sortie de `reg query` (registre Windows) | idem |
 | `mobaxterm_ini` | `MobaXterm.ini` (`#109#` SSH, `#91#` bureaux RDP) | idem, et un bureau a un nom, un hôte, un port non nul |
 | `asciicast` | un enregistrement asciicast v2 | aucune panique ; jamais plus d'événements que de lignes |
+| `clearcodec` | deux images ClearCodec (MS-RDPEGFX 2.2.4.1) décodées à la suite par le même décodeur : couches résiduelle, bandes et sous-codecs (brut, NSCodec, RLEX), caches de glyphes et de barres | aucune panique ; une image acceptée a exactement `largeur × hauteur × 4` octets |
 
 ## Lancer
 

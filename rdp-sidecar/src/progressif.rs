@@ -254,9 +254,13 @@ fn affiner(
     Ok(())
 }
 
-/// Nombre de tuiles dont on garde l'état. Un écran 4K en compte un peu plus de
-/// deux mille ; au-delà, c'est un serveur qui invente des coordonnées.
-const TUILES_MAX: usize = 4096;
+/// Nombre de tuiles dont on garde l'état : celui d'une surface au plafond de
+/// résolution (8192 / 64 au carré), l'état des tuiles simples compris. Une
+/// tuile hors de la surface n'en reçoit aucun, si bien qu'un serveur ne peut
+/// faire enfler la mémoire qu'à hauteur de la surface qu'il a déclarée, elle-
+/// même bornée à la création. Le plafond précédent, 4096, refusait un écran
+/// 8K (8160 tuiles) depuis que les tuiles simples gardent leur état.
+const TUILES_MAX: usize = (8192 / COTE) * (8192 / COTE);
 
 /// L'état progressif d'UNE surface : les coefficients de ses tuiles, indexés
 /// par leur position dans la grille.
@@ -492,6 +496,14 @@ impl Decodeur {
         difference: bool,
         extrapoler: bool,
     ) -> Result<()> {
+        // Une tuile hors de la surface ne se peint pas (`reporter` l'ignore)
+        // et ne mérite pas d'état : ses coordonnées viennent du réseau, et
+        // chaque état pèse trente-six kilooctets.
+        if usize::from(cle.0) * COTE >= usize::from(surface.largeur)
+            || usize::from(cle.1) * COTE >= usize::from(surface.hauteur)
+        {
+            return Ok(());
+        }
         let etats = &mut surface.tuiles.etats;
         if etats.len() >= TUILES_MAX && !etats.contains_key(&cle) {
             anyhow::bail!("Trop de tuiles en cours d'affinage : {} .", etats.len());
@@ -627,6 +639,47 @@ mod tests {
         let mut etat = EtatTuile::default();
         etat.positions[0] = positions(&base, &uniforme(0));
         assert!(affiner(&[], &[], &base, &uniforme(2), true, &mut etat, 0).is_err());
+    }
+
+    #[test]
+    fn une_tuile_hors_de_la_surface_ne_laisse_aucun_etat() {
+        // Les indices de tuile viennent du réseau : sur une surface de 64 × 64,
+        // la tuile (5, 0) ne se peint pas et ne doit pas non plus coûter ses
+        // trente-six kilooctets d'état, sinon un serveur remplit la mémoire à
+        // coups de coordonnées inventées.
+        use ironrdp::graphics::progressive::encode_first_pass;
+        let base = uniforme(6);
+        let mut composante = vec![40i16; COEFFS];
+        let mut donnees = vec![0u8; 4 * COEFFS];
+        let n = encode_first_pass(&mut composante, &mut donnees, &base, &uniforme(0), true)
+            .expect("encodage");
+        let flux = &donnees[..n];
+        let mut d = super::Decodeur::default();
+        let mut s = Surface::nouvelle(64, 64);
+        for cle in [(5, 0), (0, 9), (u16::MAX, u16::MAX)] {
+            d.premier_palier(
+                &mut s,
+                cle,
+                &[base; 3],
+                &[uniforme(0); 3],
+                [flux; 3],
+                false,
+                true,
+            )
+            .expect("ignorée sans erreur");
+        }
+        assert!(s.tuiles.etats.is_empty());
+        d.premier_palier(
+            &mut s,
+            (0, 0),
+            &[base; 3],
+            &[uniforme(0); 3],
+            [flux; 3],
+            false,
+            true,
+        )
+        .expect("dans la surface");
+        assert_eq!(s.tuiles.etats.len(), 1);
     }
 
     #[test]

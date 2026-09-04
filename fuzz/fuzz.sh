@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 DUREE="${DUREE:-60}"
-CIBLES=(config_ssh putty_session reg_query mobaxterm_ini asciicast)
+CIBLES=(config_ssh putty_session reg_query mobaxterm_ini asciicast clearcodec)
 for c in "${CIBLES[@]}"; do
   mkdir -p "corpus/$c"
   echo "▸ fuzz : $c (${DUREE}s)"

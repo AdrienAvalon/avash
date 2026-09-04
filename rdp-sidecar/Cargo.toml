@@ -35,6 +35,15 @@ libc = "0.2"
 
 # Chemin chaud CPU-bound (décodage graphique) : LTO + une seule unité de
 # codegen pour l'inlining inter-crates ; strip pour un binaire plus compact.
+# Les dépendances optimisées même en développement : les tests rejouent des
+# enregistrements réels à travers RLGR, les ondelettes, ClearCodec et NSCodec,
+# et le fuzzing par mutation en fait cent cinquante tours. Non optimisées,
+# elles coûtaient 224 s par exécution de la suite (mesuré le 2026-09-04 avec
+# cinq fixtures). Notre propre code reste au niveau 0, débogable et vite
+# recompilé.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 lto = true
 codegen-units = 1

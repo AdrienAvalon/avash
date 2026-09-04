@@ -7,6 +7,27 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Un serveur ne peut plus faire allouer n'importe quoi au canal graphique.**
+  `CreateSurface` acceptait les côtés tels quels : 65535 × 65535 × 4 octets,
+  dix-sept gigaoctets, et l'allocation tuait le processus, donc la session.
+  La surface est bornée comme la résolution négociée (8192 de côté). Et
+  `WireToSurface1` décodait une image aux dimensions annoncées avant tout
+  rognage, ClearCodec en tête avec ses quatre plans NSCodec : une image qui ne
+  tient pas dans sa surface est refusée avant décodage, comme chez FreeRDP.
+  L'état des tuiles progressives, qui pèse trente-six kilooctets par tuile et
+  couvre désormais les tuiles simples, n'est gardé que pour les tuiles de la
+  surface, et son plafond passe de 4096 à celui d'une surface au maximum
+  (16 384) : l'ancien refusait un écran 8K. Trois tests.
+- **Le décodeur ClearCodec passe sous cargo-fuzz, et le fuzzing par mutation
+  rejoue les cinq enregistrements.** Sixième cible dans `fuzz/`, deux images
+  décodées à la suite par le même décodeur (caches compris), sept graines
+  (NSCodec avec et sans sous-échantillonnage, RLEX à une et deux couleurs,
+  brut, résiduel, glyphe mémorisé puis réutilisé) : 52 000 exécutions en une
+  minute sans plantage. Le test de mutation du processus RDP inclut
+  `windows-surfaces-successives` et `windows-clearcodec-nscodec`. Pour que
+  cela reste supportable à chaque commit, les dépendances sont optimisées
+  dans le profil de développement du processus RDP : sa suite passe de 224 s
+  à 36 s. 101 tests dans le processus RDP, 1085 au total.
 - **Une panne du registre npm ne fait plus tomber les chaînes.** Le
   2026-09-03, le job bout en bout de GitLab est tombé sur « 503 Service
   Unavailable » du point d'audit de registry.npmjs.org, après sept minutes

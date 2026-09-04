@@ -258,7 +258,7 @@ fn disposition_detectee() -> u32 {
 /// 17 Gio pour un 65535×65535 annoncé — mort du processus par manque de
 /// mémoire, rejouable à volonté par la renégociation `DeactivateAll`. 8192 est
 /// déjà la borne appliquée au redimensionnement côté interface.
-const TAILLE_MAX: u16 = 8192;
+pub(crate) const TAILLE_MAX: u16 = 8192;
 
 pub(crate) fn taille_sure(w: u16, h: u16) -> anyhow::Result<(u16, u16)> {
     anyhow::ensure!(

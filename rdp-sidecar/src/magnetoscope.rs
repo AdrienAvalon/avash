@@ -691,12 +691,22 @@ mod tests_enregistrements_reels {
         // « xfce » emprunte les mises à jour classiques ; « gnome-remote-desktop »
         // le canal graphique et RemoteFX Progressive en tuiles simples ;
         // « windows-egfx » ClearCodec, le cache de surfaces et le progressif
-        // affiné par paliers. Chacun lit des longueurs, des indices de tuile et
-        // des emplacements de cache fournis par le serveur.
-        let bases: Vec<_> = ["xfce", "gnome-remote-desktop", "windows-egfx"]
-            .iter()
-            .map(|n| lire(&chemin(n)).unwrap())
-            .collect();
+        // affiné par paliers ; « windows-surfaces-successives » les tuiles en
+        // différence, les contextes rouverts et les paliers qui touchent
+        // plusieurs bandes (notre lecteur SRL) ; « windows-clearcodec-nscodec »
+        // le sous-codec NSCodec et le RLEX à une couleur (nos portages). Chacun
+        // lit des longueurs, des indices de tuile, des tailles de plan et des
+        // emplacements de cache fournis par le serveur.
+        let bases: Vec<_> = [
+            "xfce",
+            "gnome-remote-desktop",
+            "windows-egfx",
+            "windows-surfaces-successives",
+            "windows-clearcodec-nscodec",
+        ]
+        .iter()
+        .map(|n| lire(&chemin(n)).unwrap())
+        .collect();
         let mut graine: u64 = 0x9e37_79b9_7f4a_7c15;
         let mut alea = || {
             graine ^= graine << 13;

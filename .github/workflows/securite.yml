@@ -8,7 +8,8 @@ name: Sécurité
 # - Scorecard de l'OpenSSF note la posture du dépôt (revues, épinglage,
 #   permissions des workflows) et dit où elle est faible ;
 # - le fuzzing (cargo-fuzz, nightly) secoue les parseurs du cœur — ce qui entre
-#   depuis un fichier écrit par quelqu'un d'autre — 45 secondes par cible.
+#   depuis un fichier écrit par quelqu'un d'autre — et le décodeur ClearCodec
+#   du canal graphique, 45 secondes par cible.
 on:
   push:
     branches: [main]

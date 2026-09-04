@@ -34,9 +34,9 @@ défaut n'est pas livrée, même terminée.
 
 ## Où nous en sommes (mesuré)
 
-| Indicateur | Valeur au 02/09/2026 |
+| Indicateur | Valeur au 04/09/2026 |
 |---|---|
-| Tests | 341 Rust (147 cœur, 34 intégration, 62 interface, 98 processus RDP) · 585 dans les paquets IronRDP portés · 104 front · 52 scénarios bout en bout dans 26 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 344 Rust (147 cœur, 34 intégration, 62 interface, 101 processus RDP) · 585 dans les paquets IronRDP portés · 104 front · 52 scénarios bout en bout dans 26 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -146,6 +146,22 @@ code neuf, mais dans les hypothèses tacites — « la bibliothèque vérifie »
 chemin n'arrive jamais », « le serveur est honnête », « les tests tournent ».
 
 ---
+
+### 1.5 Avash dans Avash sous Windows — **fait** (04/09/2026)
+
+Un avash Windows lancé dans une session RDP affichait son propre bureau
+distant avec des zones noires, des carrés gris, des blocs flous, puis des
+icônes noires. Quatre causes, trouvées l'une après l'autre en enregistrant la
+session depuis le contrôleur de domaine du parc et en rejouant sans réseau :
+le canvas GPU de WebView2 perdait sa texture (canvas logiciel), le codec
+progressif ignorait les tuiles en différence et n'affinait rien par paliers
+(réécrit d'après FreeRDP), le sous-codec NSCodec de ClearCodec était un bras
+vide dans IronRDP (porté, avec le RLEX à une couleur), et deux chemins de
+redimensionnement pouvaient vider l'image l'un après l'autre. Deux
+enregistrements de référence de plus, un quatrième paquet porté, et la
+méthode consignée dans `CONTRIBUTING.md` : mesurer les pixels, comparer à
+FreeRDP. Vérifié sur le parc, avash dans avash, après ouverture,
+maximisation et restauration.
 
 ### 1.4 Le panneau SFTP sur la session du terminal — **fait**
 

@@ -20,6 +20,7 @@ use ironrdp::core as ironrdp_core;
 use ironrdp::dvc::{DvcMessage, DvcProcessor};
 use ironrdp::pdu::PduResult;
 
+use crate::args::TAILLE_MAX;
 use crate::progressif;
 use crate::surface::{Cache, Surface, Zone};
 
@@ -564,6 +565,15 @@ impl Egfx {
                     u16::from_le_bytes([c[2], c[3]]),
                     u16::from_le_bytes([c[4], c[5]]),
                 );
+                // Les côtés viennent du réseau : 65535 × 65535 × 4 octets font
+                // dix-sept gigaoctets, et l'allocation tuerait le processus,
+                // donc la session. Le même plafond que la résolution négociée
+                // (`taille_sure`) borne aussi, en aval, l'état des tuiles
+                // progressives et le décodage des images ClearCodec.
+                if l == 0 || h == 0 || l > TAILLE_MAX || h > TAILLE_MAX {
+                    eprintln!("egfx : surface {id} refusée ({l}×{h})");
+                    return None;
+                }
                 self.surfaces.insert(id, Surface::nouvelle(l, h));
             }
             CMD_DELETE_SURFACE if c.len() >= 2 => {
@@ -674,6 +684,20 @@ impl Egfx {
             return;
         };
         let (l, h) = (usize::from(zone.largeur), usize::from(zone.hauteur));
+        // Le rectangle doit tenir dans la surface (MS-RDPEGFX 2.2.2.1 ; FreeRDP
+        // refuse de même). Décoder d'abord et rogner ensuite laisserait un
+        // serveur faire allouer une image de 8192 × 8192 sur une surface de
+        // 64 × 64 : le décodage, ClearCodec en tête avec ses quatre plans
+        // NSCodec, se dimensionne sur ce que le serveur annonce.
+        if usize::from(zone.x) + l > usize::from(surface.largeur)
+            || usize::from(zone.y) + h > usize::from(surface.hauteur)
+        {
+            eprintln!(
+                "egfx : image hors de la surface {id} ({l}×{h} en ({},{}) sur {}×{})",
+                zone.x, zone.y, surface.largeur, surface.hauteur
+            );
+            return;
+        }
         let rgba = match codec {
             CODEC_CLEARCODEC => {
                 let clair = &mut self.clair;
@@ -1279,6 +1303,42 @@ mod tests {
         ));
         e.traiter(&pdu(0x0007, &[3, 0, 9, 9, 1, 0, 0, 0, 0, 0]));
         e.traiter(&pdu(0x000A, &[9, 9]));
+        assert!(file.lock().unwrap().trames.is_empty());
+    }
+
+    #[test]
+    fn une_surface_deraisonnable_est_refusee() {
+        // 65535 × 65535 × 4 octets : dix-sept gigaoctets demandés par deux
+        // champs venus du réseau. La surface n'existe pas, et rien ne s'y peint.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        e.traiter(&pdu(0x0009, &[1, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0x21]));
+        e.traiter(&pdu(0x0009, &[2, 0, 0, 0, 64, 0, 0x21]));
+        assert!(
+            e.surfaces.is_empty(),
+            "aucune de ces surfaces n'est acceptable"
+        );
+        e.traiter(&pdu(
+            0x0004,
+            &[1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 4, 0],
+        ));
+        assert!(file.lock().unwrap().trames.is_empty());
+        // Le plafond de la résolution négociée reste, lui, une surface légitime.
+        e.traiter(&pdu(0x0009, &[3, 0, 0, 0x20, 0, 0x20, 0x21]));
+        assert!(e.surfaces.contains_key(&3));
+    }
+
+    #[test]
+    fn une_image_hors_de_la_surface_est_refusee_avant_decodage() {
+        // Surface de 64 × 64 ; le serveur y pose une image ClearCodec de
+        // 128 × 64. Elle est refusée avant toute allocation à sa taille, et
+        // une image qui tient est acceptée par le même chemin.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        e.traiter(&pdu(0x0009, &[1, 0, 64, 0, 64, 0, 0x21]));
+        let mut hors = vec![1, 0, 0x08, 0x00, 0x20];
+        hors.extend_from_slice(&[0, 0, 0, 0, 128, 0, 64, 0]);
+        hors.extend_from_slice(&4u32.to_le_bytes());
+        hors.extend_from_slice(&[0xFF; 4]);
+        e.traiter(&pdu(0x0001, &hors));
         assert!(file.lock().unwrap().trames.is_empty());
     }
 }

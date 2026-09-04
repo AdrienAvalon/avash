@@ -90,6 +90,33 @@ porte encodé en UTF-16, lisible tel quel. C'est pourquoi elles ne s'activent pa
 sur `RUST_LOG`, que beaucoup exportent globalement, mais sur une variable qui
 n'appartient qu'à nous. Relis avant de coller quoi que ce soit.
 
+### Un défaut d'affichage : enregistrer, rejouer, bissecter
+
+Un bureau qui s'affiche mal se juge sur pièces, pas à l'œil. Le magnétoscope
+enregistre tout ce que le serveur envoie, et le rejeu, sans réseau, dit si le
+défaut vient de notre décodage :
+
+```bash
+# Depuis l'application : le processus RDP enregistre la session (0600).
+AVASH_RDP_ENREGISTRER=/tmp/session.rec AVASH_RDP_ENREGISTRER_PLAFOND=536870912 avash-ui
+
+# Rejouer, écrire l'image finale, s'arrêter après N PDU pour bissecter.
+avash-rdp --rejouer /tmp/session.rec --image /tmp/fin.png
+avash-rdp --rejouer /tmp/session.rec --jusqu-a 280 --image /tmp/pdu-280.png
+
+# Décrire chaque commande du canal graphique : rectangles, tuiles en
+# différence, tables de quantification, couches et sous-codecs ClearCodec.
+AVASH_RDP_JOURNAL_EGFX=1 avash-rdp --rejouer /tmp/session.rec 2> /tmp/journal.txt
+```
+
+Puis **mesurer** la zone en cause (moyenne, écart-type, pixels sombres) avec
+Python plutôt que la regarder : un « rectangle noir » lu sur une capture
+réduite s'est révélé, à la mesure, être un gris uniforme. Un enregistrement
+contient l'écran du serveur ; il reste sur le poste. Ceux qui reproduisent un
+défaut corrigé vont dans `tests-parc/enregistrements/` avec leur empreinte et
+un test qui dit ce qui doit être vrai. Pour un doute sur un codec, la
+référence est FreeRDP (`libfreerdp/codec/`), pas IronRDP.
+
 ## Installation
 
 ```bash
