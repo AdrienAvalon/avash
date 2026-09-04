@@ -739,6 +739,10 @@ function markClosed(s: Session, why: string) {
   if (!state.sessions.has(s.id)) return;
   s.closed = true;
   setSessionState(s.id, "closed");
+  // L'onglet mort dit pourquoi au survol : le terminal l'a écrit, mais un
+  // onglet qu'on n'a pas sous les yeux ne le montre pas ; et la suite bout en
+  // bout le lit là, faute de texte dans un terminal rendu par WebGL.
+  s.tab.title = why;
   s.term.write(
     `\r\n\x1b[31m${why}\x1b[0m\r\n` +
       `\x1b[90m── \x1b[0m\x1b[1m${t("touche-entree")}\x1b[0m\x1b[90m : ${t("se-reconnecter")} · \x1b[0m` +

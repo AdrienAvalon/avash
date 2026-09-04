@@ -109,7 +109,10 @@ export async function attendreSessionLive(quoi = "session SSH", minimum = 1) {
     await browser.waitUntil(async () => (await $$(".state.live")).length >= minimum,
       { timeout: 20000 });
   } catch (e) {
-    throw new Error(`${quoi} jamais live ; le terminal disait :\n${await sortiePty()}`, { cause: e });
+    // L'onglet mort porte la raison en infobulle (markClosed) : c'est le
+    // message que le front a écrit, celui que pty-output ne transporte pas.
+    const morts = await browser.execute(() => [...document.querySelectorAll(".tab.dead")].map((t) => t.title).join(" | "));
+    throw new Error(`${quoi} jamais live ; onglet : ${morts || "(vivant, sans raison)"} ; le terminal disait :\n${await sortiePty()}`, { cause: e });
   }
 }
 
@@ -130,9 +133,13 @@ export function startRdpServer(port) {
 // Démarre le serveur VNC de test (mot de passe « test ») sur `port`. Sa sortie
 // standard, une ligne par entrée reçue, va à `surLigne` : c'est par elle que
 // le scénario lit ce que le serveur a compris d'une frappe.
-export function startVncServer(port, surLigne) {
+export function startVncServer(port, surLigne, options = {}) {
+  // VeNCrypt : un second port, TLS, relié au premier (test-vnc-server/src/vencrypt.rs).
+  const tls = options.tlsPort
+    ? ["--tls-port", String(options.tlsPort), "--cert", options.cert, "--key", options.key]
+    : [];
   const p = spawn(`./target/release/test-vnc-server${EXE}`,
-    ["--port", String(port), "--pass", "test"],
+    ["--port", String(port), "--pass", "test", ...tls],
     { cwd: resolve("../test-vnc-server"), stdio: ["ignore", "pipe", "ignore"] });
   p.stdout.setEncoding("utf8");
   p.stdout.on("data", (d) => surLigne?.(String(d)));
