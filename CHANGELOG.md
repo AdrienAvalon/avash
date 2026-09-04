@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.7.2] - 2026-09-04
+
 - **La suite bout en bout relance son pilote s'il meurt en route.** Chaîne
   GitLab #3382 du 2026-09-04 : au milieu de la suite, WebKitWebDriver, le
   pilote natif que `tauri-driver` enchaîne, s'est éteint (« connection
@@ -1226,3 +1228,4 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
 [0.6.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.6.2
 [0.7.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.7.0
 [0.7.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.7.1
+[0.7.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.7.2

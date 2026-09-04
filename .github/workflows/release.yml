@@ -120,7 +120,7 @@ jobs:
           "@ | Set-Content "$dossier/LISEZ-MOI.txt"
           Compress-Archive -Path $dossier -DestinationPath "portable/avash-$env:VERSION-windows-x64.zip"
         env:
-          VERSION: "0.7.1"
+          VERSION: "0.7.2"
 
       - name: Publier les artefacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
