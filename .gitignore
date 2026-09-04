@@ -9,6 +9,7 @@ rdp-sidecar/target/
 rdp-sidecar/vendor/*/target/
 test-rdp-server/target/
 test-rdp-server/*.pem
+test-vnc-server/target/
 crates/avash-ui/binaries/
 e2e/node_modules/
 
@@ -23,6 +24,9 @@ squashfs-root/
 
 # Captures de régression visuelle produites localement (les références sont dans e2e/visuel/reference)
 e2e/.tmp/
+# Résultat des mesures du front (scripts/mesures-front.sh) : les chiffres
+# retenus sont reportés dans docs/feuille-de-route.md
+e2e/mesures/resultat.json
 
 # Schémas générés par Tauri à chaque construction (autocomplétion des
 # capacités) : leur contenu suit les fonctionnalités compilées, ils ne se

@@ -15,6 +15,25 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   le fork du mainteneur, par l'API, sans cloner le dépôt. La procédure, et
   l'automatisation possible depuis le workflow Release, sont dans
   `RELEASE.md`.
+- **Arch Linux, macOS et les logithèques : les paquets sont prêts.** Un
+  `PKGBUILD` (`packaging/aur/avash/`) construit Avash depuis l'archive de la
+  version publiée, front, processus RDP et application, à jeu de dépendances
+  figé, et installe binaires, icônes, entrée de menu et métadonnées ; éprouvé
+  sur le poste par `makepkg` puis en installant le paquet. Un cask Homebrew
+  (`packaging/homebrew/avash.rb`, image disque et empreinte de la release,
+  `livecheck`) attend un Mac pour être essayé puis soumis. Un fichier
+  AppStream (`packaging/dev.avash.app.metainfo.xml`, validé par
+  `appstreamcli`) décrit l'application aux logithèques et prépare Flathub. La
+  publication sur l'AUR demande le compte du mainteneur ; les étapes sont dans
+  `RELEASE.md`.
+- **Les correctifs du décodeur RDP remontent à IronRDP.** Le drapeau de
+  différence des tuiles progressives et la continuité du lecteur SRL sont déjà
+  corrigés sur la branche principale d'IronRDP ; la palette RLEX à une seule
+  couleur ne l'était pas (l'octet compacté était pris pour une longueur), la
+  correction est proposée en amont avec son test
+  ([Devolutions/IronRDP#1903](https://github.com/Devolutions/IronRDP/pull/1903)).
+  Les copies portées dans `rdp-sidecar/vendor/` restent en place tant que la
+  version publiée ne les contient pas.
 - **Chaîne d'approvisionnement : l'image de la chaîne GitLab est épinglée et
   Node y est installé sans rien exécuter de téléchargé.** Le Scorecard de
   l'OpenSSF, désormais affiché sur le README, relevait deux choses dans

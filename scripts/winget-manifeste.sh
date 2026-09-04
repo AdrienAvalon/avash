@@ -40,7 +40,6 @@ InstallModes:
 - silentWithProgress
 UpgradeBehavior: install
 ReleaseDate: $date
-ReleaseNotesUrl: https://github.com/AdrienAvalon/avash/releases/tag/v$v
 Installers:
 - Architecture: x64
   InstallerUrl: $url

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Métadonnées AppStream d'Avash : lues par les logithèques (GNOME Logiciels,
+     Discover), par Flathub et par l'AUR via /usr/share/metainfo. Les
+     captures pointent sur le dépôt ; les versions suivent CHANGELOG.md. -->
+<component type="desktop-application">
+  <id>dev.avash.app</id>
+  <name>Avash</name>
+  <summary xml:lang="fr">Gestionnaire de connexions SSH et RDP, natif, rapide, sécurisé</summary>
+  <summary>Native, fast and secure SSH and RDP connection manager</summary>
+  <developer id="dev.avash">
+    <name>Adrien Cros</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <description>
+    <p xml:lang="fr">
+      Avash réunit vos terminaux SSH, vos bureaux distants Windows (RDP) et vos
+      transferts de fichiers (SFTP) dans une seule application native. Il lit
+      et écrit votre ~/.ssh/config tel quel, garde les mots de passe dans le
+      trousseau du système, vérifie les clés d'hôte en SSH et en RDP avant le
+      moindre identifiant, et importe les sessions PuTTY et MobaXterm.
+    </p>
+    <p>
+      Avash brings your SSH terminals, your Windows remote desktops (RDP) and
+      your file transfers (SFTP) into a single native application. It reads and
+      writes your ~/.ssh/config as it is, keeps passwords in the system keyring,
+      verifies host keys for SSH and RDP before any credential leaves, and
+      imports PuTTY and MobaXterm sessions.
+    </p>
+    <p xml:lang="fr">Tunnels SSH locaux, distants et SOCKS, dossiers, étiquettes, palette de commandes, snippets, santé des hôtes, enregistrement de session, interface en français et en anglais.</p>
+    <p>Local, remote and SOCKS tunnels, folders, tags, command palette, snippets, host health, session recording, interface in French and English.</p>
+  </description>
+  <launchable type="desktop-id">avash.desktop</launchable>
+  <url type="homepage">https://github.com/AdrienAvalon/avash</url>
+  <url type="bugtracker">https://github.com/AdrienAvalon/avash/issues</url>
+  <url type="vcs-browser">https://github.com/AdrienAvalon/avash</url>
+  <url type="contribute">https://github.com/AdrienAvalon/avash/blob/main/CONTRIBUTING.md</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption xml:lang="fr">Un bureau Windows dans Avash, la liste des hôtes à gauche</caption>
+      <caption>A Windows desktop inside Avash, the host list on the left</caption>
+      <image>https://raw.githubusercontent.com/AdrienAvalon/avash/main/docs/captures/bureau-rdp.png</image>
+    </screenshot>
+    <screenshot>
+      <caption xml:lang="fr">Une session SSH</caption>
+      <caption>An SSH session</caption>
+      <image>https://raw.githubusercontent.com/AdrienAvalon/avash/main/docs/captures/terminal-ssh.png</image>
+    </screenshot>
+    <screenshot>
+      <caption xml:lang="fr">L'accueil, hôtes rangés par dossiers</caption>
+      <caption>Home, hosts in folders</caption>
+      <image>https://raw.githubusercontent.com/AdrienAvalon/avash/main/docs/captures/accueil.png</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>Network</category>
+    <category>RemoteAccess</category>
+  </categories>
+  <keywords>
+    <keyword>ssh</keyword>
+    <keyword>rdp</keyword>
+    <keyword>sftp</keyword>
+    <keyword>terminal</keyword>
+    <keyword xml:lang="fr">bureau distant</keyword>
+    <keyword>remote desktop</keyword>
+  </keywords>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.7.2" date="2026-09-04">
+      <url>https://github.com/AdrienAvalon/avash/releases/tag/v0.7.2</url>
+    </release>
+    <release version="0.7.1" date="2026-09-04">
+      <url>https://github.com/AdrienAvalon/avash/releases/tag/v0.7.1</url>
+    </release>
+    <release version="0.7.0" date="2026-09-03">
+      <url>https://github.com/AdrienAvalon/avash/releases/tag/v0.7.0</url>
+    </release>
+  </releases>
+</component>

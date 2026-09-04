@@ -212,3 +212,38 @@ Automatiser depuis le workflow Release est possible avec l'action
 `vedantmgoyal9/winget-releaser` sur un exécuteur Windows ; elle exige un jeton
 personnel (`public_repo`) capable de pousser sur le fork, à déposer en secret
 `WINGET_TOKEN`. À faire quand une version aura été acceptée à la main.
+
+### AUR (Arch Linux, CachyOS, Manjaro…)
+
+Le paquet `avash` se construit depuis les sources de la version publiée :
+`packaging/aur/avash/PKGBUILD` (front Vite, processus RDP, application Tauri,
+outil en ligne de commande, icônes, `.desktop`, métadonnées AppStream).
+Éprouvé sur ce poste par `makepkg` avant chaque publication. À chaque version :
+
+```bash
+cd packaging/aur/avash
+sed -i "s/^pkgver=.*/pkgver=0.7.3/; s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+updpkgsums                          # remplace l'empreinte de l'archive (pacman-contrib)
+makepkg -f --noconfirm              # construit et vérifie, une dizaine de minutes
+makepkg --printsrcinfo > .SRCINFO   # obligatoire, l'AUR le lit à la place du PKGBUILD
+```
+
+Publication : un compte sur https://aur.archlinux.org avec une clé SSH, puis
+le dépôt `ssh://aur@aur.archlinux.org/avash.git` où l'on pousse `PKGBUILD` et
+`.SRCINFO` sur `master`. Les utilisateurs installent par `paru -S avash` (ou
+`yay`). La première poussée crée le paquet.
+
+### Homebrew (macOS)
+
+Un cask `packaging/homebrew/avash.rb` (image disque, empreinte, `livecheck`
+sur les releases GitHub). Il se soumet en PR au dépôt `Homebrew/homebrew-cask`
+(`brew bump-cask-pr` depuis un Mac, ou à la main) ; l'application n'étant pas
+notarisée, le cask porte un `caveats` qui explique le clic droit puis Ouvrir.
+
+### Flathub (Linux)
+
+Flathub exige une construction depuis les sources dans son bac à sable
+(manifeste `dev.avash.app.yml`, sources cargo et npm figées par
+`flatpak-cargo-generator` et `flatpak-node-generator`), pas un simple
+emballage de l'AppImage. Les métadonnées AppStream (`packaging/dev.avash.app.metainfo.xml`)
+et le `.desktop` sont déjà prêts ; la construction Flatpak reste à écrire.

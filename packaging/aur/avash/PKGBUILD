@@ -1,0 +1,87 @@
+# Maintainer: Adrien Cros <adrien.cros@outlook.com>
+#
+# Construit depuis les sources de la version publiée : le front (Vite), le
+# processus RDP (projet cargo séparé, hors espace de travail), puis
+# l'application Tauri et l'outil en ligne de commande. Le processus RDP est
+# installé à côté de l'application, là où elle le cherche (/usr/bin).
+# Régénérer .SRCINFO après toute modification : makepkg --printsrcinfo > .SRCINFO
+
+pkgname=avash
+pkgver=0.7.2
+pkgrel=1
+pkgdesc="Gestionnaire de connexions SSH et RDP, natif, rapide, sécurisé (Tauri 2 + Rust)"
+arch=('x86_64')
+url="https://github.com/AdrienAvalon/avash"
+license=('AGPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'librsvg' 'gcc-libs' 'glibc')
+optdepends=('gnome-keyring: trousseau des mots de passe (Secret Service)'
+            'kwallet: trousseau des mots de passe (Secret Service)'
+            'putty: conversion des clés .ppk lors de l import PuTTY')
+makedepends=('cargo' 'nodejs' 'npm' 'pkgconf')
+# Sans !lto, makepkg ajoute -flto aux CFLAGS : les objets C d'aws-lc-sys
+# (russh, IronRDP) deviennent du bitcode GCC que rust-lld, éditeur de liens
+# par défaut de Rust, ne lit pas ; l'édition finit en symboles non définis
+# (vu au premier makepkg de la 0.7.2). Rust fait son propre LTO.
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('75d8f73069b0fefb5081d95f359cbddab6f391abee3b64d68670ec95c81a5e94')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  local triplet
+  triplet="$(rustc -vV | sed -n 's/host: //p')"
+  # Tout ce qui vient du réseau vient ici ; build() tourne à jeu figé.
+  cargo fetch --locked --target "$triplet"
+  cargo fetch --locked --target "$triplet" --manifest-path rdp-sidecar/Cargo.toml
+  (cd web && npm ci --no-audit --no-fund)
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  (cd web && npx vite build)
+  # Le processus RDP d'abord : avash-ui le déclare en ressource embarquée et
+  # son binaire doit exister avant la compilation.
+  cargo build --release --frozen --manifest-path rdp-sidecar/Cargo.toml
+  install -Dm755 rdp-sidecar/target/release/avash-rdp \
+    crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
+  cargo build --release --frozen -p avash-ui -p avash
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/avash-ui "$pkgdir/usr/bin/avash-ui"
+  install -Dm755 rdp-sidecar/target/release/avash-rdp "$pkgdir/usr/bin/avash-rdp"
+  install -Dm755 target/release/avash "$pkgdir/usr/bin/avash"
+  local s
+  for s in 32 64 128; do
+    install -Dm644 "crates/avash-ui/icons/${s}x${s}.png" \
+      "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/avash.png"
+  done
+  install -Dm644 crates/avash-ui/icons/128x128@2x.png \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/avash.png"
+  install -Dm644 crates/avash-ui/icons/logo.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/avash.svg"
+  install -dm755 "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/avash.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Avash
+Comment=Gestionnaire de connexions SSH et RDP
+Comment[en]=SSH and RDP connection manager
+Exec=avash-ui
+Icon=avash
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=ssh;rdp;sftp;terminal;bureau distant;remote desktop;
+StartupWMClass=avash-ui
+EOF
+  # Les métadonnées AppStream entrent dans l'archive avec la 0.7.3 : la garde
+  # tombe à la prochaine montée de version.
+  if [ -f packaging/dev.avash.app.metainfo.xml ]; then
+    install -Dm644 packaging/dev.avash.app.metainfo.xml \
+      "$pkgdir/usr/share/metainfo/dev.avash.app.metainfo.xml"
+  fi
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
