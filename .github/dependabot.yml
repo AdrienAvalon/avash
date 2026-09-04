@@ -37,3 +37,8 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly, day: monday }
+  # L'image de base de la chaîne GitLab est épinglée par empreinte
+  # (ci/Dockerfile) : c'est Dependabot qui propose la suivante.
+  - package-ecosystem: docker
+    directory: /ci
+    schedule: { interval: weekly, day: monday }

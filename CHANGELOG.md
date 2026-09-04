@@ -7,6 +7,19 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Chaîne d'approvisionnement : l'image de la chaîne GitLab est épinglée et
+  Node y est installé sans rien exécuter de téléchargé.** Le Scorecard de
+  l'OpenSSF, désormais affiché sur le README, relevait deux choses dans
+  `ci/Dockerfile` : une image de base sur une étiquette mobile
+  (`rust:1-bookworm`) et le script d'installation de NodeSource téléchargé
+  puis exécuté. L'image est fixée par empreinte, Dependabot (écosystème
+  docker) propose la suivante ; Node 22 vient de l'archive officielle,
+  vérifiée par sa somme publiée, essayée dans un conteneur jetable avant
+  d'être confiée à la chaîne. Le paquet `wnaf`, retiré du registre dans sa
+  version 0.14.0 (dépendance de russh par p256), passe en 0.14.1 dans les
+  deux arbres. Les autres avis que le Scorecard compte, la famille GTK 3
+  non maintenue qu'embarque Tauri sous Linux et l'attaque Marvin sur `rsa`
+  via russh, n'ont pas de correctif en amont.
 - **Le dépôt se présente comme les projets qu'on adopte.** README refondu
   sur le modèle des dépôts les plus suivis : accroche, badges réels (version,
   téléchargements, chaînes, Scorecard de l'OpenSSF, licence), une vraie

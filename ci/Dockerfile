@@ -13,7 +13,10 @@
 # La sortie d'apt est tue : GitLab est derrière le pare-feu applicatif de
 # Cloudflare, qui rejette un journal contenant « /etc/ssh/sshd_config » (voir
 # CONTRIBUTING.md, « Exécuteur GitLab »).
-FROM rust:1-bookworm
+# Épinglée par empreinte : l'étiquette « 1-bookworm » bouge à chaque version
+# de Rust, l'empreinte non. Dependabot (écosystème docker, répertoire ci/)
+# propose la suivante ; le Scorecard de l'OpenSSF compte l'épinglage.
+FROM rust:1-bookworm@sha256:4e4a7e7939c17991ab35f2b8c2e67593980f771d28f6b1254b1850f860fd0c7f
 
 # Paquets système : Tauri (WebKitGTK, GTK, indicateur, rsvg, patchelf), le
 # pilote WebDriver et Xvfb pour la suite bout en bout, sshd et openssl pour ses
@@ -29,10 +32,17 @@ RUN apt-get update -qq \
  && mkdir -p /run/sshd
 
 # Node 22, comme la chaîne GitHub : bookworm n'en fournit que la 18, sous le
-# plancher de stylelint et knip.
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1 \
- && apt-get install -y -qq nodejs >/dev/null 2>&1 \
- && rm -rf /var/lib/apt/lists/*
+# plancher de stylelint et knip. Depuis l'archive officielle, vérifiée par sa
+# somme publiée, et non par le script d'installation de NodeSource téléchargé
+# puis exécuté : on n'exécute rien qu'on n'ait pu lire. Version et somme à
+# reporter ensemble depuis https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt.
+ARG NODE_VERSION=22.23.2
+ARG NODE_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
+RUN curl -fsSLo /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+ && echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - >/dev/null \
+ && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --exclude=CHANGELOG.md --exclude=LICENSE --exclude=README.md \
+ && rm /tmp/node.tar.xz \
+ && node --version && npm --version
 
 # Chaîne Rust : les deux composants absents de l'image rust:1, puis les outils
 # que les jobs installaient à chaque passage. Ils vivent dans
