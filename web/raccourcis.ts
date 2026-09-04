@@ -5,6 +5,7 @@ import { closeRdp, focusRdp, rdpSessions } from "./rdp";
 import { closeSession, focusSession } from "./main";
 import { keysOpen } from "./cles";
 import { manualOpen, manualSyncSaveRow } from "./connexion-directe";
+import { basculerPartage } from "./vue-partagee";
 
 // ---------- Raccourcis d'onglets ----------
 
@@ -30,6 +31,20 @@ function closeActiveTab() {
   if (rdpSessions.has(state.active)) closeRdp(state.active);
   else closeSession(state.active);
 }
+
+// Ctrl+Maj+E : l'onglet suivant côte à côte, ou la vue partagée refermée (le
+// raccourci de Terminator). En phase de capture et arrêté là : quand un
+// terminal a le focus, xterm voit la touche avant les écouteurs de la fenêtre
+// et la remontait ensuite, si bien que le partage s'ouvrait puis se refermait
+// dans la même frappe. Ici, une seule fois, avant tout le monde.
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+  if (e.code !== "KeyE" && e.key.toLowerCase() !== "e") return;
+  if (document.querySelector(".modal-backdrop.open, .palette-backdrop.open")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  basculerPartage();
+}, true);
 
 window.addEventListener("keydown", (e) => {
   // Ne pas capturer pendant qu'un formulaire OU la palette est ouvert :

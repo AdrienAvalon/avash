@@ -32,7 +32,7 @@ pub struct RdpConn {
 /// exécutait le binaire qu'un autre compte avait pu y déposer — et lui écrivait
 /// le mot de passe RDP sur son entrée standard, celui du trousseau compris.
 /// Mieux vaut une erreur nommée qu'un chemin deviné.
-fn sidecar_path() -> Option<std::path::PathBuf> {
+pub(crate) fn sidecar_path() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("AVASH_RDP_BIN") {
         let p = std::path::PathBuf::from(p);
         // Même une variable d'environnement doit désigner un chemin absolu :
@@ -297,6 +297,23 @@ fn message_arret(diag: &str) -> String {
 /// Nombre de lignes de diagnostic gardées par session. De quoi expliquer une
 /// fin de session sans laisser un serveur bavard remplir la mémoire.
 const JOURNAL_MAX: usize = 32;
+
+/// Les journaux de toutes les sessions, pour le diagnostic exporté : l'identifiant
+/// de session et ses dernières lignes, dans l'ordre des identifiants.
+pub(crate) fn journaux(state: &RdpStore) -> Vec<(u64, String)> {
+    let mut tous: Vec<(u64, String)> = state
+        .journaux
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, j)| {
+            let lignes: Vec<String> = j.lock().unwrap().iter().cloned().collect();
+            (*id, lignes.join("\n"))
+        })
+        .collect();
+    tous.sort_by_key(|(id, _)| *id);
+    tous
+}
 
 /// Dernières lignes écrites par le sidecar d'une session.
 ///

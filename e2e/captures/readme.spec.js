@@ -101,10 +101,14 @@ describe("captures du README", () => {
     await browser.waitUntil(async () => (await $$("#sftp-list .sftp-entry")).length > 0,
       { timeout: 15000, timeoutMsg: "première liste SFTP jamais arrivée" });
     const barre = $("#sftp-path");
-    await barre.click();
-    await browser.keys(["Control", "a"]);
-    await browser.keys(site);
-    await browser.keys("Enter");
+    // Valeur posée puis Entrée dispatchée : tapé touche par touche, un long
+    // chemin perd des lettres sur une machine chargée.
+    await browser.execute((c) => {
+      const el = document.getElementById("sftp-path");
+      el.focus();
+      el.value = c;
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    }, site);
     await browser.waitUntil(async () => (await $$("#sftp-list .sftp-entry")).length >= 5,
       { timeout: 10000, timeoutMsg: "le panneau n'a pas listé l'arbre" });
     // Le chemin affiché est celui du bac à sable temporaire : on lui donne

@@ -7,6 +7,72 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Un onglet fermé laissait son conteneur.** `closeSession` demandait le
+  conteneur du terminal après l'avoir disposé, quand xterm avait déjà
+  détaché son élément : chaque onglet de terminal fermé laissait un
+  conteneur vide dans la zone centrale. Le conteneur se retient avant.
+  Vu en écrivant le scénario de la vue partagée, qui compte les conteneurs.
+- **Test d'annulation d'un téléchargement rendu déterministe.** Sur
+  l'exécuteur macOS de la chaîne, le transfert de 400 Kio finissait avant
+  que la boucle de progression n'ait posé le drapeau d'annulation : Ok au
+  lieu de « annulé ». Le fichier passe à 8 Mio (seize blocs par bande, le
+  drapeau est vu), et la propriété « la reprise ne relit pas les bandes que
+  la carte dit faites » a son propre test, sur une carte posée à la main.
+- **Publication : un seul motif pour les signatures.** Le workflow Release
+  listait `*.app.tar.gz.sig` en plus de `*.sig` : la signature macOS partait
+  deux fois, et la seconde copie, en écrasement, tombait sur un fichier que la
+  première venait de remplacer (« Not Found »). La 0.8.0 est restée en
+  brouillon sans cette signature, terminée à la main (signature reprise de
+  l'artefact du même run, empreintes, manifeste et attestations vérifiés,
+  puis publication). Le motif en double est retiré.
+- **Port série.** « Connexion directe » gagne un mode Série : le port (ceux
+  du poste sont proposés, un chemin se tape aussi) et la vitesse, 8 bits sans
+  parité ni contrôle de flux, le réglage des consoles de commutateurs, de
+  routeurs et de cartes. La session vit dans un onglet de terminal comme une
+  session SSH (mêmes canaux, même pump, enregistrement asciicast compris),
+  sans SFTP ni sonde d'OS. Deux fils bloquants lisent et écrivent le port
+  (`serialport`, sans libudev) ; fermer l'onglet ferme le port. Testé sur un
+  pseudo-terminal (`openpty`) dans le cœur, et de bout en bout sur un
+  pseudo-terminal tenu par `socat` qui renvoie ce qu'il reçoit ; le chemin
+  doit ressembler à un port (`/dev/…`, `COMn`), pas à un fichier quelconque.
+- **Vue partagée.** `Ctrl+Maj+E` (le raccourci de Terminator, ou la palette) met l'onglet actif et le
+  suivant côte à côte, chacun dans son volet ; un terminal SSH et un bureau
+  RDP ou VNC se partagent l'écran de la même façon. L'onglet actif est celui
+  des deux qui a le clavier ; cliquer un onglet qui n'est dans aucun volet le
+  met à la place de l'actif ; fermer l'un des deux referme le partage. Les
+  terminaux se réajustent à leur volet, et un bureau distant affiché dans un
+  volet se redimensionne à sa taille (le processus n'envoie d'images qu'aux
+  bureaux visibles, comme avant). Ce que la zone centrale montre passe
+  maintenant par un seul endroit (`web/vue-partagee.ts`) au lieu de quatre
+  boucles qui se recopiaient. Scénario bout en bout sur deux sessions SSH.
+- **Les onglets de la dernière fois se rouvrent.** À chaque ouverture ou
+  fermeture d'onglet, la liste de ce qui est ouvert (alias SSH, bureaux RDP
+  et VNC enregistrés ; jamais une connexion directe, qui n'a ni configuration
+  ni mot de passe rejouable) est écrite dans le répertoire de configuration
+  (`onglets.json`, 32 entrées au plus). Au lancement suivant, l'accueil dit
+  « La dernière fois, N onglets étaient ouverts » et propose de les rouvrir,
+  dans l'ordre ; « Ignorer » efface la mémoire. Proposé, jamais imposé : un
+  onglet SSH rouvert peut demander un mot de passe. Un hôte supprimé depuis
+  n'est pas compté. Écrit à chaque changement plutôt qu'à la fermeture,
+  parce que WebKitGTK ne laisse pas toujours le temps d'un `beforeunload`.
+  Deux tests Rust (aller-retour, fichier cassé et liste trop longue), deux
+  tests Vitest (ce qui est retenu, ce qui est proposé) et un scénario bout en
+  bout qui recharge le front sur le sshd local.
+- **« Exporter un diagnostic… »** dans la palette : l'utilisateur choisit un
+  fichier, le cœur y écrit (en 0600, d'un seul tenant) ce qu'un ticket a
+  besoin de savoir : version, moteur web, système et session graphique,
+  emballage (AppImage, Flatpak…), chemin du processus de bureau distant,
+  réponse du trousseau et de l'agent SSH, variables d'environnement suivies,
+  la configuration en nombre (hôtes, dossiers, rebonds, clés ; bureaux RDP et
+  VNC ; tunnels) et les dernières lignes du processus de chaque session de
+  bureau distant ouverte. Jamais un mot de passe ni un nom d'hôte de
+  `~/.ssh/config` ; l'en-tête rappelle que les journaux peuvent citer
+  l'adresse d'un serveur. Le trousseau est sondé sur une entrée qui n'existe
+  pas : « mot de passe redemandé à chaque fois » vient presque toujours d'un
+  trousseau absent, que l'application masque à dessein le reste du temps.
+  Quatre tests (texte, collecte sans recopier les hôtes, écriture 0600 et
+  refus d'un chemin relatif) et un scénario bout en bout sur la commande.
+
 ## [0.8.0] - 2026-09-04
 
 - **Paquets `.deb` et `.rpm`, et nomenclature logicielle.** Chaque release

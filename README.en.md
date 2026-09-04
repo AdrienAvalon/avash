@@ -19,7 +19,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1139%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1156%20passing-brightgreen.svg)](docs/qualite.md)
 
 <img src="docs/captures/demo.webp" alt="Demo: an SSH terminal, then a Windows 11 desktop, inside avash" width="880">
 
@@ -37,6 +37,7 @@ application, which reads your `~/.ssh/config` as it is.
 | **RDP** | Windows, xrdp and GNOME Remote Desktop desktops built in (IronRDP), native resizing with no image scaling, clipboard shared on request, files copied and pasted both ways |
 | **VNC** | VNC desktops in the same window (ZRLE, keyboard as keysyms, clipboard), through the same process as RDP |
 | **SFTP** | a file panel on the terminal's own session: browse, upload and download files or whole folders, resume an interrupted transfer, a transfer queue with speeds, host-to-host copy without touching the local disk |
+| **Serial** | the console of a switch, a router or a board in a terminal tab, ports detected on the machine, speed of your choice |
 | **Tunnels** | local (`-L`), remote (`-R`) and SOCKS (`-D`), with live status |
 | **Organisation** | drag-and-drop folders, tags, instant search, command palette, snippets, host health, session recording |
 | **Import** | PuTTY (files or registry) and MobaXterm, RDP desktops and folders included |
@@ -140,6 +141,7 @@ runs validation, build and checksums in one go.
 | `Ctrl+K` | Command palette: hosts, actions, language, health, recordings |
 | `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Close, next, go to a tab |
 | `Ctrl+B` | File panel (SFTP) |
+| `Ctrl+Shift+E` | Split view: two tabs side by side |
 | `↑` `↓` `Enter` `Shift+F10` | The whole sidebar from the keyboard |
 
 <div align="center">
@@ -154,6 +156,11 @@ runs validation, build and checksums in one go.
   output, never the keystrokes.
 - **Accessible**: full keyboard navigation, contrasts checked by `axe-core` on
   both themes.
+- **Last time's tabs**: on launch, the home screen offers to reopen what was
+  open; offered, never imposed.
+- **A diagnostic to attach to an issue**: "Export a diagnostic…" in the palette
+  writes versions, system, configuration as counts and remote desktop logs;
+  never a password nor a host name.
 
 ## Compared with other tools
 
@@ -192,17 +199,17 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1139 tests** on every commit, on two independent pipelines (GitHub Actions on
+**1156 tests** on every commit, on two independent pipelines (GitHub Actions on
 Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 
 | Level | Tests | In a word |
 |---|---:|---|
-| Rust core and integration against a real sshd | 194 | parsers, import, SFTP, tunnels, jump hosts |
-| Tauri interface | 64 | commands, session store, keyboard |
+| Rust core and integration against a real sshd | 197 | parsers, import, SFTP, tunnels, jump hosts |
+| Tauri interface | 70 | commands, session store, keyboard |
 | RDP process | 119 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
 | Vendored IronRDP and vnc-rs crates | 595 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
-| Front (Vitest) | 110 | pure logic, VNC keysyms, translations |
-| End to end (WebdriverIO) | 57 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
+| Front (Vitest) | 112 | pure logic, VNC keysyms, translations |
+| End to end (WebdriverIO) | 63 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, the OpenSSF Scorecard, seven

@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 04/09/2026 |
 |---|---|
-| Tests | 377 Rust (153 cœur, 41 intégration, 64 interface, 119 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 110 front · 57 scénarios bout en bout dans 28 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 386 Rust (155 cœur, 42 intégration, 70 interface, 119 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 112 front · 63 scénarios bout en bout dans 32 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -379,6 +379,13 @@ sur des mesures de ce qui coûte réellement.
   aucun pilote : l'interface y est exercée pour la première fois.
 - **Régression visuelle** — **fait** (02/09/2026) : quatre captures de
   référence produites par la chaîne, comparées pixel à pixel à chaque passage.
+- **Un diagnostic exportable** — **fait** (05/09/2026) : « Exporter un
+  diagnostic… » dans la palette écrit, dans un fichier choisi par
+  l'utilisateur, ce qu'un ticket a besoin de savoir (versions, système,
+  emballage, trousseau, agent, configuration en nombre, journaux des sessions
+  de bureau distant) et rien de ce qu'il ne doit pas voir. Un ticket sans ces
+  faits coûte un aller-retour ; un diagnostic qui recopierait la
+  configuration coûterait plus cher.
 - **Accessibilité au clavier** — **fait** : boîtes de dialogue (piège de focus,
   Échap), et liste d'hôtes parcourue aux flèches, Origine et Fin, avec un seul
   arrêt de tabulation et un focus qui vaut sélection, le tout sous scénarios
@@ -400,7 +407,12 @@ Par ordre de valeur décroissante :
    « é » → keysym 0xe9). Pas de chiffrement : dit dans le formulaire et dans
    `SECURITY.md`, tunnel SSH recommandé. Reste à faire : VeNCrypt/TLS, le
    pseudo-codage curseur, Tight (JPEG).
-4. **Port série** — utile en environnement réseau et industriel.
+4. **Port série** — **fait** (05/09/2026) : mode Série de la connexion
+   directe (ports du poste proposés, vitesse), session dans un onglet de
+   terminal par les canaux des sessions SSH, deux fils bloquants sur le port.
+   Test du cœur sur un pseudo-terminal `openpty`, scénario bout en bout sur
+   un pseudo-terminal `socat` qui renvoie ce qu'il reçoit. Reste à faire :
+   parité et bits d'arrêt au choix, mémoriser un port dans la barre latérale.
 5. **Transfert de fichiers par RDP** — **fait** (04/09/2026), par le
    presse-papiers, comme mstsc : la liste des fichiers copiés sur le distant
    arrive dans une pastille, un clic et une confirmation les reçoivent (par
@@ -417,6 +429,21 @@ Par ordre de valeur décroissante :
    prêté le temps de la commande. Six tests d'intégration sur un serveur SFTP
    de test doté d'un système de fichiers en mémoire, deux scénarios bout en
    bout contre le vrai sshd.
+7. **Les onglets de la dernière fois** — **fait** (05/09/2026) : la liste des
+   onglets ouverts (hôtes déclarés et bureaux enregistrés) suit chaque
+   ouverture et fermeture dans `onglets.json` ; l'accueil propose de les
+   rouvrir, dans l'ordre, ou d'oublier. Scénario bout en bout qui recharge le
+   front sur le sshd local.
+8. **Vue partagée** — **fait** (05/09/2026) : `Ctrl+Maj+E` met l'onglet actif et
+   le suivant côte à côte, terminal ou bureau distant indifféremment ; l'affichage
+   de la zone centrale passe par un seul module. Scénario bout en bout sur
+   deux sessions SSH.
+9. **VeNCrypt** — TLS pour le VNC, avec la même règle de confiance au premier
+   contact que le RDP.
+10. **Audio RDP** — le son du bureau distant (canal `rdpsnd`), joué par la
+    webview.
+11. **Redirection de lecteur (RDPDR)** — un dossier du poste visible depuis le
+    bureau distant.
 
 ---
 
@@ -427,7 +454,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 57 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 63 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |

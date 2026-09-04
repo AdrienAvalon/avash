@@ -12,6 +12,8 @@ import { langue } from "./i18n";
 import { keysymDe, messageKeysym } from "./vnc-clavier";
 import { $, type RdpHostT, state } from "./etat";
 import { askConfirm, askPassword } from "./dialogues";
+import { majMemoireOnglets } from "./onglets-restauration";
+import { appliquerVue, estAffiche, surFermeture, surFocus } from "./vue-partagee";
 import { closeAllContextMenus, placerMenu } from "./menu-hote";
 import { currentLocks } from "./verrous";
 import { focusTab, orderedTabs } from "./raccourcis";
@@ -215,6 +217,7 @@ export async function openRdp(cible: RdpTarget) {
   // logiciel est le bon de toute façon.
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   rdpSessions.set(id, { canvas, tab, ws: null, hostId: cible.hostId, target: cible, badge, fichiers: null });
+  majMemoireOnglets();
   state.active = id;
 
   tab.addEventListener("click", () => focusRdp(id));
@@ -294,8 +297,10 @@ export async function openRdp(cible: RdpTarget) {
   let resizeInFlight = false; // une seule renégociation RDP à la fois
   let resizeGuard: number | undefined;
   const sendResize = () => {
-    if (state.active !== id) return; // seul le bureau visible se redimensionne
-    const a = $("terminal").getBoundingClientRect();
+    // Seul un bureau affiché se redimensionne : l'actif, ou l'autre volet de la
+    // vue partagée. La taille est celle de son conteneur, pas de toute la zone.
+    if (!estAffiche({ kind: "rdp", id })) return;
+    const a = wrap.getBoundingClientRect();
     const w = Math.max(200, Math.min(8192, even(Math.round(a.width))));
     const h = Math.max(200, Math.min(8192, Math.round(a.height)));
     if (Math.abs(w - rdpW) < 8 && Math.abs(h - rdpH) < 8) return; // négligeable
@@ -310,7 +315,8 @@ export async function openRdp(cible: RdpTarget) {
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(sendResize, 400);
   });
-  ro.observe($("terminal"));
+  // Le conteneur, pas la zone : dans un volet, c'est lui qui a la bonne taille.
+  ro.observe(wrap);
   rdpSessions.get(id)!.ro = ro;
   rdpSessions.get(id)!.detachRect = detachRect;
   rdpSessions.get(id)!.syncSize = sendResize;
@@ -549,25 +555,25 @@ function donnerLeFocusAuBureau(canvas: HTMLCanvasElement): void {
 }
 
 export function focusRdp(id: number) {
+  const precedent = state.active === null ? null
+    : rdpSessions.has(state.active) ? { kind: "rdp" as const, id: state.active } : { kind: "ssh" as const, id: state.active };
   state.active = id;
+  surFocus({ kind: "rdp", id }, precedent);
+  // La vue montre l'actif (et l'autre volet), cache le reste, prévient chaque
+  // bureau de sa visibilité et rattrape la taille des affichés : une session
+  // inactive n'a pas suivi les redimensionnements de la fenêtre.
+  appliquerVue();
   for (const [sid, s] of rdpSessions) {
     const active = sid === id;
     s.tab.classList.toggle("active", active);
-    (s.canvas.parentElement as HTMLElement).style.display = active ? "flex" : "none";
-    marquerVisibilite(s, active);
     if (active) {
       donnerLeFocusAuBureau(s.canvas);
-      // La session inactive n'a pas suivi les redimensionnements de la fenêtre
-      // (seule l'active se resize) : on rattrape sa taille en devenant active.
-      s.syncSize?.();
       // Un canvas caché peut avoir perdu son contenu (backing-store WebKitGTK) :
       // on demande au sidecar de renvoyer l'image entière. Message [9].
       if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([9]));
     }
   }
-  // Masquer les terminaux PTY.
-  state.sessions.forEach((s) => { (s.term.element?.parentElement as HTMLElement).style.display = "none"; s.tab.classList.remove("active"); });
-  $("terminal-empty").style.display = "none";
+  state.sessions.forEach((s) => { s.tab.classList.remove("active"); });
   // Le switch d'onglet ne déclenche pas l'événement focus fenêtre : on renvoie
   // explicitement le presse-papiers local à la session qui devient active,
   // sinon le collage local->distant ne marche pas après un changement d'onglet.
@@ -578,6 +584,7 @@ export function focusRdp(id: number) {
 export function closeRdp(id: number) {
   const s = rdpSessions.get(id);
   if (!s) return;
+  surFermeture({ kind: "rdp", id });
   if (document.body.classList.contains("rdp-full")) {
     document.body.classList.remove("rdp-full");
     getCurrentWindow().setFullscreen(false).catch(() => {});
@@ -589,6 +596,7 @@ export function closeRdp(id: number) {
   s.canvas.parentElement?.remove();
   s.tab.remove();
   rdpSessions.delete(id);
+  majMemoireOnglets();
   if (state.active === id) {
     // Même défaut en miroir : `focusRdp` masque tous les terminaux SSH, et
     // fermer le bureau actif laissait la zone centrale vide alors qu'une

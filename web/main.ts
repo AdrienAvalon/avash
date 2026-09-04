@@ -8,6 +8,9 @@ import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { majMemoireOnglets, proposerRestauration } from "./onglets-restauration";
+import { appliquerVue, basculerPartage, ongletsAffiches, surFermeture, surFocus, vuePartagee } from "./vue-partagee";
 import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
 import { partageClipboard, setPartageClipboard, setSondeAuDemarrage, sondeAuDemarrage } from "./prefs";
@@ -16,7 +19,7 @@ import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost,
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, hostSessionState, renderTagBar, terminalTheme } from "./theme";
 import { MENUS_CONTEXTUELS, openHostMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { type ManualTarget } from "./connexion-directe";
-import { annoncerPartageClip, bureauActif, choisirEtOffrirFichiers, connectRdpSaved, fichiersARecevoir, marquerVisibilite, openRdpMenu, rdpSessions, recevoirFichiers } from "./rdp";
+import { annoncerPartageClip, bureauActif, choisirEtOffrirFichiers, connectRdpSaved, fichiersARecevoir, openRdpMenu, rdpSessions, recevoirFichiers } from "./rdp";
 import { askConfirm, askPassword, collerDansTerminal } from "./dialogues";
 import { focusTab, orderedTabs } from "./raccourcis";
 import { notify, notifyErreur } from "./notifications";
@@ -571,18 +574,15 @@ function newSessionShell(label: string) {
 
   const s: Session = { id, alias: label, term, fit, tab, search, serialiser, closed: false, reconnect: null, sftpPath: "" };
   state.sessions.set(id, s);
+  // Le nouvel onglet prend la place de l'actif (ou son volet, en vue
+  // partagée) ; la vue cache le reste, bureaux RDP compris : leur conteneur
+  // est absolu (inset:0) et déborderait dans la marge du terminal.
+  const precedent = ongletActif();
   state.active = id;
-  // N'afficher que ce terminal, et masquer tout bureau RDP : son conteneur est
-  // absolu (inset:0) et déborderait dans la marge du terminal + son indicateur
-  // passerait au-dessus. (Le clic d'onglet passe par focusSession qui fait pareil.)
-  state.sessions.forEach((other, sid) => {
-    (other.term.element?.parentElement as HTMLElement).style.display = sid === id ? "block" : "none";
-  });
-  for (const r of rdpSessions.values()) {
-    (r.canvas.parentElement as HTMLElement).style.display = "none";
-    r.tab.classList.remove("active");
-  }
-  $("terminal-empty").style.display = "none";
+  majMemoireOnglets();
+  surFocus({ kind: "ssh", id }, precedent);
+  appliquerVue();
+  for (const r of rdpSessions.values()) r.tab.classList.remove("active");
   focusTerminal(s);
   return { id, term, session: s };
 }
@@ -598,6 +598,33 @@ function warnIfDeaf(term: Terminal) {
       `   ${t("pty-sourd-2")}\r\n` +
       `   ${t("pty-sourd-detail", { e: ptyListenError })}\x1b[0m\r\n\r\n`,
   );
+}
+
+/** Ouvre un port série du poste dans un onglet de terminal. */
+export async function openSerie(cible: { chemin: string; vitesse: number }) {
+  await ensureFontLoaded();
+  const { id, term, session } = newSessionShell(cible.chemin);
+  session.serie = true;
+  sftpSyncButton();
+  warnIfDeaf(term);
+  const connecter = async () => {
+    session.closed = false;
+    setSessionState(id, "connecting");
+    term.write(`\x1b[90m${t("connexion-a", { cible: `${cible.chemin} @ ${cible.vitesse}` })}\x1b[0m\r\n`);
+    try {
+      const label = await invoke<string>("serie_open", { id, chemin: cible.chemin, vitesse: cible.vitesse });
+      session.alias = label;
+      session.tab.querySelector(".label")!.textContent = label;
+      setSessionState(id, "live");
+    } catch (e) {
+      term.write(`\r\n\x1b[31m${t("connexion-impossible", { e: String(e) })}\x1b[0m\r\n`);
+      session.closed = true;
+      setSessionState(id, "closed");
+      throw e;
+    }
+  };
+  session.reconnect = connecter;
+  await connecter();
 }
 
 /** Marqueur pose par le backend quand seul le mot de passe manque. */
@@ -786,21 +813,23 @@ function focusTerminal(s: Session) {
   requestAnimationFrame(() => s.fit.fit());
 }
 
+/** L'onglet actif, tel que la vue partagée le nomme. */
+export function ongletActif(): { kind: "ssh" | "rdp"; id: number } | null {
+  if (state.active === null) return null;
+  return rdpSessions.has(state.active) ? { kind: "rdp", id: state.active } : { kind: "ssh", id: state.active };
+}
+
 export function focusSession(id: number) {
+  const precedent = ongletActif();
   state.active = id;
+  surFocus({ kind: "ssh", id }, precedent);
+  appliquerVue();
   state.sessions.forEach((s, sid) => {
     const active = sid === id;
     s.tab.classList.toggle("active", active);
-    (s.term.element?.parentElement as HTMLElement).style.display = active ? "block" : "none";
     if (active) focusTerminal(s);
   });
-  // Masquer les bureaux RDP (conteneurs absolus qui recouvriraient le terminal).
-  for (const r of rdpSessions.values()) {
-    (r.canvas.parentElement as HTMLElement).style.display = "none";
-    r.tab.classList.remove("active");
-    marquerVisibilite(r, false);
-  }
-  $("terminal-empty").style.display = "none";
+  for (const r of rdpSessions.values()) r.tab.classList.remove("active");
   const cur = state.sessions.get(id);
   sftpSyncButton();
   if (sftp.open && cur) void sftpOpenAt(cur, cur.sftpPath);
@@ -810,11 +839,17 @@ export function focusSession(id: number) {
 export function closeSession(id: number) {
   const s = state.sessions.get(id);
   if (!s) return;
+  surFermeture({ kind: "ssh", id });
   invoke("pty_close", { id }).catch(() => {});
+  // Le conteneur se retient AVANT de disposer du terminal : après, xterm a
+  // détaché son élément et `parentElement` ne mène plus nulle part ; chaque
+  // onglet fermé laissait un conteneur vide dans la zone centrale.
+  const conteneur = s.term.element?.parentElement;
   s.term.dispose();
   s.tab.remove();
-  (s.term.element?.parentElement)?.remove();
+  conteneur?.remove();
   state.sessions.delete(id);
+  majMemoireOnglets();
   if (state.active === id) {
     // Le repli se faisait sur la première session SSH seulement : fermer le
     // dernier onglet SSH pendant qu'un bureau RDP vivait affichait l'écran
@@ -988,6 +1023,24 @@ async function verifierSante(silencieux = false) {
   }
 }
 
+/** « Exporter un diagnostic… » : l'utilisateur choisit où, le cœur écrit
+ *  (versions, système, configuration en nombre, journaux du processus de
+ *  bureau distant ; jamais un mot de passe). Ce qu'on joint à un ticket. */
+async function exporterDiagnostic(): Promise<void> {
+  const jour = new Date().toISOString().slice(0, 10);
+  try {
+    const chemin = await saveDialog({
+      defaultPath: `avash-diagnostic-${jour}.txt`,
+      filters: [{ name: "Texte", extensions: ["txt"] }],
+    });
+    if (!chemin) return;
+    const ecrit = await invoke<string>("diagnostic_exporter", { chemin });
+    notify(t("diagnostic-ecrit", { chemin: ecrit }), "succes");
+  } catch (e) {
+    notifyErreur(t("diagnostic-erreur", { e: String(e) }));
+  }
+}
+
 function commandesPalette(): EntreePalette[] {
   const actif = partageClipboard();
   const anglais = langue() === "en";
@@ -1034,6 +1087,21 @@ function commandesPalette(): EntreePalette[] {
       detail: t("palette-sante-detail"),
       icone: "refresh",
       ouvrir: () => void verifierSante(),
+    },
+    // Vue partagée : seulement quand il y a de quoi partager, ou refermer.
+    ...(vuePartagee() || orderedTabs().length >= 2
+      ? [{
+          nom: t(vuePartagee() ? "palette-partage-fermer" : "palette-partage-ouvrir"),
+          detail: t("palette-partage-detail"),
+          icone: "copy",
+          ouvrir: () => basculerPartage(),
+        }]
+      : []),
+    {
+      nom: t("palette-diagnostic"),
+      detail: t("palette-diagnostic-detail"),
+      icone: "film",
+      ouvrir: () => void exporterDiagnostic(),
     },
     {
       nom: t(sondeAuDemarrage() ? "palette-sante-demarrage-off" : "palette-sante-demarrage-on"),
@@ -1143,8 +1211,9 @@ window.addEventListener("resize", () => {
   if (resizeRaf) return;
   resizeRaf = requestAnimationFrame(() => {
     resizeRaf = 0;
-    if (state.active === null) return;
-    state.sessions.get(state.active)?.fit.fit();
+    // Tous les terminaux affichés, pas seulement l'actif : en vue partagée,
+    // l'autre volet change de taille aussi.
+    for (const o of ongletsAffiches()) if (o.kind === "ssh") state.sessions.get(o.id)?.fit.fit();
   });
 });
 
@@ -1162,6 +1231,16 @@ void setupWindowControls();
 restaurerSante();
 void loadHosts().then(() => {
   if (sondeAuDemarrage()) void verifierSante(true);
+  // Les onglets de la dernière fois : proposés, jamais imposés.
+  void proposerRestauration(async (o) => {
+    if (o.kind === "ssh") {
+      const h = state.hosts.find((x) => x.alias === o.alias);
+      if (h) await openSession(h);
+    } else {
+      const b = state.rdpHosts.find((x) => x.id === o.host_id);
+      if (b) await connectRdpSaved(b);
+    }
+  });
 });
 // Prechargement : au moment du clic, la police est deja prete.
 void ensureFontLoaded();

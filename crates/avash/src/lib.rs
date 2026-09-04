@@ -11,6 +11,7 @@ pub mod osinfo;
 pub mod rdphost;
 pub mod sante;
 pub mod secrets;
+pub mod serie;
 pub mod sftp;
 pub mod snippet;
 pub mod ssh;

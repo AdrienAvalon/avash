@@ -169,7 +169,10 @@ function progressionTransfert(p: { transfert: number; fichier: string; done: num
 }
 
 function sftpSession(): Session | null {
-  return state.active === null ? null : (state.sessions.get(state.active) ?? null);
+  if (state.active === null) return null;
+  const s = state.sessions.get(state.active) ?? null;
+  // Un port série n'a pas de système de fichiers à montrer.
+  return s?.serie ? null : s;
 }
 
 function sftpStatus(msg: string, kind: "" | "ok" | "err" = "") {

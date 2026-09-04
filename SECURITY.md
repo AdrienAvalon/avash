@@ -366,6 +366,14 @@ Deux décisions en découlent :
 - leur activation affiche un avertissement sur la sortie d'erreur, pour que
   personne ne colle une trace dans un ticket sans l'avoir relue.
 
+Le diagnostic exportable (« Exporter un diagnostic… » dans la palette) suit
+la même ligne : il rapporte des versions, le système, la configuration en
+nombre (jamais un alias ni une adresse de `~/.ssh/config`), l'état du
+trousseau sondé sur une entrée inexistante, et les dernières lignes du
+processus de bureau distant de chaque session ouverte, seules à pouvoir
+citer l'adresse d'un serveur, ce que son en-tête dit. Il est écrit en 0600,
+là où l'utilisateur l'a demandé, et nulle part ailleurs.
+
 ### Chaîne d'approvisionnement : au-delà des vulnérabilités déclarées
 
 `cargo audit` ne voit que ce qui est déclaré dans la base RustSec. Trois autres

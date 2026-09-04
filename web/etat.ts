@@ -41,6 +41,8 @@ export type Session = {
   reconnect: (() => Promise<void>) | null;
   /** Dossier distant courant du panneau SFTP, propre a chaque onglet. */
   sftpPath: string;
+  /** Port série du poste : ni SFTP, ni sonde d'OS, ni copie vers un hôte. */
+  serie?: boolean;
 };
 
 /** Bureau RDP enregistré (`~/.config/avash/rdp.yaml`). */

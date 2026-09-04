@@ -50,15 +50,22 @@ Le fichier `Cargo.toml` à la racine définit un workspace de deux crates, et en
   - `tunnel.rs` — tunnels SSH ;
   - `snippet.rs` — snippets ;
   - `folders.rs` — arborescence de dossiers (annotations `#Folder:`) ;
-  - `secrets.rs` — stockage des mots de passe dans le trousseau (`keyring`) ;
+  - `secrets.rs` — stockage des mots de passe dans le trousseau (`keyring`),
+    et sa sonde pour le diagnostic ;
   - `rdphost.rs` — hôtes RDP enregistrés ;
+  - `serie.rs` — port série (`serialport`, sans libudev) : deux fils
+    bloquants, un par sens, qui parlent au reste par les canaux d'une session
+    SSH ; le chemin doit mener sous `/dev` (ou être un `COMn`) ;
   - `keys.rs`, `osinfo.rs`, `testutil.rs` — utilitaires.
 
 - **`crates/avash-ui`** — l'**application Tauri**. Elle expose le cœur au front
   via des commandes Tauri :
   - `commands/` — les commandes Tauri, un fichier par domaine : `sessions`
     (magasin, cible, connexion, relais, PTY), `sftp`, `tunnels`, `snippets`,
-    `enregistrement`, `cles`, `secrets`, `dossiers`, `import`, `sante` ;
+    `enregistrement`, `cles`, `secrets`, `dossiers`, `import`, `sante`,
+    `serie` (une session série est une session du magasin comme les autres,
+    sans SFTP ni commande à distance), `onglets` (la mémoire de ce qui était
+    ouvert, `onglets.json`), `diagnostic` (le texte exporté pour un ticket) ;
     `mod.rs` réexporte tout, si bien que `commands::x` reste le chemin de chaque
     commande ;
   - `rdp.rs` — lancement et supervision du sidecar RDP ;
@@ -102,7 +109,11 @@ Le front vit dans `web/` (paquet `avash-web`, `type: module`) :
   clic droit), `verrous.ts`, `titre.ts`, `maj.ts`, `panneaux.ts`, `import.ts`
   (import PuTTY et MobaXterm), `enregistrements.ts` (liste des enregistrements
   asciicast), `i18n.ts` (dictionnaires français et anglais, `t()`, application
-  à la page), `collage.ts` (décision de collage sûr, testée sans terminal).
+  à la page), `collage.ts` (décision de collage sûr, testée sans terminal),
+  `vue-partagee.ts` (le seul endroit qui décide ce que la zone centrale
+  montre : l'onglet actif, ou deux volets), `onglets-memoire.ts` (pur : ce
+  qui vaut la peine d'être retenu) et `onglets-restauration.ts` (la mémoire
+  écrite à chaque changement, la proposition de l'accueil).
   Aucune variable n'est mutée d'un module à l'autre : ce qui change de main vit
   dans l'objet `state` de `etat.ts` ;
 - **`filters.ts`** — la logique **pure et testable** extraite du reste : arbre
@@ -378,6 +389,10 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Front (logique pure testable) | `web/filters.ts` |
 | Front (réglages persistants) | `web/prefs.ts` |
 | Client SFTP (dont bandes parallèles) | `crates/avash/src/sftp.rs` |
+| Port série | `crates/avash/src/serie.rs`, `crates/avash-ui/src/commands/serie.rs` |
+| Diagnostic exporté | `crates/avash-ui/src/commands/diagnostic.rs` |
+| Mémoire des onglets | `crates/avash-ui/src/commands/onglets.rs`, `web/onglets-memoire.ts`, `web/onglets-restauration.ts` |
+| Vue partagée | `web/vue-partagee.ts` |
 | Validation qualité | `check.sh`, `scripts/guard.sh` |
 | Tests de bout en bout | `e2e/` |
 

@@ -19,7 +19,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1139%20verts-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1156%20verts-brightgreen.svg)](docs/qualite.md)
 
 <img src="docs/captures/demo.webp" alt="Démonstration : un terminal SSH, puis un bureau Windows 11, dans avash" width="880">
 
@@ -33,6 +33,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 | **RDP** | bureaux Windows, xrdp et GNOME Remote Desktop intégrés (IronRDP), redimensionnement natif sans zoom d'image, presse-papiers partagé sur demande, fichiers copiés-collés dans les deux sens |
 | **VNC** | les bureaux VNC dans la même fenêtre (ZRLE, clavier en keysyms, presse-papiers), par le même processus que le RDP |
 | **SFTP** | panneau de fichiers sur la session du terminal : parcourir, envoyer et télécharger fichiers ou dossiers entiers, reprendre un transfert coupé, file de transferts avec vitesse, copie d'un hôte à l'autre sans passer par le disque du poste |
+| **Série** | la console d'un commutateur, d'un routeur ou d'une carte dans un onglet de terminal, ports du poste détectés, vitesse au choix |
 | **Tunnels** | locaux (`-L`), distants (`-R`) et SOCKS (`-D`), avec leur état en direct |
 | **Organisation** | dossiers par glisser-déposer, étiquettes, recherche instantanée, palette de commandes, snippets, santé des hôtes, enregistrement de session |
 | **Import** | PuTTY (fichiers ou registre) et MobaXterm, bureaux RDP et dossiers compris |
@@ -139,6 +140,7 @@ enchaîne validation, construction et empreintes.
 | `Ctrl+K` | Palette de commandes : hôtes, actions, langue, santé, enregistrements |
 | `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Fermer, suivant, aller à un onglet |
 | `Ctrl+B` | Panneau de fichiers (SFTP) |
+| `Ctrl+Maj+E` | Vue partagée : deux onglets côte à côte |
 | `↑` `↓` `Entrée` `Maj+F10` | La barre latérale entière au clavier |
 
 <div align="center">
@@ -153,6 +155,11 @@ enchaîne validation, construction et empreintes.
   `asciinema play` ; la sortie, jamais les frappes.
 - **Accessible** : navigation complète au clavier, contrastes vérifiés par
   `axe-core` sur les deux thèmes.
+- **Les onglets de la dernière fois** : au lancement, l'accueil propose de
+  rouvrir ce qui était ouvert ; proposé, jamais imposé.
+- **Un diagnostic à joindre à un ticket** : « Exporter un diagnostic… » dans
+  la palette écrit versions, système, configuration en nombre et journaux des
+  bureaux distants ; jamais un mot de passe ni un nom d'hôte.
 
 ## Face aux autres outils
 
@@ -191,17 +198,17 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1139 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
+**1156 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
 sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 
 | Niveau | Tests | En un mot |
 |---|---:|---|
-| Cœur Rust et intégration contre un vrai sshd | 194 | parseurs, import, SFTP, tunnels, rebonds |
-| Interface Tauri | 64 | commandes, magasin de sessions, clavier |
+| Cœur Rust et intégration contre un vrai sshd | 197 | parseurs, import, SFTP, tunnels, rebonds |
+| Interface Tauri | 70 | commandes, magasin de sessions, clavier |
 | Processus RDP | 119 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
 | Paquets IronRDP et vnc-rs portés | 595 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
-| Front (Vitest) | 110 | logique pure, keysyms VNC, traductions |
-| Bout en bout (WebdriverIO) | 57 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
+| Front (Vitest) | 112 | logique pure, keysyms VNC, traductions |
+| Bout en bout (WebdriverIO) | 63 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, le Scorecard de l'OpenSSF,

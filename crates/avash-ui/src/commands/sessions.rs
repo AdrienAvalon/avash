@@ -12,7 +12,7 @@ use tokio::sync::mpsc::Sender;
 /// Numero unique par session ouverte, pour distinguer deux sessions qui
 /// partagent le meme id d'onglet (le front renumerote a chaque rechargement
 /// de fenetre). Sert a ne pas emettre `pty-closed` depuis une session evincee.
-static SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
+pub(crate) static SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 /// Message d'annulation volontaire : le front le reconnaît pour ne pas
 /// présenter une fermeture d'onglet comme un échec de connexion.
@@ -489,7 +489,7 @@ fn executeur(session: &SessionPartagee) -> Executeur {
 /// et une écriture xterm. On les regroupe donc sur une courte fenêtre :
 /// le débit s'effondre en nombre de messages sans que la latence devienne
 /// perceptible (`COALESCE_MS` reste sous la durée d'une image à 60 Hz).
-async fn relayer_sortie(
+pub(crate) async fn relayer_sortie(
     app2: &AppHandle,
     sid: u64,
     mut out_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,

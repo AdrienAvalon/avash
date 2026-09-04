@@ -5,11 +5,14 @@
 // par `use super::*`.
 
 mod cles;
+mod diagnostic;
 mod dossiers;
 mod enregistrement;
 mod import;
+mod onglets;
 mod sante;
 mod secrets;
+mod serie;
 mod sessions;
 mod sftp;
 mod snippets;
@@ -19,11 +22,14 @@ mod tunnels;
 pub(crate) mod tests;
 
 pub use cles::*;
+pub use diagnostic::*;
 pub use dossiers::*;
 pub use enregistrement::*;
 pub use import::*;
+pub use onglets::*;
 pub use sante::*;
 pub use secrets::*;
+pub use serie::*;
 pub use sessions::*;
 pub use sftp::*;
 pub use snippets::*;

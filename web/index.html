@@ -487,6 +487,12 @@
     /* Meme fond que le theme xterm : l'espace entre la derniere ligne et le
        bord (les lignes ne tombent jamais juste) ne se voit pas. */
     .terminal-zone > #terminal { flex: 1; position: relative; min-width: 0; background: var(--term-bg); }
+
+    /* Vue partagée : deux volets, chacun le parent de position d'un conteneur
+       de session (terminal absolu à marges, bureau absolu inset:0). */
+    #terminal.partage { display: flex; }
+    #terminal.partage > .volet { flex: 1 1 0; position: relative; min-width: 0; }
+    #terminal.partage > .volet + .volet { border-left: 1px solid var(--border); }
     .xterm-container { display: block; border-radius: 6px; }
     .rdp-container { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; }
 
@@ -558,6 +564,22 @@
     .terminal-empty .title { font-size: 19px; font-weight: 700; color: var(--text); letter-spacing: -.2px; }
     .terminal-empty .hint { font-size: 13px; color: var(--text-dim); }
     .empty-actions { display: flex; gap: 10px; margin-top: 14px; justify-content: center; }
+
+    /* Proposition de rouvrir les onglets de la dernière fois : sous les
+       actions, discrète, avec ses deux boutons sur la même ligne. */
+    .restaurer {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 18px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+
+    .restaurer[hidden] { display: none; }
 
     .shortcuts {
       display: flex; flex-wrap: wrap; gap: 6px 22px; justify-content: center;
@@ -1027,6 +1049,11 @@
             <button class="btn-primary" id="empty-connect" type="button" data-icon="plus" data-i18n="connexion-directe">Connexion directe</button>
             <button class="btn-ghost" id="empty-keys" type="button" data-icon="key" data-i18n="mes-cles-ssh">Mes clés SSH</button>
           </div>
+          <div class="restaurer" id="restaurer" hidden role="status">
+            <span id="restaurer-texte"></span>
+            <button class="btn-primary" id="restaurer-ok" type="button" data-i18n="restaurer-ok">Rouvrir</button>
+            <button class="btn-ghost" id="restaurer-non" type="button" data-i18n="restaurer-non">Ignorer</button>
+          </div>
           <div class="shortcuts">
             <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>K</kbd> palette</span>
             <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>W</kbd> fermer l'onglet</span>
@@ -1125,16 +1152,28 @@
           <label class="radio" data-i18n="ssh"><input type="radio" name="proto" value="ssh" checked /> SSH</label>
           <label class="radio" data-i18n="rdp"><input type="radio" name="proto" value="rdp" /> RDP <code>bureau</code></label>
           <label class="radio" data-i18n="vnc"><input type="radio" name="proto" value="vnc" /> VNC</label>
+          <label class="radio" data-i18n="serie"><input type="radio" name="proto" value="serie" /> Série</label>
         </div>
         <p class="modal-hint" id="m-vnc-hint" hidden data-i18n="vnc-sans-chiffrement">VNC ne chiffre rien : hors de ton réseau, passe par un tunnel SSH.</p>
-        <label data-i18n="adresse-ou-ip">Adresse ou IP
+        <label id="m-addr-row" data-i18n="adresse-ou-ip">Adresse ou IP
           <input id="m-addr" name="addr" placeholder="192.168.1.10" required />
         </label>
-        <label data-i18n="port">Port
+        <label id="m-port-row" data-i18n="port">Port
           <input id="m-port" name="port" type="number" min="1" max="65535" placeholder="22" />
         </label>
-        <label data-i18n="utilisateur">Utilisateur
+        <label id="m-user-row" data-i18n="utilisateur">Utilisateur
           <input id="m-user" name="user" placeholder="root" required />
+        </label>
+        <label id="m-serie-row" hidden data-i18n="port-serie">Port série
+          <input id="m-serie-chemin" name="serie" list="m-serie-ports" placeholder="/dev/ttyUSB0" data-i18n-placeholder="port-serie-exemple" />
+          <datalist id="m-serie-ports"></datalist>
+          <span class="field-hint" id="m-serie-hint"></span>
+        </label>
+        <label id="m-serie-vitesse-row" hidden data-i18n="vitesse-bauds">Vitesse (bauds)
+          <select id="m-serie-vitesse">
+            <option>9600</option><option>19200</option><option>38400</option><option>57600</option>
+            <option selected>115200</option><option>230400</option><option>460800</option><option>921600</option>
+          </select>
         </label>
 
         <div class="auth-switch" id="m-auth-switch">

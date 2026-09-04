@@ -2,9 +2,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { $ } from "./etat";
-import { loadHosts, openManualSession } from "./main";
+import { loadHosts, openManualSession, openSerie } from "./main";
 import { openRdp } from "./rdp";
 import { t } from "./i18n";
+
+type PortSerie = { chemin: string; description: string };
 
 // ---------- Connexion directe (sans ~/.ssh/config) ----------
 
@@ -24,31 +26,57 @@ export function manualOpen() {
   manualSyncProto();
   manualModal().classList.add("open");
   ($("m-addr") as HTMLInputElement).focus();
+  void listerPortsSerie();
+}
+
+/** Les ports série du poste, proposés dans la liste du champ. */
+async function listerPortsSerie(): Promise<void> {
+  const liste = $("m-serie-ports") as HTMLDataListElement;
+  const ports = await invoke<PortSerie[]>("serie_ports").catch(() => [] as PortSerie[]);
+  liste.textContent = "";
+  for (const p of ports) {
+    const o = document.createElement("option");
+    o.value = p.chemin;
+    if (p.description) o.label = p.description;
+    liste.appendChild(o);
+  }
+  $("m-serie-hint").textContent = ports.length === 0
+    ? t("serie-aucun-port")
+    : t("serie-ports-trouves", { n: ports.length });
 }
 
 /** Le protocole choisi dans le formulaire. */
-function protocoleChoisi(): "ssh" | "rdp" | "vnc" {
+function protocoleChoisi(): "ssh" | "rdp" | "vnc" | "serie" {
   const v = (document.querySelector('input[name="proto"]:checked') as HTMLInputElement | null)?.value;
-  return v === "rdp" || v === "vnc" ? v : "ssh";
+  return v === "rdp" || v === "vnc" || v === "serie" ? v : "ssh";
 }
 
 /** Adapte le formulaire au protocole : un bureau (RDP ou VNC) n'a ni clé, ni
- *  sauvegarde config ; en VNC l'utilisateur est facultatif. */
+ *  sauvegarde config ; en VNC l'utilisateur est facultatif ; un port série n'a
+ *  ni adresse, ni utilisateur, ni mot de passe. */
 function manualSyncProto() {
   const proto = protocoleChoisi();
-  const bureau = proto !== "ssh";
-  $("m-auth-switch").hidden = bureau;
-  $("m-key-row").hidden = bureau || (document.querySelector('input[name="auth"]:checked') as HTMLInputElement | null)?.value !== "key";
-  $("m-save-row").hidden = bureau;
-  $("m-alias-row").hidden = bureau || !($("m-save") as HTMLInputElement).checked;
+  const serie = proto === "serie";
+  const bureau = proto === "rdp" || proto === "vnc";
+  $("m-addr-row").hidden = serie;
+  $("m-port-row").hidden = serie;
+  $("m-user-row").hidden = serie;
+  $("m-serie-row").hidden = !serie;
+  $("m-serie-vitesse-row").hidden = !serie;
+  ($("m-addr") as HTMLInputElement).required = !serie;
+  $("m-auth-switch").hidden = bureau || serie;
+  $("m-key-row").hidden = bureau || serie || (document.querySelector('input[name="auth"]:checked') as HTMLInputElement | null)?.value !== "key";
+  $("m-save-row").hidden = bureau || serie;
+  $("m-alias-row").hidden = bureau || serie || !($("m-save") as HTMLInputElement).checked;
   // Mot de passe toujours visible pour un bureau (seule auth), sinon selon le mode.
   if (bureau) $("m-password-row").hidden = false;
+  else if (serie) $("m-password-row").hidden = true;
   else manualSyncAuthRows();
   $("m-rdp-remember-row").hidden = !bureau;
   $("m-rdp-save-row").hidden = !bureau;
   $("m-rdp-name-row").hidden = !bureau || !($("m-rdp-save") as HTMLInputElement).checked;
   $("m-vnc-hint").hidden = proto !== "vnc";
-  ($("m-user") as HTMLInputElement).required = proto !== "vnc";
+  ($("m-user") as HTMLInputElement).required = proto === "ssh" || proto === "rdp";
   ($("m-port") as HTMLInputElement).placeholder = proto === "rdp" ? "3389" : proto === "vnc" ? "5900" : "22";
   ($("m-password") as HTMLInputElement).placeholder = "";
 }
@@ -89,6 +117,19 @@ async function manualSubmit(ev: Event) {
   ev.preventDefault();
   const submit = $("m-submit") as HTMLButtonElement;
   const proto = protocoleChoisi();
+  if (proto === "serie") {
+    const chemin = ($("m-serie-chemin") as HTMLInputElement).value.trim();
+    const vitesse = Number(($("m-serie-vitesse") as HTMLSelectElement).value);
+    if (!chemin) {
+      manualError().textContent = t("cd-port-serie-requis");
+      manualError().hidden = false;
+      return;
+    }
+    manualClose();
+    // L'échec s'affiche dans l'onglet lui-même, comme pour un hôte SSH.
+    await openSerie({ chemin, vitesse }).catch(() => {});
+    return;
+  }
   if (proto !== "ssh") {
     // Bureau distant : on passe par le sidecar, pas de sauvegarde ~/.ssh.
     const vnc = proto === "vnc";

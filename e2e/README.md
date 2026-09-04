@@ -52,7 +52,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 `vnc.spec.js` lance le **serveur VNC de test** (`test-vnc-server/`, port 35900,
 mot de passe `test`), qui sert une image connue et réagit aux entrées.
 
-## Couverture (57 scénarios, 28 fichiers)
+## Couverture (63 scénarios, 32 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -83,6 +83,10 @@ mot de passe `test`), qui sert une image connue et réagit aux entrées.
 | `sante.spec.js`       | **santé des hôtes** : voyant vert sur le sshd local, rouge sur une adresse sans route, résultat retenu |
 | `import.spec.js`      | **import PuTTY** : sessions semées dans `.putty/sessions`, aperçu, application (hors Windows) |
 | `langue.spec.js`      | **langue** imposée par `AVASH_LANGUE`, bascule à la palette, retenue |
+| `diagnostic.spec.js`  | **export d'un diagnostic** : l'entrée de palette, la commande écrit un fichier lisible, sans alias ni adresse de la configuration |
+| `restauration.spec.js` | **mémoire des onglets** : session SSH ouverte, front rechargé, proposition de rouvrir, réouverture live ; « Ignorer » efface |
+| `vue-partagee.spec.js` | **vue partagée** : `Ctrl+Maj+E` met deux sessions SSH côte à côte (deux volets, largeurs voisines), fermer l'une referme le partage |
+| `serie.spec.js`       | **port série** sur un pseudo-terminal `socat` qui renvoie ce qu'il reçoit : connexion directe en mode Série, session live, écho reçu par `pty-output` (Linux) |
 | `visuel.spec.js`      | **régression visuelle** : accueil sur les deux thèmes, palette, modale, contre `visuel/reference` (`VISUEL=1`, Linux) |
 
 Chaque fichier de tests repart de l'état semé (`beforeSession` remet le bac à sable à zéro).
@@ -91,7 +95,8 @@ un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spe
 
 En CI (`E2E_NO_RDP=1`), la configuration **exclut** les fichiers qui exigent
 un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`, `rdp-fichiers`, `vnc`,
-`onglets-mixtes`, `enregistrer-et-connecter`, `enregistrement`, `sante`).
+`onglets-mixtes`, `enregistrer-et-connecter`, `enregistrement`, `sante`,
+`restauration`, `vue-partagee`, `serie`).
 C'est une exclusion et non une énumération de ce qui tourne :
 la liste énumérative prenait du retard à chaque scénario ajouté, et cinq
 scénarios pourtant sans serveur ne tournaient plus qu'en local. Une nouvelle

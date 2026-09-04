@@ -44,6 +44,21 @@ pub fn load(account: &str) -> Option<String> {
     entry(account).ok()?.get_password().ok()
 }
 
+/// Dit si le trousseau répond, sans rien y écrire ni y lire de réel.
+///
+/// Pour le diagnostic exporté : « mot de passe redemandé à chaque fois » vient
+/// presque toujours d'un trousseau absent (pas de Secret Service dans la
+/// session, `KWallet` fermé), que `load` masque à dessein. On interroge une
+/// entrée qui n'existe pas : un trousseau vivant répond « aucune entrée », un
+/// trousseau absent ou verrouillé répond autre chose, et c'est cette réponse
+/// qu'on rapporte.
+pub fn sonder() -> Result<()> {
+    match entry("diagnostic-sonde")?.get_password() {
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow!("{e}")),
+    }
+}
+
 /// Oublie un mot de passe. Ne se plaint pas s'il n'y en avait pas.
 pub fn forget(account: &str) -> Result<()> {
     match entry(account)?.delete_credential() {
