@@ -54,6 +54,16 @@ pub type OuvreurSftp = std::sync::Arc<
         + Sync,
 >;
 
+/// Exécute une commande sur la session d'un onglet ; rend sortie et code.
+pub type Executeur = std::sync::Arc<
+    dyn Fn(
+            String,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(String, u32), String>> + Send>,
+        > + Send
+        + Sync,
+>;
+
 pub struct SessionHandle {
     /// Identite unique de cette session (voir `SESSION_EPOCH`).
     pub epoch: u64,
@@ -66,8 +76,13 @@ pub struct SessionHandle {
     pub sftp: Mutex<Option<std::sync::Arc<SftpHandle>>>,
     /// Ouvre ce canal SFTP sur la session vivante.
     pub ouvrir_sftp: OuvreurSftp,
+    /// Exécute une commande sur la session vivante, agent SSH redirigé.
+    pub executer: Executeur,
     /// Libelle affiche : l'alias, ou `user@hote` pour une saisie directe.
     pub label: String,
+    /// Où cette session est connectée, pour qu'un autre hôte puisse la
+    /// joindre (copie directe) : adresse, port, utilisateur.
+    pub cible: (String, u16, String),
     /// Enregistrement asciicast en cours, partagé avec le pump qui y écrit
     /// chaque sortie. `None` hors enregistrement.
     pub enregistreur: Enregistrement,
@@ -449,6 +464,23 @@ fn ouvreur_sftp(session: &SessionPartagee) -> OuvreurSftp {
     })
 }
 
+/// Exécute une commande sur la session de l'onglet, avec l'agent SSH du
+/// poste redirigé le temps de la commande (copie directe d'un hôte à un
+/// autre). Le verrou de la session n'est tenu que pour ouvrir le canal.
+fn executeur(session: &SessionPartagee) -> Executeur {
+    let session = session.clone();
+    std::sync::Arc::new(move |commande: String| {
+        let session = session.clone();
+        Box::pin(async move {
+            let garde = session.lock().await;
+            garde
+                .run_avec_agent(&commande)
+                .await
+                .map_err(|e| format!("{e:#}"))
+        })
+    })
+}
+
 /// Relaie la sortie du terminal vers le front, regroupée, et vers
 /// l'enregistrement s'il y en a un.
 ///
@@ -575,6 +607,9 @@ async fn open_on_target(
     // n'enregistre rien : lâcher `input`/`resize` ferme les canaux, le pump
     // s'arrête et la session SSH se referme d'elle-même.
     let epoch = SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+    // Adresse, port, utilisateur : ce qu'un autre hôte doit savoir pour
+    // joindre celui-ci (copie directe), sans le mot de passe.
+    let cible = (target.addr.clone(), target.port, target.user.clone());
     // La cible — mot de passe compris — n'est pas conservée : la session
     // établie suffit à tout ce qui suit, panneau SFTP inclus.
     drop(target);
@@ -589,7 +624,9 @@ async fn open_on_target(
             resize,
             sftp: Mutex::new(None),
             ouvrir_sftp: ouvreur_sftp(&session),
+            executer: executeur(&session),
             label: label.clone(),
+            cible,
             enregistreur: enregistreur.clone(),
         },
     )?;

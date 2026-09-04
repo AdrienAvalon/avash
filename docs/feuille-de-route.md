@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 04/09/2026 |
 |---|---|
-| Tests | 365 Rust (149 cœur, 34 intégration, 63 interface, 119 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 110 front · 55 scénarios bout en bout dans 28 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 375 Rust (152 cœur, 40 intégration, 64 interface, 119 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 110 front · 57 scénarios bout en bout dans 28 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -241,6 +241,21 @@ sur des mesures de ce qui coûte réellement.
   ~2 × en réseau local, et des octets identiques dans tous les cas. Nagle restait
   par ailleurs actif sur toutes les sessions, et un onglet RDP masqué continuait
   de tirer des trames pleines.
+- **Mesuré et refusé (04/09/2026) : l'envoi SFTP en bandes parallèles.** Le
+  symétrique du téléchargement a été écrit (huit descripteurs sur le même
+  fichier distant, chacun à son décalage) et mesuré avec la même sonde contre
+  un `internal-sftp` d'OpenSSH sur 8 Mio, la latence injectée par `netem` sur
+  l'interface locale :
+
+  | aller-retour | montée séquentielle | montée en bandes | descente séquentielle | descente en bandes |
+  |---|---:|---:|---:|---:|
+  | 0 ms (local) | 160,5 Mo/s | 37,7 Mo/s | 148,7 Mo/s | 253,6 Mo/s |
+  | 40 ms | 10,9 Mo/s | 13,0 Mo/s | 1,5 Mo/s | 7,1 Mo/s |
+
+  La montée séquentielle est déjà pipelinée par russh-sftp (huit écritures en
+  vol) : les bandes y perdent quatre fois en local pour gagner 1,2 × à 40 ms.
+  Pas retenu ; l'envoi reste séquentiel, avec une reprise par point de
+  contrôle. La descente en bandes, elle, confirme ses 4,7 × à 40 ms.
 - **Fait depuis (0.4.0)** : la boîte englobante des rectangles sales a laissé
   place à une fusion sélective, mesurée sur le fil — 8,39 Mo → 4,36 Mo pour le
   même parcours, avec davantage de trames livrées.
@@ -366,6 +381,14 @@ Par ordre de valeur décroissante :
    compare les octets dans les deux sens contre le serveur de test. Reste à
    faire : la redirection de lecteur (RDPDR), pour parcourir un dossier du
    poste depuis le distant.
+6. **Le panneau SFTP au complet** — **fait** (04/09/2026) : dossiers entiers
+   dans les deux sens, reprise d'un transfert coupé ou annulé (carte des
+   bandes reçues, point de contrôle des envois), file de transferts (trois à
+   la fois, vitesse, annulation), copie d'un hôte à un autre par relais sans
+   écrire sur le poste, ou directe par `scp` chez la source avec l'agent SSH
+   prêté le temps de la commande. Six tests d'intégration sur un serveur SFTP
+   de test doté d'un système de fichiers en mémoire, deux scénarios bout en
+   bout contre le vrai sshd.
 
 ---
 
@@ -376,7 +399,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 55 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 57 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |

@@ -475,7 +475,11 @@ fn poignee(epoch: u64) -> SessionHandle {
         ouvrir_sftp: std::sync::Arc::new(|| {
             Box::pin(async { Err("pas de transport dans ce test".to_owned()) })
         }),
+        executer: std::sync::Arc::new(|_| {
+            Box::pin(async { Err("pas de transport dans ce test".to_owned()) })
+        }),
         label: "h".into(),
+        cible: ("h".into(), 22, "u".into()),
         enregistreur: std::sync::Arc::new(Mutex::new(None)),
     }
 }

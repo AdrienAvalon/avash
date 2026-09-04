@@ -7,6 +7,32 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le panneau SFTP transfère des dossiers entiers, reprend, envoie en
+  bandes, empile et copie d'un hôte à l'autre.** Télécharger ou déposer un
+  dossier le transfère avec son arborescence (sous-dossiers vides compris),
+  fichier par fichier. Un transfert annulé (bouton sur sa ligne) ou coupé
+  garde ce qui est fait : une carte de reprise à côté du `.part` (ou du
+  fichier local, pour un envoi) note les bandes complètes, et relancer le
+  même transfert ne redemande que le reste, si le fichier n'a pas changé
+  entre-temps (taille et date) ; un envoi reprend au dernier point de contrôle
+  vidé (tous les 4 Mio). L'envoi en bandes parallèles a été écrit, mesuré
+  contre un `internal-sftp` d'OpenSSH, et **refusé** : la bibliothèque
+  pipeline déjà huit écritures, et huit descripteurs en parallèle étaient
+  quatre fois plus lents en réseau local pour 1,2 × à 40 ms d'aller-retour
+  (les chiffres sont dans la feuille de route). Les transferts vont dans une file, trois à
+  la fois, chacun avec sa ligne, sa progression, sa vitesse et son bouton
+  d'annulation. « Copier vers un autre hôte… » dans le menu d'un fichier ou
+  d'un dossier le copie vers un autre onglet SSH : par défaut les octets
+  traversent le poste sans y être écrits (relais par bandes, un descripteur
+  de lecture ici, un d'écriture là-bas) ; en cochant « copie directe »,
+  l'hôte source envoie lui-même par `scp`, avec l'agent SSH du poste prêté
+  le temps de la commande et refusé à tout autre moment. Le serveur SFTP de
+  test gagne un système de fichiers en mémoire ; six tests d'intégration
+  jouent le dossier récursif dans les deux sens, la reprise après annulation
+  (les bandes faites ne sont pas relues, le fichier repris est identique), le
+  relais entre deux serveurs et l'annulation ; le scénario bout en bout
+  télécharge un dossier et copie un fichier d'un onglet à l'autre contre le
+  vrai sshd.
 - **Des fichiers par le presse-papiers RDP, dans les deux sens.** Quand le
   bureau distant copie des fichiers, Avash n'en demande que la liste (noms,
   tailles) et la montre dans une pastille sous le bureau ; un clic, une

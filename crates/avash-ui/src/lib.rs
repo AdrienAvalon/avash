@@ -27,6 +27,7 @@ pub fn run() {
             annules: Mutex::new(std::collections::HashSet::new()),
         })
         .manage(rdp::RdpStore::default())
+        .manage(commands::TransfertsStore::default())
         // Trois commandes ont été retirées de cette liste : `run_command`,
         // `snippet_vars` et `password_known`, qu'aucun appel du front
         // n'utilisait. `run_command` était la plus fâcheuse — elle exécute une
@@ -57,6 +58,8 @@ pub fn run() {
             commands::sftp_list,
             commands::sftp_download,
             commands::sftp_upload,
+            commands::sftp_annuler,
+            commands::sftp_copier_vers,
             commands::sftp_mkdir,
             commands::sftp_remove,
             commands::sftp_rename,

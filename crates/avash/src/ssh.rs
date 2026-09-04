@@ -247,6 +247,23 @@ struct AvashAuth {
     port: u16,
     verdict: HostKeyVerdict,
     forwards: RemoteForwards,
+    /// L'agent SSH du poste est-il redirigé vers ce serveur en ce moment ?
+    /// Levé par `run_avec_agent` le temps d'une commande, jamais autrement :
+    /// un serveur qui ouvrirait un canal d'agent hors de ce moment est refusé.
+    agent_redirige: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Le socket (ou le tube) de l'agent SSH du poste, tel qu'OpenSSH le désigne.
+#[cfg(unix)]
+async fn ouvrir_agent_local() -> Option<tokio::net::UnixStream> {
+    let chemin = std::env::var_os("SSH_AUTH_SOCK")?;
+    tokio::net::UnixStream::connect(chemin).await.ok()
+}
+#[cfg(windows)]
+async fn ouvrir_agent_local() -> Option<tokio::net::windows::named_pipe::NamedPipeClient> {
+    tokio::net::windows::named_pipe::ClientOptions::new()
+        .open(OPENSSH_AGENT_PIPE)
+        .ok()
 }
 
 impl russh::client::Handler for AvashAuth {
@@ -352,6 +369,37 @@ impl russh::client::Handler for AvashAuth {
 
     /// Le serveur relaie une connexion recue sur un port redirige (`-R`).
     ///
+    /// Canal d'agent ouvert par le serveur : relayé vers l'agent du poste
+    /// **seulement** pendant une commande lancée par `run_avec_agent`. Hors de
+    /// ce moment, un serveur qui le tente est refusé : l'agent signe avec les
+    /// clés du poste, et c'est l'utilisateur qui décide quand le prêter.
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        if !self
+            .agent_redirige
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
+        let Some(mut agent) = ouvrir_agent_local().await else {
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+            return Ok(());
+        };
+        reply.accept().await;
+        tokio::spawn(async move {
+            let mut flux = channel.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut flux, &mut agent).await;
+        });
+        Ok(())
+    }
+
     /// On ne relaie que vers une destination enregistree par `remote_forward` :
     /// un serveur malveillant ne peut pas nous faire ouvrir une connexion
     /// locale arbitraire.
@@ -400,6 +448,8 @@ pub struct Hop {
 pub struct AvashSession {
     session: russh::client::Handle<AvashAuth>,
     forwards: RemoteForwards,
+    /// Partagé avec le Handler : levé le temps d'un `run_avec_agent`.
+    agent_redirige: Arc<std::sync::atomic::AtomicBool>,
     /// Rebonds gardes vivants : le transport de cette session passe par leurs
     /// canaux ; les lacher couperait la connexion. Jamais relu, seulement
     /// possede — d'ou l'allow.
@@ -462,6 +512,15 @@ where
     false
 }
 
+/// Referme la redirection d'agent avec la commande qui l'avait ouverte, même
+/// si elle sort en erreur.
+struct GardeAgent(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for GardeAgent {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl AvashSession {
     /// Config russh commune (keepalive : detecte une coupure NAT au lieu de
     /// laisser une session zombie).
@@ -481,21 +540,31 @@ impl AvashSession {
         })
     }
 
-    fn handler(host: &str, port: u16) -> (AvashAuth, HostKeyVerdict, RemoteForwards) {
+    fn handler(
+        host: &str,
+        port: u16,
+    ) -> (
+        AvashAuth,
+        HostKeyVerdict,
+        RemoteForwards,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
         let verdict: HostKeyVerdict = Arc::new(std::sync::Mutex::new(None));
         let forwards: RemoteForwards = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let agent_redirige = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let handler = AvashAuth {
             host: host.to_string(),
             port,
             verdict: verdict.clone(),
             forwards: forwards.clone(),
+            agent_redirige: agent_redirige.clone(),
         };
-        (handler, verdict, forwards)
+        (handler, verdict, forwards, agent_redirige)
     }
 
     /// Connexion directe (TCP), sans rebond.
     pub async fn connect(host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
-        let (handler, verdict, forwards) = Self::handler(host, port);
+        let (handler, verdict, forwards, agent_redirige) = Self::handler(host, port);
         let mut session = match russh::client::connect(Self::config(), (host, port), handler).await
         {
             Ok(s) => s,
@@ -512,6 +581,7 @@ impl AvashSession {
         Ok(Self {
             session,
             forwards,
+            agent_redirige,
             jumps: Vec::new(),
         })
     }
@@ -555,7 +625,7 @@ impl AvashSession {
             .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
             .await
             .with_context(|| format!("Le rebond n'a pas pu joindre {host}:{port}"))?;
-        let (handler, verdict, forwards) = Self::handler(host, port);
+        let (handler, verdict, forwards, agent_redirige) = Self::handler(host, port);
         let mut session =
             match russh::client::connect_stream(Self::config(), channel.into_stream(), handler)
                 .await
@@ -573,6 +643,7 @@ impl AvashSession {
         Ok(Self {
             session,
             forwards,
+            agent_redirige,
             jumps: Vec::new(),
         })
     }
@@ -800,6 +871,52 @@ impl AvashSession {
             stdout.push_str("\n[sortie tronquée : plafond de 1 Mio atteint]\n");
         }
         Ok((stdout, exit_code))
+    }
+
+    /// Exécution one-shot avec l'agent SSH du poste redirigé vers le serveur,
+    /// le temps de la commande : c'est ce qui permet à ce serveur de se
+    /// connecter à un autre avec les clés du poste (copie directe d'un hôte à
+    /// un autre, `scp` lancé là-bas). Sortie standard et d'erreur mêlées,
+    /// bornées à un mébioctet, et le code de sortie.
+    ///
+    /// La redirection n'est ouverte que pendant cet appel : avant, après, ou
+    /// pour toute autre commande, un canal d'agent demandé par le serveur est
+    /// refusé.
+    pub async fn run_avec_agent(&self, command: &str) -> Result<(String, u32)> {
+        const PLAFOND: usize = 1024 * 1024;
+        let drapeau = self.agent_redirige.clone();
+        drapeau.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Quoi qu'il arrive, la redirection se referme avec la commande.
+        let _garde = GardeAgent(drapeau);
+
+        let mut channel = self.session.channel_open_session().await?;
+        channel
+            .agent_forward(true)
+            .await
+            .context("demande de redirection d'agent")?;
+        channel.exec(false, command).await?;
+        let mut sortie = String::new();
+        let mut exit_code = 0u32;
+        let mut tronquee = false;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { ref data }
+                | russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                    if sortie.len() >= PLAFOND {
+                        tronquee = true;
+                        break;
+                    }
+                    sortie.push_str(&String::from_utf8_lossy(data));
+                }
+                russh::ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status,
+                russh::ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        if tronquee {
+            sortie.push_str("\n[sortie tronquée : plafond de 1 Mio atteint]\n");
+        }
+        Ok((sortie, exit_code))
     }
 
     /// Ouvre un canal PTY interactif.

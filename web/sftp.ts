@@ -15,11 +15,158 @@ import { langue, t } from "./i18n";
 
 export const sftp = {
   open: false,
-  /** Transfert en cours : on refuse d'en lancer un second en parallele. */
-  busy: false,
   /** Entree visee par le menu contextuel. */
   ctx: null as { entry: SftpEntry | null; path: string } | null,
 };
+
+// ===== File des transferts =====
+//
+// Plusieurs transferts à la fois (trois en parallèle, les autres attendent),
+// chacun avec sa ligne : nom, progression, vitesse, bouton d'annulation.
+// L'identifiant est choisi ici et suit le transfert jusque dans le cœur, qui
+// le rappelle dans chaque événement de progression et le retrouve pour
+// l'annuler.
+
+type Transfert = {
+  id: number;
+  kind: "download" | "upload" | "copie";
+  nom: string;
+  fichier: string;
+  fait: number;
+  total: number;
+  termines: number;
+  nombre: number;
+  etat: "attente" | "en-cours" | "fini" | "erreur" | "annule";
+  vitesse: number;
+  message: string;
+  lancer: () => Promise<string>;
+  /** Pour la vitesse : dernier point mesuré. */
+  dernierT: number;
+  dernierFait: number;
+  /** Session d'origine, pour rafraîchir sa liste à la fin. */
+  session: Session;
+};
+
+const PARALLELE = 3;
+const file: Transfert[] = [];
+let prochainTransfert = 1;
+
+/** Ajoute un transfert à la file et lance ce qui peut l'être. */
+function ajouterTransfert(kind: Transfert["kind"], nom: string, session: Session, lancer: (id: number) => Promise<string>): void {
+  const id = prochainTransfert++;
+  file.push({
+    id, kind, nom, fichier: "", fait: 0, total: 0, termines: 0, nombre: 1,
+    etat: "attente", vitesse: 0, message: "", lancer: () => lancer(id),
+    dernierT: 0, dernierFait: 0, session,
+  });
+  rendreTransferts();
+  planifier();
+}
+
+function planifier(): void {
+  for (const x of file) {
+    if (x.etat !== "attente") continue;
+    if (file.filter((y) => y.etat === "en-cours").length >= PARALLELE) break;
+    x.etat = "en-cours";
+    x.dernierT = performance.now();
+    void x.lancer().then(
+      (message) => { x.etat = "fini"; x.message = message; x.fait = x.total || x.fait; terminer(x); },
+      (err) => {
+        const texte = String(err);
+        x.etat = texte.includes("Transfert annulé") ? "annule" : "erreur";
+        x.message = texte;
+        terminer(x);
+      },
+    );
+  }
+  rendreTransferts();
+}
+
+function terminer(x: Transfert): void {
+  rendreTransferts();
+  // La liste du panneau reflète ce qui vient d'arriver ou de partir.
+  if (sftpSession() === x.session && (x.kind === "upload" || x.kind === "copie") && x.etat === "fini") void sftpNavigate(x.session.sftpPath || ".");
+  if (x.etat === "fini") {
+    sftpStatus(`✅ ${x.nom} : ${x.message}`, "ok");
+    window.setTimeout(() => { const i = file.indexOf(x); if (i >= 0 && x.etat === "fini") { file.splice(i, 1); rendreTransferts(); } }, 8000);
+  } else if (x.etat === "annule") {
+    sftpStatus(`${x.nom} : ${t("sftp-transfert-annule")}`, "");
+  } else {
+    sftpStatus(`⚠️ ${x.nom} : ${x.message}`, "err");
+  }
+  planifier();
+}
+
+/** Dessine la file ; les lignes finies s'effacent d'elles-mêmes, les erreurs
+ *  et les annulations restent jusqu'à un clic. */
+function rendreTransferts(): void {
+  const zone = $("sftp-transferts");
+  zone.innerHTML = "";
+  for (const x of file) {
+    const el = document.createElement("div");
+    el.className = `sftp-transfert ${x.etat}`;
+    el.setAttribute("role", "listitem");
+    const fleche = x.kind === "download" ? "⬇︎" : x.kind === "upload" ? "⬆︎" : "⇄";
+    const pct = x.total ? Math.round((x.fait / x.total) * 100) : 0;
+    let det: string;
+    if (x.etat === "en-cours") {
+      const vit = x.vitesse > 0 ? ` · ${humanSize(Math.round(x.vitesse), langue())}/s` : "";
+      det = x.nombre > 1
+        ? `${t("sftp-elements-faits", { fait: humanSize(x.fait, langue()), total: humanSize(x.total, langue()), termines: x.termines, nombre: x.nombre })}${vit}${x.fichier ? ` · ${x.fichier}` : ""}`
+        : `${humanSize(x.fait, langue())}${x.total ? ` / ${humanSize(x.total, langue())}` : ""}${vit}`;
+    } else if (x.etat === "attente") det = "…";
+    else if (x.etat === "fini") det = t("sftp-transfert-fini");
+    else if (x.etat === "annule") det = t("sftp-transfert-annule");
+    else det = x.message;
+    el.innerHTML = `<span class="nm"></span><button type="button" class="btn-mini" hidden></button><span class="det"></span><span class="barre"><span></span></span>`;
+    el.querySelector(".nm")!.textContent = `${fleche} ${x.nom}`;
+    el.querySelector(".det")!.textContent = det;
+    (el.querySelector(".barre > span") as HTMLElement).style.width = `${x.etat === "fini" ? 100 : pct}%`;
+    const bouton = el.querySelector("button") as HTMLButtonElement;
+    if (x.etat === "en-cours" || x.etat === "attente") {
+      bouton.hidden = false;
+      bouton.textContent = t("sftp-annuler");
+      bouton.title = t("sftp-annuler");
+      bouton.addEventListener("click", () => annulerTransfert(x));
+    } else {
+      // Une ligne terminée s'efface d'un clic.
+      el.style.cursor = "pointer";
+      el.addEventListener("click", () => { const i = file.indexOf(x); if (i >= 0) { file.splice(i, 1); rendreTransferts(); } });
+    }
+    zone.appendChild(el);
+  }
+}
+
+function annulerTransfert(x: Transfert): void {
+  if (x.etat === "attente") {
+    x.etat = "annule";
+    x.message = t("sftp-transfert-annule");
+    rendreTransferts();
+    return;
+  }
+  void invoke<boolean>("sftp_annuler", { transfert: x.id }).catch(() => false);
+}
+
+/** Un événement de progression du cœur, rapporté à sa ligne. */
+function progressionTransfert(p: { transfert: number; fichier: string; done: number; total: number; termines: number; nombre: number }): void {
+  const x = file.find((y) => y.id === p.transfert);
+  if (!x) return;
+  const maintenant = performance.now();
+  const dt = (maintenant - x.dernierT) / 1000;
+  if (dt >= 0.5) {
+    const instant = (p.done - x.dernierFait) / dt;
+    // Lissée : une moyenne mobile, pour que le chiffre ne tremble pas.
+    x.vitesse = x.vitesse > 0 ? x.vitesse * 0.6 + instant * 0.4 : instant;
+    x.dernierT = maintenant;
+    x.dernierFait = p.done;
+  }
+  x.fichier = p.nombre > 1 ? p.fichier : "";
+  x.fait = p.done;
+  x.total = p.total;
+  x.termines = p.termines;
+  x.nombre = p.nombre;
+  rendreTransferts();
+}
 
 function sftpSession(): Session | null {
   return state.active === null ? null : (state.sessions.get(state.active) ?? null);
@@ -29,17 +176,6 @@ function sftpStatus(msg: string, kind: "" | "ok" | "err" = "") {
   const el = $("sftp-status");
   el.textContent = msg;
   el.className = "sftp-status" + (kind ? ` ${kind}` : "");
-}
-
-function sftpProgress(done: number, total: number, label: string) {
-  const box = $("sftp-progress");
-  box.hidden = false;
-  box.classList.toggle("indeterminate", total === 0);
-  ($("sftp-bar") as HTMLElement).style.width = total ? `${Math.round((done / total) * 100)}%` : "";
-  sftpStatus(total ? `${label} ${humanSize(done, langue())} / ${humanSize(total, langue())}` : `${label} ${humanSize(done, langue())}`);
-}
-function sftpProgressDone() {
-  $("sftp-progress").hidden = true;
 }
 
 async function sftpNavigate(path: string) {
@@ -142,7 +278,7 @@ function sftpDelegue(list: HTMLElement, entries: SftpEntry[], path: string): voi
     if (!cible) return;
     const { e } = cible;
     if (e.is_dir) void sftpNavigate(remoteJoin(sftpLot.path, e.name));
-    else void sftpDownload(remoteJoin(sftpLot.path, e.name), e.name);
+    else sftpDownload(remoteJoin(sftpLot.path, e.name), e.name);
   });
   list.addEventListener("contextmenu", (ev) => {
     const cible = viser(ev);
@@ -193,57 +329,82 @@ $("sftp-panel").addEventListener("transitionend", (e) => {
   if (e.propertyName === "width") sftpSession()?.fit.fit();
 });
 
-async function sftpDownload(remote: string, name: string) {
+/** Télécharge un fichier ou un dossier distant, dans la file. */
+function sftpDownload(remote: string, name: string, isDir = false) {
   const s = sftpSession();
   if (!s) return;
-  if (sftp.busy) {
-    sftpStatus(t("sftp-transfert-en-cours"), "err");
-    return;
-  }
-  sftp.busy = true;
-  sftpProgress(0, 0, `⬇︎ ${name}`);
-  try {
-    const res = await invoke<string>("sftp_download", { id: s.id, remote });
-    sftpStatus(`✅ ${res}`, "ok");
-  } catch (err) {
-    sftpStatus(`⚠️ ${err}`, "err");
-  } finally {
-    sftp.busy = false;
-    sftpProgressDone();
+  ajouterTransfert("download", name, s, (transfert) => invoke<string>("sftp_download", { id: s.id, transfert, remote, isDir }));
+}
+
+/** Envoie des fichiers ou dossiers locaux (chemins absolus) dans le dossier
+ *  courant, chacun sur sa ligne de la file. */
+function sftpUploadPaths(paths: string[]) {
+  const s = sftpSession();
+  if (!s || paths.length === 0) return;
+  const dir = s.sftpPath || ".";
+  for (const local of paths) {
+    const name = local.split(/[\\/]/).pop() ?? local;
+    ajouterTransfert("upload", name, s, (transfert) => invoke<string>("sftp_upload", { id: s.id, transfert, local, remoteDir: dir }));
   }
 }
 
-/** Envoie des fichiers locaux (chemins absolus) dans le dossier courant. */
-async function sftpUploadPaths(paths: string[]) {
+// ----- Copier vers un autre hôte -----
+
+let copieVisee: { entry: SftpEntry; path: string } | null = null;
+
+/** Ouvre la modale de copie vers un autre onglet SSH. */
+function sftpOuvrirCopie(entry: SftpEntry, path: string): void {
   const s = sftpSession();
-  if (!s || paths.length === 0) return;
-  if (sftp.busy) {
-    sftpStatus(t("sftp-transfert-en-cours"), "err");
+  if (!s) return;
+  const autres = [...state.sessions.values()].filter((x) => x !== s);
+  if (autres.length === 0) {
+    sftpStatus(t("sftp-aucune-autre-session"), "err");
     return;
   }
-  sftp.busy = true;
-  const dir = s.sftpPath || ".";
-  let ok = 0;
-  const errors: string[] = [];
-  try {
-    for (const local of paths) {
-      const name = local.split(/[\\/]/).pop() ?? local;
-      sftpProgress(0, 0, `⬆︎ ${name}`);
-      try {
-        await invoke<string>("sftp_upload", { id: s.id, local, remoteDir: dir });
-        ok++;
-      } catch (e) {
-        errors.push(`${name} : ${e}`);
-      }
-    }
-  } finally {
-    sftp.busy = false;
-    sftpProgressDone();
+  copieVisee = { entry, path };
+  const select = $("sc-cible") as HTMLSelectElement;
+  select.innerHTML = "";
+  for (const x of autres) {
+    const o = document.createElement("option");
+    o.value = String(x.id);
+    o.textContent = x.tab.querySelector(".label")?.textContent ?? `#${x.id}`;
+    select.appendChild(o);
   }
-  if (errors.length === 0) sftpStatus("✅ " + t(ok > 1 ? "sftp-fichiers-envoyes" : "sftp-fichier-envoye", { n: ok }), "ok");
-  else sftpStatus(`⚠️ ${errors.join(" · ")}`, "err");
-  if (sftpSession() === s) void sftpNavigate(dir);
+  ($("sc-dossier") as HTMLInputElement).value = "";
+  ($("sc-direct") as HTMLInputElement).checked = false;
+  $("sc-error").hidden = true;
+  $("sftp-copier-quoi").textContent = t("sftp-copier-quoi", { quoi: entry.name, source: s.tab.querySelector(".label")?.textContent ?? "" });
+  $("sftp-copier-modal").classList.add("open");
+  setTimeout(() => select.focus(), 30);
 }
+
+function sftpFermerCopie(): void {
+  $("sftp-copier-modal").classList.remove("open");
+  copieVisee = null;
+}
+
+$("sc-cancel").addEventListener("click", sftpFermerCopie);
+$("sftp-copier-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const s = sftpSession();
+  const visee = copieVisee;
+  if (!s || !visee) return;
+  const idCible = Number(($("sc-cible") as HTMLSelectElement).value);
+  const cible = state.sessions.get(idCible);
+  if (!cible) { $("sc-error").textContent = t("sftp-aucune-autre-session"); $("sc-error").hidden = false; return; }
+  const dossier = ($("sc-dossier") as HTMLInputElement).value.trim() || ".";
+  const direct = ($("sc-direct") as HTMLInputElement).checked;
+  const remote = remoteJoin(visee.path, visee.entry.name);
+  const libelle = cible.tab.querySelector(".label")?.textContent ?? String(idCible);
+  sftpFermerCopie();
+  ajouterTransfert("copie", `${visee.entry.name} → ${libelle}`, cible, async (transfert) => {
+    await invoke<string>("sftp_copier_vers", { id: s.id, transfert, remote, isDir: visee.entry.is_dir, idCible, remoteDirCible: dossier, direct });
+    return direct ? t("sftp-copie-directe-faite") : t("sftp-copie-faite", { cible: libelle });
+  });
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("sftp-copier-modal").classList.contains("open")) sftpFermerCopie();
+});
 
 async function sftpPickAndUpload() {
   if (!sftpSession()) return;
@@ -255,7 +416,7 @@ async function sftpPickAndUpload() {
     return;
   }
   if (!picked) return;
-  await sftpUploadPaths(Array.isArray(picked) ? picked : [picked]);
+  sftpUploadPaths(Array.isArray(picked) ? picked : [picked]);
 }
 
 async function sftpMkdir(dir: string) {
@@ -313,9 +474,9 @@ function sftpOpenMenu(entry: SftpEntry | null, path: string, e: MouseEvent) {
   // Sans entree (clic dans le vide) : seules les actions de dossier.
   for (const item of m.querySelectorAll<HTMLElement>("[data-act]")) {
     const act = item.dataset.act!;
-    const needsEntry = ["download", "rename", "delete", "copy"].includes(act);
+    const needsEntry = ["download", "copy-to", "rename", "delete", "copy"].includes(act);
     const dirOnly = act === "cd";
-    item.hidden = (needsEntry && !entry) || (act === "download" && !!entry?.is_dir) || (dirOnly && !!entry && !entry.is_dir);
+    item.hidden = (needsEntry && !entry) || (dirOnly && !!entry && !entry.is_dir);
   }
   placerMenu(m, e);
   m.classList.add("open");
@@ -333,7 +494,8 @@ $("sftp-context").addEventListener("click", (e) => {
   if (!s) return;
   const { entry, path } = ctx;
   const full = entry ? remoteJoin(path, entry.name) : path;
-  if (act === "download" && entry && !entry.is_dir) void sftpDownload(full, entry.name);
+  if (act === "download" && entry) sftpDownload(full, entry.name, entry.is_dir);
+  else if (act === "copy-to" && entry) sftpOuvrirCopie(entry, path);
   else if (act === "cd") {
     const target = entry?.is_dir ? full : path;
     invoke("pty_write", { id: s.id, data: `cd ${shellQuote(target)}\r` }).catch(() => {});
@@ -389,9 +551,8 @@ document.addEventListener("keydown", (e) => {
 
 // ----- Progression des transferts -----
 
-listen<{ id: number; name: string; kind: string; done: number; total: number }>("sftp-progress", (ev) => {
-  if (ev.payload.id !== state.active) return;
-  sftpProgress(ev.payload.done, ev.payload.total, `${ev.payload.kind === "upload" ? "⬆︎" : "⬇︎"} ${ev.payload.name}`);
+listen<{ id: number; transfert: number; name: string; kind: string; fichier: string; done: number; total: number; termines: number; nombre: number }>("sftp-progress", (ev) => {
+  progressionTransfert(ev.payload);
 }).catch(() => {});
 
 // ----- Glisser-deposer depuis le bureau -----

@@ -77,6 +77,15 @@ répondent.
   un fichier existant et sans rien exécuter. Dans l'autre sens, seuls les
   fichiers que vous déposez ou choisissez sont offerts ; le distant n'en voit
   ni le chemin absolu ni rien d'autre du poste.
+- **L'agent SSH du poste, prêté à un serveur.** La copie directe d'un hôte à
+  un autre (case à cocher dans « Copier vers un autre hôte… ») lance `scp`
+  chez l'hôte source avec la redirection d'agent : pendant cette commande, et
+  seulement pendant elle, l'hôte source peut faire signer votre agent, donc se
+  connecter là où vos clés ouvrent. Avash refuse tout canal d'agent demandé
+  par un serveur hors de ce moment, et la case est décochée par défaut : sans
+  elle, les octets traversent le poste sans y être écrits, et aucune clé n'est
+  prêtée. Ne cochez la copie directe que pour un hôte source que vous
+  administrez.
 - **Un autre compte sur votre machine.** Fichiers d'état, empreintes, clés
   générées et traces sont créés en 0600 dans un répertoire en 0700 ; le canal
   entre l'interface et le processus RDP n'écoute que sur l'adresse locale, avec

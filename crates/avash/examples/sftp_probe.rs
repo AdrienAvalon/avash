@@ -98,7 +98,39 @@ async fn main() -> anyhow::Result<()> {
         par_bandes.len()
     );
 
+    // 3) La montée : une écriture après l'autre, pipelinée par russh-sftp
+    //    (huit en vol), avec la reprise du chemin de production. Huit
+    //    descripteurs en parallèle ont été essayés ici même : quatre fois plus
+    //    lents en réseau local, 1,2 × à 40 ms d'aller-retour — pas retenus.
+    let cible = format!("{distant}.avash-sonde-montee");
+    let depart = Instant::now();
+    let envoyes = sftp
+        .upload_reprise(&local_envoi(&par_bandes)?, &cible, None, |_, _| {})
+        .await?;
+    let m = depart.elapsed();
+    println!("montée du même fichier vers {cible}");
+    println!(
+        "  séquentiel pipeliné : {:>7.1} Mo/s   ({m:?})",
+        mo(envoyes, m)
+    );
+    let relu = sftp.download_with(&cible, &local, |_, _| {}).await?;
+    anyhow::ensure!(
+        relu == taille && std::fs::read(&local)? == par_bandes,
+        "LA MONTÉE EST FAUSSE"
+    );
+    println!("  ✓ montée relue identique");
+    let _ = sftp.remove(&cible, false).await;
+
     let _ = std::fs::remove_file(&local);
     sftp.close().await?;
     Ok(())
+}
+
+/// Le fichier à envoyer, écrit une fois dans le répertoire temporaire.
+fn local_envoi(contenu: &[u8]) -> anyhow::Result<std::path::PathBuf> {
+    let p = std::env::temp_dir().join("avash-sonde-envoi.bin");
+    if std::fs::read(&p).ok().as_deref() != Some(contenu) {
+        std::fs::write(&p, contenu)?;
+    }
+    Ok(p)
 }

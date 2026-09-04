@@ -52,7 +52,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 `vnc.spec.js` lance le **serveur VNC de test** (`test-vnc-server/`, port 35900,
 mot de passe `test`), qui sert une image connue et réagit aux entrées.
 
-## Couverture (55 scénarios, 28 fichiers)
+## Couverture (57 scénarios, 28 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -67,7 +67,7 @@ mot de passe `test`), qui sert une image connue et réagit aux entrées.
 | `isolation.spec.js`   | **garde-fou d'isolation** : chaque fichier part de l'état semé, sans reste des autres scénarios |
 | `modals.spec.js`      | « Connexion directe » ne se ferme pas au clic dehors, se ferme à Échap ; palette Ctrl+K |
 | `ssh.spec.js`         | **connexion SSH réelle** (sshd local, auth par clé) → session live |
-| `sftp.spec.js`        | **panneau SFTP** sur la session SSH → listing du répertoire distant |
+| `sftp.spec.js`        | **panneau SFTP** sur la session SSH : listing du répertoire distant, **téléchargement d'un dossier entier** par la file des transferts (octets comparés), **copie d'un fichier vers un autre onglet SSH** sans passer par le disque du poste |
 | `rdp.spec.js`         | **connexion RDP réelle** (serveur dédié) → handshake CredSSP + canvas (`.state.live`) |
 | `rdp-clipboard.spec.js` | **presse-papiers RDP** (distant → poste) : pilote le sidecar sur son WebSocket, sans toucher au presse-papiers du système |
 | `rdp-reconnect.spec.js` | **overlay de reconnexion** quand le serveur RDP coupe |

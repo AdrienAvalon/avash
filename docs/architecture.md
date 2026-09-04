@@ -42,7 +42,11 @@ Le fichier `Cargo.toml` à la racine définit un workspace de deux crates, et en
     seul chemin d'écriture des fichiers de configuration ;
   - `ssh.rs` — connexion et authentification (russh), vérification TOFU des
     clés d'hôte, redirections de ports ;
-  - `sftp.rs` — client SFTP, dont un téléchargement **en bandes parallèles** ;
+  - `sftp.rs` — client SFTP : téléchargement **en bandes parallèles**, envoi
+    séquentiel pipeliné (les bandes montantes ont été mesurées et refusées),
+    dossiers entiers, reprise par carte (`.part.reprise` : bandes complètes ;
+    `.envoi.reprise` : dernier point de contrôle vidé), annulation
+    coopérative, relais d'un serveur à un autre sans écrire sur le poste ;
   - `tunnel.rs` — tunnels SSH ;
   - `snippet.rs` — snippets ;
   - `folders.rs` — arborescence de dossiers (annotations `#Folder:`) ;

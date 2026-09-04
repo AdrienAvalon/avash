@@ -364,6 +364,88 @@ struct TestSftpSession {
     gros_fichier: bool,
     /// Le chemin ouvert annonce plus d'octets qu'il n'en sert.
     tronque: bool,
+    /// Descripteurs de dossiers /fs déjà lus : la seconde lecture rend Eof.
+    dossiers_lus: std::collections::HashSet<String>,
+}
+
+// ---------- Système de fichiers en mémoire, sous /fs/ ----------
+//
+// Le simulacre historique répond la même chose à tout le monde (un fichier de
+// démonstration, des écritures jetées) : assez pour les listes et les
+// transferts simples, pas pour les dossiers récursifs, la reprise ou le
+// relais d'hôte à hôte. Sous `/fs/`, ce serveur tient un vrai système de
+// fichiers en mémoire : les octets écrits se relisent, à leur décalage, les
+// dossiers se listent, et chaque lecture est journalisée avec son décalage
+// pour qu'un test voie ce qu'une reprise a évité de redemander.
+
+/// Fichiers en mémoire : chemin absolu → octets.
+static FS_FICHIERS: std::sync::Mutex<Option<std::collections::HashMap<String, Vec<u8>>>> =
+    std::sync::Mutex::new(None);
+/// Dossiers en mémoire : chemins absolus.
+static FS_DOSSIERS: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+/// Lectures servies sous /fs/ : (chemin, décalage).
+static FS_LECTURES: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
+
+fn fs_fichiers(
+) -> std::sync::MutexGuard<'static, Option<std::collections::HashMap<String, Vec<u8>>>> {
+    let mut g = FS_FICHIERS.lock().unwrap();
+    if g.is_none() {
+        *g = Some(std::collections::HashMap::new());
+    }
+    g
+}
+fn fs_dossiers() -> std::sync::MutexGuard<'static, Option<std::collections::HashSet<String>>> {
+    let mut g = FS_DOSSIERS.lock().unwrap();
+    if g.is_none() {
+        let mut s = std::collections::HashSet::new();
+        s.insert("/fs".to_owned());
+        *g = Some(s);
+    }
+    g
+}
+/// Écrit un fichier en mémoire (et ses dossiers parents), depuis un test.
+fn fs_poser(chemin: &str, contenu: &[u8]) {
+    let mut d = fs_dossiers();
+    let mut p = chemin
+        .rsplit_once('/')
+        .map(|(a, _)| a.to_owned())
+        .unwrap_or_default();
+    while !p.is_empty() && p != "/fs" {
+        d.as_mut().unwrap().insert(p.clone());
+        p = p
+            .rsplit_once('/')
+            .map(|(a, _)| a.to_owned())
+            .unwrap_or_default();
+    }
+    fs_fichiers()
+        .as_mut()
+        .unwrap()
+        .insert(chemin.to_owned(), contenu.to_vec());
+}
+fn fs_lire(chemin: &str) -> Option<Vec<u8>> {
+    fs_fichiers().as_ref().unwrap().get(chemin).cloned()
+}
+fn fs_est_dossier(chemin: &str) -> bool {
+    fs_dossiers().as_ref().unwrap().contains(chemin)
+}
+fn fs_lectures_de(chemin: &str) -> Vec<u64> {
+    FS_LECTURES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(c, _)| c == chemin)
+        .map(|(_, o)| *o)
+        .collect()
+}
+fn fs_oublier_lectures() {
+    FS_LECTURES.lock().unwrap().clear();
+}
+fn sous_fs(chemin: &str) -> bool {
+    chemin == "/fs" || chemin.starts_with("/fs/")
+}
+fn parent_de(chemin: &str) -> &str {
+    chemin.rsplit_once('/').map_or("", |(a, _)| a)
 }
 
 // Les methodes du trait Handler de russh-sftp sont declarees
@@ -382,7 +464,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
         &mut self,
         id: u32,
         filename: String,
-        _pflags: russh_sftp::protocol::OpenFlags,
+        pflags: russh_sftp::protocol::OpenFlags,
         _attrs: FileAttributes,
     ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
         self.coupure_en_lecture = filename.contains("coupure");
@@ -392,6 +474,21 @@ impl russh_sftp::server::Handler for TestSftpSession {
         // concurrentes rendent bien plus probable qu'une lecture séquentielle.
         self.tronque = filename.contains("tronque");
         async move {
+            if sous_fs(&filename) {
+                use russh_sftp::protocol::OpenFlags;
+                let existe = fs_lire(&filename).is_some();
+                if !existe && !pflags.contains(OpenFlags::CREATE) {
+                    return Err(StatusCode::NoSuchFile);
+                }
+                if !existe || pflags.contains(OpenFlags::TRUNCATE) {
+                    fs_poser(&filename, b"");
+                }
+                // Le descripteur porte le chemin : le serveur n'a pas d'état.
+                return Ok(Handle {
+                    id,
+                    handle: format!("fs:{filename}"),
+                });
+            }
             // Deux chemins réservés pour exercer les échecs, que le reste du
             // mock accepte trop volontiers : « introuvable » échoue à
             // l'ouverture, « coupure » rend un bloc puis casse en pleine
@@ -410,7 +507,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn read(
         &mut self,
         id: u32,
-        _handle: String,
+        handle: String,
         offset: u64,
         len: u32,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Data, Self::Error>> + Send {
@@ -419,6 +516,24 @@ impl russh_sftp::server::Handler for TestSftpSession {
         let gros = self.gros_fichier;
         let tronque = self.tronque;
         async move {
+            if let Some(chemin) = handle.strip_prefix("fs:") {
+                let Some(contenu) = fs_lire(chemin) else {
+                    return Err(StatusCode::NoSuchFile);
+                };
+                FS_LECTURES
+                    .lock()
+                    .unwrap()
+                    .push((chemin.to_owned(), offset));
+                let debut = usize::try_from(offset).unwrap_or(usize::MAX);
+                if debut >= contenu.len() {
+                    return Err(StatusCode::Eof);
+                }
+                let fin = (debut + len as usize).min(contenu.len());
+                return Ok(russh_sftp::protocol::Data {
+                    id,
+                    data: contenu[debut..fin].to_vec(),
+                });
+            }
             if done && coupure {
                 // La liaison tombe après le premier bloc.
                 return Err(StatusCode::Failure);
@@ -456,18 +571,23 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn write(
         &mut self,
         id: u32,
-        _handle: String,
-        _offset: u64,
+        handle: String,
+        offset: u64,
         data: Vec<u8>,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
-        let _n = data.len();
         async move {
-            Ok(Status {
-                id,
-                status_code: StatusCode::Ok,
-                error_message: String::new(),
-                language_tag: String::new(),
-            })
+            if let Some(chemin) = handle.strip_prefix("fs:") {
+                let mut g = fs_fichiers();
+                let Some(f) = g.as_mut().unwrap().get_mut(chemin) else {
+                    return Err(StatusCode::NoSuchFile);
+                };
+                let debut = usize::try_from(offset).unwrap_or(usize::MAX);
+                if f.len() < debut + data.len() {
+                    f.resize(debut + data.len(), 0);
+                }
+                f[debut..debut + data.len()].copy_from_slice(&data);
+            }
+            Ok(ok_status(id))
         }
     }
 
@@ -476,14 +596,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
         id: u32,
         _handle: String,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
-        async move {
-            Ok(Status {
-                id,
-                status_code: StatusCode::Ok,
-                error_message: String::new(),
-                language_tag: String::new(),
-            })
-        }
+        async move { Ok(ok_status(id)) }
     }
 
     fn realpath(
@@ -512,6 +625,13 @@ impl russh_sftp::server::Handler for TestSftpSession {
         _attrs: FileAttributes,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         async move {
+            if sous_fs(&path) {
+                if fs_est_dossier(&path) {
+                    return Err(StatusCode::Failure);
+                }
+                fs_dossiers().as_mut().unwrap().insert(path);
+                return Ok(ok_status(id));
+            }
             SFTP_OPS.lock().await.push(format!("mkdir {path}"));
             Ok(ok_status(id))
         }
@@ -523,6 +643,12 @@ impl russh_sftp::server::Handler for TestSftpSession {
         filename: String,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         async move {
+            if sous_fs(&filename) {
+                return match fs_fichiers().as_mut().unwrap().remove(&filename) {
+                    Some(_) => Ok(ok_status(id)),
+                    None => Err(StatusCode::NoSuchFile),
+                };
+            }
             SFTP_OPS.lock().await.push(format!("remove {filename}"));
             Ok(ok_status(id))
         }
@@ -534,6 +660,18 @@ impl russh_sftp::server::Handler for TestSftpSession {
         path: String,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         async move {
+            if sous_fs(&path) {
+                let plein = fs_fichiers()
+                    .as_ref()
+                    .unwrap()
+                    .keys()
+                    .any(|c| parent_de(c) == path);
+                if plein {
+                    return Err(StatusCode::Failure);
+                }
+                fs_dossiers().as_mut().unwrap().remove(&path);
+                return Ok(ok_status(id));
+            }
             // Un dossier « plein » est refuse, comme le ferait OpenSSH.
             if path.ends_with("plein") {
                 return Err(StatusCode::Failure);
@@ -550,6 +688,16 @@ impl russh_sftp::server::Handler for TestSftpSession {
         newpath: String,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         async move {
+            if sous_fs(&oldpath) {
+                let mut g = fs_fichiers();
+                return match g.as_mut().unwrap().remove(&oldpath) {
+                    Some(c) => {
+                        g.as_mut().unwrap().insert(newpath, c);
+                        Ok(ok_status(id))
+                    }
+                    None => Err(StatusCode::NoSuchFile),
+                };
+            }
             SFTP_OPS
                 .lock()
                 .await
@@ -561,9 +709,18 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn opendir(
         &mut self,
         id: u32,
-        _path: String,
+        path: String,
     ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
         async move {
+            if sous_fs(&path) {
+                if !fs_est_dossier(&path) {
+                    return Err(StatusCode::NoSuchFile);
+                }
+                return Ok(Handle {
+                    id,
+                    handle: format!("fsdir:{path}"),
+                });
+            }
             Ok(Handle {
                 id,
                 handle: "dir".into(),
@@ -574,9 +731,45 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn readdir(
         &mut self,
         id: u32,
-        _handle: String,
+        handle: String,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Name, Self::Error>> + Send {
+        // Un descripteur de dossier /fs se lit une fois : la seconde lecture
+        // rend Eof, comme un vrai serveur.
+        let deja_lu = !self.dossiers_lus.insert(handle.clone());
         async move {
+            if let Some(chemin) = handle.strip_prefix("fsdir:") {
+                if deja_lu {
+                    return Err(StatusCode::Eof);
+                }
+                let mut files = Vec::new();
+                for (c, contenu) in fs_fichiers().as_ref().unwrap() {
+                    if parent_de(c) == chemin {
+                        files.push(File {
+                            filename: c.rsplit('/').next().unwrap_or(c).to_owned(),
+                            longname: String::new(),
+                            attrs: FileAttributes {
+                                size: Some(contenu.len() as u64),
+                                permissions: Some(0o100_644),
+                                ..Default::default()
+                            },
+                        });
+                    }
+                }
+                for d in fs_dossiers().as_ref().unwrap() {
+                    if parent_de(d) == chemin {
+                        files.push(File {
+                            filename: d.rsplit('/').next().unwrap_or(d).to_owned(),
+                            longname: String::new(),
+                            attrs: FileAttributes {
+                                size: Some(0),
+                                permissions: Some(0o40755),
+                                ..Default::default()
+                            },
+                        });
+                    }
+                }
+                return Ok(russh_sftp::protocol::Name { id, files });
+            }
             if self.root_read_done {
                 return Err(StatusCode::Eof);
             }
@@ -629,6 +822,30 @@ impl russh_sftp::server::Handler for TestSftpSession {
             42
         };
         async move {
+            if sous_fs(&path) {
+                if let Some(c) = fs_lire(&path) {
+                    return Ok(russh_sftp::protocol::Attrs {
+                        id,
+                        attrs: FileAttributes {
+                            size: Some(c.len() as u64),
+                            permissions: Some(0o100_644),
+                            mtime: Some(1_700_000_000),
+                            ..Default::default()
+                        },
+                    });
+                }
+                if fs_est_dossier(&path) {
+                    return Ok(russh_sftp::protocol::Attrs {
+                        id,
+                        attrs: FileAttributes {
+                            size: Some(0),
+                            permissions: Some(0o40755),
+                            ..Default::default()
+                        },
+                    });
+                }
+                return Err(StatusCode::NoSuchFile);
+            }
             Ok(russh_sftp::protocol::Attrs {
                 id,
                 attrs: FileAttributes {
@@ -1710,4 +1927,243 @@ async fn forget_host_key_retire_la_cle_apprise() {
         0
     );
     let _ = std::fs::remove_file(&path);
+}
+
+// ---------- Transferts : dossiers, reprise, bandes montantes, annulation, relais ----------
+
+/// Un dossier temporaire à ce test, vide.
+fn dossier_temp(nom: &str) -> std::path::PathBuf {
+    let p = std::env::temp_dir().join(format!("avash-transferts-{}-{nom}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&p);
+    std::fs::create_dir_all(&p).unwrap();
+    p
+}
+
+/// Un contenu où chaque octet dépend de sa position : un réassemblage faux se voit.
+fn motif(n: usize, graine: u32) -> Vec<u8> {
+    (0..n)
+        .map(|i| ((i as u32).wrapping_mul(31).wrapping_add(graine) % 251) as u8)
+        .collect()
+}
+
+async fn sftp_de_test() -> avash::sftp::SftpHandle {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    avash::sftp::SftpHandle::open(session).await.unwrap()
+}
+
+/// Un dossier distant entier arrive avec ses sous-dossiers, ses fichiers
+/// (dont un assez gros pour les bandes) et ses dossiers vides.
+#[tokio::test]
+async fn un_dossier_distant_se_telecharge_entier() {
+    let gros = motif(300 * 1024, 1);
+    fs_poser("/fs/dl/a.txt", b"alpha");
+    fs_poser("/fs/dl/sous/b.bin", &gros);
+    fs_dossiers()
+        .as_mut()
+        .unwrap()
+        .insert("/fs/dl/vide".to_owned());
+    let sftp = sftp_de_test().await;
+    let local = dossier_temp("dl");
+    let mut dernier = avash::sftp::Avancement::default();
+    let n = sftp
+        .download_dir_with("/fs/dl", &local, None, |a| {
+            dernier = a;
+        })
+        .await
+        .unwrap();
+    assert_eq!(n as usize, 5 + gros.len());
+    assert_eq!(std::fs::read(local.join("a.txt")).unwrap(), b"alpha");
+    assert_eq!(
+        std::fs::read(local.join("sous").join("b.bin")).unwrap(),
+        gros
+    );
+    assert!(local.join("vide").is_dir(), "le dossier vide est recréé");
+    assert_eq!((dernier.termines, dernier.nombre, dernier.fait), (2, 2, n));
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
+
+/// Un dossier local entier part avec son arborescence ; le gros fichier
+/// arrive à l'octet près.
+#[tokio::test]
+async fn un_dossier_local_se_televerse_entier() {
+    let gros = motif(300 * 1024 + 11, 2);
+    let local = dossier_temp("up");
+    std::fs::create_dir_all(local.join("sous").join("creux")).unwrap();
+    std::fs::write(local.join("a.txt"), b"alpha").unwrap();
+    std::fs::write(local.join("sous").join("b.bin"), &gros).unwrap();
+    let sftp = sftp_de_test().await;
+    let mut dernier = avash::sftp::Avancement::default();
+    let n = sftp
+        .upload_dir_with(&local, "/fs/up/arbre", None, |a| {
+            dernier = a;
+        })
+        .await
+        .unwrap();
+    assert_eq!(n as usize, 5 + gros.len());
+    assert_eq!(fs_lire("/fs/up/arbre/a.txt").unwrap(), b"alpha");
+    assert_eq!(fs_lire("/fs/up/arbre/sous/b.bin").unwrap(), gros);
+    assert!(fs_est_dossier("/fs/up/arbre/sous/creux"));
+    assert_eq!((dernier.termines, dernier.nombre), (2, 2));
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
+
+/// Annulé au tiers, un téléchargement garde son `.part` et sa carte ; relancé,
+/// il ne redemande pas les bandes déjà complètes et rend le fichier entier.
+#[tokio::test]
+async fn un_telechargement_annule_reprend_sans_redemander_les_bandes_faites() {
+    let gros = motif(400 * 1024, 3);
+    fs_poser("/fs/reprise/gros.bin", &gros);
+    let sftp = sftp_de_test().await;
+    let local = dossier_temp("reprise").join("gros.bin");
+    let annulation: avash::sftp::Annulation = std::sync::Arc::default();
+    let a = annulation.clone();
+    let issue = sftp
+        .download_reprise(
+            "/fs/reprise/gros.bin",
+            &local,
+            Some(&annulation),
+            move |fait, _| {
+                if fait >= 130 * 1024 {
+                    a.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            },
+        )
+        .await;
+    let e = issue.expect_err("l'annulation doit se voir");
+    assert!(e.to_string().contains(avash::sftp::ANNULE), "{e:#}");
+    let partiel = local.with_file_name("gros.bin.part");
+    let carte = local.with_file_name("gros.bin.part.reprise");
+    assert!(
+        partiel.exists() && carte.exists(),
+        "le .part et sa carte restent pour la reprise"
+    );
+    let carte_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&carte).unwrap()).unwrap();
+    let faites: Vec<(u64, u64)> = serde_json::from_value(carte_json["faites"].clone()).unwrap();
+    assert!(
+        !faites.is_empty(),
+        "au moins une bande complète avant l'annulation"
+    );
+
+    fs_oublier_lectures();
+    let n = sftp
+        .download_reprise("/fs/reprise/gros.bin", &local, None, |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(n as usize, gros.len());
+    assert_eq!(
+        std::fs::read(&local).unwrap(),
+        gros,
+        "le fichier repris est faux"
+    );
+    assert!(
+        !partiel.exists() && !carte.exists(),
+        "plus de trace après la reprise"
+    );
+    for o in fs_lectures_de("/fs/reprise/gros.bin") {
+        assert!(
+            !faites.iter().any(|(d, f)| *d <= o && o < *f),
+            "la reprise a relu le décalage {o}, dans une bande déjà faite {faites:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
+
+/// Même chose en montée : la carte `.envoi.reprise` note ce qui est
+/// sûrement écrit, la reprise repart de là et le fichier distant finit entier.
+#[tokio::test]
+async fn un_envoi_annule_reprend_sans_renvoyer_les_bandes_faites() {
+    // Douze mégaoctets : au moins deux points de contrôle (tous les 4 Mio)
+    // avant l'annulation, pour que la reprise ait quelque chose à reprendre.
+    let gros = motif(12 * 1024 * 1024 + 5, 4);
+    let local = dossier_temp("envoi").join("gros.bin");
+    std::fs::write(&local, &gros).unwrap();
+    let sftp = sftp_de_test().await;
+    let annulation: avash::sftp::Annulation = std::sync::Arc::default();
+    let a = annulation.clone();
+    let issue = sftp
+        .upload_reprise(
+            &local,
+            "/fs/envoi/gros.bin",
+            Some(&annulation),
+            move |fait, _| {
+                if fait >= 9 * 1024 * 1024 {
+                    a.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            },
+        )
+        .await;
+    assert!(issue.is_err());
+    let carte = local.with_file_name("gros.bin.envoi.reprise");
+    assert!(carte.exists(), "la carte d'envoi reste");
+    let mut premiere = None;
+    let n = sftp
+        .upload_reprise(&local, "/fs/envoi/gros.bin", None, |fait, _| {
+            premiere.get_or_insert(fait);
+        })
+        .await
+        .unwrap();
+    assert_eq!(n as usize, gros.len());
+    assert!(
+        premiere.unwrap_or(0) > 0,
+        "la reprise repart de ce qui était fait"
+    );
+    assert_eq!(fs_lire("/fs/envoi/gros.bin").unwrap(), gros);
+    assert!(!carte.exists());
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
+
+/// Un dossier passe d'un serveur à un autre par le poste sans rien y écrire :
+/// deux serveurs, deux sessions, et les octets identiques à l'arrivée.
+#[tokio::test]
+async fn un_dossier_se_relaie_d_un_serveur_a_l_autre() {
+    let gros = motif(300 * 1024 + 3, 5);
+    fs_poser("/fs/relais/src/x.bin", &gros);
+    fs_poser("/fs/relais/src/sous/y.txt", b"y");
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+    let mut dernier = avash::sftp::Avancement::default();
+    let n = source
+        .relayer_dir_vers("/fs/relais/src", &cible, "/fs/relais/dst", None, |a| {
+            dernier = a;
+        })
+        .await
+        .unwrap();
+    assert_eq!(n as usize, gros.len() + 1);
+    assert_eq!(fs_lire("/fs/relais/dst/x.bin").unwrap(), gros);
+    assert_eq!(fs_lire("/fs/relais/dst/sous/y.txt").unwrap(), b"y");
+    assert_eq!((dernier.termines, dernier.nombre), (2, 2));
+    // Rien sur le disque du poste : aucun .part n'a été créé pour ce relais.
+    let temp = std::env::temp_dir();
+    assert!(
+        !std::fs::read_dir(&temp)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().contains("x.bin.part")),
+        "le relais a écrit sur le disque du poste"
+    );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
+/// Une annulation posée avant le départ arrête tout, en le disant.
+#[tokio::test]
+async fn un_transfert_annule_avant_de_partir_le_dit() {
+    fs_poser("/fs/annule/f.txt", b"abc");
+    let sftp = sftp_de_test().await;
+    let annulation: avash::sftp::Annulation =
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let local = dossier_temp("annule");
+    let e = sftp
+        .download_dir_with("/fs/annule", &local, Some(&annulation), |_| {})
+        .await
+        .expect_err("annulé");
+    assert!(e.to_string().contains(avash::sftp::ANNULE), "{e:#}");
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
 }

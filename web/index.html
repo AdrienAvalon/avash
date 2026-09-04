@@ -894,11 +894,25 @@
     .sftp-entry.dir .nm { color: var(--accent-soft); font-weight: 600; }
     .sftp-entry.up .nm { color: var(--text-dim); font-weight: 400; }
     .sftp-foot { padding: 8px 10px; border-top: 1px solid var(--border-soft); display: flex; gap: 8px; }
-    .sftp-progress { height: 3px; margin: 0 10px; border-radius: 2px; background: var(--card); overflow: hidden; }
-    .sftp-progress .bar { height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
-    .sftp-progress.indeterminate .bar { width: 40%; animation: slide 1s ease-in-out infinite alternate; }
 
-    @keyframes slide { from { transform: translateX(-100%) } to { transform: translateX(250%) } }
+    /* File des transferts : une ligne par transfert, barre, vitesse, bouton d'annulation. */
+    .sftp-transferts { display: flex; flex-direction: column; gap: 4px; margin: 6px 10px 0; max-height: 34%; overflow: auto; }
+    .sftp-transferts:empty { display: none; }
+
+    .sftp-transfert {
+      display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center;
+      padding: 6px 8px; border-radius: 8px; background: var(--card); font-size: 12px;
+    }
+
+    .sftp-transfert .nm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .sftp-transfert .det { grid-column: 1 / -1; color: var(--text-dim); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .sftp-transfert .barre { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--card-2, rgb(255 255 255 / 8%)); overflow: hidden; }
+    .sftp-transfert .barre > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
+    .sftp-transfert.fini .barre > span { background: var(--ok); }
+    .sftp-transfert.erreur { color: var(--err); }
+    .sftp-transfert.erreur .barre > span { background: var(--err); }
+    .sftp-transfert .btn-mini { padding: 0 6px; min-height: 20px; }
+
 
     .sftp-status {
       padding: 6px 12px 8px; font-size: 10.5px; color: var(--text-dim); font-family: var(--mono);
@@ -1052,11 +1066,34 @@
             <button class="btn-mini" id="sftp-up-btn" type="button" data-icon="upload" data-i18n="envoyer">Envoyer…</button>
             <button class="btn-mini" id="sftp-mkdir-btn" type="button" data-icon="plus" data-i18n="dossier-2">Dossier</button>
           </div>
-          <div class="sftp-progress" id="sftp-progress" hidden><div class="bar" id="sftp-bar"></div></div>
+          <div class="sftp-transferts" id="sftp-transferts" role="list" aria-label="Transferts" data-i18n-aria="sftp-transferts"></div>
           <div class="sftp-status" id="sftp-status" data-i18n="glisse-des-fichiers-ici-ou-clique-sur-un-f">Glisse des fichiers ici, ou clique sur un fichier pour le télécharger.</div>
         </aside>
+        <div class="modal-backdrop" id="sftp-copier-modal">
+          <form class="modal" id="sftp-copier-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="sftp-copier-title">
+            <h2 id="sftp-copier-title" data-i18n="sftp-copier-titre">Copier vers un autre hôte</h2>
+            <p class="modal-hint" id="sftp-copier-quoi"></p>
+            <label data-i18n="sftp-copier-cible">Hôte de destination (un onglet SSH ouvert)
+              <select id="sc-cible"></select>
+            </label>
+            <label data-i18n="sftp-copier-dossier">Dossier de destination
+              <input id="sc-dossier" placeholder="." />
+            </label>
+            <label class="check">
+              <input type="checkbox" id="sc-direct" />
+              <span data-i18n="sftp-copie-directe">Copie directe entre les deux hôtes</span>
+            </label>
+            <p class="modal-hint" data-i18n="sftp-copie-directe-detail">Sans cette case, les octets traversent ce poste sans y être écrits. Avec, l'hôte source envoie lui-même par scp, avec les clés de ton agent SSH prêtées le temps de la copie ; il doit pouvoir joindre l'hôte de destination.</p>
+            <p class="modal-error" id="sc-error" hidden></p>
+            <div class="modal-actions">
+              <button type="button" class="btn-ghost" id="sc-cancel" data-i18n="annuler">Annuler</button>
+              <button type="submit" class="btn-primary" id="sc-submit" data-i18n="sftp-copier-bouton">Copier</button>
+            </div>
+          </form>
+        </div>
         <div class="ctx-menu" id="sftp-context">
           <div class="ctx-item" data-act="download" data-i18n="telecharger">Télécharger</div>
+          <div class="ctx-item" data-act="copy-to" data-i18n="sftp-copier-vers">Copier vers un autre hôte…</div>
           <div class="ctx-item" data-act="cd" data-i18n="aller-ici-dans-le-terminal">Aller ici dans le terminal</div>
           <div class="ctx-item" data-act="copy" data-i18n="copier-le-chemin">Copier le chemin</div>
           <div class="ctx-sep"></div>
