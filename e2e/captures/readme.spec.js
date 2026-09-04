@@ -1,9 +1,23 @@
-// Les vues du README : accueil, terminal SSH, bureau RDP. Voir
+// Les vues du README : accueil, terminal SSH, bureau RDP, et les cadres de la
+// démonstration animée, pris aux moments clés le long du même parcours. Voir
 // wdio.captures.conf.js et scripts/captures-readme.sh.
+import { writeFileSync } from "node:fs";
 import { findHostRow, attendreBureauConnecte } from "../specs/helpers.js";
 
 const DOSSIER = process.env.CAPTURES_DOSSIER;
+const CADRES = process.env.CAPTURES_CADRES;
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+let numero = 0;
+// Un cadre de la démonstration ; `fois` copies pour tenir la vue à l'écran
+// (le montage joue les cadres à cadence fixe).
+async function cadre(fois = 1) {
+  if (!CADRES) return;
+  const png = await browser.saveScreenshot(`${CADRES}/${String(++numero).padStart(3, "0")}.png`);
+  for (let i = 1; i < fois; i++) {
+    writeFileSync(`${CADRES}/${String(++numero).padStart(3, "0")}.png`, png);
+  }
+}
 
 async function theme(voulu) {
   for (let i = 0; i < 3; i++) {
@@ -23,13 +37,17 @@ describe("captures du README", () => {
 
   it("accueil", async () => {
     await browser.saveScreenshot(`${DOSSIER}/accueil.png`);
+    await cadre(4);
   });
 
   it("terminal SSH", async () => {
     await (await findHostRow("test-ssh")).doubleClick();
+    await pause(300);
+    await cadre();
     await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
       { timeout: 20000, timeoutMsg: "session SSH jamais live" });
     await pause(1000);
+    await cadre(2);
     // Une invite et des commandes neutres : la machine derrière le sshd local
     // est le poste du mainteneur, on ne montre ni son nom ni ses disques. Le
     // shell de connexion peut être fish : on passe par bash pour l'invite.
@@ -50,9 +68,11 @@ describe("captures du README", () => {
     ]) {
       await taper(commande);
       await pause(600);
+      await cadre();
     }
     await pause(800);
     await browser.saveScreenshot(`${DOSSIER}/terminal-ssh.png`);
+    await cadre(3);
   });
 
   it("bureau RDP", async function () {
@@ -60,16 +80,24 @@ describe("captures du README", () => {
     if (!hote) return this.skip();
     await $("#manual-btn").click();
     await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
+    await pause(400);
+    await cadre(2);
     await browser.execute(() => {
       const r = document.querySelector('input[name="proto"][value="rdp"]');
       r.checked = true;
       r.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    await pause(300);
+    // Le formulaire RDP vide : pas de cadre une fois rempli, l'adresse du
+    // parc et le compte n'ont rien à faire dans la démonstration.
+    await cadre(2);
     await $("#m-addr").setValue(hote);
     await $("#m-port").setValue("3389");
     await $("#m-user").setValue(process.env.CAPTURES_RDP_UTILISATEUR);
     await $("#m-password").setValue(process.env.CAPTURES_RDP_MDP);
     await $("#m-submit").click();
+    await pause(800);
+    await cadre();
     const canvas = await $(".rdp-container canvas");
     await canvas.waitForExist({ timeout: 30000, timeoutMsg: "aucun canvas RDP" });
     await attendreBureauConnecte();
@@ -80,8 +108,10 @@ describe("captures du README", () => {
     // centre, quelle que soit la taille du bureau.
     await canvas.click();
     await pause(3000);
+    await cadre(2);
     await canvas.click({ x: 0, y: 75 });
     await pause(12000);
     await browser.saveScreenshot(`${DOSSIER}/bureau-rdp.png`);
+    await cadre(6);
   });
 });

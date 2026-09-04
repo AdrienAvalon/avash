@@ -21,7 +21,7 @@ application, qui lit votre `~/.ssh/config` tel quel.
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
 [![Tests](https://img.shields.io/badge/tests-1085%20verts-brightgreen.svg)](docs/qualite.md)
 
-<img src="docs/captures/bureau-rdp.png" alt="Un bureau Windows 11 affiché dans avash, la liste des hôtes à gauche" width="880">
+<img src="docs/captures/demo.webp" alt="Démonstration : un terminal SSH, puis un bureau Windows 11, dans avash" width="880">
 
 </div>
 
@@ -36,6 +36,10 @@ application, qui lit votre `~/.ssh/config` tel quel.
 | **Organisation** | dossiers par glisser-déposer, étiquettes, recherche instantanée, palette de commandes, snippets, santé des hôtes, enregistrement de session |
 | **Import** | PuTTY (fichiers ou registre) et MobaXterm, bureaux RDP et dossiers compris |
 | **Sécurité** | mots de passe dans le trousseau du système, clés d'hôte vérifiées en SSH **et** en RDP avant le moindre identifiant, aucune télémétrie |
+
+<div align="center">
+<img src="docs/captures/bureau-rdp.png" alt="Un bureau Windows 11 affiché dans avash, la liste des hôtes à gauche" width="880">
+</div>
 
 ## Pourquoi avash
 
@@ -103,6 +107,15 @@ produit par notre chaîne d'intégration continue (attestation Sigstore).
 Rust stable, Node.js 22 et les dépendances système de Tauri suffisent ; les
 étapes sont dans [CONTRIBUTING.md](CONTRIBUTING.md). `./scripts/release.sh`
 enchaîne validation, construction et empreintes.
+
+### Premier lancement, en trois gestes
+
+1. Vos hôtes de `~/.ssh/config` sont déjà dans la barre latérale ; **double-clic**
+   pour ouvrir un terminal, `Ctrl+B` pour le panneau de fichiers.
+2. **Connexion directe** pour un serveur SSH ou un bureau RDP qui n'y est pas
+   encore ; cochez « enregistrer » et il y reste, au format d'OpenSSH.
+3. `Ctrl+K` pour tout le reste : hôtes, tunnels, snippets, langue, santé des
+   hôtes, enregistrements. Le mot de passe, une seule fois : il va au trousseau.
 
 ## Au quotidien
 
@@ -189,6 +202,21 @@ qui parle à l'interface par WebSocket binaire local. Quatre paquets IronRDP
 sont portés avec des correctifs ciblés, documentés dans
 [rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md). Le reste est dans
 [docs/architecture.md](docs/architecture.md).
+
+```mermaid
+flowchart LR
+    subgraph app["Application (Tauri 2)"]
+        front["Front TypeScript<br/>xterm.js, canvas RDP"]
+        ui["avash-ui (Rust)<br/>commandes, trousseau"]
+        coeur["avash (Rust)<br/>~/.ssh/config, russh, SFTP, tunnels"]
+        front <-->|IPC Tauri| ui
+        ui --> coeur
+    end
+    sidecar["avash-rdp (Rust)<br/>IronRDP, codecs, magnétoscope"]
+    front <-->|WebSocket binaire local| sidecar
+    coeur -->|SSH, SFTP| ssh[("Serveurs SSH")]
+    sidecar -->|RDP, TLS, NLA| rdp[("Windows, xrdp,<br/>GNOME Remote Desktop")]
+```
 
 ## Contribuer
 

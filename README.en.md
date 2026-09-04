@@ -21,7 +21,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
 [![Tests](https://img.shields.io/badge/tests-1085%20passing-brightgreen.svg)](docs/qualite.md)
 
-<img src="docs/captures/bureau-rdp.png" alt="A Windows 11 desktop inside avash, the host list on the left" width="880">
+<img src="docs/captures/demo.webp" alt="Demo: an SSH terminal, then a Windows 11 desktop, inside avash" width="880">
 
 </div>
 
@@ -40,6 +40,10 @@ application, which reads your `~/.ssh/config` as it is.
 | **Organisation** | drag-and-drop folders, tags, instant search, command palette, snippets, host health, session recording |
 | **Import** | PuTTY (files or registry) and MobaXterm, RDP desktops and folders included |
 | **Security** | passwords in the system keyring, host keys checked for SSH **and** RDP before any credential leaves, no telemetry |
+
+<div align="center">
+<img src="docs/captures/bureau-rdp.png" alt="A Windows 11 desktop inside avash, the host list on the left" width="880">
+</div>
 
 ## Why avash
 
@@ -104,6 +108,15 @@ built by our CI (Sigstore attestation).
 Stable Rust, Node.js 22 and Tauri's system dependencies are enough; the steps
 are in [CONTRIBUTING.md](CONTRIBUTING.md) (in French). `./scripts/release.sh`
 runs validation, build and checksums in one go.
+
+### First launch, in three moves
+
+1. Your hosts from `~/.ssh/config` are already in the sidebar; **double-click**
+   to open a terminal, `Ctrl+B` for the file panel.
+2. **Direct connection** for an SSH server or an RDP desktop that is not there
+   yet; tick "save" and it stays, in OpenSSH's own format.
+3. `Ctrl+K` for everything else: hosts, tunnels, snippets, language, host
+   health, recordings. The password, once: it goes to the keyring.
 
 ## Day to day
 
@@ -190,6 +203,21 @@ talks to the interface over a local binary WebSocket. Four IronRDP crates are
 vendored with targeted fixes, documented in
 [rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md). The rest is in
 [docs/architecture.md](docs/architecture.md).
+
+```mermaid
+flowchart LR
+    subgraph app["Application (Tauri 2)"]
+        front["TypeScript front<br/>xterm.js, RDP canvas"]
+        ui["avash-ui (Rust)<br/>commands, keyring"]
+        core["avash (Rust)<br/>~/.ssh/config, russh, SFTP, tunnels"]
+        front <-->|Tauri IPC| ui
+        ui --> core
+    end
+    sidecar["avash-rdp (Rust)<br/>IronRDP, codecs, recorder"]
+    front <-->|local binary WebSocket| sidecar
+    core -->|SSH, SFTP| ssh[("SSH servers")]
+    sidecar -->|RDP, TLS, NLA| rdp[("Windows, xrdp,<br/>GNOME Remote Desktop")]
+```
 
 ## Contributing
 

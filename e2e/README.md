@@ -24,8 +24,10 @@ Le même harnais prend les **captures d'écran du README** (`docs/captures/`) :
 `scripts/captures-readme.sh [hôte RDP]` lance `wdio.captures.conf.js` sous
 Xvfb, avec le bac à sable semé d'hôtes plausibles, une session SSH ouverte sur
 le sshd local et, si un hôte est donné, un bureau Windows (mot de passe lu dans
-le trousseau, jamais en argument). Ce n'est pas un test : rien n'est comparé,
-et `captures/` n'est pas dans la liste des spécifications.
+le trousseau, jamais en argument). Le même parcours dépose des cadres aux
+moments clés, que le script monte en démonstration animée (`demo.webp`,
+ffmpeg). Ce n'est pas un test : rien n'est comparé, et `captures/` n'est pas
+dans la liste des spécifications.
 
 ## Lancer
 

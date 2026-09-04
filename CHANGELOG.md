@@ -39,7 +39,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   de conduite. Les notes de chaque release reprennent désormais la section
   du CHANGELOG de la version, avec les commandes de vérification ; une
   section absente fait échouer la publication plutôt que de publier sans un
-  mot.
+  mot. Puis, sur les deux plateformes : une démonstration animée en tête
+  (WebP de onze secondes et cent trente kilooctets, accueil, terminal SSH,
+  connexion directe, bureau Windows, montée par le même harnais), un schéma
+  d'architecture Mermaid rendu nativement par GitHub et GitLab, un
+  « premier lancement en trois gestes », et, côté GitLab, trois badges de
+  projet (pipeline, version, licence) posés par l'API ; le rendu GitLab a
+  été contrôlé par son API markdown (blocs centrés, largeurs d'images,
+  tableaux et badges conservés).
 
 ## [0.7.2] - 2026-09-04
 
