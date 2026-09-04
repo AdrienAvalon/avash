@@ -304,7 +304,11 @@ jobs:
             artefacts/**/*.zip
             artefacts/**/*.dmg
             artefacts/**/*.app.tar.gz
-            artefacts/**/*.app.tar.gz.sig
+            # Un seul motif pour les signatures : `*.app.tar.gz.sig` en plus de
+            # `*.sig` faisait téléverser deux fois Avash.app.tar.gz.sig, et la
+            # seconde copie, en « écrasement », tombait sur un fichier que la
+            # première venait de remplacer (« Not Found », release 0.8.0 restée
+            # en brouillon sans cette signature, terminée à la main).
             artefacts/**/*.sig
             latest.json
             SHA256SUMS

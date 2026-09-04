@@ -234,9 +234,14 @@ outil en ligne de commande, icônes, `.desktop`, métadonnées AppStream).
 cd packaging/aur/avash
 sed -i "s/^pkgver=.*/pkgver=0.7.3/; s/^pkgrel=.*/pkgrel=1/" PKGBUILD
 updpkgsums                          # remplace l'empreinte de l'archive (pacman-contrib)
-makepkg -f --noconfirm              # construit et vérifie, une dizaine de minutes
+BUILDDIR=/tmp/avash-makepkg PKGDEST=/tmp/avash-makepkg makepkg -f --noconfirm
 makepkg --printsrcinfo > .SRCINFO   # obligatoire, l'AUR le lit à la place du PKGBUILD
 ```
+
+`BUILDDIR` hors du dépôt, sinon cargo voit l'archive extraite sous
+`packaging/aur/avash/src/` comme un membre égaré de l'espace de travail
+(« current package believes it's in a workspace when it's not ») et
+`prepare()` échoue ; une dizaine de minutes de construction.
 
 Publication : un compte sur https://aur.archlinux.org avec une clé SSH, puis
 le dépôt `ssh://aur@aur.archlinux.org/avash.git` où l'on pousse `PKGBUILD` et

@@ -8,6 +8,10 @@ import { basename, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { findHostRow } from "./helpers.js";
 
+/** Un chemin local tel que le serveur SFTP le nomme : sous Windows, OpenSSH
+ *  Server présente `C:\Users\x` comme `/C:/Users/x`. */
+const distant = (p) => (process.platform === "win32" ? `/${p.replace(/\\/g, "/")}` : p);
+
 /** Le dossier de réception de l'application : celui des téléchargements du
  *  bac à sable s'il existe, sinon le bac à sable lui-même (repli du cœur). */
 function dossierDeReception() {
@@ -103,7 +107,7 @@ describe("SFTP — panneau, dossier entier, copie vers un autre hôte", () => {
   });
 
   it("télécharge un dossier entier, sous-dossiers compris, par la file des transferts", async () => {
-    await allerDans(racine);
+    await allerDans(distant(racine));
     await menuSur(await ligne("arbre"), "download");
     await attendreTransfertFini("arbre");
     const recu = join(dossierDeReception(), "arbre");
@@ -119,12 +123,12 @@ describe("SFTP — panneau, dossier entier, copie vers un autre hôte", () => {
     // Retour au premier onglet, dont le panneau est ouvert sur la racine.
     await $$(".tab")[0].click();
     await browser.waitUntil(async () => $("#sftp-panel").isDisplayed(), { timeout: 5000 });
-    await allerDans(join(arbre, "sous"));
+    await allerDans(distant(join(arbre, "sous")));
     await menuSur(await ligne("b.bin"), "copy-to");
     await $("#sftp-copier-modal").waitForDisplayed({ timeout: 3000 });
     const options = await $$("#sc-cible option");
     expect(options.length).toBe(1);
-    await $("#sc-dossier").setValue(cible);
+    await $("#sc-dossier").setValue(distant(cible));
     await $("#sc-submit").click();
     await attendreTransfertFini("b.bin");
     expect(readFileSync(join(cible, "b.bin")).equals(gros)).toBe(true);

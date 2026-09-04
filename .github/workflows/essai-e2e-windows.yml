@@ -1,0 +1,88 @@
+# Essai : la suite bout en bout complète sous Windows, serveurs locaux compris
+# (sshd d'OpenSSH Server, serveur RDP et serveur VNC de test), sur une
+# branche essai/… ou à la demande. Le job e2e-windows de ci.yml n'en joue que
+# les scénarios sans serveur ; quand celui-ci est vert, il le remplace.
+name: Essai E2E Windows (serveurs locaux)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["essai/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: essai-e2e-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-windows-serveurs:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-on-failure: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # OpenSSH Server est une capacité Windows facultative. Le harnais se
+      # sert du service « sshd » (port 22) : l'authentification par clé
+      # d'OpenSSH pour Windows exige le compte SYSTEM. Le shell de connexion
+      # est bash (Git for Windows), posé dans le registre : les scénarios
+      # tapent des commandes POSIX dans le terminal.
+      - name: OpenSSH Server et shell bash
+        shell: pwsh
+        run: |
+          Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+          Get-Service sshd | Select-Object Name, Status
+          New-Item -Path HKLM:\SOFTWARE\OpenSSH -Force | Out-Null
+          New-ItemProperty -Path HKLM:\SOFTWARE\OpenSSH -Name DefaultShell `
+            -Value "C:\Program Files\Git\bin\bash.exe" -PropertyType String -Force | Out-Null
+          & "C:\Windows\System32\OpenSSH\sshd.exe" -V 2>&1 | Select-Object -First 1
+
+      - name: Front (le binaire embarque web/dist)
+        working-directory: web
+        run: npm ci && npx vite build
+
+      - name: Processus RDP
+        working-directory: rdp-sidecar
+        run: cargo build --release
+
+      # Le vrai sidecar cette fois : les scénarios RDP et VNC le lancent.
+      - name: Construire l'app (serveur WebDriver embarqué)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path crates/avash-ui/binaries | Out-Null
+          Copy-Item rdp-sidecar/target/release/avash-rdp.exe `
+            crates/avash-ui/binaries/avash-rdp-x86_64-pc-windows-msvc.exe
+          cargo build --release -p avash-ui --features webdriver
+
+      - name: Serveurs RDP et VNC de test
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path test-rdp-server/Cargo.toml
+          cargo build --release --manifest-path test-vnc-server/Cargo.toml
+          openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost" `
+            -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem
+
+      - name: E2E — dépendances
+        working-directory: e2e
+        run: npm ci
+
+      - name: E2E — suite complète (sshd et serveurs de test locaux)
+        working-directory: e2e
+        run: npm test
+
+      - name: Journal d'OpenSSH Server
+        if: always()
+        shell: pwsh
+        run: |
+          Get-WinEvent -LogName OpenSSH/Operational -MaxEvents 60 -ErrorAction SilentlyContinue |
+            Sort-Object TimeCreated | Format-Table -AutoSize -Wrap TimeCreated, Message

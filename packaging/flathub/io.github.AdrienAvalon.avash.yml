@@ -103,7 +103,7 @@ modules:
         tag: v0.8.0
         # Le commit du tag, posé à la publication (RELEASE.md, section 8) ;
         # entre guillemets, sinon YAML peut le lire comme un nombre.
-        commit: "0000000000000000000000000000000000000000"
+        commit: "69b8e4f4052e4f977630e205a6e9243acc241842"
       - cargo-sources.json
       - cargo-sources-rdp.json
       - node-sources.json

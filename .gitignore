@@ -36,3 +36,8 @@ crates/avash-ui/gen/schemas/
 # Construction Flatpak locale (packaging/flathub)
 build-flatpak/
 .flatpak-builder/
+
+# Archive des sources téléchargée par makepkg (packaging/aur)
+packaging/aur/avash/*.tar.gz
+packaging/aur/avash/src/
+packaging/aur/avash/pkg/

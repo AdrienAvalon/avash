@@ -82,8 +82,11 @@ export async function openCtx(row) {
 // Chaque spec RDP a le sien : aucun couplage entre specs.
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+// Le binaire d'un serveur de test, avec son suffixe sous Windows : libuv ne
+// l'ajoute pas toujours quand le chemin porte un répertoire.
+const EXE = process.platform === "win32" ? ".exe" : "";
 export function startRdpServer(port) {
-  return spawn("./target/release/test-rdp-server",
+  return spawn(`./target/release/test-rdp-server${EXE}`,
     ["--bind-addr", `127.0.0.1:${port}`, "--cert", "cert.pem", "--key", "key.pem",
      "--user", "test", "--pass", "test", "--sec", "hybrid"],
     { cwd: resolve("../test-rdp-server"), stdio: "ignore" });
@@ -93,7 +96,7 @@ export function startRdpServer(port) {
 // standard, une ligne par entrée reçue, va à `surLigne` : c'est par elle que
 // le scénario lit ce que le serveur a compris d'une frappe.
 export function startVncServer(port, surLigne) {
-  const p = spawn("./target/release/test-vnc-server",
+  const p = spawn(`./target/release/test-vnc-server${EXE}`,
     ["--port", String(port), "--pass", "test"],
     { cwd: resolve("../test-vnc-server"), stdio: ["ignore", "pipe", "ignore"] });
   p.stdout.setEncoding("utf8");

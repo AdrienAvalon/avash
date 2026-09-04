@@ -16,7 +16,7 @@
 // pour les scénarios de bout en bout : un serveur RDP de test et un sshd dédié
 // (non-root, clé, port 2223) auquel l'app se connecte réellement.
 import { spawn, execSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, copyFileSync, existsSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
@@ -29,15 +29,22 @@ let appEmbarquee;
 // l'application utilise réellement.
 const sandbox = process.env.AVASH_E2E_SANDBOX ?? mkdtempSync(join(tmpdir(), "avash-e2e-"));
 const sshDir = join(sandbox, "sshtest");
-export const RDP_PORT = 33899;
-export const SSH_PORT = 2223;
-// Serveurs locaux (RDP + sshd) : actifs partout, intégration continue comprise,
-// qui construit le serveur RDP de test et génère son certificat. `E2E_NO_RDP=1`
-// reste disponible pour une machine sans sshd ni serveur de test.
-// Sous Windows, ni sshd de harnais ni serveur RDP de test : seuls les scénarios
-// sans serveur local tournent — c'est déjà ce que la CI Linux ne voyait pas.
 export const WINDOWS = process.platform === "win32";
-export const LOCAL_SERVERS = !process.env.E2E_NO_RDP && !WINDOWS;
+export const RDP_PORT = 33899;
+// Sous Windows, le sshd est le service OpenSSH Server du système (voir
+// preparerSshdWindows) : il écoute sur le port 22, on ne choisit pas.
+export const SSH_PORT = WINDOWS ? 22 : 2223;
+// Serveurs locaux (RDP, VNC, sshd) : actifs partout, intégration continue
+// comprise, qui construit les serveurs de test et génère le certificat RDP.
+// `E2E_NO_RDP=1` reste disponible pour une machine sans sshd ni serveur de
+// test. Sous Windows, ils ont tourné pour la première fois le 05/09/2026 :
+// jusque-là seuls les scénarios sans serveur y passaient, et les quatre bogues
+// Windows de l'été avaient tous été trouvés en publiant.
+export const LOCAL_SERVERS = !process.env.E2E_NO_RDP;
+// Un chemin tel que le sshd et l'application le lisent : sous Windows, les
+// barres obliques évitent qu'un `\t` ou un `\n` de C:\temp ne soit pris pour
+// une séquence d'échappement par un parseur de configuration.
+const chemin = (p) => (WINDOWS ? p.replace(/\\/g, "/") : p);
 // Serveur WebDriver embarqué dans l'application (cf. en-tête) : d'office sous
 // Windows, sur demande ailleurs.
 export const EMBARQUE = WINDOWS || !!process.env.E2E_EMBARQUE;
@@ -123,7 +130,7 @@ function seedSandbox() {
     // Hôte réellement joignable, servi par le sshd local ci-dessous.
     lines.push(
       "Host test-ssh", "    HostName 127.0.0.1", `    Port ${SSH_PORT}`,
-      `    User ${userInfo().username}`, `    IdentityFile ${join(ssh, "test_client")}`, "");
+      `    User ${userInfo().username}`, `    IdentityFile ${chemin(join(ssh, "test_client"))}`, "");
   }
   writeFileSync(join(ssh, "config"), lines.join("\n"), { mode: 0o600 });
 
@@ -150,9 +157,10 @@ function startSshd() {
   const client = join(ssh, "test_client");
   const authKeys = join(sshDir, "authorized_keys");
   const cfg = join(sshDir, "sshd_config");
-  execSync(`ssh-keygen -t ed25519 -f "${host}" -N "" -q`);
   execSync(`ssh-keygen -t ed25519 -f "${client}" -N "" -q`);
-  execSync(`cp "${client}.pub" "${authKeys}"`);
+  if (WINDOWS) return preparerSshdWindows(`${client}.pub`);
+  execSync(`ssh-keygen -t ed25519 -f "${host}" -N "" -q`);
+  copyFileSync(`${client}.pub`, authKeys);
   chmodSync(authKeys, 0o600); chmodSync(host, 0o600);
   writeFileSync(cfg, [
     `Port ${SSH_PORT}`, "ListenAddress 127.0.0.1", `HostKey ${host}`,
@@ -167,6 +175,32 @@ function startSshd() {
   ).toString().trim();
   // -D : reste au premier plan pour qu'on tienne le processus et qu'on le tue à la fin.
   return spawn(sshdBin, ["-D", "-f", cfg, "-E", join(sshDir, "sshd.log")], { stdio: "ignore" });
+}
+
+// Sous Windows, on ne lance pas un sshd à nous : l'authentification par clé
+// d'OpenSSH pour Windows passe par une ouverture de session S4U que seul le
+// compte SYSTEM peut faire, donc par le service « sshd » (OpenSSH Server,
+// capacité facultative installée par la chaîne). Le harnais lui confie la clé
+// cliente dans administrators_authorized_keys, le fichier que sa configuration
+// par défaut lit pour les administrateurs (l'exécuteur en est un), avec les
+// droits qu'il exige (SYSTEM et Administrateurs seulement), puis le redémarre.
+// Le shell de connexion (bash de Git for Windows) est posé dans le registre
+// par la chaîne, avant. Rien à arrêter à la fin : la machine est jetable.
+function preparerSshdWindows(clePublique) {
+  const programData = process.env.ProgramData ?? "C:\\ProgramData";
+  const autorisees = join(programData, "ssh", "administrators_authorized_keys");
+  const ps = (script) => execSync(`powershell -NoProfile -NonInteractive -Command "${script.replace(/"/g, '\\"')}"`, { stdio: "pipe" }).toString();
+  // Un premier démarrage crée C:\ProgramData\ssh (clés d'hôte, sshd_config).
+  ps("Start-Service sshd");
+  if (!existsSync(autorisees)) writeFileSync(autorisees, "");
+  writeFileSync(autorisees, `${copierCle(clePublique)}\n`);
+  ps(`icacls '${autorisees}' /inheritance:r /grant 'SYSTEM:F' /grant 'Administrators:F' /grant 'BUILTIN\\Administrators:F'`);
+  ps("Restart-Service sshd");
+  return null;
+}
+
+function copierCle(fichier) {
+  return execSync(WINDOWS ? `type "${fichier}"` : `cat "${fichier}"`).toString().trim();
 }
 
 // Le pilote natif (WebKitWebDriver, lancé par tauri-driver) est mort une fois
