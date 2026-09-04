@@ -80,9 +80,12 @@ jobs:
         working-directory: e2e
         run: npm test
 
+      # Les événements de CE job seulement : l'image de l'exécuteur en garde
+      # d'anciens, et soixante lignes ne montraient qu'une connexion sur dix.
       - name: Journal d'OpenSSH Server
         if: always()
         shell: pwsh
         run: |
-          Get-WinEvent -LogName OpenSSH/Operational -MaxEvents 60 -ErrorAction SilentlyContinue |
+          Get-WinEvent -LogName OpenSSH/Operational -MaxEvents 500 -ErrorAction SilentlyContinue |
+            Where-Object { $_.TimeCreated -gt (Get-Date).AddHours(-2) } |
             Sort-Object TimeCreated | Format-Table -AutoSize -Wrap TimeCreated, Message

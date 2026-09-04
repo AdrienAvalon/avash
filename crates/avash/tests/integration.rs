@@ -2022,11 +2022,18 @@ async fn un_dossier_local_se_televerse_entier() {
     sftp.close().await.unwrap();
 }
 
-/// Annulé au tiers, un téléchargement garde son `.part` et sa carte ; relancé,
-/// il ne redemande pas les bandes déjà complètes et rend le fichier entier.
+/// Annulé en route, un téléchargement garde son `.part` et sa carte ; relancé,
+/// il rend le fichier entier et ne laisse aucune trace.
+///
+/// Huit mégaoctets : huit bandes de seize blocs. Avec 400 Kio (deux blocs par
+/// bande), les bandes finissaient leurs lectures avant que la boucle de
+/// progression, qui pose le drapeau, ne les ait toutes vues : sur l'exécuteur
+/// macOS de la chaîne, le transfert rendait Ok(409600) au lieu de
+/// « annulé » (régression vue en CI, 04/09/2026). Le drapeau est vérifié par
+/// chaque bande avant chaque bloc : avec seize blocs par bande, il est vu.
 #[tokio::test]
-async fn un_telechargement_annule_reprend_sans_redemander_les_bandes_faites() {
-    let gros = motif(400 * 1024, 3);
+async fn un_telechargement_annule_reprend_et_rend_le_fichier_entier() {
+    let gros = motif(8 * 1024 * 1024, 3);
     fs_poser("/fs/reprise/gros.bin", &gros);
     let sftp = sftp_de_test().await;
     let local = dossier_temp("reprise").join("gros.bin");
@@ -2038,7 +2045,7 @@ async fn un_telechargement_annule_reprend_sans_redemander_les_bandes_faites() {
             &local,
             Some(&annulation),
             move |fait, _| {
-                if fait >= 130 * 1024 {
+                if fait >= 1024 * 1024 {
                     a.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             },
@@ -2048,19 +2055,9 @@ async fn un_telechargement_annule_reprend_sans_redemander_les_bandes_faites() {
     assert!(e.to_string().contains(avash::sftp::ANNULE), "{e:#}");
     let partiel = local.with_file_name("gros.bin.part");
     let carte = local.with_file_name("gros.bin.part.reprise");
-    assert!(
-        partiel.exists() && carte.exists(),
-        "le .part et sa carte restent pour la reprise"
-    );
-    let carte_json: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&carte).unwrap()).unwrap();
-    let faites: Vec<(u64, u64)> = serde_json::from_value(carte_json["faites"].clone()).unwrap();
-    assert!(
-        !faites.is_empty(),
-        "au moins une bande complète avant l'annulation"
-    );
-
-    fs_oublier_lectures();
+    // La carte n'existe que si une bande a fini avant l'annulation, ce que
+    // huit bandes menées de front ne garantissent pas ; le .part, lui, reste.
+    assert!(partiel.exists(), "le .part reste pour la reprise");
     let n = sftp
         .download_reprise("/fs/reprise/gros.bin", &local, None, |_, _| {})
         .await
@@ -2075,7 +2072,58 @@ async fn un_telechargement_annule_reprend_sans_redemander_les_bandes_faites() {
         !partiel.exists() && !carte.exists(),
         "plus de trace après la reprise"
     );
-    for o in fs_lectures_de("/fs/reprise/gros.bin") {
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
+
+/// La reprise ne redemande pas les bandes que la carte dit complètes : avec
+/// une carte posée à la main (première et dernière bandes faites, leurs
+/// octets déjà dans le `.part`), aucune lecture ne tombe dans ces bandes, et
+/// le fichier rendu est entier. Déterministe, là où l'annulation en cours de
+/// route ne garantit pas qu'une bande ait fini.
+#[tokio::test]
+async fn la_reprise_ne_relit_pas_les_bandes_que_la_carte_dit_faites() {
+    let gros = motif(2 * 1024 * 1024, 5);
+    fs_poser("/fs/reprise2/gros.bin", &gros);
+    let sftp = sftp_de_test().await;
+    let local = dossier_temp("reprise2").join("gros.bin");
+    let partiel = local.with_file_name("gros.bin.part");
+    let carte = local.with_file_name("gros.bin.part.reprise");
+    // Huit bandes de 256 Kio : la première et la dernière sont « faites ».
+    let bande = 256 * 1024u64;
+    let faites = vec![(0, bande), (7 * bande, 8 * bande)];
+    let mut part = vec![0u8; gros.len()];
+    for (d, f) in &faites {
+        let (d, f) = (*d as usize, *f as usize);
+        part[d..f].copy_from_slice(&gros[d..f]);
+    }
+    std::fs::write(&partiel, &part).unwrap();
+    // Même taille et même date que le serveur de test : la carte vaut.
+    std::fs::write(
+        &carte,
+        serde_json::json!({ "taille": gros.len(), "mtime": 1_700_000_000u64, "faites": faites })
+            .to_string(),
+    )
+    .unwrap();
+
+    fs_oublier_lectures();
+    let n = sftp
+        .download_reprise("/fs/reprise2/gros.bin", &local, None, |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(n as usize, gros.len());
+    assert_eq!(
+        std::fs::read(&local).unwrap(),
+        gros,
+        "le fichier repris est faux"
+    );
+    assert!(
+        !partiel.exists() && !carte.exists(),
+        "plus de trace après la reprise"
+    );
+    let lectures = fs_lectures_de("/fs/reprise2/gros.bin");
+    assert!(!lectures.is_empty(), "les six bandes manquantes se lisent");
+    for o in lectures {
         assert!(
             !faites.iter().any(|(d, f)| *d <= o && o < *f),
             "la reprise a relu le décalage {o}, dans une bande déjà faite {faites:?}"

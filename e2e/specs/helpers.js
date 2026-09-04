@@ -78,6 +78,41 @@ export async function openCtx(row) {
   }, row);
 }
 
+/** Écoute ce que les sessions de terminal écrivent (`pty-output`), pour que
+ *  l'échec d'une connexion dise ce que l'onglet affichait — la seule trace de
+ *  la raison (clé introuvable, refus, hôte injoignable) est dans le terminal,
+ *  et son rendu WebGL n'a pas de texte à lire dans le DOM. À poser AVANT le
+ *  geste qui connecte. */
+export async function ecouterSortiePty() {
+  await browser.execute(() => {
+    if (window.__sortiePty !== undefined) return;
+    window.__sortiePty = "";
+    const i = window.__TAURI_INTERNALS__;
+    return i.invoke("plugin:event|listen", {
+      event: "pty-output",
+      target: { kind: "Any" },
+      handler: i.transformCallback((ev) => { window.__sortiePty += ev.payload?.data ?? ""; }),
+    });
+  });
+}
+
+/** Ce que les terminaux ont écrit depuis `ecouterSortiePty`, sans les séquences d'échappement. */
+export async function sortiePty() {
+  const brut = await browser.execute(() => window.__sortiePty ?? "");
+  // eslint-disable-next-line no-control-regex
+  return String(brut).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "").trim();
+}
+
+/** Attend qu'une session de terminal soit live, et dit sinon ce que l'onglet affichait. */
+export async function attendreSessionLive(quoi = "session SSH", minimum = 1) {
+  try {
+    await browser.waitUntil(async () => (await $$(".state.live")).length >= minimum,
+      { timeout: 20000 });
+  } catch (e) {
+    throw new Error(`${quoi} jamais live ; le terminal disait :\n${await sortiePty()}`, { cause: e });
+  }
+}
+
 // Démarre un serveur RDP de test dédié (identifiants test/test) sur `port`.
 // Chaque spec RDP a le sien : aucun couplage entre specs.
 import { spawn } from "node:child_process";

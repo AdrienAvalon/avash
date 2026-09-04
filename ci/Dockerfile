@@ -25,7 +25,7 @@ FROM rust:1-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531
 RUN apt-get update -qq \
  && apt-get install -y -qq \
       libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
-      webkit2gtk-driver xvfb openssh-server openssl libopus-dev cmake \
+      webkit2gtk-driver xvfb socat openssh-server openssl libopus-dev cmake \
       python3 python3-numpy python3-pil python3-websockets \
       ca-certificates curl gnupg >/dev/null 2>&1 \
  && rm -rf /var/lib/apt/lists/* \

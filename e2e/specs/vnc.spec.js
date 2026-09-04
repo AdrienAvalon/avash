@@ -60,8 +60,18 @@ describe("VNC — connexion réelle au serveur de test", () => {
 
     // Un clic au centre du canvas : le serveur pose un carré magenta à
     // l'endroit reçu. Le pixel central prouve le mappage souris (letterbox),
-    // le masque de boutons, et la mise à jour incrémentale.
-    await $(".rdp-container canvas").click();
+    // le masque de boutons, et la mise à jour incrémentale. Les événements
+    // sont dispatchés à la main : le canvas écoute mousedown et mouseup, et le
+    // serveur WebDriver embarqué (Windows, macOS) ne produit qu'un `click`
+    // synthétique, sans les deux, ce qui ne faisait jamais partir le clic.
+    await browser.execute(() => {
+      const c = document.querySelector(".rdp-container canvas");
+      const r = c.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      for (const type of ["mousedown", "mouseup"]) {
+        c.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, buttons: type === "mousedown" ? 1 : 0, clientX: x, clientY: y }));
+      }
+    });
     try {
       await attendreCouleur(325, 245, [255, 0, 255], "carré magenta au point du clic");
     } catch (e) {

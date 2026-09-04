@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { findHostRow } from "./helpers.js";
+import { attendreSessionLive, ecouterSortiePty, findHostRow } from "./helpers.js";
 
 /** Un chemin local tel que le serveur SFTP le nomme : sous Windows, OpenSSH
  *  Server présente `C:\Users\x` comme `/C:/Users/x`. */
@@ -23,9 +23,9 @@ function dossierDeReception() {
 }
 
 async function ouvrirSessionEtPanneau() {
+  await ecouterSortiePty();
   await (await findHostRow("test-ssh")).doubleClick();
-  await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
-    { timeout: 20000, timeoutMsg: "session SSH jamais live" });
+  await attendreSessionLive();
   await browser.waitUntil(async () => $("#sftp-toggle").isEnabled(),
     { timeout: 5000, timeoutMsg: "bouton SFTP jamais activé" });
   // Le panneau est toujours dans la page : c'est sa classe « open » qui dit
@@ -40,15 +40,23 @@ async function ouvrirSessionEtPanneau() {
   }
 }
 
-/** Va dans un dossier distant par la barre de chemin. */
+/** Va dans un dossier distant par la barre de chemin : la valeur est posée
+ *  puis Entrée dispatchée, comme le fait la frappe. Un chemin tapé touche par
+ *  touche perdait des lettres quand la machine était chargée (suite complète,
+ *  05/09/2026) et le panneau allait ailleurs. */
 async function allerDans(chemin) {
   const barre = $("#sftp-path");
-  await barre.click();
-  await browser.keys(["Control", "a"]);
-  await browser.keys(chemin);
-  await browser.keys("Enter");
-  await browser.waitUntil(async () => (await barre.getValue()) === chemin && (await $$("#sftp-list .sftp-entry")).length > 0,
-    { timeout: 10000, timeoutMsg: `le panneau n'est pas allé dans ${chemin}` });
+  await browser.execute((c) => {
+    const el = document.getElementById("sftp-path");
+    el.focus();
+    el.value = c;
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  }, chemin);
+  let vu = "";
+  await browser.waitUntil(async () => {
+    vu = await barre.getValue();
+    return vu === chemin && (await $$("#sftp-list .sftp-entry")).length > 0;
+  }, { timeout: 10000, timeoutMsg: `le panneau n'est pas allé dans ${chemin} (barre : ${vu})` });
 }
 
 /** La ligne d'une entrée du panneau, par son nom. */

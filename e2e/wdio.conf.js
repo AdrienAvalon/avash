@@ -258,6 +258,7 @@ export const config = {
         "./specs/rdp-clipboard.spec.js", "./specs/rdp-fichiers.spec.js", "./specs/vnc.spec.js",
         "./specs/onglets-mixtes.spec.js", "./specs/enregistrer-et-connecter.spec.js",
         "./specs/enregistrement.spec.js", "./specs/sante.spec.js",
+        "./specs/restauration.spec.js", "./specs/vue-partagee.spec.js", "./specs/serie.spec.js",
       ],
   maxInstances: 1,
   // Régression visuelle : captures comparées pixel à pixel à des références.
