@@ -111,7 +111,7 @@ run "audit npm (front)"  "$WEB" "$ROOT/scripts/npm-audit.sh" high
 # transitives (extract-zip, deepmerge-ts, serialize-javascript) portent des
 # avis « haute » sans correctif en amont : ce code ne tourne que sur la
 # machine de test, jamais chez l'utilisateur. On ne bloque que sur « critique ».
-run "audit npm (e2e)"    "$ROOT/e2e" "$ROOT/scripts/npm-audit.sh" critical
+run "audit npm (e2e)"    "$ROOT/e2e" "$ROOT/scripts/npm-audit.sh" critical tolerer-registre
 run "tests"              "$WEB" npx vitest run
 run "build"              "$WEB" npx vite build
 

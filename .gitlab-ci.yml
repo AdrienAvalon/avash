@@ -151,7 +151,7 @@ dependances:
     # Le front est le périmètre de confiance réel : « haute » et au-delà ; la
     # suite bout en bout ne tourne que sur la machine de test : « critique ».
     - (cd web && npm ci && ../scripts/npm-audit.sh high)
-    - (cd e2e && npm ci && ../scripts/npm-audit.sh critical)
+    - (cd e2e && npm ci && ../scripts/npm-audit.sh critical tolerer-registre)
   allow_failure: false
 
 # --- Bout en bout : l'application réelle, sans affichage ------------------

@@ -85,7 +85,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   de construction pour un job à eux dans chaque chaîne (`audit-npm` sur
   GitHub, `dependances` sur GitLab, avec l'audit cargo) : logés dans le job
   du front, dont dépendent la construction Rust et la suite bout en bout, ils
-  sautaient tout le reste. Une panne ne rougit plus que ce job.
+  sautaient tout le reste. Une panne ne rougit plus que ce job. Et pour la
+  suite bout en bout seulement, dont les dépendances ne tournent que sur la
+  machine de test, une panne du registre après trois essais est un
+  avertissement, pas une erreur : le point d'audit a refusé sa requête de
+  480 paquets pendant des heures, rougissant chaque PR Dependabot. Le
+  front, périmètre de confiance réel, garde la porte fermée.
 - **`SHA256SUMS` publié avec les seuls noms de fichiers.** Depuis la 0.7.0,
   chaque ligne portait le chemin du fichier dans la chaîne
   (`artefacts/avash-linux/target/…`) : `sha256sum -c SHA256SUMS` depuis le

@@ -191,7 +191,7 @@ jobs:
         run: npm ci && ../scripts/npm-audit.sh high
       - name: Suite bout en bout — audit des dépendances
         working-directory: e2e
-        run: npm ci && ../scripts/npm-audit.sh critical
+        run: npm ci && ../scripts/npm-audit.sh critical tolerer-registre
 
   windows-coeur:
     name: Cœur — tests Windows
