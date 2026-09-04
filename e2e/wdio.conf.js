@@ -169,6 +169,46 @@ function startSshd() {
   return spawn(sshdBin, ["-D", "-f", cfg, "-E", join(sshDir, "sshd.log")], { stdio: "ignore" });
 }
 
+// Le pilote natif (WebKitWebDriver, lancé par tauri-driver) est mort une fois
+// en pleine suite : chaîne GitLab #3382 du 2026-09-04, « connection closed »
+// puis « Connection refused » pour tout ce qui suivait, deux fichiers perdus
+// sur vingt-six, alors que les trois exécutions précédentes en passaient
+// vingt-six. Rien ne le relançait. Avant chaque fichier, on vérifie qu'il
+// répond ; sinon on relance tauri-driver, qui relance le natif, sur un port
+// natif neuf au cas où l'ancien processus traînerait encore sur le sien.
+const PORT_NATIF = 4445;
+let relances = 0;
+
+function lancerTauriDriver() {
+  const args = relances ? ["--native-port", String(PORT_NATIF + relances)] : [];
+  tauriDriver = spawn("tauri-driver", args, {
+    stdio: [null, process.stdout, process.stderr],
+    env: ENV_APP,
+  });
+}
+
+async function pilotePret() {
+  try {
+    const r = await fetch("http://127.0.0.1:4444/status", { signal: AbortSignal.timeout(3000) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function relancerPiloteSiMort() {
+  if (await pilotePret()) return;
+  relances += 1;
+  console.warn(`e2e : le pilote WebDriver ne répond plus, relance de tauri-driver (${relances})`);
+  try { tauriDriver?.kill(); } catch { /* déjà mort */ }
+  lancerTauriDriver();
+  for (let i = 0; i < 100; i++) {
+    if (await pilotePret()) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("e2e : tauri-driver ne répond pas vingt secondes après sa relance");
+}
+
 export const config = {
   runner: "local",
   specs: ["./specs/**/*.spec.js"],
@@ -226,17 +266,16 @@ export const config = {
     // cf. rdp.spec/rdp-reconnect.spec) : pas de serveur partagé à coupler.
     // Avec le serveur embarqué, c'est `beforeSession` qui lance l'application.
     if (EMBARQUE) return;
-    tauriDriver = spawn("tauri-driver", [], {
-      stdio: [null, process.stdout, process.stderr],
-      env: ENV_APP,
-    });
+    lancerTauriDriver();
   },
   // Avant CHAQUE fichier de spécifications : on remet le bac à sable dans son
   // état semé. L'application démarre ensuite et lit un état déterministe, quel
   // que soit ce qu'ont fait les fichiers précédents (spécification isolation).
+  // Et on s'assure que le pilote répond encore, sinon on le relance.
   beforeSession: async () => {
     seedSandbox();
     if (EMBARQUE) appEmbarquee = await lancerAppEmbarquee();
+    else await relancerPiloteSiMort();
   },
   afterSession: async () => {
     if (EMBARQUE) { await arreterAppEmbarquee(appEmbarquee); appEmbarquee = null; }

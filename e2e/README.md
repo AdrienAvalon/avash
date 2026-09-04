@@ -14,6 +14,12 @@ cargo install tauri-driver --locked
 cd e2e && npm install
 ```
 
+`tauri-driver` est lancé une fois pour toute la suite et enchaîne le pilote
+natif. Avant chaque fichier, la configuration vérifie qu'il répond encore
+(`/status`) et le relance sinon, sur un port natif neuf : le natif est mort une
+fois en pleine suite sur la chaîne GitLab (#3382), emportant tout ce qui
+suivait.
+
 ## Lancer
 
 ```bash

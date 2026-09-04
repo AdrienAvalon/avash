@@ -7,6 +7,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **La suite bout en bout relance son pilote s'il meurt en route.** Chaîne
+  GitLab #3382 du 2026-09-04 : au milieu de la suite, WebKitWebDriver, le
+  pilote natif que `tauri-driver` enchaîne, s'est éteint (« connection
+  closed » puis « Connection refused ») et les deux derniers fichiers sur
+  vingt-six ont échoué, alors que les trois exécutions précédentes passaient
+  tout. Rien ne le relançait. Avant chaque fichier, la configuration vérifie
+  que le pilote répond et, sinon, relance `tauri-driver` sur un port natif
+  neuf. Essayé en tuant le natif à la main : la relance répond en moins de
+  deux secondes ; la suite locale passe ensuite ses dix-sept fichiers sans
+  serveur RDP.
 - **Un serveur ne peut plus faire allouer n'importe quoi au canal graphique.**
   `CreateSurface` acceptait les côtés tels quels : 65535 × 65535 × 4 octets,
   dix-sept gigaoctets, et l'allocation tuait le processus, donc la session.
