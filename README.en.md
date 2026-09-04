@@ -4,9 +4,9 @@
 
 # avash
 
-**A native, fast and secure SSH and RDP connection manager.**
+**A native, fast and secure SSH, RDP and VNC connection manager.**
 
-Your SSH terminals, your Windows desktops and your file transfers in a single
+Your SSH terminals, your remote desktops and your file transfers in a single
 application, which reads your `~/.ssh/config` as it is.
 
 [Website](https://adrienavalon.github.io/avash/en/) · [Français](README.md) · [English](README.en.md)
@@ -72,8 +72,8 @@ signed for the automatic updater and shipped with their checksums.
 ### Linux
 
 ```bash
-chmod +x Avash_0.7.2_amd64.AppImage
-./Avash_0.7.2_amd64.AppImage
+chmod +x Avash_0.8.0_amd64.AppImage
+./Avash_0.8.0_amd64.AppImage
 ```
 
 The AppImage bundles everything, WebKitGTK included: nothing to install.
@@ -81,8 +81,8 @@ For a package-manager install, each release also carries a `.deb` (Debian,
 Ubuntu) and an `.rpm` (Fedora, openSUSE):
 
 ```bash
-sudo apt install ./Avash_0.7.2_amd64.deb      # Debian, Ubuntu
-sudo dnf install ./Avash-0.7.2-1.x86_64.rpm    # Fedora
+sudo apt install ./Avash_0.8.0_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./Avash-0.8.0-1.x86_64.rpm    # Fedora
 ```
 
 Arch Linux: `packaging/aur/avash/PKGBUILD` builds the package from source
@@ -108,7 +108,7 @@ tested in CI but has not been tried on a real machine yet: feedback welcome.
 
 ```bash
 sha256sum -c SHA256SUMS                                             # integrity
-gh attestation verify Avash_0.7.2_amd64.AppImage --repo AdrienAvalon/avash   # provenance
+gh attestation verify Avash_0.8.0_amd64.AppImage --repo AdrienAvalon/avash   # provenance
 ```
 
 The second check proves the file comes from this repository, at this commit,
@@ -141,6 +141,10 @@ runs validation, build and checksums in one go.
 | `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Close, next, go to a tab |
 | `Ctrl+B` | File panel (SFTP) |
 | `↑` `↓` `Enter` `Shift+F10` | The whole sidebar from the keyboard |
+
+<div align="center">
+<img src="docs/captures/sftp.png" alt="The SFTP panel next to the terminal: a backups folder, a finished transfer in the queue" width="880">
+</div>
 
 - Interface in **French** and **English**: follows the locale, switchable from
   the palette, or `AVASH_LANGUE=fr|en`.
@@ -201,7 +205,7 @@ Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 | End to end (WebdriverIO) | 57 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo
-audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, the OpenSSF Scorecard, six
+audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, the OpenSSF Scorecard, seven
 cargo-fuzz targets and an RDP test fleet in containers. One rule stands in for
 discipline: **a new test must have been seen failing.** Details, with what each
 device actually found: [docs/qualite.md](docs/qualite.md) (in French).

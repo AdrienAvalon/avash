@@ -59,6 +59,9 @@ if [ -f "$CLE_MAJ" ]; then
 else
   echo "  ⚠ clé de signature absente ($CLE_MAJ) : artefacts non signés" >&2
 fi
+# Les bundles d'une version précédente restent dans target/ : sans ce ménage,
+# la collecte ramassait aussi les deb et rpm de la 0.7.2 à côté de la 0.8.0.
+rm -rf "$ROOT/target/release/bundle"
 # NO_STRIP : le strip embarqué par linuxdeploy ne gère pas .relr.dyn (libs récentes).
 ( cd "$UI" && NO_STRIP=1 cargo tauri build )
 

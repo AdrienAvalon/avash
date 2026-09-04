@@ -219,6 +219,34 @@ modifiables, un hôte déjà déclaré pour le même serveur décoché d'office,
 écrit dans `~/.ssh/config`. Testé par parseurs (échantillons réels des deux
 formats), par les commandes, et de bout en bout sur des sessions PuTTY semées.
 
+### 2.4 Canaux de distribution — **en cours** (04/09/2026)
+
+Un utilisateur installe par son gestionnaire de paquets ou pas du tout. Ce
+qui est en place, et ce qui attend :
+
+- **Release GitHub** : AppImage, `.deb` (Debian 12, Ubuntu 22.04 et
+  suivants), `.rpm` (Fedora, openSUSE), installeur et archive portable
+  Windows, image disque macOS ; empreintes, attestation de provenance
+  Sigstore, SBOM SPDX attesté. Les paquets deb et rpm ont été installés et
+  lancés dans des conteneurs Ubuntu 24.04 et Fedora avant d'être publiés.
+- **winget** (`AdrienCros.Avash`) : première soumission ouverte le
+  04/09/2026, validée par le robot, CLA signé ; attend un modérateur. À
+  chaque version suivante, `scripts/winget-manifeste.sh`.
+- **AUR** : `packaging/aur/avash/PKGBUILD`, éprouvé par `makepkg` sur le
+  poste ; la publication attend un compte AUR avec sa clé SSH.
+- **Homebrew** : cask `packaging/homebrew/avash.rb`, à soumettre depuis un
+  Mac (`brew bump-cask-pr`), après un premier essai réel de l'image disque.
+- **Flathub** : manifeste `packaging/flathub/io.github.AdrienAvalon.avash.yml`,
+  construction hors ligne (GNOME 49, Rust stable et Node 22 du SDK, sources
+  cargo et npm figées), construit, installé et lancé sur le poste par
+  `flatpak-builder` ; le linter Flathub passe hormis trois droits qui
+  demandent une exception justifiée (agent SSH, dossier personnel, nom D-Bus
+  de Tauri). À soumettre sur `flathub/flathub` une fois la 0.8.0 taguée
+  (le manifeste pointe sur un tag et son commit).
+- **Vitrine** : https://adrienavalon.github.io/avash/ (et `/en/`), publiée par
+  GitHub Pages à chaque changement de `site/` ; les fichiers de la dernière
+  version y sont listés par système.
+
 ---
 
 ## Axe 3 — Performance, avec des chiffres

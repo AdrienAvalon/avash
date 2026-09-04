@@ -1,7 +1,9 @@
 // Les vues du README : accueil, terminal SSH, bureau RDP, et les cadres de la
 // démonstration animée, pris aux moments clés le long du même parcours. Voir
 // wdio.captures.conf.js et scripts/captures-readme.sh.
-import { writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { findHostRow, attendreBureauConnecte } from "../specs/helpers.js";
 
 const DOSSIER = process.env.CAPTURES_DOSSIER;
@@ -73,6 +75,70 @@ describe("captures du README", () => {
     await pause(800);
     await browser.saveScreenshot(`${DOSSIER}/terminal-ssh.png`);
     await cadre(3);
+  });
+
+  it("panneau SFTP", async () => {
+    // Un arbre de fichiers plausible, servi par le sshd local : le panneau
+    // montre une arborescence de déploiement, pas le disque du mainteneur.
+    const racine = mkdtempSync(join(tmpdir(), "avash-captures-"));
+    const site = join(racine, "srv", "web-1");
+    for (const d of ["releases/2026-09-04", "releases/2026-08-28", "backups", "config"]) {
+      mkdirSync(join(site, d), { recursive: true });
+    }
+    writeFileSync(join(site, "config", "nginx.conf"), "server {\n  listen 443 ssl;\n}\n");
+    writeFileSync(join(site, "config", "docker-compose.yml"), "services:\n  web:\n    image: nginx\n");
+    writeFileSync(join(site, "backups", "db-2026-09-04.sql.gz"), Buffer.alloc(3 * 1024 * 1024 + 517, 7));
+    writeFileSync(join(site, "backups", "db-2026-08-28.sql.gz"), Buffer.alloc(2 * 1024 * 1024 + 88, 9));
+    writeFileSync(join(site, "releases", "2026-09-04", "app.tar.gz"), Buffer.alloc(11 * 1024 * 1024 + 41, 3));
+    writeFileSync(join(site, "deploy.sh"), "#!/bin/sh\nset -e\n");
+    writeFileSync(join(site, "README.md"), "# web-1\n");
+
+    await $("#sftp-toggle").click();
+    await browser.waitUntil(async () => (await $("#sftp-panel").getAttribute("class")).includes("open"),
+      { timeout: 5000, timeoutMsg: "panneau SFTP jamais ouvert" });
+    // La première liste (le dossier personnel) remplit aussi la barre de
+    // chemin : taper avant qu'elle n'arrive, c'est se faire écraser.
+    await browser.waitUntil(async () => (await $$("#sftp-list .sftp-entry")).length > 0,
+      { timeout: 15000, timeoutMsg: "première liste SFTP jamais arrivée" });
+    const barre = $("#sftp-path");
+    await barre.click();
+    await browser.keys(["Control", "a"]);
+    await browser.keys(site);
+    await browser.keys("Enter");
+    await browser.waitUntil(async () => (await $$("#sftp-list .sftp-entry")).length >= 5,
+      { timeout: 10000, timeoutMsg: "le panneau n'a pas listé l'arbre" });
+    // Le chemin affiché est celui du bac à sable temporaire : on lui donne
+    // l'allure d'un serveur, le temps de la capture.
+    await browser.execute((chemin) => { document.querySelector("#sftp-path").value = chemin; }, "/srv/web-1");
+    await pause(500);
+    await cadre(2);
+    // Une sauvegarde téléchargée : la file des transferts apparaît sous la
+    // liste, avec sa ligne, sa progression et sa vitesse.
+    const lignes = await $$("#sftp-list .sftp-entry");
+    for (const el of lignes) {
+      if ((await el.$(".nm").getProperty("textContent")) !== "backups") continue;
+      await el.doubleClick();
+      break;
+    }
+    await browser.waitUntil(async () => (await $$("#sftp-list .sftp-entry")).length >= 2 && (await barre.getValue()).endsWith("backups"),
+      { timeout: 10000, timeoutMsg: "le panneau n'est pas entré dans backups" });
+    await browser.execute((chemin) => { document.querySelector("#sftp-path").value = chemin; }, "/srv/web-1/backups");
+    for (const el of await $$("#sftp-list .sftp-entry")) {
+      if ((await el.$(".nm").getProperty("textContent")) !== "db-2026-09-04.sql.gz") continue;
+      await browser.execute((e) => {
+        e.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+      }, el);
+      await $("#sftp-context").waitForDisplayed({ timeout: 3000 });
+      await $('#sftp-context [data-act="download"]').click();
+      break;
+    }
+    await browser.waitUntil(async () => (await $$("#sftp-transferts .sftp-transfert")).length > 0,
+      { timeout: 10000, timeoutMsg: "aucune ligne de transfert" });
+    await pause(700);
+    await browser.saveScreenshot(`${DOSSIER}/sftp.png`);
+    await cadre(3);
+    await $("#sftp-toggle").click();
+    await pause(300);
   });
 
   it("bureau RDP", async function () {

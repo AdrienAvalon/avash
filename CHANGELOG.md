@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.8.0] - 2026-09-04
+
 - **Paquets `.deb` et `.rpm`, et nomenclature logicielle.** Chaque release
   porte, à côté de l'AppImage, un paquet Debian (Debian 12, Ubuntu 22.04 et
   suivants) et un paquet RPM (Fedora, openSUSE) qui s'installent par le
@@ -23,6 +25,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   lus sur l'API GitHub avec des liens statiques en repli. Une page HTML par
   langue, une feuille de style, aucun service tiers ; publiée par le
   workflow `pages.yml` à chaque changement de `site/` ou des captures.
+- **Dépendances.** La suite bout en bout n'embarque plus `extract-zip`
+  (GHSA-jmr9-qjv8-65gv, traversée de chemin par lien symbolique, sans
+  version corrigée) : `@puppeteer/browsers` est forcé en version 3, qui
+  l'a remplacé par `modern-tar` ; WebdriverIO ne s'en sert que pour
+  installer un pilote de navigateur, ce que la suite ne fait jamais.
+  L'avis RUSTSEC-2024-0429 sur `glib` 0.18, imposé par la pile GTK 3 de
+  Tauri et déjà justifié dans `deny.toml`, est clos côté Dependabot avec la
+  même raison.
 - **Flathub.** Le manifeste `packaging/flathub/io.github.AdrienAvalon.avash.yml`
   construit Avash hors ligne dans le bac à sable de flatpak-builder (runtime
   GNOME 49, Rust stable et Node 22 du SDK, sources cargo et npm figées par
@@ -1382,8 +1392,8 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.6.2...HEAD
-[0.6.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.6.2
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.8.0
 [0.2.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.0
 [0.2.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.1
 [0.2.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.2.2

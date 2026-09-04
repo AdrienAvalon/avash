@@ -4,10 +4,10 @@
 
 # avash
 
-**Gestionnaire de connexions SSH et RDP, natif, rapide, sécurisé.**
+**Gestionnaire de connexions SSH, RDP et VNC, natif, rapide, sécurisé.**
 
-Vos terminaux SSH, vos bureaux Windows et vos transferts de fichiers dans une seule
-application, qui lit votre `~/.ssh/config` tel quel.
+Vos terminaux SSH, vos bureaux distants et vos transferts de fichiers dans une
+seule application, qui lit votre `~/.ssh/config` tel quel.
 
 [Site](https://adrienavalon.github.io/avash/) · [Français](README.md) · [English](README.en.md)
 
@@ -69,8 +69,8 @@ signés pour la mise à jour automatique et accompagnés de leurs empreintes.
 ### Linux
 
 ```bash
-chmod +x Avash_0.7.2_amd64.AppImage
-./Avash_0.7.2_amd64.AppImage
+chmod +x Avash_0.8.0_amd64.AppImage
+./Avash_0.8.0_amd64.AppImage
 ```
 
 L'AppImage embarque tout ce qu'il faut, WebKitGTK compris : rien à installer.
@@ -78,8 +78,8 @@ Pour une installation par le gestionnaire de paquets, la release porte aussi un
 `.deb` (Debian, Ubuntu) et un `.rpm` (Fedora, openSUSE) :
 
 ```bash
-sudo apt install ./Avash_0.7.2_amd64.deb      # Debian, Ubuntu
-sudo dnf install ./Avash-0.7.2-1.x86_64.rpm    # Fedora
+sudo apt install ./Avash_0.8.0_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./Avash-0.8.0-1.x86_64.rpm    # Fedora
 ```
 
 Arch Linux : `packaging/aur/avash/PKGBUILD` construit le paquet depuis les
@@ -107,7 +107,7 @@ macOS est construite et testée en intégration continue mais n'a pas encore ét
 
 ```bash
 sha256sum -c SHA256SUMS                                             # intégrité
-gh attestation verify Avash_0.7.2_amd64.AppImage --repo AdrienAvalon/avash   # provenance
+gh attestation verify Avash_0.8.0_amd64.AppImage --repo AdrienAvalon/avash   # provenance
 ```
 
 La seconde vérification prouve que le fichier vient de ce dépôt, de ce commit,
@@ -140,6 +140,10 @@ enchaîne validation, construction et empreintes.
 | `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Fermer, suivant, aller à un onglet |
 | `Ctrl+B` | Panneau de fichiers (SFTP) |
 | `↑` `↓` `Entrée` `Maj+F10` | La barre latérale entière au clavier |
+
+<div align="center">
+<img src="docs/captures/sftp.png" alt="Le panneau SFTP à côté du terminal : un dossier de sauvegardes, un transfert terminé dans la file" width="880">
+</div>
 
 - Interface en **français** et en **anglais** : suit la locale, se change dans la
   palette, ou `AVASH_LANGUE=fr|en`.
@@ -201,7 +205,7 @@ sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, le Scorecard de l'OpenSSF,
-six cibles cargo-fuzz et un parc RDP en conteneurs. Une règle tient lieu de
+sept cibles cargo-fuzz et un parc RDP en conteneurs. Une règle tient lieu de
 discipline : **un nouveau test doit avoir été vu échouer.** Le détail, avec ce
 que chaque dispositif a réellement trouvé : [docs/qualite.md](docs/qualite.md).
 
