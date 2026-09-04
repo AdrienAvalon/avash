@@ -32,3 +32,7 @@ e2e/mesures/resultat.json
 # capacités) : leur contenu suit les fonctionnalités compilées, ils ne se
 # commitent pas — le modèle officiel les ignore aussi.
 crates/avash-ui/gen/schemas/
+
+# Construction Flatpak locale (packaging/flathub)
+build-flatpak/
+.flatpak-builder/

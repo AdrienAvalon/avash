@@ -9,7 +9,7 @@
 Vos terminaux SSH, vos bureaux Windows et vos transferts de fichiers dans une seule
 application, qui lit votre `~/.ssh/config` tel quel.
 
-[Français](README.md) · [English](README.en.md)
+[Site](https://adrienavalon.github.io/avash/) · [Français](README.md) · [English](README.en.md)
 
 [![Version](https://img.shields.io/github/v/release/AdrienAvalon/avash?label=version&color=8b7cf6)](https://github.com/AdrienAvalon/avash/releases/latest)
 [![Téléchargements](https://img.shields.io/github/downloads/AdrienAvalon/avash/total?label=t%C3%A9l%C3%A9chargements&color=2ea44f)](https://github.com/AdrienAvalon/avash/releases)
@@ -54,8 +54,8 @@ application, qui lit votre `~/.ssh/config` tel quel.
   RDP, et un serveur RDP ne peut pas obtenir un mot de passe sans
   authentification mutuelle. Les secrets vivent dans le trousseau, jamais dans
   un fichier.
-- **Libre.** AGPL-3.0, code auditable, binaires reproductibles avec attestation
-  de provenance.
+- **Libre.** AGPL-3.0, code auditable, binaires avec attestation de provenance
+  et nomenclature logicielle (SBOM).
 
 <div align="center">
 <img src="docs/captures/terminal-ssh.png" alt="Une session SSH dans avash" width="880">
@@ -74,6 +74,16 @@ chmod +x Avash_0.7.2_amd64.AppImage
 ```
 
 L'AppImage embarque tout ce qu'il faut, WebKitGTK compris : rien à installer.
+Pour une installation par le gestionnaire de paquets, la release porte aussi un
+`.deb` (Debian, Ubuntu) et un `.rpm` (Fedora, openSUSE) :
+
+```bash
+sudo apt install ./Avash_0.7.2_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./Avash-0.7.2-1.x86_64.rpm    # Fedora
+```
+
+Arch Linux : `packaging/aur/avash/PKGBUILD` construit le paquet depuis les
+sources (`makepkg -si`).
 
 ### Windows
 

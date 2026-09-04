@@ -6,6 +6,8 @@ et — côté Windows — signé pour éviter les alertes.
 | Système | Artefact | Déploiement | Dépendance à l'exécution |
 |---|---|---|---|
 | Linux | `Avash_<version>_amd64.AppImage` | copier le fichier, `chmod +x`, lancer | aucune (tout est empaqueté dedans) |
+| Linux | `Avash_<version>_amd64.deb` | `apt install ./Avash_<version>_amd64.deb` | WebKitGTK 4.1 et GTK 3 du système (Debian 12, Ubuntu 22.04 et suivants) |
+| Linux | `Avash-<version>-1.x86_64.rpm` | `dnf install ./Avash-<version>-1.x86_64.rpm` | idem (Fedora, openSUSE) |
 | Windows | `Avash_<version>_x64-setup.exe` (NSIS) | lancer l'installeur | WebView2 (préinstallé Win10 récent / Win11) |
 | Windows | `avash-<version>-windows-x64.zip` | décompresser et lancer, sans installation | WebView2 — garder `avash-rdp.exe` à côté d'`avash.exe` |
 
@@ -122,15 +124,23 @@ est fourni.
 
 ## 6. Ce que le dépôt fournit déjà
 
-- `tauri.conf.json` : cibles AppImage + NSIS, métadonnées, horodatage de
-  signature, emplacement du certificat (à renseigner).
+- `tauri.conf.json` : cibles AppImage, deb, rpm et NSIS, métadonnées,
+  horodatage de signature, emplacement du certificat (à renseigner). Les
+  dépendances du `.deb` (`libwebkit2gtk-4.1-0`, `libgtk-3-0`) et du `.rpm`
+  (les mêmes, par nom de bibliothèque) sont posées par tauri-cli ; le
+  processus RDP `avash-rdp` est installé dans `/usr/bin` à côté de l'exe.
+- `.syft.yaml` : la nomenclature logicielle (SBOM, SPDX 2.3) jointe à chaque
+  release, calculée sur les fichiers de verrouillage de ce qui est livré et
+  attestée à son tour, liée aux binaires. Vérification :
+  `gh attestation verify --predicate-type https://spdx.dev/Document/v2.3 <fichier> --repo AdrienAvalon/avash`.
 - `scripts/release.sh` : build validé + `SHA256SUMS` + signature GPG optionnelle.
 - `check.sh` : la porte qualité exécutée avant chaque release.
 - `LICENSE` (**AGPL-3.0-or-later**), icônes multi-résolutions
   (`crates/avash-ui/icons/`).
-- `.github/workflows/release.yml` : sur un tag `v*`, construit Linux et Windows,
-  produit le manifeste `latest.json` signé, les empreintes `SHA256SUMS` et une
-  **attestation de provenance Sigstore**, puis publie la release.
+- `.github/workflows/release.yml` : sur un tag `v*`, construit Linux, Windows
+  et macOS, produit le manifeste `latest.json` signé, les empreintes
+  `SHA256SUMS`, le SBOM et une **attestation de provenance Sigstore**, puis
+  publie la release.
 
 À fournir par toi : le **certificat Authenticode** (Windows) et, si tu veux
 signer l'AppImage, une **clé GPG**.
@@ -242,8 +252,32 @@ notarisée, le cask porte un `caveats` qui explique le clic droit puis Ouvrir.
 
 ### Flathub (Linux)
 
-Flathub exige une construction depuis les sources dans son bac à sable
-(manifeste `dev.avash.app.yml`, sources cargo et npm figées par
-`flatpak-cargo-generator` et `flatpak-node-generator`), pas un simple
-emballage de l'AppImage. Les métadonnées AppStream (`packaging/dev.avash.app.metainfo.xml`)
-et le `.desktop` sont déjà prêts ; la construction Flatpak reste à écrire.
+Flathub exige une construction depuis les sources dans son bac à sable, pas
+un emballage de l'AppImage. Tout est dans `packaging/flathub/` : le manifeste
+`io.github.AdrienAvalon.avash.yml` (runtime GNOME 49, extensions Rust stable
+et Node 22, construction hors ligne), le `.desktop`, et les sources figées
+`cargo-sources.json`, `cargo-sources-rdp.json` et `node-sources.json`, à
+régénérer à chaque version par `scripts/flathub-sources.sh` (générateurs de
+flatpak-builder-tools). L'identifiant Flathub suit le dépôt GitHub, parce que
+la vérification d'un identifiant `dev.avash.app` demanderait de prouver la
+propriété du domaine `avash.dev` ; celui de Tauri reste `dev.avash.app` et
+l'application l'enregistre sur D-Bus (`--own-name`). À chaque version :
+
+```bash
+scripts/flathub-sources.sh                          # régénère les trois JSON
+sed -i "s/tag: v.*/tag: v0.8.0/; s/commit: .*/commit: \"$(git rev-parse v0.8.0^{commit})\"/" \
+  packaging/flathub/io.github.AdrienAvalon.avash.yml
+flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest \
+  packaging/flathub/io.github.AdrienAvalon.avash.yml
+flatpak-builder --user --install --force-clean build-flatpak \
+  packaging/flathub/io.github.AdrienAvalon.avash.yml   # une vingtaine de minutes
+flatpak run io.github.AdrienAvalon.avash
+```
+
+Le linter signale deux droits qui demandent une exception, à justifier dans la
+PR de soumission (dépôt `flathub/flathub`, branche `new-pr`, le manifeste et
+les JSON à la racine) : `--socket=ssh-auth` (l'agent SSH du poste, avec ses
+clés, et prêté le temps d'une copie directe) et `--filesystem=home`
+(`~/.ssh/config`, clés, `known_hosts`, transferts SFTP et fichiers RDP dans
+les deux sens). Les mises à jour suivantes se font par PR sur le dépôt
+`flathub/io.github.AdrienAvalon.avash` que Flathub crée à l'acceptation.

@@ -5,8 +5,8 @@
 <component type="desktop-application">
   <id>dev.avash.app</id>
   <name>Avash</name>
-  <summary xml:lang="fr">Gestionnaire de connexions SSH et RDP, natif, rapide, sécurisé</summary>
-  <summary>Native, fast and secure SSH and RDP connection manager</summary>
+  <summary xml:lang="fr">SSH, RDP et VNC, natifs et rapides</summary>
+  <summary>SSH, RDP and VNC in one native app</summary>
   <developer id="dev.avash">
     <name>Adrien Cros</name>
   </developer>

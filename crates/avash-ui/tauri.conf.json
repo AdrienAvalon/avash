@@ -30,6 +30,8 @@
     ],
     "targets": [
       "appimage",
+      "deb",
+      "rpm",
       "nsis"
     ],
     "publisher": "Adrien Cros",

@@ -385,6 +385,15 @@ arbres de dépendances (workspace et processus RDP), dans `check.sh` comme dans
 les deux chaînes d'intégration continue. La politique est dans `deny.toml`, et
 chaque exception y est justifiée en clair.
 
+**Nomenclature logicielle.** Chaque release joint un SBOM au format SPDX 2.3
+(`avash-vX.Y.Z.spdx.json`), calculé par syft sur les fichiers de verrouillage
+de ce qui est livré (`.syft.yaml` exclut les serveurs de test, le fuzzing et
+la suite bout en bout) et attesté par Sigstore, lié aux binaires : on peut
+vérifier que ce document décrit bien ces fichiers, puis le confronter à une
+base de vulnérabilités (`grype sbom:avash-vX.Y.Z.spdx.json`) sans reconstruire
+quoi que ce soit. Sa limite est celle de `Cargo.lock`, qui ne distingue pas les
+dépendances de développement : elles y figurent.
+
 **Fuzzing.** Ce que le cœur lit depuis un fichier écrit par quelqu'un d'autre
 (`~/.ssh/config`, sessions PuTTY et MobaXterm, registre, enregistrements
 asciicast) passe sous cargo-fuzz — génération guidée par la couverture, sur

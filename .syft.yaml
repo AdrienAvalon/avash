@@ -1,0 +1,26 @@
+# Nomenclature logicielle (SBOM) jointe à chaque release, calculée par syft
+# (anchore/sbom-action dans .github/workflows/release.yml) sur les fichiers de
+# verrouillage de ce qui est livré : l'espace de travail (Cargo.lock), le
+# processus RDP (rdp-sidecar/Cargo.lock) et le front (web/package-lock.json).
+#
+# Les arbres qui ne sont pas dans les binaires n'y figurent pas : serveurs de
+# test, fuzzing, suite bout en bout, image de la chaîne GitLab, paquets.
+exclude:
+  - ./test-rdp-server/**
+  - ./test-vnc-server/**
+  - ./fuzz/**
+  - ./e2e/**
+  - ./ci/**
+  - ./packaging/**
+  - ./scripts/**
+  - ./.github/**
+  # Sur un poste de travail : les binaires et paquets déjà construits, les
+  # modules installés (la chaîne part d'un dépôt nu, sans ces dossiers).
+  - ./target/**
+  - ./**/target/**
+  - ./**/node_modules/**
+
+# Le front n'embarque que ses dépendances de production ; vite, vitest,
+# eslint et consorts ne sont pas dans web/dist.
+javascript:
+  include-dev-dependencies: false

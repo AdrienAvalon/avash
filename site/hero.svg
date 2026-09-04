@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 480" width="420" height="480">
+  <!-- Écusson avash — variante neutre (diffusion publique) : aucune référence à
+       une organisation réelle. Bouclier navy/or, serveurs, circuit, cadenas,
+       invite de commande — l'identité « accès serveurs sécurisé ». -->
+  <defs>
+    <linearGradient id="hnavy" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a2942"/><stop offset="1" stop-color="#0a1322"/>
+    </linearGradient>
+    <linearGradient id="hgold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6dc92"/><stop offset="0.5" stop-color="#d9b24a"/><stop offset="1" stop-color="#a9750a"/>
+    </linearGradient>
+    <linearGradient id="hsteel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#41527a"/><stop offset="1" stop-color="#27334e"/>
+    </linearGradient>
+    <radialGradient id="hglow" cx="0.5" cy="0.42" r="0.55">
+      <stop offset="0" stop-color="#8b7cf6" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#8b7cf6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <ellipse cx="210" cy="215" rx="190" ry="175" fill="url(#hglow)"/>
+
+  <!-- Bouclier -->
+  <path d="M40 40 L380 40 L380 232 C380 340 305 415 210 452 C115 415 40 340 40 232 Z" fill="url(#hgold)"/>
+  <path d="M56 56 L364 56 L364 230 C364 330 296 396 210 430 C124 396 56 330 56 230 Z" fill="url(#hnavy)" stroke="#08101d" stroke-width="3"/>
+  <path d="M68 68 L352 68 L352 228 C352 322 290 383 210 415 C130 383 68 322 68 228 Z" fill="none" stroke="url(#hgold)" stroke-width="2.5" opacity="0.5"/>
+
+  <!-- Étoiles discrètes -->
+  <g fill="#cfe2ff" opacity="0.5">
+    <circle cx="100" cy="104" r="2"/><circle cx="320" cy="120" r="2.2"/>
+    <circle cx="128" cy="150" r="1.5"/><circle cx="296" cy="92" r="1.6"/>
+    <circle cx="210" cy="86" r="1.8"/>
+  </g>
+
+  <!-- Pistes de circuit -->
+  <g stroke="url(#hgold)" stroke-width="2.6" fill="none" opacity="0.8" stroke-linecap="round">
+    <path d="M126 168 H100 V214"/><path d="M126 214 H112"/>
+    <path d="M294 168 H320 V214"/><path d="M294 214 H308"/>
+    <path d="M126 260 H104 V300"/><path d="M294 260 H316 V300"/>
+  </g>
+  <g fill="url(#hgold)">
+    <circle cx="100" cy="214" r="4.5"/><circle cx="112" cy="214" r="3.5"/>
+    <circle cx="320" cy="214" r="4.5"/><circle cx="308" cy="214" r="3.5"/>
+    <circle cx="104" cy="300" r="4.5"/><circle cx="316" cy="300" r="4.5"/>
+  </g>
+
+  <!-- Trois serveurs -->
+  <g>
+    <rect x="140" y="152" width="140" height="32" rx="7" fill="url(#hsteel)" stroke="#08101d" stroke-width="2"/>
+    <rect x="150" y="164" width="54" height="4" rx="2" fill="#9db4dc"/><rect x="150" y="172" width="38" height="4" rx="2" fill="#7288b4"/>
+    <circle cx="262" cy="168" r="5" fill="#f6dc92"/><circle cx="245" cy="168" r="5" fill="#5cc8ff"/>
+    <rect x="140" y="198" width="140" height="32" rx="7" fill="url(#hsteel)" stroke="#08101d" stroke-width="2"/>
+    <rect x="150" y="210" width="54" height="4" rx="2" fill="#9db4dc"/><rect x="150" y="218" width="38" height="4" rx="2" fill="#7288b4"/>
+    <circle cx="262" cy="214" r="5" fill="#5cc8ff"/><circle cx="245" cy="214" r="5" fill="#f6dc92"/>
+    <rect x="140" y="244" width="140" height="32" rx="7" fill="url(#hsteel)" stroke="#08101d" stroke-width="2"/>
+    <rect x="150" y="256" width="54" height="4" rx="2" fill="#9db4dc"/><rect x="150" y="264" width="38" height="4" rx="2" fill="#7288b4"/>
+    <circle cx="262" cy="260" r="5" fill="#f6dc92"/><circle cx="245" cy="260" r="5" fill="#5cc8ff"/>
+  </g>
+
+  <!-- Cadenas + invite de commande -->
+  <g>
+    <path d="M186 318 V304 a24 24 0 0 1 48 0 V318" fill="none" stroke="url(#hgold)" stroke-width="11"/>
+    <rect x="170" y="316" width="80" height="64" rx="12" fill="url(#hgold)" stroke="#7d5405" stroke-width="2"/>
+    <path d="M194 340 l10 8 -10 8" fill="none" stroke="#0a1322" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M212 356 h16" stroke="#0a1322" stroke-width="5" stroke-linecap="round"/>
+  </g>
+
+  <!-- Nom -->
+  <text x="210" y="398" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif"
+        font-size="27" font-weight="700" letter-spacing="7" fill="url(#hgold)">AVASH</text>
+</svg>

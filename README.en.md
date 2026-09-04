@@ -9,7 +9,7 @@
 Your SSH terminals, your Windows desktops and your file transfers in a single
 application, which reads your `~/.ssh/config` as it is.
 
-[Français](README.md) · [English](README.en.md)
+[Website](https://adrienavalon.github.io/avash/en/) · [Français](README.md) · [English](README.en.md)
 
 [![Version](https://img.shields.io/github/v/release/AdrienAvalon/avash?label=version&color=8b7cf6)](https://github.com/AdrienAvalon/avash/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/AdrienAvalon/avash/total?label=downloads&color=2ea44f)](https://github.com/AdrienAvalon/avash/releases)
@@ -58,7 +58,7 @@ application, which reads your `~/.ssh/config` as it is.
   RDP, and an RDP server cannot obtain a password without mutual
   authentication. Secrets live in the keyring, never in a file.
 - **Free software.** AGPL-3.0, auditable code, binaries with a provenance
-  attestation.
+  attestation and a software bill of materials (SBOM).
 
 <div align="center">
 <img src="docs/captures/terminal-ssh.png" alt="An SSH session inside avash" width="880">
@@ -77,6 +77,16 @@ chmod +x Avash_0.7.2_amd64.AppImage
 ```
 
 The AppImage bundles everything, WebKitGTK included: nothing to install.
+For a package-manager install, each release also carries a `.deb` (Debian,
+Ubuntu) and an `.rpm` (Fedora, openSUSE):
+
+```bash
+sudo apt install ./Avash_0.7.2_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./Avash-0.7.2-1.x86_64.rpm    # Fedora
+```
+
+Arch Linux: `packaging/aur/avash/PKGBUILD` builds the package from source
+(`makepkg -si`).
 
 ### Windows
 

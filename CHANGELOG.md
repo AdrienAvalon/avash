@@ -7,6 +7,29 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Paquets `.deb` et `.rpm`, et nomenclature logicielle.** Chaque release
+  porte, à côté de l'AppImage, un paquet Debian (Debian 12, Ubuntu 22.04 et
+  suivants) et un paquet RPM (Fedora, openSUSE) qui s'installent par le
+  gestionnaire de paquets et dépendent du WebKitGTK et du GTK du système ;
+  tous deux ont été installés et lancés dans des conteneurs Ubuntu et Fedora
+  avant d'être annoncés. Un SBOM au format SPDX 2.3 (les bibliothèques
+  exactes de l'espace de travail, du processus RDP et du front, sans les
+  arbres de test) est joint et attesté par Sigstore, lié aux binaires. Le
+  README ne parle plus de « binaires reproductibles » : la construction ne
+  l'est pas (SECURITY.md le disait déjà), elle est attestée.
+- **Un site.** La vitrine d'Avash est sur https://adrienavalon.github.io/avash/
+  (et `/en/`) : ce que fait l'application, pourquoi elle est sûre, comment
+  elle est éprouvée, et les fichiers de la dernière version par système,
+  lus sur l'API GitHub avec des liens statiques en repli. Une page HTML par
+  langue, une feuille de style, aucun service tiers ; publiée par le
+  workflow `pages.yml` à chaque changement de `site/` ou des captures.
+- **Flathub.** Le manifeste `packaging/flathub/io.github.AdrienAvalon.avash.yml`
+  construit Avash hors ligne dans le bac à sable de flatpak-builder (runtime
+  GNOME 49, Rust stable et Node 22 du SDK, sources cargo et npm figées par
+  `scripts/flathub-sources.sh`), avec les droits que le métier impose et
+  pas plus : réseau, agent SSH, trousseau, dossier personnel. Construit,
+  installé et lancé sur le poste avant d'être soumis ; l'identifiant suit le
+  dépôt GitHub, l'application gardant `dev.avash.app` pour GTK et D-Bus.
 - **Le panneau SFTP transfère des dossiers entiers, reprend, envoie en
   bandes, empile et copie d'un hôte à l'autre.** Télécharger ou déposer un
   dossier le transfère avec son arborescence (sous-dossiers vides compris),

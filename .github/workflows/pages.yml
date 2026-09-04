@@ -1,0 +1,47 @@
+name: Site
+
+# Publie la vitrine (site/) sur GitHub Pages : une page en français, une en
+# anglais, une feuille de style, un script qui liste les fichiers de la
+# dernière version. Les captures viennent de docs/captures, les mêmes que le
+# README, copiées à la publication pour que le site se suffise à lui-même.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/captures/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write    # déployer le site
+      id-token: write # jeton OIDC exigé par deploy-pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deploiement.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Assembler le site
+        run: |
+          mkdir -p _site/captures
+          cp -r site/. _site/
+          cp docs/captures/*.png docs/captures/*.webp _site/captures/
+          # Pas de traitement Jekyll : les fichiers sont servis tels quels.
+          touch _site/.nojekyll
+          find _site -type f | sort
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+      - id: deploiement
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>avash — SSH, RDP, VNC and SFTP in one native app</title>
+  <meta name="description" content="avash brings your SSH terminals, your Windows (RDP) and VNC desktops and your SFTP transfers into one native, fast and secure application that reads your ~/.ssh/config as it is. Linux, Windows, macOS. Free software (AGPL-3.0).">
+  <link rel="icon" href="../hero.svg" type="image/svg+xml">
+  <link rel="alternate" hreflang="fr" href="../">
+  <link rel="alternate" hreflang="en" href="./">
+  <meta property="og:title" content="avash — SSH, RDP and VNC connection manager">
+  <meta property="og:description" content="Your SSH terminals, your remote desktops and your files in one native, fast and secure application.">
+  <meta property="og:image" content="https://adrienavalon.github.io/avash/captures/apercu-social.png">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="barre">
+    <div class="conteneur">
+      <a class="marque" href="./"><img src="../hero.svg" alt="" width="30" height="30">avash</a>
+      <nav aria-label="Sections">
+        <a href="#features">Features</a>
+        <a href="#security">Security</a>
+        <a href="#quality">Quality</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/AdrienAvalon/avash">GitHub</a>
+        <a href="../" hreflang="fr" lang="fr">Français</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="accueil">
+      <div class="conteneur">
+        <span class="surtitre">Free · native · no telemetry</span>
+        <h1>Your servers, your remote desktops, your files.<br>One application.</h1>
+        <p class="chapeau">
+          avash opens your SSH terminals, your Windows (RDP) and VNC desktops and
+          your SFTP transfers in one native, fast and secure window that reads your
+          <code>~/.ssh/config</code> as it is.
+        </p>
+        <div class="actions">
+          <a class="bouton" href="#install">Download</a>
+          <a class="bouton secondaire" href="https://github.com/AdrienAvalon/avash">View the code</a>
+        </div>
+        <p class="plateformes">Linux · Windows · macOS &nbsp;·&nbsp; <span data-version>Latest version on GitHub</span></p>
+        <div class="vitrine">
+          <img src="../captures/demo.webp" alt="Demo: an SSH terminal, then a Windows 11 desktop, inside avash" width="1280" height="800">
+        </div>
+      </div>
+    </section>
+
+    <section id="why">
+      <div class="conteneur">
+        <h2>Why avash</h2>
+        <p class="intro">A connection manager that installs in a minute and asks you to change nothing in your habits.</p>
+        <div class="grille">
+          <article class="carte">
+            <h3><span class="ico" aria-hidden="true">📄</span>Nothing to migrate</h3>
+            <p>avash reads <code>~/.ssh/config</code> and writes what you add in OpenSSH's own format. Your hosts are there on first launch, and <code>ssh</code> on the command line keeps seeing the same thing.</p>
+          </article>
+          <article class="carte">
+            <h3><span class="ico" aria-hidden="true">⚡</span>Native</h3>
+            <p>Tauri 2 and Rust, no Electron: about twenty megabytes, a start-up in a fraction of a second, a remote desktop that follows the window pixel for pixel.</p>
+          </article>
+          <article class="carte">
+            <h3><span class="ico" aria-hidden="true">🔒</span>Safe by default</h3>
+            <p>A server whose key changed is refused, for SSH as for RDP, and an RDP server never obtains a password without mutual authentication. Secrets live in the keyring, never in a file.</p>
+          </article>
+          <article class="carte">
+            <h3><span class="ico" aria-hidden="true">🧭</span>Free software</h3>
+            <p>AGPL-3.0, auditable code, binaries with a provenance attestation and a software bill of materials. No telemetry, no network call other than your connections.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="conteneur">
+        <h2>Everything you need, nothing more</h2>
+        <div class="deux">
+          <img src="../captures/bureau-rdp.png" alt="A Windows 11 desktop inside avash, the host list on the left" width="1280" height="800" loading="lazy">
+          <ul class="liste">
+            <li><strong>SSH.</strong> Full terminal (xterm.js), tabs, chained <code>ProxyJump</code>, agent, keys generated and deployed from the app.</li>
+            <li><strong>RDP.</strong> Windows, xrdp and GNOME Remote Desktop desktops built in (IronRDP), native resizing, clipboard shared on request, files copied and pasted both ways.</li>
+            <li><strong>VNC.</strong> VNC desktops in the same window, through the same process as RDP.</li>
+            <li><strong>SFTP.</strong> A file panel on the terminal's own session: whole folders, resume of an interrupted transfer, a queue with speeds, host-to-host copy without touching your disk.</li>
+            <li><strong>Tunnels.</strong> Local, remote and SOCKS, with live status.</li>
+            <li><strong>Organisation.</strong> Folders, tags, instant search, command palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>), snippets, host health, session recording.</li>
+            <li><strong>Import.</strong> PuTTY (files or registry) and MobaXterm, RDP desktops and folders included.</li>
+            <li><strong>Two languages.</strong> Interface in English and French, fully keyboard-driven.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="security">
+      <div class="conteneur">
+        <h2>Security is not an option</h2>
+        <div class="deux">
+          <ul class="liste">
+            <li><strong>Passwords in the system keyring</strong>, never in clear text on disk nor handed to the interface: the native core reads them when connecting, and the RDP password goes to the RDP process through standard input, invisible in the process list.</li>
+            <li><strong>Host keys verified</strong> (TOFU), connection refused when the key changes, including when only the algorithm differs. Same rule for the RDP server, before CredSSP sends any credential.</li>
+            <li><strong>Clipboard shared</strong> with a remote desktop only if you want it, revocable at any time.</li>
+            <li><strong>Nothing unbounded from the network</strong>: resolution, surfaces, images, command output, clipboard, all capped. The parsers run under cargo-fuzz.</li>
+            <li><strong>Supply chain</strong>: pinned actions, <code>cargo audit</code>, <code>cargo deny</code>, CodeQL, gitleaks, OpenSSF Scorecard, an attested SBOM with every release.</li>
+          </ul>
+          <img src="../captures/terminal-ssh.png" alt="An SSH session inside avash" width="1280" height="800" loading="lazy">
+        </div>
+        <p class="note">The security model, what it covers and what it does not: <a href="https://github.com/AdrienAvalon/avash/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+      </div>
+    </section>
+
+    <section id="quality">
+      <div class="conteneur">
+        <h2>Tested on every commit</h2>
+        <div class="chiffres">
+          <div class="chiffre"><b>1139</b><span>tests, from the Rust core to the real application</span></div>
+          <div class="chiffre"><b>2</b><span>independent CI pipelines</span></div>
+          <div class="chiffre"><b>3</b><span>operating systems built and tested</span></div>
+          <div class="chiffre"><b>7</b><span>fuzzing targets</span></div>
+        </div>
+        <p class="intro">
+          Unit tests, integration tests against a real sshd, end-to-end tests on
+          the real application with actual SSH, RDP and VNC connections, replay of
+          real RDP recordings, an accessibility audit, a fleet of xrdp servers in
+          containers. One rule stands in for discipline: a new test must have been
+          seen failing. The details, with what each device actually found:
+          <a href="https://github.com/AdrienAvalon/avash/blob/main/docs/qualite.md">docs/qualite.md</a> (in French).
+        </p>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="conteneur">
+        <h2>Install</h2>
+        <p class="intro">Binaries are signed for the automatic updater and shipped with their checksums, a provenance attestation and an SBOM. <span data-version></span></p>
+        <div class="onglets" role="tablist">
+          <button type="button" role="tab" data-onglet="linux" aria-selected="true">Linux</button>
+          <button type="button" role="tab" data-onglet="windows" aria-selected="false">Windows</button>
+          <button type="button" role="tab" data-onglet="macos" aria-selected="false">macOS</button>
+        </div>
+
+        <div class="panneau" data-panneau="linux" data-actif>
+          <ul class="fichiers" data-famille="linux">
+            <li><a href="https://github.com/AdrienAvalon/avash/releases/latest">AppImage, .deb and .rpm on the releases page</a></li>
+          </ul>
+          <p class="note">The AppImage bundles everything, WebKitGTK included. The <code>.deb</code> (Debian, Ubuntu) and the <code>.rpm</code> (Fedora, openSUSE) install through the package manager; Arch Linux builds from source with the repository's <code>PKGBUILD</code>.</p>
+<pre><code>chmod +x Avash_*_amd64.AppImage &amp;&amp; ./Avash_*_amd64.AppImage
+sudo apt install ./Avash_*_amd64.deb        # Debian, Ubuntu
+sudo dnf install ./Avash-*.x86_64.rpm       # Fedora</code></pre>
+        </div>
+
+        <div class="panneau" data-panneau="windows">
+          <ul class="fichiers" data-famille="windows">
+            <li><a href="https://github.com/AdrienAvalon/avash/releases/latest">Installer and portable build on the releases page</a></li>
+          </ul>
+          <p class="note">The installer is a regular installation; the portable build unzips and runs without writing to the registry. Windows shows a warning on first launch, as avash is not yet signed with an Authenticode certificate: "More info", then "Run anyway".</p>
+        </div>
+
+        <div class="panneau" data-panneau="macos">
+          <ul class="fichiers" data-famille="macos">
+            <li><a href="https://github.com/AdrienAvalon/avash/releases/latest">Disk image on the releases page</a></li>
+          </ul>
+          <p class="note">For Apple silicon Macs. The app is not notarised: right-click, <strong>Open</strong>, once. The macOS build is built and tested in CI but has not been tried on a real machine yet.</p>
+        </div>
+
+        <h3>Verify what you downloaded</h3>
+<pre><code>sha256sum -c SHA256SUMS                                          # integrity
+gh attestation verify Avash_*_amd64.AppImage --repo AdrienAvalon/avash   # provenance</code></pre>
+        <p class="note">The second command proves the file comes from this repository, at this commit, built by our CI (Sigstore attestation).</p>
+
+        <h3>First launch, in three moves</h3>
+        <ol class="liste">
+          <li>Your hosts from <code>~/.ssh/config</code> are already in the sidebar; double-click to open a terminal, <kbd>Ctrl</kbd>+<kbd>B</kbd> for the file panel.</li>
+          <li><strong>Direct connection</strong> for an SSH server, an RDP or a VNC desktop that is not there yet; tick "save" and it stays.</li>
+          <li><kbd>Ctrl</kbd>+<kbd>K</kbd> for everything else: hosts, tunnels, snippets, language, host health, recordings. The password, once: it goes to the keyring.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="compare">
+      <div class="conteneur">
+        <h2>Compared with other tools</h2>
+        <div class="tableau">
+          <table>
+            <thead>
+              <tr><th></th><th>avash</th><th>PuTTY</th><th>MobaXterm</th><th>Remmina</th><th>Termius</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>SSH, RDP, VNC and SFTP in one window</td><td class="oui">✓</td><td>SSH</td><td class="oui">✓</td><td class="oui">✓</td><td>SSH, SFTP</td></tr>
+              <tr><td>Reads and writes <code>~/.ssh/config</code></td><td class="oui">✓</td><td>–</td><td>–</td><td>–</td><td>import</td></tr>
+              <tr><td>Linux, Windows, macOS</td><td class="oui">✓</td><td>Windows, Unix</td><td>Windows</td><td>Linux</td><td class="oui">✓</td></tr>
+              <tr><td>Native, no Electron</td><td class="oui">✓</td><td class="oui">✓</td><td class="oui">✓</td><td class="oui">✓</td><td>–</td></tr>
+              <tr><td>RDP host key checked before credentials</td><td class="oui">✓</td><td>–</td><td>–</td><td class="oui">✓</td><td>–</td></tr>
+              <tr><td>Passwords in the system keyring</td><td class="oui">✓</td><td>–</td><td>encrypted</td><td class="oui">✓</td><td>cloud</td></tr>
+              <tr><td>Free software</td><td>AGPL-3.0</td><td>MIT</td><td>freemium</td><td>GPL-2.0</td><td>subscription</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">From each tool's public documentation, September 2026. A wrong cell? <a href="https://github.com/AdrienAvalon/avash/issues/new/choose">Open an issue</a>.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="conteneur">
+      <span>avash is distributed under the <a href="https://github.com/AdrienAvalon/avash/blob/main/LICENSE">AGPL-3.0-or-later</a> license. © 2026 Adrien Cros.</span>
+      <nav aria-label="Links">
+        <a href="https://github.com/AdrienAvalon/avash/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/AdrienAvalon/avash/blob/main/CONTRIBUTING.md">Contributing</a>
+        <a href="https://github.com/AdrienAvalon/avash/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/AdrienAvalon/avash/discussions">Discussions</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="../site.js" defer></script>
+</body>
+</html>

@@ -69,7 +69,7 @@ BUNDLE="$ROOT/target/release/bundle"
 found=0
 while IFS= read -r -d '' f; do
   cp -v "$f" "$OUT/"; found=1
-done < <(find "$BUNDLE" -type f \( -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' \) -print0 2>/dev/null)
+done < <(find "$BUNDLE" -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*-setup.exe' -o -name '*.msi' \) -print0 2>/dev/null)
 [ "$found" -eq 1 ] || { echo "Aucun artefact trouvé sous $BUNDLE" >&2; exit 1; }
 
 # 4) Checksums SHA-256 : l'intégrité vérifiable sur n'importe quelle machine

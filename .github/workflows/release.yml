@@ -129,6 +129,8 @@ jobs:
           path: |
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/appimage/*.AppImage.sig
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
             target/release/bundle/nsis/*.exe
             target/release/bundle/nsis/*.exe.sig
             target/release/bundle/dmg/*.dmg
@@ -191,6 +193,29 @@ jobs:
           PY
           cat latest.json
 
+      # Les sources servent deux fois : la nomenclature logicielle est
+      # calculée dessus, et les notes de la release sont lues dans le CHANGELOG.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+
+      # Nomenclature logicielle (SBOM) au format SPDX : la liste exacte des
+      # bibliothèques embarquées, lue dans les fichiers de verrouillage de
+      # l'espace de travail, du processus RDP et du front. Les arbres qui ne
+      # sont pas livrés (serveurs de test, fuzzing, suite bout en bout) en sont
+      # exclus. Ce que Cargo.lock ne distingue pas, le SBOM ne le distingue pas
+      # non plus : les dépendances de développement des crates livrées y
+      # figurent.
+      - name: Nomenclature logicielle (SBOM)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: source
+          format: spdx-json
+          output-file: avash-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          config: source/.syft.yaml
+
       # Chaque ligne porte le seul nom du fichier, pas son chemin dans la
       # chaîne (`artefacts/avash-linux/target/…`) : `sha256sum -c SHA256SUMS`
       # depuis le dossier de téléchargement, comme le README le promet, ne
@@ -198,10 +223,11 @@ jobs:
       - name: Empreintes SHA256
         run: |
           : > SHA256SUMS
-          find artefacts -type f \( -name '*.AppImage' -o -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.app.tar.gz' \) -print0 \
+          find artefacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.app.tar.gz' \) -print0 \
             | while IFS= read -r -d '' f; do
                 (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
               done >> SHA256SUMS
+          sha256sum avash-*.spdx.json >> SHA256SUMS
           cat SHA256SUMS
       # Attestation de provenance : preuve cryptographique (Sigstore) que ces
       # binaires ont bien été produits par ce dépôt, à ce commit, par ce
@@ -214,21 +240,35 @@ jobs:
         with:
           subject-path: |
             artefacts/**/*.AppImage
+            artefacts/**/*.deb
+            artefacts/**/*.rpm
             artefacts/**/*.exe
             artefacts/**/*.zip
             artefacts/**/*.dmg
             artefacts/**/*.app.tar.gz
+
+      # La nomenclature est attestée à son tour, liée aux binaires : quelqu'un
+      # peut vérifier que ce SBOM est bien celui de ces fichiers, et non un
+      # document déposé après coup (gh attestation verify --predicate-type
+      # https://spdx.dev/Document/v2.3 <fichier> --repo AdrienAvalon/avash).
+      - name: Attester la nomenclature logicielle
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: |
+            artefacts/**/*.AppImage
+            artefacts/**/*.deb
+            artefacts/**/*.rpm
+            artefacts/**/*.exe
+            artefacts/**/*.zip
+            artefacts/**/*.dmg
+            artefacts/**/*.app.tar.gz
+          sbom-path: avash-${{ github.ref_name }}.spdx.json
 
       # Les notes de la release sont la section du CHANGELOG de cette version,
       # telle quelle : c'est ce que voient les visiteurs de la page des
       # releases et le courriel des abonnés, et jusqu'ici la page était vide
       # sous la liste des fichiers. Une section absente fait échouer la
       # publication plutôt que de publier sans un mot.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: CHANGELOG.md
-          sparse-checkout-cone-mode: false
-          path: source
       - name: Notes de la release depuis le CHANGELOG
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -248,7 +288,7 @@ jobs:
             echo
             echo "---"
             echo
-            echo "Vérifier un fichier téléchargé : \`sha256sum -c SHA256SUMS\` depuis le dossier de téléchargement, et \`gh attestation verify <fichier> --repo ${GITHUB_REPOSITORY}\` pour sa provenance. Mise à jour automatique depuis une version installée : pastille de version, « vérifier les mises à jour »."
+            echo "Vérifier un fichier téléchargé : \`sha256sum -c SHA256SUMS\` depuis le dossier de téléchargement, et \`gh attestation verify <fichier> --repo ${GITHUB_REPOSITORY}\` pour sa provenance. La nomenclature logicielle (SBOM, SPDX) est jointe et attestée elle aussi. Mise à jour automatique depuis une version installée : pastille de version, « vérifier les mises à jour »."
           } > notes-release.md
           cat notes-release.md
 
@@ -258,6 +298,8 @@ jobs:
           body_path: notes-release.md
           files: |
             artefacts/**/*.AppImage
+            artefacts/**/*.deb
+            artefacts/**/*.rpm
             artefacts/**/*.exe
             artefacts/**/*.zip
             artefacts/**/*.dmg
@@ -266,4 +308,5 @@ jobs:
             artefacts/**/*.sig
             latest.json
             SHA256SUMS
+            avash-*.spdx.json
           generate_release_notes: true

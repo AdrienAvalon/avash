@@ -27,6 +27,8 @@ ce qui n'est pas ici n'existe pas pour eux.
 | `fuzz/` | cibles cargo-fuzz (nightly), hors espace de travail |
 | `ci/` | `Dockerfile` de l'image de base de la chaîne GitLab, construite sur le démon Docker du runner par le premier job de chaque pipeline |
 | `docs/` | `architecture.md`, `feuille-de-route.md` ; `CHANGELOG.md`, `SECURITY.md`, `CONTRIBUTING.md`, `RELEASE.md` à la racine |
+| `packaging/` | canaux de distribution : `aur/` (PKGBUILD), `flathub/` (manifeste et sources figées, régénérées par `scripts/flathub-sources.sh`), `homebrew/`, `winget/`, métadonnées AppStream |
+| `site/` | vitrine GitHub Pages (FR à la racine, EN dans `en/`), publiée par `pages.yml` ; les captures viennent de `docs/captures` |
 | `secrets/` | fichiers chiffrés sops (jeton GitHub, aide git-credential) ; **jamais en clair, jamais commités déchiffrés** |
 
 ## Valider avant de livrer
