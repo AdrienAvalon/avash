@@ -3,6 +3,7 @@
 // de rouvrir l'onglet, et « Rouvrir » remet une session live. « Ignorer »
 // efface la mémoire : au rechargement suivant, plus rien n'est proposé.
 import { doubleCliquerHote } from "./helpers.js";
+import { EMBARQUE } from "../wdio.conf.js";
 
 async function attendreDemarrage() {
   await browser.waitUntil(async () => browser.execute(() => {
@@ -12,6 +13,14 @@ async function attendreDemarrage() {
 }
 
 describe("Onglets — mémoire et réouverture", () => {
+  before(function () {
+    // Le scénario recharge la page pour simuler un relancement. Par le serveur
+    // WebDriver embarqué (Windows, macOS), le rechargement coupe la session de
+    // pilotage : la page ne répond plus (ECONNRESET sur `execute`, cinquième
+    // passage Windows du 05/09/2026). Il reste joué sous Linux, par tauri-driver.
+    if (EMBARQUE) this.skip();
+  });
+
   it("propose de rouvrir l'onglet de la dernière fois, et le rouvre", async () => {
     await doubleCliquerHote("test-ssh");
     await browser.waitUntil(async () => (await $$(".state.live")).length > 0,

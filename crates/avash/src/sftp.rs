@@ -1136,8 +1136,23 @@ fn rel_texte(rel: &Path) -> String {
 /// crate, et non par `dirs::home_dir()` : sous `AVASH_HOME` — les tests, ou une
 /// installation qui isole sa configuration —, c'est là que les fichiers
 /// doivent atterrir.
+///
+/// Sous `AVASH_HOME`, tout reste sous ce toit : `dirs::download_dir()` ignore
+/// la variable et, sous Windows, rendait le vrai dossier Téléchargements de
+/// l'utilisateur, hors du bac à sable des tests (cinquième passage Windows de
+/// la suite complète, 05/09/2026). Le sous-dossier des téléchargements y est
+/// pris s'il existe, le foyer sinon.
 #[must_use]
 pub fn default_local_dir() -> PathBuf {
+    if std::env::var_os("AVASH_HOME").is_some_and(|v| !v.is_empty()) {
+        if let Some(foyer) = crate::repertoire_personnel() {
+            return ["Téléchargements", "Downloads"]
+                .iter()
+                .map(|n| foyer.join(n))
+                .find(|d| d.is_dir())
+                .unwrap_or(foyer);
+        }
+    }
     dirs::download_dir()
         .or_else(crate::repertoire_personnel)
         .unwrap_or_else(|| PathBuf::from("."))

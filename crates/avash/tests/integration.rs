@@ -2250,3 +2250,22 @@ async fn un_serveur_qui_nomme_une_entree_hors_du_dossier_est_refuse() {
     let _ = std::fs::remove_dir_all(local.parent().unwrap());
     sftp.close().await.unwrap();
 }
+
+/// Sous `AVASH_HOME`, les téléchargements restent sous ce toit : le vrai dossier
+/// Téléchargements de l'utilisateur ne doit pas recevoir les fichiers d'un bac à
+/// sable (cinquième passage Windows de la suite bout en bout, 05/09/2026, où
+/// `dirs::download_dir()` ignorait la variable). Le sous-dossier des
+/// téléchargements est pris dès qu'il existe.
+#[test]
+fn sous_avash_home_les_telechargements_restent_sous_le_foyer() {
+    std::sync::LazyLock::force(&HOME_POSE);
+    let foyer = std::path::PathBuf::from(std::env::var_os("AVASH_HOME").unwrap());
+    assert!(
+        avash::sftp::default_local_dir().starts_with(&foyer),
+        "{:?} hors de {foyer:?}",
+        avash::sftp::default_local_dir()
+    );
+    let telechargements = foyer.join("Téléchargements");
+    std::fs::create_dir_all(&telechargements).unwrap();
+    assert_eq!(avash::sftp::default_local_dir(), telechargements);
+}

@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 05/09/2026 |
 |---|---|
-| Tests | 429 Rust (155 cœur, 42 intégration, 72 interface, 133 processus RDP, 27 serveur RDP de test) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 69 scénarios bout en bout dans 35 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 431 Rust (155 cœur, 43 intégration, 72 interface, 134 processus RDP, 27 serveur RDP de test) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 69 scénarios bout en bout dans 35 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |

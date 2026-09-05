@@ -72,7 +72,20 @@ pub(crate) fn annonce(files: &[FileDescriptor]) -> Vec<FichierDistant> {
 
 /// Le dossier de réception par défaut : celui des téléchargements, sinon le
 /// répertoire personnel, sinon le répertoire courant.
+///
+/// Sous `AVASH_HOME`, tout reste sous ce toit : `dirs::download_dir()` ignore
+/// la variable et, sous Windows, rendait le vrai dossier Téléchargements de
+/// l'utilisateur, hors du bac à sable des tests (cinquième passage Windows de
+/// la suite complète, 05/09/2026).
 pub(crate) fn dossier_par_defaut() -> PathBuf {
+    if let Some(foyer) = std::env::var_os("AVASH_HOME").filter(|v| !v.is_empty()) {
+        let foyer = PathBuf::from(foyer);
+        return ["Téléchargements", "Downloads"]
+            .iter()
+            .map(|n| foyer.join(n))
+            .find(|d| d.is_dir())
+            .unwrap_or(foyer);
+    }
     dirs::download_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -536,6 +549,33 @@ impl Offre {
 
 #[cfg(test)]
 mod tests {
+    /// Sous `AVASH_HOME`, la réception reste sous ce toit, dans le sous-dossier
+    /// des téléchargements s'il existe ; sans la variable, le dossier du
+    /// système. Sous le verrou partagé avec les autres tests qui la posent.
+    #[test]
+    fn sous_avash_home_la_reception_reste_sous_le_foyer() {
+        let _verrou = crate::empreintes::VERROU_AVASH_HOME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let foyer = std::env::temp_dir().join(format!("avash-fichiers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&foyer);
+        std::fs::create_dir_all(&foyer).unwrap();
+        let precedent = std::env::var_os("AVASH_HOME");
+        unsafe { std::env::set_var("AVASH_HOME", &foyer) };
+        let sous_foyer = super::dossier_par_defaut();
+        std::fs::create_dir_all(foyer.join("Downloads")).unwrap();
+        let sous_downloads = super::dossier_par_defaut();
+        unsafe {
+            match precedent {
+                Some(v) => std::env::set_var("AVASH_HOME", v),
+                None => std::env::remove_var("AVASH_HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&foyer);
+        assert_eq!(sous_foyer, foyer);
+        assert_eq!(sous_downloads, foyer.join("Downloads"));
+    }
+
     use super::{annonce, chemin_local, preparer_offre, Reception, MORCEAU};
     use ironrdp::cliprdr::pdu::{
         ClipboardFileAttributes, FileContentsFlags, FileContentsRequest, FileDescriptor,

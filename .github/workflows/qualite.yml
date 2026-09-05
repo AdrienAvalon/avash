@@ -93,7 +93,7 @@ jobs:
         run: |
           # Les filtres se lisent depuis la racine de l'espace de travail
           # (`src/ssh.rs` ne sélectionne rien) : 264 mutants le 05/09/2026.
-          cargo mutants -p avash --in-place --jobs 2 --timeout 300 \
+          cargo mutants -p avash --in-place --timeout 300 \
             -f crates/avash/src/ssh.rs -f crates/avash/src/keys.rs \
             -f crates/avash/src/secrets.rs -f crates/avash/src/lib.rs \
             -o mutants || true

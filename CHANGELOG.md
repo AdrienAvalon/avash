@@ -7,6 +7,26 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Sous `AVASH_HOME`, les téléchargements restent sous ce toit.** Le dossier
+  de réception (panneau SFTP, fichiers reçus d'un bureau RDP) était celui du
+  système même quand la variable isolait le reste : sous Windows, où
+  `dirs::download_dir()` l'ignore, un bac à sable de test écrivait dans le
+  vrai dossier Téléchargements de l'utilisateur. Le sous-dossier des
+  téléchargements du foyer est pris s'il existe, le foyer sinon ; un test
+  d'intégration et un test du processus le vérifient.
+- **La suite bout en bout complète tourne sous Windows.** Quatre passages
+  instrumentés pour trouver que l'action « doubleClick » du protocole
+  n'atteint jamais le DOM par le serveur WebDriver embarqué : toute session
+  ouverte par double-clic sur un hôte restait « jamais live » sans qu'un seul
+  appel n'atteigne le cœur. Les scénarios ouvrent un hôte par une aide qui
+  émet l'événement à la main sur ce chemin ; le chemin d'un enregistrement
+  n'est plus présumé commencer par `/` ; le scénario de réouverture des
+  onglets, qui recharge la page, se saute sur ce chemin (le rechargement
+  coupe le pilotage embarqué) ; `waitForPort` attend jusqu'à quinze
+  secondes, dépassé une fois en suite complète.
+- **Chaîne : références visuelles renouvelées** (la palette a trois entrées
+  de plus : son, partage, diagnostic) ; le workflow qualité ne combinait plus
+  `--in-place` et `--jobs`, que cargo-mutants refuse ensemble.
 - **Un dossier du poste comme lecteur du bureau distant (redirection de
   lecteur, MS-RDPEFS).** La fiche d'un bureau RDP et la connexion directe
   prennent un « dossier partagé » (champ ou sélecteur du système) ; le

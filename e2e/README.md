@@ -143,7 +143,9 @@ Rust, sshd en `LogLevel DEBUG1` muet), alors que la connexion directe, un clic
 simple, passait. Les scénarios ouvrent donc un hôte par `doubleCliquerHote`
 (`helpers.js`), qui émet l'événement `dblclick` à la main sur ce chemin et
 garde la vraie action ailleurs ; même traitement pour le clic sur le canvas VNC
-(`mousedown`/`mouseup` émis à la main).
+(`mousedown`/`mouseup` émis à la main). Et `restauration.spec.js`, qui recharge
+la page pour simuler un relancement, se saute sur ce chemin : le rechargement
+coupe la session de pilotage embarquée (la page ne répond plus, `ECONNRESET`).
 
 ## Astuces WebKitGTK
 

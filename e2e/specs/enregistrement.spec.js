@@ -31,7 +31,9 @@ describe("Enregistrement de session (asciicast)", () => {
     await browser.execute(() => document.querySelector(".xterm-helper-textarea")?.focus());
     await browser.keys(texte);
   };
-  const cheminDu = (toast) => /: (\/\S+\.cast)/.exec(toast ?? "")?.[1];
+  // Le chemin annoncé commence par « / » sous Unix et par une lettre de lecteur
+  // sous Windows (`C:\…\x.cast`) : le motif ne présume pas de sa forme.
+  const cheminDu = (toast) => /: (\S+\.cast)/.exec(toast ?? "")?.[1];
   // Un marqueur unique SANS deux caractères identiques consécutifs : la frappe
   // synthétique en perd un sur deux (« 1788 » arrivait « 178 », « asciicast »
   // « ascicast ») ; on intercale une lettre entre deux jumeaux.
