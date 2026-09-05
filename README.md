@@ -12,6 +12,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [Site](https://adrienavalon.github.io/avash/) · [Français](README.md) · [English](README.en.md)
 
 [![Version](https://img.shields.io/github/v/release/AdrienAvalon/avash?label=version&color=8b7cf6)](https://github.com/AdrienAvalon/avash/releases/latest)
+[![winget](https://img.shields.io/winget/v/AdrienCros.Avash?label=winget&color=0078d4)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/AdrienCros/Avash)
 [![Téléchargements](https://img.shields.io/github/downloads/AdrienAvalon/avash/total?label=t%C3%A9l%C3%A9chargements&color=2ea44f)](https://github.com/AdrienAvalon/avash/releases)
 [![Plateformes](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-plateformes-informational)](#installation)
 [![Licence](https://img.shields.io/github/license/AdrienAvalon/avash?label=licence)](LICENSE)
@@ -90,6 +91,12 @@ sources (`makepkg -si`).
 
 ### Windows
 
+```powershell
+winget install AdrienCros.Avash
+```
+
+- **winget** installe l'installeur ci-dessous et le met à jour avec le reste
+  du poste (`winget upgrade`).
 - **Installeur** `Avash_x.y.z_x64-setup.exe`, installation classique.
 - **Portable** `avash-x.y.z-windows-x64.zip`, à décompresser et lancer, sans
   installation ni écriture dans la base de registre. Garder `avash-rdp.exe` à

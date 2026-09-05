@@ -7,6 +7,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Avash est sur winget.** `winget install AdrienCros.Avash` installe la
+  0.9.1 : la première soumission au dépôt communautaire de Microsoft, mise à
+  jour sur place de la 0.7.2 à la 0.9.1 pendant qu'elle attendait, a été
+  validée (installation réelle comprise) puis approuvée par un modérateur le
+  5 septembre 2026. Les README et le site le disent, avec le badge de version
+  winget.
+
 ## [0.9.1] - 2026-09-05
 
 - **Le lecteur partagé fonctionne contre un vrai Windows 11.** Éprouvé contre

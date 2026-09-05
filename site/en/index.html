@@ -157,7 +157,8 @@ sudo dnf install ./Avash-*.x86_64.rpm       # Fedora</code></pre>
           <ul class="fichiers" data-famille="windows">
             <li><a href="https://github.com/AdrienAvalon/avash/releases/latest">Installer and portable build on the releases page</a></li>
           </ul>
-          <p class="note">The installer is a regular installation; the portable build unzips and runs without writing to the registry. Windows shows a warning on first launch, as avash is not yet signed with an Authenticode certificate: "More info", then "Run anyway".</p>
+          <p class="note">Avash is on winget, the Windows package manager: one command installs it and <code>winget upgrade</code> keeps it current along with the rest of the machine. The installer is a regular installation; the portable build unzips and runs without writing to the registry. Windows shows a warning on first launch, as avash is not yet signed with an Authenticode certificate: "More info", then "Run anyway".</p>
+<pre><code>winget install AdrienCros.Avash</code></pre>
         </div>
 
         <div class="panneau" data-panneau="macos">

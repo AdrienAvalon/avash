@@ -229,9 +229,11 @@ qui est en place, et ce qui attend :
   Windows, image disque macOS ; empreintes, attestation de provenance
   Sigstore, SBOM SPDX attesté. Les paquets deb et rpm ont été installés et
   lancés dans des conteneurs Ubuntu 24.04 et Fedora avant d'être publiés.
-- **winget** (`AdrienCros.Avash`) : première soumission ouverte le
-  04/09/2026, validée par le robot, CLA signé ; attend un modérateur. À
-  chaque version suivante, `scripts/winget-manifeste.sh`.
+- **winget** (`AdrienCros.Avash`) : **publié**. Première soumission ouverte
+  le 04/09/2026 en 0.7.2, mise à jour sur place en 0.9.1 pendant l'attente,
+  validée par le robot (installation réelle comprise) et approuvée par un
+  modérateur le 05/09/2026 : `winget install AdrienCros.Avash`. À chaque
+  version suivante, `scripts/winget-manifeste.sh` et une PR `Update:`.
 - **AUR** : `packaging/aur/avash/PKGBUILD`, éprouvé par `makepkg` sur le
   poste ; la publication attend un compte AUR avec sa clé SSH.
 - **Homebrew** : cask `packaging/homebrew/avash.rb`, à soumettre depuis un

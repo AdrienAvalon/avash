@@ -12,6 +12,7 @@ application, which reads your `~/.ssh/config` as it is.
 [Website](https://adrienavalon.github.io/avash/en/) · [Français](README.md) · [English](README.en.md)
 
 [![Version](https://img.shields.io/github/v/release/AdrienAvalon/avash?label=version&color=8b7cf6)](https://github.com/AdrienAvalon/avash/releases/latest)
+[![winget](https://img.shields.io/winget/v/AdrienCros.Avash?label=winget&color=0078d4)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/AdrienCros/Avash)
 [![Downloads](https://img.shields.io/github/downloads/AdrienAvalon/avash/total?label=downloads&color=2ea44f)](https://github.com/AdrienAvalon/avash/releases)
 [![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-platforms-informational)](#install)
 [![License](https://img.shields.io/github/license/AdrienAvalon/avash?label=license)](LICENSE)
@@ -93,6 +94,12 @@ Arch Linux: `packaging/aur/avash/PKGBUILD` builds the package from source
 
 ### Windows
 
+```powershell
+winget install AdrienCros.Avash
+```
+
+- **winget** installs the installer below and updates it along with the rest
+  of the machine (`winget upgrade`).
 - **Installer** `Avash_x.y.z_x64-setup.exe`, a regular installation.
 - **Portable** `avash-x.y.z-windows-x64.zip`: unzip and run, no installation
   and nothing written to the registry. Keep `avash-rdp.exe` next to

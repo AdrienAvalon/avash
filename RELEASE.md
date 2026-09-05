@@ -228,10 +228,13 @@ qui retire l'ancien dossier de version et dépose le nouveau, puis un
 renommage : la première version publiée est ainsi la courante, sans PR de
 rattrapage. C'est ce qui a été fait le 05/09/2026 (0.7.2 → 0.9.1).
 
-Automatiser depuis le workflow Release est possible avec l'action
-`vedantmgoyal9/winget-releaser` sur un exécuteur Windows ; elle exige un jeton
-personnel (`public_repo`) capable de pousser sur le fork, à déposer en secret
-`WINGET_TOKEN`. À faire quand une version aura été acceptée à la main.
+La première version acceptée est la 0.9.1 (PR #429575, approuvée le
+05/09/2026) : les suivantes se soumettent par une PR `Update: AdrienCros.Avash
+to <version>`, même contenu, même chemin. Automatiser depuis le workflow
+Release est possible avec l'action `vedantmgoyal9/winget-releaser` sur un
+exécuteur Windows ; elle exige un jeton personnel (`public_repo`) capable de
+pousser sur le fork, à déposer en secret `WINGET_TOKEN` : c'est au mainteneur
+de le créer.
 
 ### AUR (Arch Linux, CachyOS, Manjaro…)
 
