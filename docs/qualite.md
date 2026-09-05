@@ -122,6 +122,7 @@ déconnexion sans effet, le marqueur `@revoked` ignoré par la vraie lecture de
 `known_hosts`, la redirection distante en port 0, et dans `lib.rs` la ligne
 vide avant un bloc ajouté, le bloc `Match` qui suit un hôte retiré, la place du
 commentaire de dossier, les directives faites d'espaces, l'étoile en fin de
-motif. Restent sans test, à dessein : l'agent SSH (aucun agent dans la suite),
-les réglages de la session russh (keepalive, `TCP_NODELAY`), et les fonctions
-qui n'existent que pour Windows.
+motif. Second passage, ces tests posés : 201 attrapés, 43 manqués. Restent
+sans test, à dessein : l'agent SSH (aucun agent dans la suite), les réglages
+de la session russh (keepalive, `TCP_NODELAY`), et les fonctions qui
+n'existent que pour Windows.
