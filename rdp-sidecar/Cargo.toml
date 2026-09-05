@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr", "rdpsnd", "pdu", "core"] }
+ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr", "rdpsnd", "rdpdr", "pdu", "core"] }
 ironrdp-tokio = { version = "0.10", features = ["reqwest"] }
 ironrdp-tls = { version = "0.2", features = ["rustls"] }
 # VeNCrypt (VNC sous TLS) : le même rustls qu'ironrdp-tls, même fournisseur.
@@ -71,6 +71,10 @@ ironrdp-graphics = { path = "vendor/ironrdp-graphics" }
 # comportements indéfinis et détacher la file des événements du verrou du
 # client. Voir vendor/README.md.
 vnc-rs = { path = "vendor/vnc-rs" }
+
+[target.'cfg(windows)'.dependencies]
+# Espace libre du volume partagé (redirection de lecteur).
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }

@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { attendreSessionLive, ecouterSortiePty, findHostRow } from "./helpers.js";
+import { attendreSessionLive, doubleCliquerHote, ecouterSortiePty } from "./helpers.js";
 
 /** Un chemin local tel que le serveur SFTP le nomme : sous Windows, OpenSSH
  *  Server présente `C:\Users\x` comme `/C:/Users/x`. */
@@ -24,7 +24,7 @@ function dossierDeReception() {
 
 async function ouvrirSessionEtPanneau() {
   await ecouterSortiePty();
-  await (await findHostRow("test-ssh")).doubleClick();
+  await doubleCliquerHote("test-ssh");
   await attendreSessionLive();
   await browser.waitUntil(async () => $("#sftp-toggle").isEnabled(),
     { timeout: 5000, timeoutMsg: "bouton SFTP jamais activé" });
@@ -125,7 +125,7 @@ describe("SFTP — panneau, dossier entier, copie vers un autre hôte", () => {
 
   it("copie un fichier vers un autre onglet SSH sans l'écrire sur le poste", async () => {
     // Un second onglet vers le même sshd : c'est « l'autre hôte ».
-    await (await findHostRow("test-ssh")).doubleClick();
+    await doubleCliquerHote("test-ssh");
     await browser.waitUntil(async () => (await $$(".state.live")).length >= 2,
       { timeout: 20000, timeoutMsg: "second onglet jamais live" });
     // Retour au premier onglet, dont le panneau est ouvert sur la racine.

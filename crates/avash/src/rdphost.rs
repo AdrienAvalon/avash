@@ -62,6 +62,10 @@ pub struct RdpHost {
     /// RDP sauf mention contraire : un fichier antérieur n'a pas ce champ.
     #[serde(default)]
     pub protocole: Protocole,
+    /// Dossier du poste servi au bureau distant comme lecteur « Avash »
+    /// (redirection de lecteur). Absent : rien n'est partagé.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partage: Option<String>,
 }
 
 impl RdpHost {
@@ -90,6 +94,7 @@ impl RdpHost {
             folder: String::new(),
             sans_nla: false,
             protocole: Protocole::Rdp,
+            partage: None,
         }
     }
 
@@ -310,10 +315,19 @@ mod tests {
         let all = upsert_host_in(&p, b.clone()).unwrap();
         assert_eq!(all, vec![a.clone(), b.clone()]);
         assert_eq!(load_hosts_from(&p).unwrap(), all, "relecture identique");
-        // Remplacement par id.
+        // Remplacement par id ; le dossier partagé survit à l'aller-retour, et
+        // n'apparaît dans le fichier que pour le bureau qui en a un.
         b.width = 2560;
+        b.partage = Some("/srv/echange".to_owned());
         let all = upsert_host_in(&p, b.clone()).unwrap();
         assert_eq!(all, vec![a.clone(), b.clone()]);
+        assert_eq!(
+            load_hosts_from(&p).unwrap(),
+            all,
+            "le dossier partagé est relu"
+        );
+        let brut = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(brut.matches("partage").count(), 1, "{brut}");
         let all = remove_host_in(&p, &a.id).unwrap();
         assert_eq!(all, vec![b]);
         let _ = std::fs::remove_file(&p);

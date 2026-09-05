@@ -46,7 +46,7 @@ export type Session = {
 };
 
 /** Bureau RDP enregistré (`~/.config/avash/rdp.yaml`). */
-export type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string; sans_nla?: boolean; protocole?: "rdp" | "vnc" };
+export type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string; sans_nla?: boolean; protocole?: "rdp" | "vnc"; partage?: string };
 
 export const FONT_MIN = 9;
 export const FONT_MAX = 28;

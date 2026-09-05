@@ -260,6 +260,7 @@ pub(crate) async fn connect(
     a: &Args,
     clip_backend: ClipBackend,
     son: Option<crate::son::SonBackend>,
+    disque: Option<crate::disque::DisqueBackend>,
     redirection: Option<&ironrdp::session::redirection::Redirection>,
     graphique: egfx::Politique,
 ) -> Result<(
@@ -296,6 +297,19 @@ pub(crate) async fn connect(
     if let Some(son) = son {
         connector =
             connector.with_static_channel(ironrdp::rdpsnd::client::Rdpsnd::new(Box::new(son)));
+    }
+    // Canal RDPDR : le dossier partagé, servi comme lecteur « Avash ». Un
+    // lecteur est un périphérique « après ouverture de session » : le canal
+    // l'annonce de lui-même quand le serveur dit l'utilisateur connecté.
+    if let Some(disque) = disque {
+        connector = connector.with_static_channel(
+            ironrdp::rdpdr::Rdpdr::new(Box::new(disque), "avash-rdp".to_owned()).with_drives(Some(
+                vec![(
+                    crate::disque::LECTEUR_ID,
+                    crate::disque::LECTEUR_NOM.to_owned(),
+                )],
+            )),
+        );
     }
     let should_upgrade = match ironrdp_tokio::connect_begin(&mut framed, &mut connector).await {
         Ok(v) => v,

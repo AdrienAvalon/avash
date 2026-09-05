@@ -4,7 +4,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findHostRow, attendreBureauConnecte } from "../specs/helpers.js";
+import { attendreBureauConnecte, doubleCliquer, doubleCliquerHote } from "../specs/helpers.js";
 
 const DOSSIER = process.env.CAPTURES_DOSSIER;
 const CADRES = process.env.CAPTURES_CADRES;
@@ -43,7 +43,7 @@ describe("captures du README", () => {
   });
 
   it("terminal SSH", async () => {
-    await (await findHostRow("test-ssh")).doubleClick();
+    await doubleCliquerHote("test-ssh");
     await pause(300);
     await cadre();
     await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
@@ -121,7 +121,7 @@ describe("captures du README", () => {
     const lignes = await $$("#sftp-list .sftp-entry");
     for (const el of lignes) {
       if ((await el.$(".nm").getProperty("textContent")) !== "backups") continue;
-      await el.doubleClick();
+      await doubleCliquer(el);
       break;
     }
     await browser.waitUntil(async () => (await $$("#sftp-list .sftp-entry")).length >= 2 && (await barre.getValue()).endsWith("backups"),

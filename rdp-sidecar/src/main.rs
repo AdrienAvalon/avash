@@ -46,6 +46,7 @@ mod args;
 mod atomique;
 mod capture;
 mod connexion;
+mod disque;
 mod egfx;
 mod empreintes;
 mod entrees;

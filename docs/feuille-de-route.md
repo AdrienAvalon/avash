@@ -4,7 +4,7 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 4 septembre 2026, après la publication de la version 0.7.2
+Dernière révision : 5 septembre 2026, après la publication de la version 0.8.0
 — un lot de fond (panneau SFTP sur la session du terminal, mot de passe oublié
 dès la connexion, front et processus RDP découpés en modules, chaîne
 d'intégration complète, quarante tests de plus, fuzzing du parseur), après la
@@ -34,14 +34,14 @@ défaut n'est pas livrée, même terminée.
 
 ## Où nous en sommes (mesuré)
 
-| Indicateur | Valeur au 04/09/2026 |
+| Indicateur | Valeur au 05/09/2026 |
 |---|---|
-| Tests | 392 Rust (155 cœur, 42 intégration, 70 interface, 125 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 67 scénarios bout en bout dans 34 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 429 Rust (155 cœur, 42 intégration, 72 interface, 133 processus RDP, 27 serveur RDP de test) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 69 scénarios bout en bout dans 35 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.7.2 (Linux + Windows, signées, attestation Sigstore) |
+| Version publiée | 0.8.0 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
@@ -422,9 +422,9 @@ Par ordre de valeur décroissante :
    arrive dans une pastille, un clic et une confirmation les reçoivent (par
    morceaux, quatre en vol, sans écraser) ; des fichiers déposés sur le bureau
    se collent dans son Explorateur, dossiers compris. Le scénario bout en bout
-   compare les octets dans les deux sens contre le serveur de test. Reste à
-   faire : la redirection de lecteur (RDPDR), pour parcourir un dossier du
-   poste depuis le distant.
+   compare les octets dans les deux sens contre le serveur de test. La
+   redirection de lecteur, pour parcourir un dossier du poste depuis le
+   distant, est le point 11.
 6. **Le panneau SFTP au complet** — **fait** (04/09/2026) : dossiers entiers
    dans les deux sens, reprise d'un transfert coupé ou annulé (carte des
    bandes reçues, point de contrôle des envois), file de transferts (trois à
@@ -450,8 +450,12 @@ Par ordre de valeur décroissante :
     seulement, blocs relayés à la webview (`[20]`) qui les joue par WebAudio,
     volume du serveur (`[21]`), coupure dans la palette. Scénario bout en bout
     sur le la 440 Hz du serveur de test.
-11. **Redirection de lecteur (RDPDR)** — un dossier du poste visible depuis le
-    bureau distant.
+11. **Redirection de lecteur (RDPDR)** — **fait** (05/09/2026) : un dossier
+    du poste, choisi dans la fiche du bureau ou la connexion directe, servi au
+    distant comme lecteur « Avash » (canal `rdpdr`, `disque.rs`, un fil dédié
+    aux entrées-sorties, chemins confinés sous la racine). Le serveur de test
+    a son côté serveur RDPDR ; le scénario bout en bout le voit énumérer, lire
+    et écrire dans le dossier.
 
 ---
 
@@ -462,7 +466,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 67 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 69 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |

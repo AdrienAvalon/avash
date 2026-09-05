@@ -7,6 +7,36 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Un dossier du poste comme lecteur du bureau distant (redirection de
+  lecteur, MS-RDPEFS).** La fiche d'un bureau RDP et la connexion directe
+  prennent un « dossier partagé » (champ ou sélecteur du système) ; le
+  processus RDP annonce alors le canal `rdpdr` avec un lecteur « Avash »,
+  que le distant voit comme un disque réseau : l'explorateur y lit, écrit,
+  crée, renomme et supprime, et n'importe quel programme distant y ouvre un
+  fichier. Le serveur pilote tout par des requêtes d'entrée-sortie (ouvrir,
+  lire, écrire, énumérer, informations de fichier et de volume, disposition,
+  renommage, verrous) ; `rdp-sidecar/src/disque.rs` y répond depuis un fil
+  dédié, hors de la boucle de session, par `completion_id`. Chaque chemin
+  venu du serveur est ramené sous la racine partagée avant toute ouverture
+  (`..` refusé, parent résolu liens compris et tenu sous la racine, lien en
+  dernier composant non suivi) : un serveur hostile ne sort pas du dossier.
+  Le volume se présente en NTFS distant (pas FAT32, dont l'explorateur
+  refuserait les fichiers de plus de quatre gigaoctets), avec l'espace réel
+  du disque du poste. MS-RDPEFS exige que `rdpdr` soit annoncé avec `rdpsnd`
+  : le son coupé, un canal audio muet (aucun format, pas de drapeau ALIVE)
+  reste annoncé pour que le lecteur réponde. Huit tests dans le processus
+  (confinement, aller-retour créer-écrire-relire, énumération par motif
+  DOS, suppression et renommage, volume, réponse par le fil, motif, dates)
+  et deux dans l'interface (dossier absent refusé avant tout lancement, drapeaux du processus). Le
+  serveur de test gagne son côté serveur RDPDR (`test-rdp-server/src/rdpdr/`
+  : annonce 1.12, capacités, `UserLoggedOn`, puis un scénario fixe qui lit
+  le volume, énumère, lit `bonjour.txt` et écrit `ecrit.txt`, une ligne par
+  étape sur sa sortie), sur un ironrdp-server porté dans
+  `test-rdp-server/vendor/` avec un point d'attache de canal statique que
+  le paquet n'offre pas ; 27 tests (décodeurs écrits à la main, automate,
+  dialogue complet avec le canal client du paquet), éprouvé aussi contre
+  xfreerdp 3.31. Deux scénarios bout en bout : par le formulaire, puis le
+  processus seul avec le son coupé.
 - **VNC chiffré : VeNCrypt, avec le certificat épinglé.** Quand le serveur
   offre le type de sécurité VeNCrypt, le client porté le choisit, négocie la
   version 0.2 et un sous-type X.509 (`X509Vnc` d'abord, `X509None` sinon ;

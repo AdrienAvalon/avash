@@ -3,7 +3,7 @@
 // Signalé en usage réel sous Windows : une session SSH et un bureau RDP ouverts,
 // on ferme le SSH, et le bureau devient inutilisable — il fallait fermer son
 // onglet et se reconnecter.
-import { startRdpServer, waitForPort, findHostRow, attendreBureauConnecte } from "./helpers.js";
+import { startRdpServer, waitForPort, findHostRow, attendreBureauConnecte, doubleCliquer } from "./helpers.js";
 const RDP_PORT = 33897;
 let srv;
 
@@ -28,7 +28,7 @@ describe("Onglets mixtes SSH + RDP", () => {
 
     // 2. Une session SSH réelle par-dessus, qui devient l'onglet actif.
     const ligne = await findHostRow("test-ssh");
-    await ligne.doubleClick();
+    await doubleCliquer(ligne);
     await browser.waitUntil(async () => (await $$(".tab")).length === 2,
       { timeout: 20000, timeoutMsg: "second onglet absent" });
     await browser.waitUntil(

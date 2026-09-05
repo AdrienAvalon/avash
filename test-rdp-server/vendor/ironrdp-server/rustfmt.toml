@@ -1,0 +1,6 @@
+# Style d'IronRDP (rustfmt.toml de son dépôt) : 120 colonnes, style de l'édition
+# 2024. Sans ce fichier, un rustfmt lancé depuis avash reformate tout le paquet
+# porté à 100 colonnes et retrie ses imports : le `diff -r` avec la version de
+# crates.io devient illisible.
+max_width = 120
+style_edition = "2024"

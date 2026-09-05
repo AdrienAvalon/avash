@@ -1,12 +1,16 @@
-//! Serveur RDP de TEST pour Avash — adapté de l'exemple `server.rs` d'IronRDP
+//! Serveur RDP de TEST pour Avash — adapté de l'exemple `server.rs` d'`IronRDP`
 //! (MIT/Apache-2.0). Sert un faux bureau (rectangles aléatoires) en TLS/NLA
-//! pour valider le sidecar `avash-rdp` sans machine Windows.
-//! Audio (opus) et presse-papiers retirés (non nécessaires au test).
+//! pour valider le sidecar `avash-rdp` sans machine Windows, avec un son, un
+//! presse-papiers et, dès qu'un client annonce un lecteur redirigé, le
+//! scénario rdpdr de `src/rdpdr/` dont chaque étape s'écrit sur la sortie
+//! standard.
 //!
 //! Example of utilizing `ironrdp-server` crate.
 
 #![allow(unused_crate_dependencies)] // False positives because there are both a library and a binary.
 #![allow(clippy::print_stdout)]
+
+mod rdpdr;
 
 use core::net::SocketAddr;
 use core::num::{NonZeroU16, NonZeroUsize};
@@ -434,7 +438,7 @@ impl CliprdrBackend for ClipBackend {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let taille = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                let taille = std::fs::metadata(&p).map_or(0, |m| m.len());
                 println!("offre : {nom} ({taille} octets)");
                 self.send(ClipboardMessage::SendInitiateFileCopy(vec![
                     FileDescriptor::new(nom)
@@ -579,7 +583,7 @@ impl RdpsndServerHandler for SndHandler {
                 format: WaveFormat::OPUS,
                 n_channels: 2,
                 n_samples_per_sec: 48000,
-                n_avg_bytes_per_sec: 192000,
+                n_avg_bytes_per_sec: 192_000,
                 n_block_align: 4,
                 bits_per_sample: 16,
                 data: None,
@@ -588,7 +592,7 @@ impl RdpsndServerHandler for SndHandler {
                 format: WaveFormat::PCM,
                 n_channels: 2,
                 n_samples_per_sec: 44100,
-                n_avg_bytes_per_sec: 176400,
+                n_avg_bytes_per_sec: 176_400,
                 n_block_align: 4,
                 bits_per_sample: 16,
                 data: None,
@@ -654,9 +658,7 @@ impl RdpsndServerHandler for SndHandler {
                         }
                     }
                 } else {
-                    wave.into_iter()
-                        .flat_map(|value| value.to_le_bytes())
-                        .collect()
+                    wave.into_iter().flat_map(i16::to_le_bytes).collect()
                 };
 
                 let inner = inner.lock().expect("poisoned");
@@ -688,7 +690,7 @@ fn generate_sine_wave(
 
     let total_samples = (u64::from(sample_rate) * duration_ms) / 1000;
 
-    #[expect(clippy::as_conversions)]
+    #[expect(clippy::as_conversions, clippy::cast_precision_loss)]
     let delta_phase = 2.0 * PI * frequency / sample_rate as f32;
 
     let amplitude = 32767.0; // Max amplitude for 16-bit audio
@@ -760,6 +762,9 @@ async fn run(
             recevoir_dans,
         })))
         .with_sound_factory(Some(sound))
+        // Le canal rdpdr n'est joint que si le client le demande ; le
+        // scénario ne démarre qu'à l'annonce d'un lecteur. Sans lecteur, rien.
+        .with_static_channel_factory(Some(Box::new(rdpdr::FabriqueRdpdr)))
         .build();
 
     server.set_credentials(Some(Credentials {

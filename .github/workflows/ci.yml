@@ -132,6 +132,17 @@ jobs:
           cargo test
           ./verifier-portes.sh
 
+      # Même leçon pour les serveurs de test, hors espace de travail eux aussi :
+      # la chaîne les compilait pour la suite bout en bout sans jouer leurs
+      # tests (le côté serveur RDPDR en compte vingt-sept).
+      - name: Serveurs de test — format, clippy, tests
+        run: |
+          for s in test-rdp-server test-vnc-server; do
+            cargo fmt --check --manifest-path "$s/Cargo.toml"
+            cargo clippy --all-targets --manifest-path "$s/Cargo.toml" -- -D warnings
+            cargo test --manifest-path "$s/Cargo.toml"
+          done
+
       # Absent jusqu'ici du CI, et le sidecar RDP n'était audité nulle part
       # alors qu'il est compilé et livré dans le bundle.
       - name: Rust — audit des dépendances

@@ -255,6 +255,21 @@ Trois commandes exposées à l'interface n'étaient appelées par aucun code :
 commande arbitraire sur n'importe quel alias, avec le mot de passe du trousseau
 chargé automatiquement. Elles ne sont plus enregistrées.
 
+### Le lecteur partagé ne sort pas de son dossier
+
+Partager un dossier avec un bureau RDP (fiche du bureau, « Dossier partagé »)
+donne au serveur un lecteur qu'il pilote entièrement : c'est lui qui nomme les
+chemins à ouvrir, lire, écrire ou supprimer. Un serveur hostile, ou compromis,
+nommerait `..\..\.ssh\id_ed25519`. Chaque chemin est donc ramené sous la
+racine partagée **avant toute ouverture** (`rdp-sidecar/src/disque.rs`) : les
+composants `.` et `..` sont refusés, le répertoire parent est résolu par le
+système, liens symboliques compris, et doit rester sous la racine, et un lien
+symbolique en dernier composant n'est pas suivi (un lien vers `/etc` déposé
+dans le dossier ne donne rien). Rien n'est partagé sans un dossier renseigné,
+et rien d'autre que ce dossier ne l'est ; le reste du poste n'existe pas pour
+le serveur. Les accès sont ceux de l'utilisateur qui lance Avash, ni plus ni
+moins.
+
 ### Le presse-papiers n'est partagé que sur décision
 
 Partager le presse-papiers avec un bureau distant revient à confier son contenu

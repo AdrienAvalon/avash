@@ -209,6 +209,16 @@ bout à bout sur un curseur de temps, et applique le volume. Le processus ne
 touche à aucun périphérique audio. `--sans-son` (réglage de la palette) retire
 le canal de la négociation.
 
+Le dossier partagé passe par le canal statique RDPDR ([MS-RDPEFS]) :
+`--lecteur <dossier>` fait annoncer un lecteur « Avash » (périphérique
+`Filesystem`, annoncé une fois l'utilisateur connecté), et le serveur pilote
+tout par des requêtes d'entrée-sortie que `rdp-sidecar/src/disque.rs` sert
+depuis un fil dédié (créer, lire, écrire, énumérer, informations de fichier et
+de volume, disposition, renommage, verrous), en répondant par `completion_id`
+hors de la boucle de session. Chaque chemin du serveur est ramené sous la
+racine avant toute ouverture. MS-RDPEFS veut `rdpdr` annoncé avec `rdpsnd` :
+le son coupé, un canal audio muet (aucun format, sans ALIVE) reste annoncé.
+
 Les fichiers passent par le canal CLIPRDR ([MS-RDPECLIP] 2.2.5 : liste
 `FileGroupDescriptorW`, flux `FileContentsRequest` / `Response`, verrous), porté
 par IronRDP ; `rdp-sidecar/src/fichiers.rs` découpe une réception en morceaux
@@ -392,6 +402,7 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Sidecar RDP — trames vers l'interface (zone sale, format binaire) | `rdp-sidecar/src/trames.rs` |
 | Sidecar RDP — presse-papiers CLIPRDR | `rdp-sidecar/src/presse_papiers.rs` |
 | Sidecar RDP — son RDPSND, et sa lecture WebAudio | `rdp-sidecar/src/son.rs`, `web/audio.ts` |
+| Sidecar RDP — lecteur partagé RDPDR (dossier du poste) | `rdp-sidecar/src/disque.rs` |
 | Sidecar RDP — capture `--shot` | `rdp-sidecar/src/capture.rs` |
 | Canal graphique RDP (MS-RDPEGFX) | `rdp-sidecar/src/egfx.rs` |
 | Codec RemoteFX Progressive | `rdp-sidecar/src/progressif.rs` |

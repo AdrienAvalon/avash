@@ -61,7 +61,24 @@ pub(crate) async fn executer(
     };
     // Le son : le canal n'est offert que si l'utilisateur ne l'a pas coupé.
     let (son_tx, mut son_rx) = tokio::sync::mpsc::unbounded_channel::<Son>();
-    let son_backend = (!args.sans_son).then(|| SonBackend::new(son_tx));
+    // Le lecteur partagé : son fil répond sur `disque_rx`, la boucle écrit. Il
+    // impose le canal son (muet s'il est coupé), voir `SonBackend::muet`.
+    let (disque_tx, mut disque_rx) =
+        tokio::sync::mpsc::unbounded_channel::<ironrdp::rdpdr::pdu::RdpdrPdu>();
+    let disque_backend = match &args.lecteur {
+        Some(dossier) => Some(crate::disque::demarrer(
+            std::path::Path::new(dossier),
+            disque_tx,
+        )?),
+        None => None,
+    };
+    let son_backend = if !args.sans_son {
+        Some(SonBackend::new(son_tx))
+    } else if disque_backend.is_some() {
+        Some(SonBackend::muet())
+    } else {
+        None
+    };
     let formats_son = crate::son::formats();
     // Une tentative de connexion doit être BORNÉE. Sans cela le processus reste
     // pendu indéfiniment, sans un mot : constaté contre un xrdp qui annonce NLA
@@ -74,6 +91,7 @@ pub(crate) async fn executer(
             args,
             clip_backend,
             son_backend,
+            disque_backend,
             redirection.as_deref(),
             graphique,
         ),
@@ -575,6 +593,13 @@ pub(crate) async fn executer(
                 if let Some(m) = m {
                     sink.send(Message::Binary(m.into())).await.context("envoi son")?;
                 }
+            }
+            Some(pdu) = disque_rx.recv() => {
+                // Une réponse du lecteur, prête : le fil a fini son accès
+                // disque, on l'écrit sur le canal RDPDR.
+                send_svc!(ironrdp::svc::SvcProcessorMessages::<ironrdp::rdpdr::Rdpdr>::new(
+                    vec![ironrdp::svc::SvcMessage::from(pdu)]
+                ));
             }
             Some(req) = clip_rx.recv() => {
                 match req {

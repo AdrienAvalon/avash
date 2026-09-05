@@ -21,7 +21,7 @@ ce qui n'est pas ici n'existe pas pour eux.
 | `crates/avash-ui` | interface Tauri ; commandes dans `src/commands/` (un fichier par domaine), `src/rdp.rs`, `src/langue.rs` |
 | `web/` | front TypeScript (Vite, Vitest, ESLint, stylelint, knip) ; i18n dans `web/i18n.ts` |
 | `rdp-sidecar/` | processus de bureau distant (RDP par IronRDP, VNC par vnc-rs dans `src/vnc.rs`), **hors espace de travail**, avec des paquets IronRDP et vnc-rs portés dans `rdp-sidecar/vendor/` |
-| `test-rdp-server/` | serveur RDP de test pour la suite bout en bout |
+| `test-rdp-server/` | serveur RDP de test pour la suite bout en bout (presse-papiers, son, lecteur RDPDR côté serveur), hors espace de travail, avec un ironrdp-server porté dans `test-rdp-server/vendor/` |
 | `test-vnc-server/` | serveur VNC de test (rustvncserver), hors espace de travail, qui réagit aux entrées pour que le scénario mesure les pixels |
 | `e2e/` | suite WebdriverIO sur la vraie application (Linux : tauri-driver + WebKitWebDriver ; Windows et macOS : serveur WebDriver embarqué) |
 | `fuzz/` | cibles cargo-fuzz (nightly), hors espace de travail |

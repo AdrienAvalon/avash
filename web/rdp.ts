@@ -26,7 +26,7 @@ import { t } from "./i18n";
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
 
-type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string; sansNla?: boolean; vnc?: boolean };
+type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string; sansNla?: boolean; vnc?: boolean; partage?: string };
 
 /** Le protocole d'un bureau enregistré, tel que le cœur le nomme. */
 const protocoleDe = (h: RdpHostT): "rdp" | "vnc" => (h.protocole === "vnc" ? "vnc" : "rdp");
@@ -332,6 +332,7 @@ export async function openRdp(cible: RdpTarget) {
       sansNla: cible.sansNla === true || sansNlaAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
       vnc: cible.vnc === true,
       sansSon: !sonBureau(),
+      partage: cible.partage ?? null,
     });
     // L'onglet a pu être fermé pendant la connexion (TLS + NLA prennent du
     // temps) : sans cette garde, l'affectation levait une exception, attrapée
@@ -688,6 +689,7 @@ export async function connectRdpSaved(h: RdpHostT) {
     // Choix déjà donné pour ce bureau : on ne le redemande pas à chaque fois.
     sansNla: h.sans_nla === true,
     vnc: protocole === "vnc",
+    partage: h.partage,
   });
 }
 
@@ -736,6 +738,7 @@ function openEditRdp(h: RdpHostT) {
   ($("re-port") as HTMLInputElement).value = String(h.port);
   ($("re-user") as HTMLInputElement).value = h.user;
   ($("re-password") as HTMLInputElement).value = "";
+  ($("re-partage") as HTMLInputElement).value = h.partage ?? "";
   ($("rdp-edit-form") as HTMLFormElement).dataset.folder = h.folder ?? "";
   $("rdp-edit-modal").classList.add("open");
   setTimeout(() => ($("re-name") as HTMLInputElement).focus(), 30);
@@ -749,9 +752,18 @@ export function closeEditRdp() {
 function syncProtoEdition() {
   const vnc = ($("re-proto") as HTMLSelectElement).value === "vnc";
   $("re-vnc-hint").hidden = !vnc;
+  // Pas de lecteur en VNC : le RFB n'a pas de canal pour ça.
+  $("re-partage-row").hidden = vnc;
   ($("re-port") as HTMLInputElement).placeholder = vnc ? "5900" : "3389";
 }
 $("re-proto").addEventListener("change", syncProtoEdition);
+
+/** Sélecteur de dossier du système pour le lecteur partagé ; annulé, le champ ne bouge pas. */
+export async function choisirDossierPartage(champ: HTMLInputElement) {
+  const choix = await openDialog({ directory: true, multiple: false, defaultPath: champ.value || undefined }).catch(() => null);
+  if (typeof choix === "string" && choix) champ.value = choix;
+}
+$("re-partage-choisir").addEventListener("click", () => void choisirDossierPartage($("re-partage") as HTMLInputElement));
 
 $("re-cancel").addEventListener("click", closeEditRdp);
 $("rdp-edit-form").addEventListener("submit", async (e) => {
@@ -776,7 +788,7 @@ $("rdp-edit-form").addEventListener("submit", async (e) => {
   }
   submit.disabled = true;
   try {
-    await invoke("rdp_host_save", { id: val("re-id"), name, host, port, user, width: 0, height: 0, folder: ($("rdp-edit-form") as HTMLFormElement).dataset.folder ?? null, protocole });
+    await invoke("rdp_host_save", { id: val("re-id"), name, host, port, user, width: 0, height: 0, folder: ($("rdp-edit-form") as HTMLFormElement).dataset.folder ?? null, protocole, partage: protocole === "vnc" ? null : (val("re-partage") || null) });
     // Le compte du trousseau dépend de host/port/user et du protocole : si
     // l'un change, on migre (ou remplace) le mot de passe mémorisé vers le
     // nouveau compte.

@@ -2,7 +2,7 @@
 // côte (deux conteneurs visibles, chacun dans son volet, de largeurs voisines),
 // fermer l'un des deux onglets ramène une seule vue, et la palette propose le
 // partage quand il y a deux onglets.
-import { findHostRow } from "./helpers.js";
+import { attendreSessionLive, doubleCliquerHote } from "./helpers.js";
 
 const visibles = () => browser.execute(() =>
   [...document.querySelectorAll("#terminal .xterm-container")]
@@ -12,9 +12,11 @@ const visibles = () => browser.execute(() =>
 describe("Vue partagée — deux onglets côte à côte", () => {
   it("Ctrl+Maj+E partage l'écran entre l'onglet actif et le suivant", async () => {
     for (let i = 0; i < 2; i++) {
-      await (await findHostRow("test-ssh")).doubleClick();
-      await browser.waitUntil(async () => (await $$(".state.live")).length === i + 1,
-        { timeout: 20000, timeoutMsg: `session ${i + 1} jamais live` });
+      await doubleCliquerHote("test-ssh");
+      // L'aide dit pourquoi une session n'arrive pas (onglet mort, sortie du
+      // PTY) : sur le miroir GitLab, la seconde session ne venait jamais, et
+      // « jamais live » seul ne disait rien.
+      await attendreSessionLive(`session ${i + 1}`, i + 1);
     }
     expect((await visibles()).length).toBe(1);
     await browser.keys(["Control", "Shift", "e"]);

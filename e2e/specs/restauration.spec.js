@@ -2,7 +2,7 @@
 // rechargé (ce que fait un relancement de l'application) ; l'accueil propose
 // de rouvrir l'onglet, et « Rouvrir » remet une session live. « Ignorer »
 // efface la mémoire : au rechargement suivant, plus rien n'est proposé.
-import { findHostRow } from "./helpers.js";
+import { doubleCliquerHote } from "./helpers.js";
 
 async function attendreDemarrage() {
   await browser.waitUntil(async () => browser.execute(() => {
@@ -13,7 +13,7 @@ async function attendreDemarrage() {
 
 describe("Onglets — mémoire et réouverture", () => {
   it("propose de rouvrir l'onglet de la dernière fois, et le rouvre", async () => {
-    await (await findHostRow("test-ssh")).doubleClick();
+    await doubleCliquerHote("test-ssh");
     await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
       { timeout: 20000, timeoutMsg: "session SSH jamais live" });
     // La mémoire s'écrit à l'ouverture : on n'attend pas une fermeture propre.

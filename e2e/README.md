@@ -52,7 +52,7 @@ effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
 `vnc.spec.js` lance le **serveur VNC de test** (`test-vnc-server/`, port 35900,
 mot de passe `test`), qui sert une image connue et réagit aux entrées.
 
-## Couverture (67 scénarios, 34 fichiers)
+## Couverture (69 scénarios, 35 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -74,6 +74,7 @@ mot de passe `test`), qui sert une image connue et réagit aux entrées.
 | `rdp-fichiers.spec.js` | **fichiers par le presse-papiers RDP**, dans les deux sens : liste annoncée sans contenu, réception après accord (2,5 Mo, octets comparés), offre d'un fichier du poste reçu par le serveur (300 Ko) |
 | `rdp-audio.spec.js`   | **son du bureau distant** : le sidecar piloté sur son WebSocket relaie le la 440 Hz du serveur de test en PCM 44,1 kHz stéréo, en temps réel, pas du silence ; rien avec `--sans-son` |
 | `vnc.spec.js`         | **connexion VNC réelle** (serveur dédié, ZRLE) : pixels rouge et bleu, carré magenta au clic, bureau vert après « g », keysym 0xe9 pour « é », mauvais mot de passe refusé avec sa raison |
+| `rdp-lecteur.spec.js` | **lecteur partagé (RDPDR)** : le dossier donné dans le formulaire est servi au serveur de test, qui annonce le lecteur « Avash », lit le volume, énumère, lit `bonjour.txt` (taille et SHA-256 exacts) et écrit `ecrit.txt` ; puis le sidecar seul avec `--sans-son`, où le canal audio muet garde le lecteur vivant |
 | `vnc-tls.spec.js`     | **VeNCrypt** : le serveur de test derrière son terminateur TLS ; type 19, sous-type X509Vnc, TLS, authentification sous TLS, pixels, empreinte épinglée sous `vnc:hôte:port` ; relancé avec un autre certificat, refus avec la raison |
 | `clavier.spec.js`     | palette aux flèches, `Ctrl+K` bloqué par-dessus une boîte, Échap ne ferme qu'une boîte à la fois |
 | `liste-clavier.spec.js` | **barre latérale au clavier** : un seul arrêt de tabulation, flèches et Origine/Fin, focus qui vaut sélection, `Maj+F10` et navigation dans le menu |
@@ -96,7 +97,7 @@ Serveurs locaux : chaque spec RDP démarre son propre serveur de test (aucun cou
 un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spec`.
 
 En CI (`E2E_NO_RDP=1`), la configuration **exclut** les fichiers qui exigent
-un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`, `rdp-fichiers`, `rdp-audio`, `vnc`, `vnc-tls`,
+un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`, `rdp-fichiers`, `rdp-audio`, `rdp-lecteur`, `vnc`, `vnc-tls`,
 `onglets-mixtes`, `enregistrer-et-connecter`, `enregistrement`, `sante`,
 `restauration`, `vue-partagee`, `serie`).
 C'est une exclusion et non une énumération de ce qui tourne :
@@ -133,6 +134,16 @@ Une limite connue : le serveur embarqué synthétise les touches en JavaScript
 modificateurs ignorés sur les touches de fonction). `liste-clavier.spec.js`,
 qui a besoin de vraies touches, se saute sur ce chemin et reste joué sous
 Linux.
+
+Autre limite, trouvée en quatre passages Windows de la suite complète : l'action
+« doubleClick » du protocole n'atteint jamais le DOM par ce serveur. Toute
+session ouverte par double-clic sur une ligne d'hôte restait « jamais live »
+sans qu'un seul appel n'atteigne le cœur (traces horodatées posées dans le
+Rust, sshd en `LogLevel DEBUG1` muet), alors que la connexion directe, un clic
+simple, passait. Les scénarios ouvrent donc un hôte par `doubleCliquerHote`
+(`helpers.js`), qui émet l'événement `dblclick` à la main sur ce chemin et
+garde la vraie action ailleurs ; même traitement pour le clic sur le canvas VNC
+(`mousedown`/`mouseup` émis à la main).
 
 ## Astuces WebKitGTK
 

@@ -3,7 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { $ } from "./etat";
 import { loadHosts, openManualSession, openSerie } from "./main";
-import { openRdp } from "./rdp";
+import { choisirDossierPartage, openRdp } from "./rdp";
 import { t } from "./i18n";
 
 type PortSerie = { chemin: string; description: string };
@@ -76,6 +76,8 @@ function manualSyncProto() {
   $("m-rdp-save-row").hidden = !bureau;
   $("m-rdp-name-row").hidden = !bureau || !($("m-rdp-save") as HTMLInputElement).checked;
   $("m-vnc-hint").hidden = proto !== "vnc";
+  // Le lecteur partagé n'existe qu'en RDP : VNC n'a pas de canal pour ça.
+  $("m-rdp-partage-row").hidden = proto !== "rdp";
   ($("m-user") as HTMLInputElement).required = proto === "ssh" || proto === "rdp";
   ($("m-port") as HTMLInputElement).placeholder = proto === "rdp" ? "3389" : proto === "vnc" ? "5900" : "22";
   ($("m-password") as HTMLInputElement).placeholder = "";
@@ -147,6 +149,7 @@ async function manualSubmit(ev: Event) {
     const enregistrer = ($("m-rdp-save") as HTMLInputElement).checked;
     const memoriser = ($("m-rdp-remember") as HTMLInputElement).checked;
     const nomRdp = ($("m-rdp-name") as HTMLInputElement).value.trim();
+    const partage = vnc ? "" : ($("m-rdp-partage") as HTMLInputElement).value.trim();
     // Le volet SSH refuse un alias vide avant d'enregistrer ; le volet RDP
     // acceptait n'importe quoi et posait dans la barre latérale une ligne sans
     // libellé, que même sa suppression ne savait plus nommer.
@@ -163,6 +166,7 @@ async function manualSubmit(ev: Event) {
         await invoke("rdp_host_save", {
           id: null, name: nomRdp,
           host: addr, port: rport, user, width: 0, height: 0, protocole: proto,
+          partage: partage || null,
         });
       }
       // « Mémoriser le mot de passe » était imbriqué dans « Enregistrer la
@@ -181,7 +185,7 @@ async function manualSubmit(ev: Event) {
       submit.textContent = libelleRdp;
     }
     manualClose();
-    await openRdp({ host: addr, port: rport, user, password, vnc });
+    await openRdp({ host: addr, port: rport, user, password, vnc, partage: partage || undefined });
     return;
   }
   const target = manualReadForm();
@@ -237,6 +241,7 @@ document
   .forEach((r) => r.addEventListener("change", manualSyncAuthRows));
 document.querySelectorAll('input[name="proto"]').forEach((r) => r.addEventListener("change", manualSyncProto));
 $("m-rdp-save").addEventListener("change", manualSyncProto);
+$("m-rdp-partage-choisir").addEventListener("click", () => void choisirDossierPartage($("m-rdp-partage") as HTMLInputElement));
 // Fermeture à Échap seulement (pas au clic dehors : évite de perdre la saisie).
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && manualModal().classList.contains("open")) manualClose();

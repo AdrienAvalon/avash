@@ -9,6 +9,8 @@ CORE="$ROOT/crates/avash"
 UI="$ROOT/crates/avash-ui"
 WEB="$ROOT/web"
 SIDECAR="$ROOT/rdp-sidecar"
+SERVEUR_RDP="$ROOT/test-rdp-server"
+SERVEUR_VNC="$ROOT/test-vnc-server"
 QUICK=${1:-}
 FAILED=()
 
@@ -55,6 +57,18 @@ run "tests"              "$SIDECAR" cargo test
 run "correctifs portés"  "$SIDECAR" ./verifier-portes.sh
 run "format"             "$SIDECAR" cargo fmt --check
 run "clippy"             "$SIDECAR" cargo clippy --all-targets -- -D warnings
+
+# Les serveurs de test sont eux aussi hors de l'espace de travail, et la chaîne
+# ne faisait que les compiler : les 27 tests du côté serveur RDPDR (décodeurs
+# écrits à la main, automate du scénario) ne tournaient nulle part. Même leçon
+# que le processus RDP, même remède.
+step "Serveurs de test (hors workspace)"
+run "tests serveur RDP"  "$SERVEUR_RDP" cargo test
+run "format serveur RDP" "$SERVEUR_RDP" cargo fmt --check
+run "clippy serveur RDP" "$SERVEUR_RDP" cargo clippy --all-targets -- -D warnings
+run "tests serveur VNC"  "$SERVEUR_VNC" cargo test
+run "format serveur VNC" "$SERVEUR_VNC" cargo fmt --check
+run "clippy serveur VNC" "$SERVEUR_VNC" cargo clippy --all-targets -- -D warnings
 # Vulnerabilites connues des dependances. cargo-audit s'installe avec
 #   cargo install cargo-audit --locked
 if cargo audit --version >/dev/null 2>&1; then

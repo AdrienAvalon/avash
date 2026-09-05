@@ -104,12 +104,27 @@ impl SonBackend {
             tx,
         }
     }
+
+    /// Un canal audio qui n'annonce aucun format et ne se dit pas vivant : le
+    /// serveur n'y encode rien. Il n'existe que parce que MS-RDPEFS exige que
+    /// `rdpdr` soit annoncé avec `rdpsnd` pour que le serveur lui réponde
+    /// (appendice A, note 1) : sans lui, couper le son couperait le lecteur.
+    pub(crate) fn muet() -> Self {
+        let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            formats: Vec::new(),
+            tx,
+        }
+    }
 }
 
 impl RdpsndClientHandler for SonBackend {
     fn get_flags(&self) -> AudioFormatFlags {
         // ALIVE est obligatoire pour recevoir quoi que ce soit ; VOLUME dit que
         // le réglage du serveur sera appliqué (par la webview).
+        if self.formats.is_empty() {
+            return AudioFormatFlags::empty();
+        }
         AudioFormatFlags::ALIVE | AudioFormatFlags::VOLUME
     }
 

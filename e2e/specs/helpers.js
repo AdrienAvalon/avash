@@ -39,6 +39,29 @@ export async function findHostRow(alias, timeout = 8000) {
   );
   return trouve;
 }
+
+// Double-clic sur un élément. Sous le serveur WebDriver embarqué (Windows,
+// macOS, ou E2E_EMBARQUE=1), l'action « doubleClick » du protocole n'arrive
+// jamais au DOM : les quatre passages Windows de la suite complète montraient
+// des sessions SSH « jamais live » sans qu'un seul appel n'atteigne le cœur,
+// alors que la connexion directe, ouverte par un clic simple, passait. On émet
+// donc l'événement `dblclick` nous-mêmes, comme la souris l'aurait fait ;
+// ailleurs, la vraie action garde toute sa valeur (elle traverse le pilote).
+import { EMBARQUE } from "../wdio.conf.js";
+export async function doubleCliquer(el) {
+  if (!EMBARQUE) {
+    await el.doubleClick();
+    return;
+  }
+  await browser.execute((e) => {
+    e.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window, detail: 2, button: 0 }));
+  }, el);
+}
+
+/** Ouvre un hôte de la barre latérale par double-clic sur sa ligne. */
+export async function doubleCliquerHote(alias) {
+  await doubleCliquer(await findHostRow(alias));
+}
 export async function findFolderRow(name) {
   const r = await trouverLigne("#host-list .folder-row", ".fname", name);
   if (!r) throw new Error(`dossier « ${name} » introuvable`);
@@ -123,11 +146,18 @@ import { resolve } from "node:path";
 // Le binaire d'un serveur de test, avec son suffixe sous Windows : libuv ne
 // l'ajoute pas toujours quand le chemin porte un répertoire.
 const EXE = process.platform === "win32" ? ".exe" : "";
-export function startRdpServer(port) {
-  return spawn(`./target/release/test-rdp-server${EXE}`,
+// `surLigne`, s'il est donné, reçoit la sortie standard du serveur : c'est par
+// elle que le scénario du lecteur partagé lit ce que le serveur a vu du dossier.
+export function startRdpServer(port, surLigne) {
+  const p = spawn(`./target/release/test-rdp-server${EXE}`,
     ["--bind-addr", `127.0.0.1:${port}`, "--cert", "cert.pem", "--key", "key.pem",
      "--user", "test", "--pass", "test", "--sec", "hybrid"],
-    { cwd: resolve("../test-rdp-server"), stdio: "ignore" });
+    { cwd: resolve("../test-rdp-server"), stdio: surLigne ? ["ignore", "pipe", "ignore"] : "ignore" });
+  if (surLigne) {
+    p.stdout.setEncoding("utf8");
+    p.stdout.on("data", (d) => surLigne(String(d)));
+  }
+  return p;
 }
 
 // Démarre le serveur VNC de test (mot de passe « test ») sur `port`. Sa sortie

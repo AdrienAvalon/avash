@@ -255,7 +255,7 @@ export const config = {
     : [
         "./specs/ssh.spec.js", "./specs/sftp.spec.js",
         "./specs/rdp.spec.js", "./specs/rdp-reconnect.spec.js",
-        "./specs/rdp-clipboard.spec.js", "./specs/rdp-fichiers.spec.js", "./specs/rdp-audio.spec.js", "./specs/vnc.spec.js", "./specs/vnc-tls.spec.js",
+        "./specs/rdp-clipboard.spec.js", "./specs/rdp-fichiers.spec.js", "./specs/rdp-audio.spec.js", "./specs/rdp-lecteur.spec.js", "./specs/vnc.spec.js", "./specs/vnc-tls.spec.js",
         "./specs/onglets-mixtes.spec.js", "./specs/enregistrer-et-connecter.spec.js",
         "./specs/enregistrement.spec.js", "./specs/sante.spec.js",
         "./specs/restauration.spec.js", "./specs/vue-partagee.spec.js", "./specs/serie.spec.js",

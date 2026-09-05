@@ -100,8 +100,13 @@ pub async fn rdp_open(
     sans_nla: bool,
     vnc: bool,
     sans_son: bool,
+    partage: Option<String>,
 ) -> Result<RdpConn, String> {
     use std::process::Stdio;
+    // Le dossier partagé doit exister ici, avant de lancer quoi que ce soit :
+    // le sidecar le refuserait aussi, mais après la connexion, et l'utilisateur
+    // verrait un bureau qui se ferme au lieu d'un message.
+    let partage = dossier_partage(partage)?;
     let protocole = if vnc {
         rdphost::Protocole::Vnc
     } else {
@@ -145,19 +150,9 @@ pub async fn rdp_open(
         "--height",
         &height.to_string(),
     ])
-    .args(if sans_nla {
-        &["--sans-nla"][..]
-    } else {
-        &[][..]
-    })
-    .args(if vnc { &["--vnc"][..] } else { &[][..] })
     // Le son du bureau distant se coupe dans la palette : le processus
     // n'annonce alors pas le canal, plutôt que de recevoir pour rien.
-    .args(if sans_son {
-        &["--sans-son"][..]
-    } else {
-        &[][..]
-    })
+    .args(drapeaux(sans_nla, vnc, sans_son, partage.as_deref()))
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
@@ -414,6 +409,67 @@ pub fn rdp_hosts() -> Result<Vec<RdpHost>, String> {
 ///
 /// `protocole` : « rdp » (défaut) ou « vnc ».
 #[allow(clippy::too_many_arguments)]
+/// Les options du sidecar, dans l'ordre : chacune n'apparaît que demandée.
+fn drapeaux(sans_nla: bool, vnc: bool, sans_son: bool, partage: Option<&str>) -> Vec<String> {
+    let mut v = Vec::new();
+    if sans_nla {
+        v.push("--sans-nla".to_owned());
+    }
+    if vnc {
+        v.push("--vnc".to_owned());
+    }
+    if sans_son {
+        v.push("--sans-son".to_owned());
+    }
+    if let Some(p) = partage {
+        v.push("--lecteur".to_owned());
+        v.push(p.to_owned());
+    }
+    v
+}
+
+#[cfg(test)]
+mod tests_drapeaux {
+    use super::drapeaux;
+
+    /// Rien de demandé, rien de passé ; tout demandé, tout passé, le dossier
+    /// après son drapeau.
+    #[test]
+    fn les_drapeaux_du_sidecar_suivent_les_options() {
+        assert!(drapeaux(false, false, false, None).is_empty());
+        assert_eq!(
+            drapeaux(true, true, true, Some("/srv/partage")),
+            [
+                "--sans-nla",
+                "--vnc",
+                "--sans-son",
+                "--lecteur",
+                "/srv/partage"
+            ]
+        );
+        assert_eq!(drapeaux(false, false, true, None), ["--sans-son"]);
+    }
+}
+
+/// Le dossier partagé tel que l'interface le donne : vide vaut « rien », et
+/// tout le reste doit être un dossier existant, en chemin absolu.
+fn dossier_partage(partage: Option<String>) -> Result<Option<String>, String> {
+    let partage = partage
+        .map(|p| p.trim().to_owned())
+        .filter(|p| !p.is_empty());
+    if let Some(p) = &partage {
+        let chemin = std::path::Path::new(p);
+        if !chemin.is_absolute() || !chemin.is_dir() {
+            return Err(format!(
+                "Le dossier à partager n'existe pas ou n'est pas un chemin absolu : {p}"
+            ));
+        }
+    }
+    Ok(partage)
+}
+
+// Une commande Tauri reflète les champs de la fiche, un par argument.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn rdp_host_save(
     id: Option<String>,
@@ -425,6 +481,7 @@ pub fn rdp_host_save(
     height: u16,
     folder: Option<String>,
     protocole: Option<String>,
+    partage: Option<String>,
 ) -> Result<RdpHost, String> {
     let mut h = RdpHost::new(&name, &host, port, &user, width, height)
         .en(rdphost::Protocole::depuis(protocole.as_deref()));
@@ -432,6 +489,9 @@ pub fn rdp_host_save(
         h.id = id;
     }
     h.folder = avash::folders::normalize(&folder.unwrap_or_default());
+    // Le dossier partagé est vérifié à l'enregistrement, pas seulement à la
+    // connexion : une faute de frappe se voit tout de suite, dans la fiche.
+    h.partage = dossier_partage(partage)?;
     rdphost::upsert_host_in(&rdphost::hosts_path(), h.clone()).map_err(|e| e.to_string())?;
     Ok(h)
 }
@@ -619,12 +679,43 @@ mod tests_ouverture {
             false,
             false,
             false,
+            None,
         )
         .await;
         let Err(e) = issue else {
             panic!("une adresse à espace a été acceptée")
         };
         assert!(e.contains("caractère interdit"), "{e}");
+        assert!(app.state::<RdpStore>().inner.lock().unwrap().is_empty());
+    }
+
+    /// Un dossier partagé qui n'existe pas, ou un chemin relatif, est refusé
+    /// avant de lancer le sidecar : l'utilisateur lit la raison dans la
+    /// fiche, pas un bureau qui se ferme.
+    #[tokio::test]
+    async fn un_dossier_partage_absent_est_refuse_avant_de_lancer_quoi_que_ce_soit() {
+        let app = app_de_test();
+        for dossier in ["/ce/dossier/n/existe/pas", "relatif/partage"] {
+            let issue = rdp_open(
+                app.state::<RdpStore>(),
+                3,
+                "hote".into(),
+                None,
+                "u".into(),
+                "p".into(),
+                800,
+                600,
+                false,
+                false,
+                false,
+                Some(dossier.to_owned()),
+            )
+            .await;
+            let Err(e) = issue else {
+                panic!("un dossier absent a été accepté : {dossier}")
+            };
+            assert!(e.contains("dossier à partager"), "{e}");
+        }
         assert!(app.state::<RdpStore>().inner.lock().unwrap().is_empty());
     }
 
@@ -645,6 +736,7 @@ mod tests_ouverture {
             false,
             true,
             false,
+            None,
         )
         .await;
         let Err(e) = issue else {

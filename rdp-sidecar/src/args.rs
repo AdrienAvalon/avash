@@ -28,6 +28,9 @@ pub(crate) struct Args {
     pub(crate) vnc: bool,
     /// `--sans-son` : ne pas annoncer le canal audio (réglage de l'interface).
     pub(crate) sans_son: bool,
+    /// `--lecteur <dossier>` : ce dossier du poste est servi au bureau distant
+    /// comme lecteur « Avash » (redirection de lecteur, MS-RDPEFS).
+    pub(crate) lecteur: Option<String>,
 }
 
 struct Pa(Vec<String>);
@@ -98,6 +101,7 @@ fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
         domain: a.opt("--domain"),
         sans_nla: a.drapeau("--sans-nla"),
         sans_son: a.drapeau("--sans-son"),
+        lecteur: a.opt("--lecteur").filter(|l| !l.trim().is_empty()),
         layout: a
             .opt("--layout")
             .and_then(|v| analyser_disposition(&v))

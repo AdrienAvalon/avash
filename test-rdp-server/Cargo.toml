@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ironrdp = { version = "0.17", features = ["server", "cliprdr", "rdpsnd", "connector"] }
+# `rdpdr` et `svc` : le côté serveur de la redirection de lecteur (MS-RDPEFS),
+# joué par src/rdpdr/ pour que la suite bout en bout vérifie le lecteur que le
+# sidecar annonce.
+ironrdp = { version = "0.17", features = ["server", "cliprdr", "rdpsnd", "connector", "rdpdr", "svc"] }
 anyhow = "1"
 async-trait = "0.1"
 rand = "0.9"
@@ -12,3 +15,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pico-args = "0.5"
 opus2 = "0.4.0"
+# Empreinte du fichier lu sur le lecteur redirigé, imprimée pour que le
+# scénario la compare à celle du fichier du poste.
+sha2 = "0.11"
+
+# ironrdp-server 0.13.0 n'offre aucun point d'attache pour un canal statique
+# autre que cliprdr, rdpsnd et drdynvc, attachés en dur. La copie ajoute une
+# fabrique de canal, par laquelle passe rdpdr. Voir vendor/README.md.
+[patch.crates-io]
+ironrdp-server = { path = "vendor/ironrdp-server" }

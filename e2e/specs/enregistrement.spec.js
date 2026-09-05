@@ -6,7 +6,7 @@
 // mot. Seule la sortie est enregistrée : le fichier ne doit contenir aucun
 // événement de frappe.
 import { readFileSync } from "node:fs";
-import { findHostRow } from "./helpers.js";
+import { doubleCliquerHote } from "./helpers.js";
 
 describe("Enregistrement de session (asciicast)", () => {
   const menu = async (act) => {
@@ -38,7 +38,7 @@ describe("Enregistrement de session (asciicast)", () => {
   const marqueur = (base) => `${base}-${String(Date.now()).replace(/(.)(?=\1)/g, "$1x")}`;
 
   it("enregistre la sortie du terminal dans un fichier relisible", async () => {
-    await (await findHostRow("test-ssh")).doubleClick();
+    await doubleCliquerHote("test-ssh");
     await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
       { timeout: 20000, timeoutMsg: "session SSH jamais live" });
 

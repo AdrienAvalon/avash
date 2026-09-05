@@ -740,6 +740,10 @@
     .modal .check input { width: 15px; height: 15px; margin: 0; }
     .field-hint { font-size: 11px; color: var(--text-faint); }
 
+    /* Un champ suivi d'un bouton (dossier partagé : chemin + « Parcourir… »). */
+    .champ-et-bouton { display: flex; gap: 6px; align-items: center; }
+    .champ-et-bouton > input { flex: 1; min-width: 0; }
+
     .modal textarea {
       background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
       padding: 9px 11px; color: var(--text); font-family: var(--mono); font-size: 12.5px;
@@ -1198,6 +1202,14 @@
         <label id="m-rdp-name-row" hidden data-i18n="nom">Nom
           <input id="m-rdp-name" placeholder="Serveur prod" data-i18n-placeholder="serveur-prod" />
         </label>
+        <label id="m-rdp-partage-row" hidden>
+          <span data-i18n="dossier-partage">Dossier partagé (lecteur « Avash » sur le distant)</span>
+          <span class="champ-et-bouton">
+            <input id="m-rdp-partage" placeholder="/home/moi/Partage" data-i18n-placeholder="dossier-partage-exemple" />
+            <button type="button" class="btn-ghost" id="m-rdp-partage-choisir" data-i18n="parcourir">Parcourir…</button>
+          </span>
+          <span class="field-hint" data-i18n="dossier-partage-aide">Le bureau distant voit ce dossier comme un lecteur ; vide, rien n'est partagé.</span>
+        </label>
 
         <label class="check" id="m-save-row">
           <input type="checkbox" id="m-save" />
@@ -1516,6 +1528,14 @@
         </label>
         <label><span data-i18n="mot-de-passe">Mot de passe <span class="field-hint" data-i18n="laisser-vide-pour-ne-pas-changer">(laisser vide pour ne pas changer)</span></span>
           <input id="re-password" type="password" />
+        </label>
+        <label id="re-partage-row">
+          <span data-i18n="dossier-partage">Dossier partagé (lecteur « Avash » sur le distant)</span>
+          <span class="champ-et-bouton">
+            <input id="re-partage" placeholder="/home/moi/Partage" data-i18n-placeholder="dossier-partage-exemple" />
+            <button type="button" class="btn-ghost" id="re-partage-choisir" data-i18n="parcourir">Parcourir…</button>
+          </span>
+          <span class="field-hint" data-i18n="dossier-partage-aide">Le bureau distant voit ce dossier comme un lecteur ; vide, rien n'est partagé.</span>
         </label>
         <p class="modal-error" id="re-error" hidden></p>
         <div class="modal-actions">

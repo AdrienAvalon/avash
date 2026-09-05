@@ -133,6 +133,14 @@ processus-rdp:
     # « test = false », hérité de l'amont, et quatorze tests passaient pour verts
     # sans jamais tourner. On compte donc ce qui s'exécute.
     - ./verifier-portes.sh
+    # Les serveurs de test, hors espace de travail eux aussi, n'étaient que
+    # compilés : le côté serveur RDPDR a vingt-sept tests, qu'on joue ici.
+    - cd ..
+    - for s in test-rdp-server test-vnc-server; do
+        cargo fmt --check --manifest-path "$s/Cargo.toml" &&
+        cargo clippy --all-targets --manifest-path "$s/Cargo.toml" -- -D warnings &&
+        cargo test --manifest-path "$s/Cargo.toml" || exit 1;
+      done
 
 # --- Chaîne d'approvisionnement ------------------------------------------
 dependances:
