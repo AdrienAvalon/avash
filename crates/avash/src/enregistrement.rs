@@ -457,9 +457,24 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        // Même seconde ou non, les suffixes sont ceux attendus dès qu'il y a collision.
-        if a.chemin().file_name() != b.chemin().file_name() && nb.ends_with("-2.cast") {
-            assert!(nc.ends_with("-3.cast"), "{nc}");
+        // Les suffixes sont ceux attendus dès qu'il y a collision. Mais chaque
+        // démarrage peut franchir une seconde : vu en CI le 05/09/2026, b était
+        // né dans la seconde de a (suffixe -2) et c dans la suivante, sans
+        // suffixe, ce qui est juste. On n'exige -3 que si c partage encore
+        // l'horodatage de a.
+        let racine = a
+            .chemin()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .trim_end_matches(".cast")
+            .to_string();
+        if nb == format!("{racine}-2.cast") {
+            assert!(
+                nc == format!("{racine}-3.cast") || !nc.starts_with(&racine),
+                "{nc}"
+            );
         }
         assert_eq!(lister(&dir).len(), 3);
         let _ = std::fs::remove_dir_all(&dir);
