@@ -7,6 +7,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le lot de provenance joint à chaque release.** L'attestation Sigstore
+  vivait dans l'API de GitHub seulement ; son lot est désormais aussi un
+  fichier de la release (`avash-vX.Y.Z.intoto.jsonl`), vérifiable hors ligne,
+  et reconnu par le Scorecard de l'OpenSSF, qui ne voyait aucune provenance.
+- **Documentation à jour de la 0.9.0** : les README et le site disent le
+  lecteur partagé, le son et VeNCrypt, la section Sécurité les gardes qui
+  vont avec ; `CONTRIBUTING.md` décrit la suite Windows complète ; les
+  descriptions et sujets des dépôts GitHub et GitLab nomment VNC et le port
+  série.
+
 ## [0.9.0] - 2026-09-05
 
 - **Démarrage plus court : xterm.js chargé à part.** Deux repères de mesure

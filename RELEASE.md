@@ -139,8 +139,9 @@ est fourni.
   (`crates/avash-ui/icons/`).
 - `.github/workflows/release.yml` : sur un tag `v*`, construit Linux, Windows
   et macOS, produit le manifeste `latest.json` signé, les empreintes
-  `SHA256SUMS`, le SBOM et une **attestation de provenance Sigstore**, puis
-  publie la release.
+  `SHA256SUMS`, le SBOM et une **attestation de provenance Sigstore**, dont le
+  lot est aussi joint à la release (`avash-vX.Y.Z.intoto.jsonl`, vérifiable
+  hors ligne par `gh attestation verify --bundle`), puis publie la release.
 
 À fournir par toi : le **certificat Authenticode** (Windows) et, si tu veux
 signer l'AppImage, une **clé GPG**.

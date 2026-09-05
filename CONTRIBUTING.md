@@ -268,15 +268,20 @@ cargo build --release -p avash-ui --features webdriver
 cd e2e; npm test
 ```
 
-Les scénarios qui exigent un serveur local (sshd, RDP de test) et l'import
-PuTTY sont écartés d'eux-mêmes ; la chaîne joue ce sous-ensemble à chaque
-poussée (job `e2e-windows`). Le même chemin se force partout avec
-`E2E_EMBARQUE=1` — c'est celui de macOS en chaîne, et le moyen de vérifier le
-harnais sous Linux avant de pousser. La fonctionnalité `webdriver` n'entre
-jamais dans un binaire publié.
+La chaîne joue la suite complète à chaque poussée (job `e2e-windows`),
+serveurs locaux compris : le sshd est le service OpenSSH Server de
+l'exécuteur, les serveurs RDP et VNC de test sont construits sur place. Seuls
+l'import PuTTY, la régression visuelle, les vraies touches et la réouverture
+des onglets se sautent sur ce chemin. Le même chemin se force partout avec
+`E2E_EMBARQUE=1` — c'est celui de macOS en chaîne (scénarios sans serveur,
+`E2E_NO_RDP=1`), et le moyen de vérifier le harnais sous Linux avant de
+pousser : le serveur embarqué ne transmet pas tout au DOM (double-clic,
+caractères tapés), et `e2e/README.md` dit comment les scénarios s'en
+accommodent. La fonctionnalité `webdriver` n'entre jamais dans un binaire
+publié.
 
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
-et le détail des 52 scénarios.
+et le détail des 69 scénarios.
 
 ### Claude sur les issues et les PR
 

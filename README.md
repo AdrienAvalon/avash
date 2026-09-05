@@ -185,9 +185,12 @@ par une issue si une case est fausse.
 - Clés d'hôte SSH vérifiées (TOFU), connexion refusée si la clé change, **y
   compris quand seul l'algorithme diffère**. Même règle pour le serveur RDP,
   **avant** que CredSSP ne transmette le moindre identifiant ; le repli de NLA
-  vers TLS seul est refusé.
+  vers TLS seul est refusé. Même règle encore pour un serveur VNC sous
+  VeNCrypt : certificat épinglé au premier contact, refusé s'il change.
 - Presse-papiers partagé avec les bureaux distants seulement si vous le voulez,
-  dans les deux sens, révocable à tout moment.
+  dans les deux sens, révocable à tout moment. Un dossier partagé comme lecteur
+  RDP ne donne que ce dossier : chaque chemin demandé par le serveur est ramené
+  sous sa racine avant toute ouverture.
 - Écritures atomiques de `~/.ssh/config`, `known_hosts` et des fichiers de
   configuration ; rien d'illimité ne vient du réseau (résolution, surfaces,
   images, sortie de commande, presse-papiers, tous plafonnés).

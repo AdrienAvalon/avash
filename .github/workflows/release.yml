@@ -236,6 +236,7 @@ jobs:
       # Ce n'est PAS une signature Authenticode : elle ne lève pas
       # l'avertissement de Windows, qui exige un certificat d'autorité.
       - name: Attester la provenance des binaires
+        id: provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -246,6 +247,14 @@ jobs:
             artefacts/**/*.zip
             artefacts/**/*.dmg
             artefacts/**/*.app.tar.gz
+
+      # Le lot Sigstore de cette attestation est joint à la release sous le
+      # nom que les outils reconnaissent (`.intoto.jsonl`). L'attestation vit
+      # déjà dans l'API de GitHub, mais un fichier à côté des binaires se
+      # vérifie hors ligne (`gh attestation verify --bundle`), et le Scorecard
+      # de l'OpenSSF ne comptait aucune provenance sans lui (8/10).
+      - name: Joindre le lot de provenance à la release
+        run: cp "${{ steps.provenance.outputs.bundle-path }}" "artefacts/avash-${{ github.ref_name }}.intoto.jsonl"
 
       # La nomenclature est attestée à son tour, liée aux binaires : quelqu'un
       # peut vérifier que ce SBOM est bien celui de ces fichiers, et non un
@@ -310,6 +319,7 @@ jobs:
             # première venait de remplacer (« Not Found », release 0.8.0 restée
             # en brouillon sans cette signature, terminée à la main).
             artefacts/**/*.sig
+            artefacts/**/*.intoto.jsonl
             latest.json
             SHA256SUMS
             avash-*.spdx.json

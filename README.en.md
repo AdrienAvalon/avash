@@ -186,9 +186,12 @@ is wrong.
 - SSH host keys verified (TOFU), connection refused when the key changes,
   **including when only the algorithm differs**. Same rule for the RDP server,
   **before** CredSSP sends any credential; falling back from NLA to plain TLS
-  is refused.
+  is refused. Same rule again for a VNC server under VeNCrypt: certificate
+  pinned on first contact, refused if it changes.
 - Clipboard shared with remote desktops only if you want it, both ways,
-  revocable at any time.
+  revocable at any time. A folder shared as an RDP drive gives that folder
+  only: every path the server asks for is brought back under its root before
+  anything is opened.
 - Atomic writes of `~/.ssh/config`, `known_hosts` and the configuration files;
   nothing unbounded comes from the network (resolution, surfaces, images,
   command output, clipboard: all capped).
