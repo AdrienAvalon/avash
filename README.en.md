@@ -33,7 +33,7 @@ application, which reads your `~/.ssh/config` as it is.
 
 ## At a glance
 
-| | |
+| Feature | What it brings |
 |---|---|
 | **SSH** | full terminal (xterm.js), tabs, chained `ProxyJump`, agent, keys generated and deployed from the app |
 | **RDP** | Windows, xrdp and GNOME Remote Desktop desktops built in (IronRDP), native resizing with no image scaling, clipboard shared on request, files copied and pasted both ways, a local folder served as a drive on the remote desktop, remote sound |

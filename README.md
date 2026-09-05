@@ -29,7 +29,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 
 ## En bref
 
-| | |
+| Fonction | Ce qu'elle apporte |
 |---|---|
 | **SSH** | terminal complet (xterm.js), onglets, `ProxyJump` en chaîne, agent, clés générées et déployées depuis l'application |
 | **RDP** | bureaux Windows, xrdp et GNOME Remote Desktop intégrés (IronRDP), redimensionnement natif sans zoom d'image, presse-papiers partagé sur demande, fichiers copiés-collés dans les deux sens, un dossier du poste servi comme lecteur sur le distant, son du distant |
