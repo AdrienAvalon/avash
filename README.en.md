@@ -19,7 +19,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1219%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1221%20passing-brightgreen.svg)](docs/qualite.md)
 [![Coverage](https://img.shields.io/badge/coverage-76%25%20of%20lines-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20caught-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -204,7 +204,7 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1219 tests** on every commit, on two independent pipelines (GitHub Actions on
+**1221 tests** on every commit, on two independent pipelines (GitHub Actions on
 Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 
 | Level | Tests | In a word |
@@ -213,7 +213,7 @@ Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 | Tauri interface | 72 | commands, session store, keyboard |
 | RDP process | 134 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
 | Test servers | 29 | server-side RDPDR (hand-written decoders, scenario state machine, full dialogue with the client channel) and the VNC server |
-| Vendored IronRDP and vnc-rs crates | 595 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
+| Vendored IronRDP and vnc-rs crates | 597 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
 | Front (Vitest) | 115 | pure logic, VNC keysyms, translations |
 | End to end (WebdriverIO) | 69 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
@@ -228,7 +228,7 @@ device actually found: [docs/qualite.md](docs/qualite.md) (in French).
 Three components: a reusable SSH core (`crates/avash`), the Tauri application
 (`crates/avash-ui`), and a separate remote-desktop process (`rdp-sidecar`:
 IronRDP for RDP, vnc-rs for VNC) that talks to the interface over a local
-binary WebSocket. Four IronRDP crates and the VNC client are vendored with
+binary WebSocket. Five IronRDP crates and the VNC client are vendored with
 targeted fixes, documented in
 [rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md). The rest is in
 [docs/architecture.md](docs/architecture.md).

@@ -424,10 +424,11 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 
 ## Correctifs portés sur IronRDP
 
-`rdp-sidecar/vendor/` contient quatre crates d'IronRDP copiés, chacun avec un
-ou deux changements ciblés. Ce n'est pas un fork de confort : ce sont des
-défauts qui touchent tout client IronRDP parlant à xrdp, à GNOME Remote Desktop
-ou à Windows, et qui rendaient avash inutilisable contre des serveurs légitimes.
+`rdp-sidecar/vendor/` contient cinq crates d'IronRDP copiés (plus le client
+vnc-rs), chacun avec un ou deux changements ciblés. Ce n'est pas un fork de
+confort : ce sont des défauts qui touchent tout client IronRDP parlant à xrdp,
+à GNOME Remote Desktop ou à Windows, et qui rendaient avash inutilisable contre
+des serveurs légitimes.
 
 | Crate | Défaut | Symptôme |
 |---|---|---|
@@ -435,6 +436,7 @@ ou à Windows, et qui rendaient avash inutilisable contre des serveurs légitime
 | `ironrdp-connector` | la mesure de bande passante n'est jamais renvoyée ; le drapeau du pipeline graphique n'est pas annoncé | connexion suspendue sans fin ; GNOME Remote Desktop refuse la connexion |
 | `ironrdp-pdu` | ClearCodec lit deux champs dans l'ordre inverse de la spécification ; le RLEX à une seule couleur est lu sans son octet compacté | aucun bureau Windows ne s'affiche par le canal graphique ; les coins unis de la barre des tâches sont refusés |
 | `ironrdp-graphics` | le sous-codec NSCodec de ClearCodec est un bras vide, sans erreur | les icônes de la barre des tâches sont des carrés noirs, mis en cache puis retamponnés |
+| `ironrdp-rdpdr` | à la confirmation d'un serveur récent, aucune liste de périphériques ne part sans carte à puce | un Windows 11 n'annonce jamais l'ouverture de session, et le lecteur partagé n'apparaît pas |
 
 Chacun a ses propres tests, exécutés par `check.sh`, le hook de pré-commit et
 les deux chaînes d'intégration : sans cela, une montée de version pourrait les

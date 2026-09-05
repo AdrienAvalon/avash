@@ -60,6 +60,10 @@ strip = true
 [patch.crates-io]
 ironrdp-session = { path = "vendor/ironrdp-session" }
 ironrdp-connector = { path = "vendor/ironrdp-connector" }
+# Porté pour la liste de périphériques vide qu'un Windows 11 attend avant
+# d'annoncer l'ouverture de session : sans elle, aucun lecteur partagé. Voir
+# vendor/README.md.
+ironrdp-rdpdr = { path = "vendor/ironrdp-rdpdr" }
 # Porté pour un défaut de ClearCodec, trouvé contre un Windows réel : voir
 # vendor/README.md.
 ironrdp-pdu = { path = "vendor/ironrdp-pdu" }

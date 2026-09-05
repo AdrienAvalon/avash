@@ -1521,8 +1521,6 @@ dependencies = [
 [[package]]
 name = "ironrdp-rdpdr"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ece9e67ccf992eb8ce5ec0416d3950e2e199d4b1e2523f91af192205279fc970"
 dependencies = [
  "bitflags 2.13.1",
  "ironrdp-core",

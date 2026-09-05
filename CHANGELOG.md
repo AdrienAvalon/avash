@@ -7,6 +7,20 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Le lecteur partagé fonctionne contre un vrai Windows 11.** Éprouvé contre
+  le serveur de test et xfreerdp, il n'apparaissait jamais sur un Windows 11
+  du parc : à la Server Client ID Confirm d'un serveur de version 1.13, le
+  paquet `ironrdp-rdpdr` n'annonçait que les cartes à puce et, sans carte,
+  n'envoyait rien, alors que Windows attend une Client Device List Announce,
+  même vide, avant d'émettre la Server User Logged On qui déclenche l'annonce
+  des lecteurs (mstsc et FreeRDP l'envoient toujours, MS-RDPEFS 2.2.2.9).
+  Le paquet est porté dans `rdp-sidecar/vendor/ironrdp-rdpdr` avec ce seul
+  changement et deux tests. Rejoué contre un Windows 11 du parc, traces du
+  canal à l'appui : le serveur envoie sa Server User Logged On, puis ouvre le
+  lecteur et interroge son volume. Un poste dont la session était déjà
+  ouverte n'émet pas de Server User Logged On et le lecteur n'y apparaît pas
+  tant qu'une ouverture de session ne survient pas, ce qui est le
+  comportement de Windows, pas un défaut d'avash.
 - **Le lot de provenance joint à chaque release.** L'attestation Sigstore
   vivait dans l'API de GitHub seulement ; son lot est désormais aussi un
   fichier de la release (`avash-vX.Y.Z.intoto.jsonl`), vérifiable hors ligne,

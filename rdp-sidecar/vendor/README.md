@@ -1,6 +1,6 @@
 # Correctifs portés sur IronRDP et vnc-rs
 
-Cinq crates sont copiés ici, chacun avec un ou deux changements ciblés, décrits section par section.
+Six crates sont copiés ici, chacun avec un ou deux changements ciblés, décrits section par section.
 
 Une retouche mécanique s'y ajoute, sans rapport avec les défauts : les
 `#[expect(lint)]` deviennent `#[allow(lint)]`. Hors de leur espace de travail
@@ -316,3 +316,32 @@ fermeture, puis reprend l'authentification classique. Le montage lui-même
 `src/vnc_tls.rs` : le paquet ne dépend d'aucune bibliothèque TLS. Testé
 contre TigerVNC et contre le serveur de test, dont `src/vencrypt.rs` joue le
 terminateur TLS.
+
+## `ironrdp-rdpdr` — Windows 11 attend une liste de périphériques, même vide
+
+Copie de `ironrdp-rdpdr` 0.7.0 (redirection de périphériques, MS-RDPEFS), qui
+porte le lecteur partagé du sidecar (`src/disque.rs`). Un seul changement, dans
+`src/lib.rs`, `handle_client_id_confirm` ; le `rustfmt.toml` reproduit le style
+d'IronRDP pour que `diff -r` avec crates.io reste lisible, et `test = false` est
+retiré du manifeste, comme pour les autres paquets.
+
+Le défaut : à la Server Client ID Confirm d'un serveur dont la version mineure
+n'est pas 5, le paquet n'annonce que les cartes à puce et garde les lecteurs
+pour la Server User Logged On ; sans carte à puce, il n'envoie **rien**. Or un
+Windows 11 (version 1.13) attend une Client Device List Announce à ce
+moment-là avant d'envoyer la Server User Logged On : le dialogue s'arrêtait à
+la confirmation, et aucun lecteur n'était jamais annoncé, alors que tout
+passait contre le serveur de test et xfreerdp, qui n'attendent pas ce message.
+Éprouvé contre un Windows 11 du parc le 05/09/2026, traces du canal à l'appui :
+avec le correctif, le serveur envoie sa Server User Logged On, puis ouvre le
+lecteur et interroge son volume ; sans lui, le dialogue s'arrêtait à la
+confirmation. mstsc et FreeRDP envoient toujours cette liste, à zéro
+périphérique s'il le faut (MS-RDPEFS 2.2.2.9) ; le paquet fait désormais de
+même. Deux tests dans `src/lib.rs` : la liste vide part à la confirmation d'un
+serveur récent et le lecteur attend l'ouverture de session ; un serveur 5.1
+reçoit tout d'un coup.
+
+Note d'usage : un poste dont la session de l'utilisateur est déjà ouverte
+n'émet pas de Server User Logged On à la reconnexion, et le lecteur n'y
+apparaît qu'à la prochaine ouverture de session. C'est le comportement de
+Windows, indépendant de ce correctif.
