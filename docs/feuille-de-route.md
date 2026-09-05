@@ -4,7 +4,7 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 5 septembre 2026, après la publication de la version 0.8.0
+Dernière révision : 5 septembre 2026, après la publication de la version 0.9.0
 — un lot de fond (panneau SFTP sur la session du terminal, mot de passe oublié
 dès la connexion, front et processus RDP découpés en modules, chaîne
 d'intégration complète, quarante tests de plus, fuzzing du parseur), après la
@@ -41,7 +41,7 @@ défaut n'est pas livrée, même terminée.
 | Paquet front | 172 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.8.0 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
+| Version publiée | 0.9.0 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour

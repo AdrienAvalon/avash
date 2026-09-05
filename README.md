@@ -70,8 +70,8 @@ signés pour la mise à jour automatique et accompagnés de leurs empreintes.
 ### Linux
 
 ```bash
-chmod +x Avash_0.8.0_amd64.AppImage
-./Avash_0.8.0_amd64.AppImage
+chmod +x Avash_0.9.0_amd64.AppImage
+./Avash_0.9.0_amd64.AppImage
 ```
 
 L'AppImage embarque tout ce qu'il faut, WebKitGTK compris : rien à installer.
@@ -79,8 +79,8 @@ Pour une installation par le gestionnaire de paquets, la release porte aussi un
 `.deb` (Debian, Ubuntu) et un `.rpm` (Fedora, openSUSE) :
 
 ```bash
-sudo apt install ./Avash_0.8.0_amd64.deb      # Debian, Ubuntu
-sudo dnf install ./Avash-0.8.0-1.x86_64.rpm    # Fedora
+sudo apt install ./Avash_0.9.0_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./Avash-0.9.0-1.x86_64.rpm    # Fedora
 ```
 
 Arch Linux : `packaging/aur/avash/PKGBUILD` construit le paquet depuis les
@@ -108,7 +108,7 @@ macOS est construite et testée en intégration continue mais n'a pas encore ét
 
 ```bash
 sha256sum -c SHA256SUMS                                             # intégrité
-gh attestation verify Avash_0.8.0_amd64.AppImage --repo AdrienAvalon/avash   # provenance
+gh attestation verify Avash_0.9.0_amd64.AppImage --repo AdrienAvalon/avash   # provenance
 ```
 
 La seconde vérification prouve que le fichier vient de ce dépôt, de ce commit,
