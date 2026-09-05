@@ -68,18 +68,20 @@ License: AGPL-3.0-or-later
 LicenseUrl: https://github.com/AdrienAvalon/avash/blob/main/LICENSE
 Copyright: Copyright (c) 2026 Adrien Cros
 CopyrightUrl: https://github.com/AdrienAvalon/avash/blob/main/LICENSE
-ShortDescription: Native, fast and secure SSH and RDP connection manager
+ShortDescription: Native, fast and secure SSH, RDP and VNC connection manager
 Description: |-
-  Avash brings your SSH terminals, your Windows remote desktops (RDP) and your file transfers (SFTP) into a single native application. It reads and writes your ~/.ssh/config as it is, keeps passwords in the system credential store, verifies host keys for SSH and RDP before any credential leaves, and imports PuTTY and MobaXterm sessions. Built with Tauri 2 and Rust; requires the WebView2 runtime, shipped with Windows 10 and 11.
+  Avash brings your SSH terminals, your Windows remote desktops (RDP), your VNC desktops, your serial consoles and your file transfers (SFTP) into a single native application. It reads and writes your ~/.ssh/config as it is, keeps passwords in the system credential store, verifies host keys for SSH and RDP before any credential leaves, shares a local folder as a drive on the remote desktop, and imports PuTTY and MobaXterm sessions. Built with Tauri 2 and Rust; requires the WebView2 runtime, shipped with Windows 10 and 11.
 Moniker: avash
 Tags:
 - ssh
 - rdp
+- vnc
 - sftp
 - terminal
 - remote-desktop
 - ssh-client
 - rdp-client
+- vnc-client
 - putty
 - mobaxterm
 - tauri
@@ -105,12 +107,13 @@ PackageUrl: https://github.com/AdrienAvalon/avash
 License: AGPL-3.0-or-later
 LicenseUrl: https://github.com/AdrienAvalon/avash/blob/main/LICENSE
 Copyright: Copyright (c) 2026 Adrien Cros
-ShortDescription: Gestionnaire de connexions SSH et RDP, natif, rapide, sécurisé
+ShortDescription: Gestionnaire de connexions SSH, RDP et VNC, natif, rapide, sécurisé
 Description: |-
-  Avash réunit vos terminaux SSH, vos bureaux distants Windows (RDP) et vos transferts de fichiers (SFTP) dans une seule application native. Il lit et écrit votre ~/.ssh/config tel quel, garde les mots de passe dans le gestionnaire d'identifiants du système, vérifie les clés d'hôte en SSH et en RDP avant le moindre identifiant, et importe les sessions PuTTY et MobaXterm. Construit avec Tauri 2 et Rust ; requiert le moteur WebView2, livré avec Windows 10 et 11.
+  Avash réunit vos terminaux SSH, vos bureaux distants Windows (RDP), vos bureaux VNC, vos consoles série et vos transferts de fichiers (SFTP) dans une seule application native. Il lit et écrit votre ~/.ssh/config tel quel, garde les mots de passe dans le gestionnaire d'identifiants du système, vérifie les clés d'hôte en SSH et en RDP avant le moindre identifiant, partage un dossier du poste comme lecteur sur le bureau distant, et importe les sessions PuTTY et MobaXterm. Construit avec Tauri 2 et Rust ; requiert le moteur WebView2, livré avec Windows 10 et 11.
 Tags:
 - ssh
 - rdp
+- vnc
 - sftp
 - terminal
 - bureau-distant

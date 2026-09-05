@@ -219,6 +219,15 @@ mainteneur doit avoir signé une fois le CLA de Microsoft (le robot le demande
 dans la PR). Les manifestes de la première soumission sont commités dans
 `packaging/winget/` pour référence.
 
+Deux leçons de la première PR (#429575). `ReleaseNotesUrl` est refusé par la
+validation dans le manifeste **installer** ; il n'a sa place que dans les
+manifestes de langue, où le robot l'accepte. Et tant qu'un modérateur bénévole
+n'est pas passé (des jours, parfois des semaines), une PR « New package » se
+met à jour **sur place** vers la dernière version, par un commit sur sa branche
+qui retire l'ancien dossier de version et dépose le nouveau, puis un
+renommage : la première version publiée est ainsi la courante, sans PR de
+rattrapage. C'est ce qui a été fait le 05/09/2026 (0.7.2 → 0.9.1).
+
 Automatiser depuis le workflow Release est possible avec l'action
 `vedantmgoyal9/winget-releaser` sur un exécuteur Windows ; elle exige un jeton
 personnel (`public_repo`) capable de pousser sur le fork, à déposer en secret
