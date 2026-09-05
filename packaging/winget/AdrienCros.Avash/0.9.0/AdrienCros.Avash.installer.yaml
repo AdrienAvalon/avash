@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+PackageIdentifier: AdrienCros.Avash
+PackageVersion: 0.9.0
+InstallerType: nullsoft
+Scope: user
+InstallModes:
+- interactive
+- silent
+- silentWithProgress
+UpgradeBehavior: install
+ReleaseDate: 2026-09-05
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/AdrienAvalon/avash/releases/download/v0.9.0/Avash_0.9.0_x64-setup.exe
+  InstallerSha256: F01D43020CE91BB26C2C861EDB3410B44D8F81AE0BAEC6CCCED06A48F3B70601
+  ProductCode: Avash
+  AppsAndFeaturesEntries:
+  - DisplayName: Avash
+    Publisher: Adrien Cros
+    DisplayVersion: 0.9.0
+    ProductCode: Avash
+ManifestType: installer
+ManifestVersion: 1.12.0

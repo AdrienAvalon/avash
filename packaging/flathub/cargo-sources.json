@@ -3317,6 +3317,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/io-kit-sys/io-kit-sys-0.4.1.crate",
+        "sha256": "617ee6cf8e3f66f3b4ea67a4058564628cde41901316e19f559e14c7c72c5e7b",
+        "dest": "cargo/vendor/io-kit-sys-0.4.1"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"617ee6cf8e3f66f3b4ea67a4058564628cde41901316e19f559e14c7c72c5e7b\", \"files\": {}}",
+        "dest": "cargo/vendor/io-kit-sys-0.4.1",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/ipnet/ipnet-2.12.1.crate",
         "sha256": "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78",
         "dest": "cargo/vendor/ipnet-2.12.1"
@@ -3772,6 +3785,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/mach2/mach2-0.4.3.crate",
+        "sha256": "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44",
+        "dest": "cargo/vendor/mach2-0.4.3"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44\", \"files\": {}}",
+        "dest": "cargo/vendor/mach2-0.4.3",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/markup5ever/markup5ever-0.38.0.crate",
         "sha256": "8983d30f2915feeaaab2d6babdd6bc7e9ed1a00b66b5e6d74df19aa9c0e91862",
         "dest": "cargo/vendor/markup5ever-0.38.0"
@@ -3988,6 +4014,19 @@
         "type": "inline",
         "contents": "{\"package\": \"650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086\", \"files\": {}}",
         "dest": "cargo/vendor/new_debug_unreachable-1.0.6",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/nix/nix-0.26.4.crate",
+        "sha256": "598beaf3cc6fdd9a5dfb1630c2800c7acd31df7aaf0f565796fba2b53ca1af1b",
+        "dest": "cargo/vendor/nix-0.26.4"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"598beaf3cc6fdd9a5dfb1630c2800c7acd31df7aaf0f565796fba2b53ca1af1b\", \"files\": {}}",
+        "dest": "cargo/vendor/nix-0.26.4",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -6008,6 +6047,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/serialport/serialport-4.10.0.crate",
+        "sha256": "6a2f4ac56b5d3af3c40fbbee17be96d532cba02fa5853926aacdb77d926272ab",
+        "dest": "cargo/vendor/serialport-4.10.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"6a2f4ac56b5d3af3c40fbbee17be96d532cba02fa5853926aacdb77d926272ab\", \"files\": {}}",
+        "dest": "cargo/vendor/serialport-4.10.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/servo_arc/servo_arc-0.4.3.crate",
         "sha256": "170fb83ab34de17dc69aa7c67482b22218ddb85da56546f9bd6b929e32a05930",
         "dest": "cargo/vendor/servo_arc-0.4.3"
@@ -7303,6 +7355,19 @@
         "type": "inline",
         "contents": "{\"package\": \"f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e\", \"files\": {}}",
         "dest": "cargo/vendor/uds_windows-1.2.1",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/unescaper/unescaper-0.1.10.crate",
+        "sha256": "7285e83a80ce76f5e7bce79fa41f68d78ba62d1003cf27bf748ab24413808cf4",
+        "dest": "cargo/vendor/unescaper-0.1.10"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"7285e83a80ce76f5e7bce79fa41f68d78ba62d1003cf27bf748ab24413808cf4\", \"files\": {}}",
+        "dest": "cargo/vendor/unescaper-0.1.10",
         "dest-filename": ".cargo-checksum.json"
     },
     {

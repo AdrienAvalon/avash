@@ -7,7 +7,7 @@
 # Régénérer .SRCINFO après toute modification : makepkg --printsrcinfo > .SRCINFO
 
 pkgname=avash
-pkgver=0.8.0
+pkgver=0.9.0
 pkgrel=1
 pkgdesc="Gestionnaire de connexions SSH et RDP, natif, rapide, sécurisé (Tauri 2 + Rust)"
 arch=('x86_64')
@@ -24,7 +24,7 @@ makedepends=('cargo' 'nodejs' 'npm' 'pkgconf')
 # (vu au premier makepkg de la 0.7.2). Rust fait son propre LTO.
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('9b479493bc3f71329d722f09fafab8f14379b22ec5df6a0a01c6da0a8bf746b9')
+sha256sums=('c3f0321d62daed6bc0ba9b997ca49edcb8cf37202c6fdc737650a2370d8d0527')
 
 prepare() {
   cd "$pkgname-$pkgver"
