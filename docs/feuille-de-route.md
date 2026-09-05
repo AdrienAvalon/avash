@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 05/09/2026 |
 |---|---|
-| Tests | 433 Rust (155 cœur, 43 intégration, 72 interface, 134 processus RDP, 29 serveurs de test) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 69 scénarios bout en bout dans 35 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
+| Tests | 440 Rust (158 cœur, 47 intégration, 72 interface, 134 processus RDP, 29 serveurs de test) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 69 scénarios bout en bout dans 35 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 172 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |

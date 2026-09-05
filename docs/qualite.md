@@ -6,12 +6,12 @@ preuves (juge d'accessibilité extérieur, rejeu d'enregistrements réels,
 conformité RDP contre de vrais serveurs).
 
 
-**1212 tests** couvrent le projet, tous exécutés à chaque commit :
+**1219 tests** couvrent le projet, tous exécutés à chaque commit :
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
-| Cœur (`crates/avash`) | 155 | parseur `~/.ssh/config` et son **fuzzing par mutation** (plus sept cibles cargo-fuzz dans `fuzz/`, dont le décodeur ClearCodec du canal graphique et le flux entier d'un serveur VNC), import PuTTY et MobaXterm, enregistrement asciicast, sonde de santé, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
-| Intégration | 43 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP sur la session du terminal (dossiers récursifs dans les deux sens, reprise après annulation, relais entre deux serveurs, sur un système de fichiers en mémoire), tunnels, rebonds `ProxyJump` ; l'outil en ligne de commande exercé comme binaire |
+| Cœur (`crates/avash`) | 158 | parseur `~/.ssh/config` et son **fuzzing par mutation** (plus sept cibles cargo-fuzz dans `fuzz/`, dont le décodeur ClearCodec du canal graphique et le flux entier d'un serveur VNC), import PuTTY et MobaXterm, enregistrement asciicast, sonde de santé, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
+| Intégration | 47 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP sur la session du terminal (dossiers récursifs dans les deux sens, reprise après annulation, relais entre deux serveurs, sur un système de fichiers en mémoire), tunnels, rebonds `ProxyJump` ; l'outil en ligne de commande exercé comme binaire |
 | Interface (`crates/avash-ui`) | 72 | commandes Tauri, import de sessions, enregistrement, santé des hôtes, magasin de sessions sur moteur factice (annulation pendant la connexion, éviction par époque), résolution des rebonds `ProxyJump`, décodage UTF-8 en flux, verrous clavier, annonce du processus RDP, variables d'environnement de la webview |
 | Processus RDP | 134 | lecteur partagé RDPDR (confinement des chemins, aller-retour créer-écrire-relire, énumération par motif DOS, suppression et renommage, volume, réponse par le fil), VeNCrypt (montage TLS, clé d'épinglage), son du distant (formats PCM, message, relais), fichiers par le presse-papiers (réception par morceaux dans le désordre, refus, réponse courte, offre et parcours des dossiers), session VNC (entrées, masque de boutons, copie de rectangles), empreinte du serveur, fichier des empreintes, écriture atomique, plafond de résolution, négociation, identifiants et domaine, format binaire des trames, nouvelle taille d'écran sans image vidée, configuration après redirection, origine WebSocket, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique (surfaces bornées, image refusée hors surface, cache, ClearCodec, RemoteFX Progressive : décodeur SRL, paliers d'affinage, tuiles en différence, tuile hors surface sans état), magnétoscope, rejeu d'enregistrements réels (icônes NSCodec non noires), fuzzing par mutation sur cinq enregistrements |
 | Serveurs de test | 29 | serveur VNC (2) et côté serveur RDPDR (`test-rdp-server/src/rdpdr/`, 27) : décodeurs des PDU client écrits à la main (aller-retour contre les encodeurs du paquet, préfixes tronqués sans panique), automate du scénario contre des complétions simulées, dialogue complet avec le canal client d'`ironrdp-rdpdr` sur un dossier temporaire |
@@ -112,5 +112,16 @@ compte les mutants que les tests ne voient pas. Relevé du 05/09/2026 :
 
 Ce que ces chiffres disent : l'essentiel du cœur est traversé par les tests,
 et la part non couverte de l'interface tient surtout aux commandes Tauri qui
-exigent une fenêtre. Le chiffre des mutations survivantes se lit dans le
-résumé du passage ; c'est là que se trouvent les tests à écrire.
+exigent une fenêtre.
+
+Mutations, même passage : 264 mutants sur les quatre modules, en deux heures ;
+179 attrapés, 65 manqués, 19 non viables, 1 délai. Les survivants les plus
+parlants ont reçu leur test le jour même : le plafond de sortie d'une commande
+(`1024 * 1024` devenu `1024 + 1024` passait), `run_avec_agent` vidé, la
+déconnexion sans effet, le marqueur `@revoked` ignoré par la vraie lecture de
+`known_hosts`, la redirection distante en port 0, et dans `lib.rs` la ligne
+vide avant un bloc ajouté, le bloc `Match` qui suit un hôte retiré, la place du
+commentaire de dossier, les directives faites d'espaces, l'étoile en fin de
+motif. Restent sans test, à dessein : l'agent SSH (aucun agent dans la suite),
+les réglages de la session russh (keepalive, `TCP_NODELAY`), et les fonctions
+qui n'existent que pour Windows.

@@ -19,7 +19,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1212%20verts-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1219%20verts-brightgreen.svg)](docs/qualite.md)
 
 <img src="docs/captures/demo.webp" alt="Démonstration : un terminal SSH, puis un bureau Windows 11, dans avash" width="880">
 
@@ -198,12 +198,12 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1212 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
+**1219 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
 sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 
 | Niveau | Tests | En un mot |
 |---|---:|---|
-| Cœur Rust et intégration contre un vrai sshd | 198 | parseurs, import, SFTP, tunnels, rebonds |
+| Cœur Rust et intégration contre un vrai sshd | 205 | parseurs, import, SFTP, tunnels, rebonds |
 | Interface Tauri | 72 | commandes, magasin de sessions, clavier |
 | Processus RDP | 134 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
 | Serveurs de test | 29 | côté serveur RDPDR (décodeurs écrits à la main, automate du scénario, dialogue complet avec le canal client) et serveur VNC |

@@ -100,7 +100,10 @@ jobs:
           {
             echo "## Mutation : cœur (ssh.rs, keys.rs, secrets.rs, lib.rs)"
             echo '```'
-            cat mutants/outcomes.json | python3 -c '
+            # `-o mutants` écrit dans mutants/mutants.out/ : le premier passage
+            # (05/09/2026, 264 mutants en deux heures) a fini sur un résumé
+            # qui cherchait outcomes.json un cran trop haut.
+            cat mutants/mutants.out/outcomes.json | python3 -c '
           import json, sys, collections
           d = json.load(sys.stdin)
           c = collections.Counter(o["summary"] for o in d["outcomes"])
@@ -117,9 +120,9 @@ jobs:
         with:
           name: mutants
           path: |
-            mutants/outcomes.json
-            mutants/missed.txt
-            mutants/caught.txt
-            mutants/timeout.txt
-            mutants/unviable.txt
+            mutants/mutants.out/outcomes.json
+            mutants/mutants.out/missed.txt
+            mutants/mutants.out/caught.txt
+            mutants/mutants.out/timeout.txt
+            mutants/mutants.out/unviable.txt
           retention-days: 30

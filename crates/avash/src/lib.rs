@@ -1079,6 +1079,29 @@ mod tests_ecriture_atomique {
 mod save_tests {
     use super::*;
 
+    /// Le commentaire de dossier se pose juste après la dernière directive du
+    /// bloc, avant ses lignes vides de fin (mutants survivants : `!` de la
+    /// recherche de la dernière ligne pleine, et `i + 1` devenu `i * 1`).
+    #[test]
+    fn set_host_folder_se_pose_apres_la_derniere_directive() {
+        let dir = std::env::temp_dir().join(format!("avash-sf2-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config");
+        std::fs::write(
+            &path,
+            "Host prod\n    HostName 10.0.0.1\n\n\nHost autre\n    HostName 10.0.0.2\n",
+        )
+        .unwrap();
+        set_host_folder_at(&path, "prod", "x").unwrap();
+        let t = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            t.contains("    HostName 10.0.0.1\n    #Folder: x\n\n"),
+            "commentaire mal placé : {t:?}"
+        );
+        assert!(t.starts_with("Host prod\n    HostName 10.0.0.1\n"), "{t:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn set_host_folder_preserve_les_autres_directives() {
         let dir = std::env::temp_dir().join(format!("avash-sf-{}", rand::random::<u64>()));
@@ -1180,6 +1203,16 @@ Host autre
         };
         let bloc = render_host_block(&h);
         assert_eq!(bloc.trim(), "Host minimal", "bloc : {bloc:?}");
+        // Une clé ou un rebond faits d'espaces ne donnent pas de directive vide
+        // (mutant survivant : le filtre `!v.trim().is_empty()` du ProxyJump).
+        let h = SshHost {
+            alias: "blancs".into(),
+            identity_file: Some("   ".into()),
+            proxy_jump: Some(" \t".into()),
+            ..Default::default()
+        };
+        let bloc = render_host_block(&h);
+        assert_eq!(bloc.trim(), "Host blancs", "bloc : {bloc:?}");
     }
 
     #[test]
@@ -1309,6 +1342,41 @@ Host autre
     /// Sans cela on ajoutait un second bloc pour le même alias : OpenSSH retenant
     /// la première occurrence, l'hôte semblait ne plus répondre aux
     /// modifications, et la liste affichait deux entrées identiques.
+    /// La ligne vide avant un nouveau bloc n'est mise que s'il en faut une :
+    /// aucune sur un fichier vide, une seule après un bloc, aucune de plus
+    /// après une ligne vide déjà là. Mutants survivants : `&&` devenu `||`
+    /// (ligne vide en tête d'un fichier vide) et le `!` de `ends_with('\n')`
+    /// (un bloc collé au précédent, ou deux lignes vides).
+    #[test]
+    fn append_host_ne_met_de_ligne_vide_que_s_il_en_faut() {
+        let _h = temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for (avant, attendu) in [
+            ("", "Host b\n"),
+            (
+                "Host a\n    HostName 1\n",
+                "Host a\n    HostName 1\n\nHost b\n",
+            ),
+            (
+                "Host a\n    HostName 1",
+                "Host a\n    HostName 1\n\nHost b\n",
+            ),
+            (
+                "Host a\n    HostName 1\n\n",
+                "Host a\n    HostName 1\n\nHost b\n",
+            ),
+        ] {
+            std::fs::write(&path, avant).unwrap();
+            append_host(&host("b")).unwrap();
+            let apres = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                apres.starts_with(attendu),
+                "avant {avant:?} : attendu {attendu:?}, obtenu {apres:?}"
+            );
+        }
+    }
+
     #[test]
     fn append_host_voit_les_alias_declares_dans_un_include() {
         let _h = temp_home();
@@ -1502,9 +1570,37 @@ Host autre
         assert!(!glob_match("config?", "config12"));
         assert!(!glob_match("10-*", "20-web"));
         assert!(glob_match("a*b*c", "axxbyyc"));
+        // Une étoile en fin de nom : rien à consommer, et rien ne déborde
+        // (mutant survivant : `&&` devenu `||` faisait indexer un nom vide).
+        assert!(glob_match("a*", "a"));
+        assert!(!glob_match("a*b", "a"));
     }
 
     // ---------- remove_host ----------
+
+    /// Un bloc `Match` qui suit l'hôte retiré termine le bloc à retirer et
+    /// reste entier ; les directives de l'hôte retiré, elles, partent toutes
+    /// (mutant survivant : `key == "match"` devenu `!=`, qui gardait les
+    /// directives dès la première ligne).
+    #[test]
+    fn remove_host_s_arrete_au_bloc_match_qui_suit() {
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "Host prod\n    HostName 1.1.1.1\n    User root\n\nMatch host x\n    User u\n\nHost b\n    HostName 2.2.2.2\n",
+        )
+        .unwrap();
+        remove_host("prod").unwrap();
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !apres.contains("1.1.1.1") && !apres.contains("User root"),
+            "{apres}"
+        );
+        assert!(apres.contains("Match host x\n    User u"), "{apres}");
+        assert!(apres.contains("Host b\n    HostName 2.2.2.2"), "{apres}");
+    }
 
     #[test]
     fn remove_host_supprime_le_bon_bloc_et_garde_le_reste() {

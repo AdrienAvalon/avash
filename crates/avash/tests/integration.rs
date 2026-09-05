@@ -2269,3 +2269,138 @@ fn sous_avash_home_les_telechargements_restent_sous_le_foyer() {
     std::fs::create_dir_all(&telechargements).unwrap();
     assert_eq!(avash::sftp::default_local_dir(), telechargements);
 }
+
+/// Le plafond de sortie d'une commande est d'un mébioctet, pas de deux
+/// kibioctets : trois kilo-octets reviennent entiers, par `run` comme par
+/// `run_avec_agent`, qui rend aussi la sortie et le code. Mutants survivants
+/// du premier passage de cargo-mutants (05/09/2026) : `run_avec_agent`
+/// remplacé par `Ok((String::new(), 0))`, `1024 * 1024` par `1024 + 1024`,
+/// `>=` par `<` sur le plafond.
+#[tokio::test]
+async fn les_deux_executions_rendent_toute_une_sortie_de_trois_kilo_octets() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+    let long = "x".repeat(3000);
+    let (out, code) = session.run(&format!("echo {long}")).await.unwrap();
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(&long) && !out.contains("tronquée"),
+        "sortie coupée : {} octets",
+        out.len()
+    );
+    let (out, code) = session
+        .run_avec_agent(&format!("echo {long} ; exit 7"))
+        .await
+        .unwrap();
+    assert_eq!(code, 7, "le code de sortie de run_avec_agent");
+    assert!(
+        out.contains("CMD:echo") && out.contains(&long) && !out.contains("tronquée"),
+        "sortie de run_avec_agent : {} octets",
+        out.len()
+    );
+    session.disconnect().await.unwrap();
+}
+
+/// Se déconnecter ferme la session, et `is_closed` le dit.
+#[tokio::test]
+async fn la_deconnexion_ferme_la_session() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+    assert!(!session.is_closed(), "ouverte tant qu'on ne l'a pas fermée");
+    session.disconnect().await.unwrap();
+    let echeance = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !session.is_closed() {
+        assert!(
+            tokio::time::Instant::now() < echeance,
+            "la session ne se ferme pas après disconnect"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// Un marqueur `@revoked` sur l'hôte dans `known_hosts` bloque la connexion
+/// avant toute clé, par la vraie lecture du fichier et pas seulement par la
+/// fonction pure (mutant survivant : `marqueur_bloquant` remplacé par `None`).
+/// L'hôte visé est « localhost », résolu vers le serveur de test : les autres
+/// tests parlent à 127.0.0.1 et ne voient pas la ligne ; russh, lui, lit
+/// « @revoked » comme un hôte qui ne correspond à rien.
+#[tokio::test]
+async fn un_hote_marque_revoked_dans_known_hosts_est_refuse() {
+    std::sync::LazyLock::force(&HOME_POSE);
+    let port = spawn_test_sshd().await;
+    let chemin = avash::ssh::chemin_known_hosts().unwrap();
+    std::fs::create_dir_all(chemin.parent().unwrap()).unwrap();
+    let cle =
+        russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
+    let ligne = format!(
+        "@revoked localhost {}\n",
+        cle.public_key().to_openssh().unwrap()
+    );
+    {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&chemin)
+            .unwrap()
+            .write_all(ligne.as_bytes())
+            .unwrap();
+    }
+    let auth = test_auth();
+    let issue = avash::ssh::AvashSession::connect("localhost", port, &auth).await;
+    let Err(e) = issue else {
+        panic!("un hôte révoqué a été accepté");
+    };
+    assert!(format!("{e:#}").contains("@revoked"), "{e:#}");
+}
+
+/// Une redirection distante demandée sur le port 0 prend le port que le
+/// serveur choisit (40 000 chez le serveur de test), et c'est celui-là qui est
+/// rendu et qui relaie (mutants survivants sur `port == 0 && bound != 0`).
+#[tokio::test]
+async fn une_redirection_distante_en_port_zero_prend_le_port_du_serveur() {
+    let local = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let local_port = local.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut s, _) = local.accept().await.unwrap();
+        let mut buf = [0u8; 16];
+        let n = s.read(&mut buf).await.unwrap();
+        let up = String::from_utf8_lossy(&buf[..n]).to_uppercase();
+        s.write_all(up.as_bytes()).await.unwrap();
+    });
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    // Directement par la session : la définition d'un tunnel refuse le port 0
+    // (validation_refuse_un_port_d_ecoute_a_zero), c'est la couche SSH qui
+    // sait laisser le serveur choisir.
+    let bound = session
+        .remote_forward(
+            "localhost",
+            0,
+            "127.0.0.1",
+            local_port,
+            Arc::new(avash::ssh::ForwardCounters::default()),
+        )
+        .await
+        .expect("redirection distante en port 0");
+    assert_eq!(bound, 40_000, "le port choisi par le serveur");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if REMOTE_REPLY.lock().await.iter().any(|r| r == b"HELLO") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "rien n'est revenu par la redirection en port 0"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+}
