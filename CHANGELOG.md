@@ -29,8 +29,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   n'atteint jamais le DOM par le serveur WebDriver embarqué : toute session
   ouverte par double-clic sur un hôte restait « jamais live » sans qu'un seul
   appel n'atteigne le cœur. Les scénarios ouvrent un hôte par une aide qui
-  émet l'événement à la main sur ce chemin ; le chemin d'un enregistrement
-  n'est plus présumé commencer par `/` ; le scénario de réouverture des
+  émet l'événement à la main sur ce chemin ; de même pour la frappe dans un
+  terminal, le serveur ne synthétisant que keydown et keyup quand xterm.js
+  prend les caractères sur l'événement `input` de son textarea ; le chemin
+  d'un enregistrement n'est plus présumé commencer par `/` ; le scénario de
+  réouverture des
   onglets, qui recharge la page, se saute sur ce chemin (le rechargement
   coupe le pilotage embarqué) ; `waitForPort` attend jusqu'à quinze
   secondes, dépassé une fois en suite complète.

@@ -7,6 +7,7 @@
 // événement de frappe.
 import { readFileSync } from "node:fs";
 import { doubleCliquerHote } from "./helpers.js";
+import { EMBARQUE } from "../wdio.conf.js";
 
 describe("Enregistrement de session (asciicast)", () => {
   const menu = async (act) => {
@@ -28,8 +29,23 @@ describe("Enregistrement de session (asciicast)", () => {
     // Pas de lettre doublée dans ce qu'on tape : une frappe synthétique répétée
     // trop vite est parfois perdue par le composant (« asciicast » arrivait
     // « ascicast »), et ce n'est pas ce que le scénario vérifie.
+    // Le serveur WebDriver embarqué (Windows, macOS) ne synthétise que keydown
+    // et keyup ; or xterm.js prend les caractères imprimables sur l'événement
+    // `input` de son textarea (le chemin d'une saisie IME ou d'un collage), et
+    // Entrée sur keydown. Sur ce chemin, le texte est donc donné par `input`
+    // et Entrée part comme touche nommée (sixième passage Windows, 05/09/2026,
+    // où « le premier marqueur n'est jamais arrivé »).
     await browser.execute(() => document.querySelector(".xterm-helper-textarea")?.focus());
-    await browser.keys(texte);
+    const corps = texte.replace(/\n$/, "");
+    if (EMBARQUE) {
+      await browser.execute((t) => {
+        document.querySelector(".xterm-helper-textarea")
+          ?.dispatchEvent(new InputEvent("input", { data: t, inputType: "insertText", bubbles: true }));
+      }, corps);
+    } else {
+      await browser.keys(corps);
+    }
+    if (texte.endsWith("\n")) await browser.keys("Enter");
   };
   // Le chemin annoncé commence par « / » sous Unix et par une lettre de lecteur
   // sous Windows (`C:\…\x.cast`) : le motif ne présume pas de sa forme.

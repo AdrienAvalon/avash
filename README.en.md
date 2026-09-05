@@ -19,7 +19,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1210%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1212%20passing-brightgreen.svg)](docs/qualite.md)
 
 <img src="docs/captures/demo.webp" alt="Demo: an SSH terminal, then a Windows 11 desktop, inside avash" width="880">
 
@@ -199,7 +199,7 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1210 tests** on every commit, on two independent pipelines (GitHub Actions on
+**1212 tests** on every commit, on two independent pipelines (GitHub Actions on
 Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 
 | Level | Tests | In a word |
@@ -207,7 +207,7 @@ Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 | Rust core and integration against a real sshd | 198 | parsers, import, SFTP, tunnels, jump hosts |
 | Tauri interface | 72 | commands, session store, keyboard |
 | RDP process | 134 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
-| RDP test server | 27 | server-side RDPDR: hand-written decoders, scenario state machine, full dialogue with the client channel |
+| Test servers | 29 | server-side RDPDR (hand-written decoders, scenario state machine, full dialogue with the client channel) and the VNC server |
 | Vendored IronRDP and vnc-rs crates | 595 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
 | Front (Vitest) | 115 | pure logic, VNC keysyms, translations |
 | End to end (WebdriverIO) | 69 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |

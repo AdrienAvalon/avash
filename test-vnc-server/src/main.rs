@@ -9,6 +9,7 @@
 //! - un clic gauche pose un carré magenta de 40 pixels à l'endroit du clic ;
 //! - un texte collé par le client revient sur son presse-papiers, précédé
 //!   de « reçu: ».
+//!
 //! Chaque entrée est aussi écrite sur la sortie standard, une ligne par
 //! événement, pour que le scénario lise ce que le serveur a compris (le
 //! keysym d'un « é », par exemple).
