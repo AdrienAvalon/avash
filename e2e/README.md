@@ -120,14 +120,20 @@ L'application est donc compilée avec `--features webdriver` : elle embarque un
 serveur WebDriver (`tauri-plugin-wdio-webdriver`, 127.0.0.1:4445) et le harnais
 la lance lui-même dans `beforeSession`, attend `/status`, puis WebdriverIO lui
 parle en direct ; `afterSession` l'arrête. Une application par fichier de
-scénarios, comme sous Linux. Les serveurs locaux ne sont pas montés
-(`LOCAL_SERVERS` est faux), l'import PuTTY et la régression visuelle sont
-sautés. Le job `e2e-windows` de la chaîne joue ce sous-ensemble.
+scénarios, comme sous Linux. Les serveurs locaux tournent là aussi depuis le
+05/09/2026 : le sshd est le service OpenSSH Server du système (port 22, clé
+dans `administrators_authorized_keys`, bash de Git for Windows comme shell de
+connexion), les serveurs RDP et VNC de test sont construits sur place. Seuls
+l'import PuTTY, la régression visuelle, les vraies touches
+(`liste-clavier.spec.js`) et la réouverture des onglets (`restauration.spec.js`)
+se sautent. Le job `e2e-windows` de la chaîne joue cette suite complète.
 
 `E2E_EMBARQUE=1` force ce chemin sur toute plateforme (Linux compris, sur un
 binaire compilé avec la fonctionnalité) : c'est ainsi que le harnais se
-vérifie avant de pousser. C'est aussi le chemin de macOS (WKWebView), qui n'a
-aucun pilote : le job macOS de la chaîne joue le même sous-ensemble.
+vérifie avant de pousser, et c'est ainsi qu'ont été trouvées les limites
+ci-dessous. C'est aussi le chemin de macOS (WKWebView), qui n'a aucun pilote :
+le job macOS de la chaîne y joue les scénarios sans serveur local
+(`E2E_NO_RDP=1`).
 
 Une limite connue : le serveur embarqué synthétise les touches en JavaScript
 (Origine et Fin non traduites, flèches gérées seulement sur des boutons radio,

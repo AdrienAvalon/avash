@@ -36,7 +36,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   réouverture des
   onglets, qui recharge la page, se saute sur ce chemin (le rechargement
   coupe le pilotage embarqué) ; `waitForPort` attend jusqu'à quinze
-  secondes, dépassé une fois en suite complète.
+  secondes, dépassé une fois en suite complète. Le job `e2e-windows` de la
+  chaîne joue désormais cette suite complète à chaque poussée (sshd
+  d'OpenSSH Server, serveurs RDP et VNC de test construits sur place), au
+  lieu des seuls scénarios sans serveur ; le workflow d'essai qui a servi
+  aux sept passages est retiré.
 - **Chaîne : références visuelles renouvelées** (la palette a trois entrées
   de plus : son, partage, diagnostic) ; le workflow qualité ne combinait plus
   `--in-place` et `--jobs`, que cargo-mutants refuse ensemble.
