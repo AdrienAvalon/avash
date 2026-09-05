@@ -68,6 +68,20 @@ export async function doubleCliquer(el) {
  *  mort ni sortie. On attend donc que la même ligne soit rendue deux fois de
  *  suite avant de cliquer : un état, pas une durée. */
 export async function doubleCliquerHote(alias) {
+  // Le serveur embarqué rend un identifiant neuf à chaque recherche, même
+  // pour le même nœud : l'attente de stabilité n'y aboutirait jamais (vu sur
+  // la chaîne Windows). Là, l'événement est émis sur l'élément tout juste
+  // trouvé ; une référence caduque fait lever `execute`, et on recommence.
+  if (EMBARQUE) {
+    for (let essai = 0; ; essai++) {
+      try {
+        await doubleCliquer(await findHostRow(alias));
+        return;
+      } catch (e) {
+        if (essai >= 3) throw e;
+      }
+    }
+  }
   let ligne = await findHostRow(alias);
   await browser.waitUntil(async () => {
     const encore = await findHostRow(alias);
