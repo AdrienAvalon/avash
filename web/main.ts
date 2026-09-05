@@ -1,5 +1,7 @@
 // Avash — cœur du front : arbre des hôtes, onglets, terminaux (xterm.js ↔ PTY Rust), palette, amorçage.
 
+// En premier, avant xterm.js : repère de mesure du démarrage (voir le module).
+import "./mesure-demarrage";
 import "@xterm/xterm/css/xterm.css";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -35,6 +37,9 @@ import "./maj";
 import { enregistrementsOpen } from "./enregistrements";
 import "./panneaux";
 import { appliquerLangue, langue, setLangue, t } from "./i18n";
+
+// Tous les modules sont évalués ; ce qui suit est l'initialisation d'avash.
+performance.mark("avash:modules-evalues");
 
 // ---------- Arbre des hôtes (dossiers unifiés SSH + RDP) ----------
 
