@@ -7,6 +7,25 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **VNC chiffré : VeNCrypt, avec le certificat épinglé.** Quand le serveur
+  offre le type de sécurité VeNCrypt, le client porté le choisit, négocie la
+  version 0.2 et un sous-type X.509 (`X509Vnc` d'abord, `X509None` sinon ;
+  les sous-types TLS anonymes, sans certificat, sont refusés parce qu'ils ne
+  prouvent pas à qui l'on parle), rend le flux au processus qui monte TLS
+  (`rdp-sidecar/src/vnc_tls.rs`, le même rustls que le RDP), puis
+  s'authentifie sous TLS. Le certificat n'est pas jugé par une autorité mais
+  épinglé comme en RDP : clé publique mémorisée au premier contact sous
+  `vnc:<hôte>:<port>` dans `rdp_known_hosts`, et un changement refuse la
+  connexion avant que le mot de passe ne parte, empreintes à l'appui. Sans
+  VeNCrypt, l'authentification VNC classique en clair reste ce qu'elle était
+  ; le formulaire le dit. Le serveur VNC de test gagne un terminateur
+  VeNCrypt (`--tls-port`, `--cert`, `--key`) qui mène la poignée de main et
+  TLS puis relie le client au serveur RFB en clair ; deux scénarios bout en
+  bout : la connexion chiffrée (type 19, X509Vnc, TLS, pixels, empreinte
+  épinglée) et le refus d'un certificat qui change, raison affichée. Au
+  passage, l'incrustation « connexion fermée » rend entière une erreur du
+  processus sur plusieurs lignes : elle n'en montrait que la dernière, et un
+  certificat changé se résumait à « retirez la ligne de rdp_known_hosts ».
 - **Le son du bureau distant.** Le processus RDP annonce le canal `rdpsnd`
   (MS-RDPEA) avec du PCM 16 bits seulement (44,1 et 48 kHz, stéréo et mono)
   et relaie chaque bloc d'ondes à l'interface (message `[20]`, cadence et

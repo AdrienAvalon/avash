@@ -58,6 +58,7 @@ mod son;
 mod surface;
 mod trames;
 mod vnc;
+mod vnc_tls;
 
 #[tokio::main]
 async fn main() -> Result<()> {

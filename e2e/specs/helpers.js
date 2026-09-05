@@ -156,9 +156,12 @@ export function startVncServer(port, surLigne, options = {}) {
 //
 // On exige donc DEUX connexions successives : la seconde n'est tentée qu'après
 // fermeture de la première, ce qui vérifie que la boucle d'acceptation a bouclé.
-// C'est bien un état qu'on attend, pas une durée.
+// C'est bien un état qu'on attend, pas une durée. Le délai plafond, lui, a été
+// vu dépassé une fois en suite complète (34 fichiers en parallèle, 05/09/2026 :
+// « port 33898 pas prêt à temps » dans le before all de rdp-reconnect, qui
+// passait seul) : il couvre le démarrage d'un serveur sur une machine chargée.
 import { connect } from "node:net";
-export function waitForPort(port, timeout = 8000) {
+export function waitForPort(port, timeout = 15000) {
   const deadline = Date.now() + timeout;
   const uneConnexion = () =>
     new Promise((ok, ko) => {

@@ -36,7 +36,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 04/09/2026 |
 |---|---|
-| Tests | 389 Rust (155 cœur, 42 intégration, 70 interface, 122 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 65 scénarios bout en bout dans 33 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
+| Tests | 392 Rust (155 cœur, 42 intégration, 70 interface, 125 processus RDP) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 67 scénarios bout en bout dans 34 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 572 Ko en un seul module |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -408,8 +408,9 @@ Par ordre de valeur décroissante :
    trousseau ; un serveur VNC de test réagit aux entrées et le scénario bout
    en bout mesure les pixels (clic → carré magenta, « g » → bureau vert,
    « é » → keysym 0xe9). Pas de chiffrement : dit dans le formulaire et dans
-   `SECURITY.md`, tunnel SSH recommandé. Reste à faire : VeNCrypt/TLS, le
-   pseudo-codage curseur, Tight (JPEG).
+   `SECURITY.md`, tunnel SSH recommandé ; VeNCrypt (TLS, certificat épinglé)
+   depuis le 05/09/2026. Reste à faire : le pseudo-codage curseur, Tight
+   (JPEG).
 4. **Port série** — **fait** (05/09/2026) : mode Série de la connexion
    directe (ports du poste proposés, vitesse), session dans un onglet de
    terminal par les canaux des sessions SSH, deux fils bloquants sur le port.
@@ -441,8 +442,10 @@ Par ordre de valeur décroissante :
    le suivant côte à côte, terminal ou bureau distant indifféremment ; l'affichage
    de la zone centrale passe par un seul module. Scénario bout en bout sur
    deux sessions SSH.
-9. **VeNCrypt** — TLS pour le VNC, avec la même règle de confiance au premier
-   contact que le RDP.
+9. **VeNCrypt** — **fait** (05/09/2026) : TLS pour le VNC (sous-types X.509
+   seulement), certificat épinglé au premier contact comme en RDP, refus
+   avec les empreintes quand il change. Le serveur de test a son terminateur
+   VeNCrypt ; deux scénarios bout en bout.
 10. **Audio RDP** — **fait** (05/09/2026) : canal `rdpsnd` en PCM 16 bits
     seulement, blocs relayés à la webview (`[20]`) qui les joue par WebAudio,
     volume du serveur (`[21]`), coupure dans la palette. Scénario bout en bout
@@ -459,7 +462,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 65 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 67 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |

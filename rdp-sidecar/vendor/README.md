@@ -304,3 +304,15 @@ serveur entier scénarisé dans un tampon) :
 Et un détail de protocole : le texte du presse-papiers voyage en Latin-1
 (RFC 6143, 7.5.6), un octet par caractère ; le paquet envoyait et lisait de
 l'UTF-8, et « é » arrivait en « Ã© ».
+
+**Un ajout, VeNCrypt.** Le paquet ne connaissait que les types de sécurité
+None et VncAuth, donc tout passait en clair. `VncConnector::set_tls_upgrader`
+reçoit une fermeture qui monte TLS sur le flux ; quand le serveur annonce le
+type 19 (VeNCrypt), `connector::vencrypt` négocie la version 0.2, choisit
+X509Vnc (261) sinon X509None (260), refuse les sous-types TLS anonymes (qui
+ne présentent aucun certificat, donc rien à épingler), remonte le flux par la
+fermeture, puis reprend l'authentification classique. Le montage lui-même
+(rustls, épinglage TOFU sous `vnc:<hôte>:<port>`) reste dans le sidecar,
+`src/vnc_tls.rs` : le paquet ne dépend d'aucune bibliothèque TLS. Testé
+contre TigerVNC et contre le serveur de test, dont `src/vencrypt.rs` joue le
+terminateur TLS.

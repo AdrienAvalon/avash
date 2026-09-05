@@ -86,7 +86,10 @@ Le fichier `Cargo.toml` à la racine définit un workspace de deux crates, et en
   client `vnc-rs` (copie portée dans `vendor/`, voir son README), même poste
   local, même protocole avec l'interface, même image et même cadencement sur
   accusé de réception que le RDP. Seuls changent le dialogue avec le serveur
-  et le clavier, en keysyms (message `14`).
+  et le clavier, en keysyms (message `14`). Quand le serveur offre VeNCrypt,
+  le client porté rend le flux à `src/vnc_tls.rs`, qui monte TLS (le même
+  rustls que le RDP) et épingle le certificat sous `vnc:<hôte>:<port>` dans
+  le fichier des empreintes, avant l'authentification.
 
 Au moment de la release, le sidecar est compilé puis embarqué dans l'AppImage
 via le mécanisme `externalBin` de Tauri, à côté de l'exécutable principal.

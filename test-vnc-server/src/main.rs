@@ -18,6 +18,9 @@
 //! ne vaut rien.
 //!
 //! Usage : test-vnc-server [--port 35900] [--pass test] [--width 640] [--height 480]
+//!         [--tls-port 35902 --cert cert.pem --key key.pem]   (VeNCrypt, voir vencrypt.rs)
+
+mod vencrypt;
 
 use anyhow::Context as _;
 use rustvncserver::server::{ServerEvent, VncServer};
@@ -30,6 +33,10 @@ struct Options {
     pass: String,
     largeur: u16,
     hauteur: u16,
+    /// Un second port, VeNCrypt (TLS), relié au premier.
+    tls_port: Option<u16>,
+    cert: Option<std::path::PathBuf>,
+    cle: Option<std::path::PathBuf>,
 }
 
 fn options() -> anyhow::Result<Options> {
@@ -41,6 +48,9 @@ fn options() -> anyhow::Result<Options> {
             .unwrap_or_else(|| "test".to_owned()),
         largeur: a.opt_value_from_str("--width")?.unwrap_or(640),
         hauteur: a.opt_value_from_str("--height")?.unwrap_or(480),
+        tls_port: a.opt_value_from_str("--tls-port")?,
+        cert: a.opt_value_from_str("--cert")?,
+        cle: a.opt_value_from_str("--key")?,
     })
 }
 
@@ -145,6 +155,18 @@ async fn main() -> anyhow::Result<()> {
         "test-vnc-server : {}x{} sur le port {}",
         o.largeur, o.hauteur, o.port
     );
+    if let Some(port_tls) = o.tls_port {
+        let (cert, cle) = (
+            o.cert.clone().context("--cert requis avec --tls-port")?,
+            o.cle.clone().context("--key requis avec --tls-port")?,
+        );
+        let port_interne = o.port;
+        tokio::spawn(async move {
+            if let Err(e) = vencrypt::ecouter(port_tls, port_interne, &cert, &cle).await {
+                println!("vencrypt : arrêt : {e:#}");
+            }
+        });
+    }
     serveur.listen(o.port).await.context("écoute VNC")?;
     Ok(())
 }

@@ -19,7 +19,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1164%20verts-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1169%20verts-brightgreen.svg)](docs/qualite.md)
 
 <img src="docs/captures/demo.webp" alt="Démonstration : un terminal SSH, puis un bureau Windows 11, dans avash" width="880">
 
@@ -31,7 +31,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 |---|---|
 | **SSH** | terminal complet (xterm.js), onglets, `ProxyJump` en chaîne, agent, clés générées et déployées depuis l'application |
 | **RDP** | bureaux Windows, xrdp et GNOME Remote Desktop intégrés (IronRDP), redimensionnement natif sans zoom d'image, presse-papiers partagé sur demande, fichiers copiés-collés dans les deux sens, son du distant |
-| **VNC** | les bureaux VNC dans la même fenêtre (ZRLE, clavier en keysyms, presse-papiers), par le même processus que le RDP |
+| **VNC** | les bureaux VNC dans la même fenêtre (ZRLE, clavier en keysyms, presse-papiers), chiffrés par VeNCrypt quand le serveur l'offre, certificat épinglé au premier contact |
 | **SFTP** | panneau de fichiers sur la session du terminal : parcourir, envoyer et télécharger fichiers ou dossiers entiers, reprendre un transfert coupé, file de transferts avec vitesse, copie d'un hôte à l'autre sans passer par le disque du poste |
 | **Série** | la console d'un commutateur, d'un routeur ou d'une carte dans un onglet de terminal, ports du poste détectés, vitesse au choix |
 | **Tunnels** | locaux (`-L`), distants (`-R`) et SOCKS (`-D`), avec leur état en direct |
@@ -198,17 +198,17 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1164 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
+**1169 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
 sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 
 | Niveau | Tests | En un mot |
 |---|---:|---|
 | Cœur Rust et intégration contre un vrai sshd | 197 | parseurs, import, SFTP, tunnels, rebonds |
 | Interface Tauri | 70 | commandes, magasin de sessions, clavier |
-| Processus RDP | 122 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
+| Processus RDP | 125 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
 | Paquets IronRDP et vnc-rs portés | 595 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
 | Front (Vitest) | 115 | logique pure, keysyms VNC, traductions |
-| Bout en bout (WebdriverIO) | 65 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
+| Bout en bout (WebdriverIO) | 67 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, le Scorecard de l'OpenSSF,

@@ -185,9 +185,12 @@ fn message(e: vnc::VncError) -> anyhow::Error {
         }
         vnc::VncError::General(m) if m.contains("has not been implemented") => anyhow::anyhow!(
             "Le serveur n'accepte que des authentifications que ce client ne parle pas \
-             (VeNCrypt, TLS, RSA-AES). Autorise l'authentification VNC classique, ou passe \
-             par un tunnel SSH vers un serveur sans chiffrement."
+             (TLS anonyme, RSA-AES). Autorise VeNCrypt avec certificat (X.509) ou \
+             l'authentification VNC classique, ou passe par un tunnel SSH."
         ),
+        // Nos propres messages (VeNCrypt, certificat épinglé) : tels quels,
+        // sans le « VNC Error with message » que la bibliothèque colle devant.
+        vnc::VncError::General(m) => anyhow::anyhow!("{m}"),
         autre => anyhow::anyhow!("{autre}"),
     }
 }
@@ -207,8 +210,13 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
     .with_context(|| format!("connexion à {}:{}", args.host, args.port))?;
     tcp.set_nodelay(true).ok();
     let pass = args.pass.clone();
+    // VeNCrypt : si le serveur l'offre, le flux passe sous TLS et le
+    // certificat est épinglé (vnc_tls) ; sinon, l'authentification VNC
+    // classique, en clair, comme avant.
+    let monteur = crate::vnc_tls::monteur(&args.host, args.port);
     let client = tokio::time::timeout(DELAI_CONNEXION, async move {
-        VncConnector::new(tcp)
+        VncConnector::new(crate::vnc_tls::MaybeTls::Clair(tcp))
+            .set_tls_upgrader(monteur)
             .set_auth_method(async move { Ok(pass) })
             // L'ordre est une préférence annoncée au serveur : ZRLE d'abord
             // (sans perte, compact), CopyRect pour les déplacements, Raw parce

@@ -160,6 +160,12 @@ mod tests_certificat {
     }
 }
 
+/// Verrou des tests qui posent `AVASH_HOME` : la variable est globale au
+/// processus et `cargo test` fait tourner les tests en parallèle ; sans lui,
+/// le test du montage VeNCrypt pouvait lire le bac à sable d'un autre test.
+#[cfg(test)]
+pub(crate) static VERROU_AVASH_HOME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests_fichier_empreintes {
     use super::chercher_empreinte;
@@ -205,6 +211,9 @@ mod tests_fichier_empreintes {
     fn avash_home_detourne_le_fichier_de_confiance() {
         // Sans cela, la suite bout en bout sous Windows écrirait dans le
         // fichier réel de l'utilisateur : `config_dir()` y ignore HOME.
+        let _verrou = super::VERROU_AVASH_HOME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let bac = std::env::temp_dir().join(format!("avash-rdp-{}", std::process::id()));
         let precedent = std::env::var_os("AVASH_HOME");
         unsafe { std::env::set_var("AVASH_HOME", &bac) };

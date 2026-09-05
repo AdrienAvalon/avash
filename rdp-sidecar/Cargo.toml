@@ -71,3 +71,6 @@ ironrdp-graphics = { path = "vendor/ironrdp-graphics" }
 # comportements indéfinis et détacher la file des événements du verrou du
 # client. Voir vendor/README.md.
 vnc-rs = { path = "vendor/vnc-rs" }
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }

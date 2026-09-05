@@ -294,7 +294,19 @@ fn analyser_annonce(ligne: &str) -> Result<(u16, String), String> {
 /// la DERNIÈRE ligne de son diagnostic (« authentification refusée », « TLS »…)
 /// plutôt qu'un générique, seul moyen pour l'utilisateur d'apprendre la cause.
 fn message_arret(diag: &str) -> String {
-    let msg = diag.trim().lines().last().unwrap_or("").trim();
+    let diag = diag.trim();
+    // Une erreur du processus commence par « Error: » et peut tenir sur
+    // plusieurs lignes (un certificat qui change en fait cinq, empreintes
+    // comprises) : on la rend entière, sinon l'utilisateur ne voyait que la
+    // dernière ligne, « retirez la ligne … de rdp_known_hosts », sans le
+    // pourquoi ni les empreintes.
+    if let Some(debut) = diag.rfind("Error: ") {
+        let bloc = diag[debut + "Error: ".len()..].trim();
+        if !bloc.is_empty() {
+            return bloc.to_owned();
+        }
+    }
+    let msg = diag.lines().last().unwrap_or("").trim();
     if msg.is_empty() {
         "Le sidecar RDP s'est arrêté sans se connecter.".to_owned()
     } else {
@@ -695,6 +707,12 @@ mod tests_annonce {
         assert_eq!(
             message_arret("   \n  "),
             "Le sidecar RDP s'est arrêté sans se connecter."
+        );
+        // Une erreur sur plusieurs lignes (certificat changé) revient entière,
+        // pas réduite à sa dernière ligne (régression vue avec VeNCrypt).
+        assert_eq!(
+            message_arret("connexion…\nError: Le certificat a changé.\n\nEmpreinte : abc\nRetirez la ligne.\n"),
+            "Le certificat a changé.\n\nEmpreinte : abc\nRetirez la ligne."
         );
     }
 }

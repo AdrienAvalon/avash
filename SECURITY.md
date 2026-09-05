@@ -59,12 +59,19 @@ répondent.
   d'hôte SSH et de l'empreinte du certificat RDP dès le premier contact, avec
   refus explicite au changement ; NLA exigé en RDP, sans repli silencieux vers
   TLS seul ; aucun secret ne quitte la machine autrement que par le protocole
-  chiffré négocié. **Exception assumée : VNC.** Le RFB classique ne chiffre
-  rien et n'a rien à épingler ; le mot de passe y est protégé par un DES à
-  56 bits qui ne résiste à personne, et l'image passe en clair. Avash le dit
-  dans le formulaire et ne prétend pas mieux : hors d'un réseau que vous
-  contrôlez, ouvrez un tunnel SSH (`Tunnels`) vers le port du serveur et
-  connectez le bureau VNC sur `127.0.0.1`.
+  chiffré négocié. **VNC : chiffré quand le serveur le permet.** Un serveur
+  qui offre VeNCrypt (TigerVNC, x11vnc avec certificat) est joint sous TLS,
+  et son certificat est épinglé comme celui d'un serveur RDP : clé publique
+  mémorisée au premier contact (`vnc:<hôte>:<port>` dans `rdp_known_hosts`),
+  refus explicite avec les deux empreintes si elle change, avant que le mot
+  de passe ne parte. Seuls les sous-types X.509 sont acceptés : les
+  sous-types TLS anonymes (sans certificat) ne prouvent pas à qui l'on parle.
+  **Exception assumée : le RFB classique**, sans VeNCrypt, ne chiffre rien et
+  n'a rien à épingler ; le mot de passe y est protégé par un DES à 56 bits
+  qui ne résiste à personne, et l'image passe en clair. Avash le dit dans le
+  formulaire et ne prétend pas mieux : hors d'un réseau que vous contrôlez,
+  ouvrez un tunnel SSH (`Tunnels`) vers le port du serveur et connectez le
+  bureau VNC sur `127.0.0.1`.
 - **Un serveur malveillant, compromis ou simplement défaillant.** Une fois la
   session établie, tout ce qu'il envoie est traité comme une entrée non fiable :
   tailles bornées, rectangles rognés, décodeurs graphiques exercés par fuzzing à
