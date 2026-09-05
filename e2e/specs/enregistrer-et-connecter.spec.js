@@ -42,7 +42,16 @@ describe("Enregistrer un hôte puis se connecter", () => {
       document.querySelector(".tab.active .label")?.textContent ?? null);
     expect(libelle).toBe(ALIAS);
 
-    // Et l'hôte doit exister dans la barre latérale sous ce nom.
-    expect(await findHostRow(ALIAS)).not.toBe(null);
+    // Et l'hôte doit exister dans la barre latérale sous ce nom. L'exécuteur
+    // Windows a été vu mettre plus de huit secondes à l'afficher (chaîne du
+    // 05/09/2026, un passage sur deux) : on attend plus longtemps, et l'échec
+    // nomme ce que la barre montrait.
+    try {
+      await findHostRow(ALIAS, 20000);
+    } catch (e) {
+      const presents = await browser.execute(() =>
+        [...document.querySelectorAll("#host-list .host .alias")].map((a) => a.textContent));
+      throw new Error(`hôte « ${ALIAS} » absent de la barre ; présents : ${JSON.stringify(presents)}`, { cause: e });
+    }
   });
 });

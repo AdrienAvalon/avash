@@ -58,9 +58,24 @@ export async function doubleCliquer(el) {
   }, el);
 }
 
-/** Ouvre un hôte de la barre latérale par double-clic sur sa ligne. */
+/** Ouvre un hôte de la barre latérale par double-clic sur sa ligne.
+ *
+ *  La liste se reconstruit à chaque changement d'état d'une session (le voyant
+ *  de la ligne) : une référence prise pendant la reconstruction est caduque, et
+ *  un double-clic dessus tombe dans le vide sans erreur sous WebKitWebDriver.
+ *  Vu sur le miroir GitLab, dans vue-partagee : le second double-clic suivait
+ *  immédiatement le premier « live », et « session 2 jamais live », sans onglet
+ *  mort ni sortie. On attend donc que la même ligne soit rendue deux fois de
+ *  suite avant de cliquer : un état, pas une durée. */
 export async function doubleCliquerHote(alias) {
-  await doubleCliquer(await findHostRow(alias));
+  let ligne = await findHostRow(alias);
+  await browser.waitUntil(async () => {
+    const encore = await findHostRow(alias);
+    const stable = encore.elementId === ligne.elementId;
+    ligne = encore;
+    return stable;
+  }, { timeout: 5000, interval: 200, timeoutMsg: `la ligne « ${alias} » ne cesse d'être reconstruite` });
+  await doubleCliquer(ligne);
 }
 export async function findFolderRow(name) {
   const r = await trouverLigne("#host-list .folder-row", ".fname", name);

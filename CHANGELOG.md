@@ -41,6 +41,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   d'OpenSSH Server, serveurs RDP et VNC de test construits sur place), au
   lieu des seuls scénarios sans serveur ; le workflow d'essai qui a servi
   aux sept passages est retiré.
+- **Miroir GitLab : le second double-clic sur un hôte.** Dans le scénario de
+  la vue partagée, le second double-clic suivait immédiatement le premier
+  « live », pendant que la barre latérale se reconstruisait (le voyant de la
+  ligne) ; la référence était caduque et le double-clic tombait dans le vide
+  sans erreur sous WebKitWebDriver. L'aide qui ouvre un hôte attend que la
+  même ligne soit rendue deux fois de suite avant de cliquer.
 - **Chaîne : références visuelles renouvelées** (la palette a trois entrées
   de plus : son, partage, diagnostic) ; le workflow qualité ne combinait plus
   `--in-place` et `--jobs`, que cargo-mutants refuse ensemble.

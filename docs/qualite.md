@@ -95,3 +95,22 @@ cd e2e && npm test      # tests bout en bout (ouvre des fenêtres)
 scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
 ```
 
+
+### Couverture et mutations : le workflow hebdomadaire
+
+`.github/workflows/qualite.yml` (chaque lundi, ou à la demande) mesure ce que
+les tests exercent réellement, sans bloquer les poussées : la couverture par
+`cargo-llvm-cov` (rapports HTML en artefact, résumé dans le journal du
+passage), puis `cargo-mutants` sur les modules de sécurité du cœur (`ssh.rs`,
+`keys.rs`, `secrets.rs`, `lib.rs`), qui altère le code un point à la fois et
+compte les mutants que les tests ne voient pas. Relevé du 05/09/2026 :
+
+| Périmètre | Fonctions | Lignes | Régions |
+|---|---:|---:|---:|
+| Espace de travail (cœur et interface) | 66,4 % (776/1168) | 76,4 % (6407/8392) | 76,5 % |
+| Processus RDP | 75,0 % (467/623) | 71,2 % (4463/6270) | 71,5 % |
+
+Ce que ces chiffres disent : l'essentiel du cœur est traversé par les tests,
+et la part non couverte de l'interface tient surtout aux commandes Tauri qui
+exigent une fenêtre. Le chiffre des mutations survivantes se lit dans le
+résumé du passage ; c'est là que se trouvent les tests à écrire.

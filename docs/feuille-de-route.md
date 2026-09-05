@@ -394,6 +394,16 @@ sur des mesures de ce qui coûte réellement.
   (`--features webdriver`), un serveur WebDriver que le harnais lance et
   arrête à chaque fichier. Le même chemin joue la suite sous macOS, qui n'a
   aucun pilote : l'interface y est exercée pour la première fois.
+  **Serveurs locaux compris depuis le 05/09/2026** : sept passages d'une
+  branche d'essai, dont un instrumenté (traces horodatées dans le cœur, sshd
+  en `DEBUG1`), ont trouvé ce que le serveur embarqué ne transmet pas au DOM
+  (le double-clic, les caractères tapés dans un terminal), le rechargement de
+  page qui coupe le pilotage, le chemin d'un enregistrement présumé
+  commencer par `/`, et le dossier de téléchargement hors du bac à sable
+  (`dirs::download_dir()` ignore `AVASH_HOME` sous Windows). La suite
+  complète passe désormais sous Windows à chaque poussée, avec le sshd
+  d'OpenSSH Server et les serveurs RDP et VNC de test ; seuls la
+  réouverture des onglets et les vraies touches restent réservés à Linux.
 - **Régression visuelle** — **fait** (02/09/2026) : quatre captures de
   référence produites par la chaîne, comparées pixel à pixel à chaque passage.
 - **Un diagnostic exportable** — **fait** (05/09/2026) : « Exporter un
