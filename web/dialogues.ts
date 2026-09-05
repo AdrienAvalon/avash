@@ -1,6 +1,6 @@
 // Boîtes de dialogue maison : saisie de texte, confirmation, mot de passe, accessibilité (piège de focus, Échap).
 
-import { Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
 import { getVersion } from "@tauri-apps/api/app";
 import { effectuerCollage } from "./collage";
 import { $ } from "./etat";

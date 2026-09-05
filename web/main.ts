@@ -3,12 +3,8 @@
 // En premier, avant xterm.js : repère de mesure du démarrage (voir le module).
 import "./mesure-demarrage";
 import "@xterm/xterm/css/xterm.css";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { SearchAddon } from "@xterm/addon-search";
-import { SerializeAddon } from "@xterm/addon-serialize";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { Terminal } from "@xterm/xterm";
+import { chargerXterm } from "./xterm-charge";
 import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { majMemoireOnglets, proposerRestauration } from "./onglets-restauration";
@@ -435,7 +431,10 @@ function setSessionState(id: number, st: SessionState) {
 }
 
 /** Cree l'onglet et le terminal. La connexion elle-meme est faite par l'appelant. */
-function newSessionShell(label: string) {
+async function newSessionShell(label: string) {
+  // xterm.js vit hors du paquet principal (voir xterm-charge.ts) : déjà là
+  // après le premier terminal, ou déjà en route depuis l'accueil.
+  const { Terminal, FitAddon, WebglAddon, SearchAddon, SerializeAddon, WebLinksAddon } = await chargerXterm();
   const id = state.nextId++;
   const term = new Terminal({
     theme: terminalTheme(),
@@ -608,7 +607,7 @@ function warnIfDeaf(term: Terminal) {
 /** Ouvre un port série du poste dans un onglet de terminal. */
 export async function openSerie(cible: { chemin: string; vitesse: number }) {
   await ensureFontLoaded();
-  const { id, term, session } = newSessionShell(cible.chemin);
+  const { id, term, session } = await newSessionShell(cible.chemin);
   session.serie = true;
   sftpSyncButton();
   warnIfDeaf(term);
@@ -636,7 +635,7 @@ export async function openSerie(cible: { chemin: string; vitesse: number }) {
 /** Ouvre une session sur un hote declare dans ~/.ssh/config. */
 export async function openSession(h: Host) {
   await ensureFontLoaded();
-  const { session } = newSessionShell(h.alias);
+  const { session } = await newSessionShell(h.alias);
   warnIfDeaf(session.term);
   session.reconnect = () => connectByAlias(session, h);
   await connectByAlias(session, h);
@@ -770,7 +769,7 @@ function markClosed(s: Session, why: string) {
 /// l'onglet et se reconnecter depuis la liste pour retrouver le bon nom.
 export async function openManualSession(cible: ManualTarget, alias?: string) {
   await ensureFontLoaded();
-  const { id, term, session } = newSessionShell(alias?.trim() || `${cible.user}@${cible.addr}`);
+  const { id, term, session } = await newSessionShell(alias?.trim() || `${cible.user}@${cible.addr}`);
   warnIfDeaf(term);
   try {
     await connectManual(session, cible);
@@ -1262,3 +1261,6 @@ void loadHosts().then(() => {
 });
 // Prechargement : au moment du clic, la police est deja prete.
 void ensureFontLoaded();
+// Le terminal se charge à l'oisiveté, après l'accueil : le premier onglet ne
+// l'attend pas, et l'accueil ne l'a pas attendu non plus.
+(window.requestIdleCallback ?? ((f: () => void) => setTimeout(f, 0)))(() => void chargerXterm());

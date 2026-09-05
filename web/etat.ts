@@ -1,9 +1,10 @@
 // État partagé du front : hôtes, sessions, bureaux RDP, réglages, thèmes du terminal et l'accès au DOM (`$`).
 
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
-import { SerializeAddon } from "@xterm/addon-serialize";
+// Types seulement : xterm.js se charge à part, au premier terminal (xterm-charge.ts).
+import type { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { SearchAddon } from "@xterm/addon-search";
+import type { SerializeAddon } from "@xterm/addon-serialize";
 import { type Host, type OsInfo } from "./filters";
 
 // ---------- Systeme distant par hote ----------

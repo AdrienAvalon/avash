@@ -38,7 +38,7 @@ défaut n'est pas livrée, même terminée.
 |---|---|
 | Tests | 431 Rust (155 cœur, 43 intégration, 72 interface, 134 processus RDP, 27 serveur RDP de test) · 595 dans les paquets IronRDP et vnc-rs portés · 115 front · 69 scénarios bout en bout dans 35 fichiers, tous en intégration continue, sous Linux et — hors serveurs locaux — sous Windows |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
-| Paquet front | 572 Ko en un seul module |
+| Paquet front | 172 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
 | Version publiée | 0.8.0 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
@@ -314,13 +314,27 @@ sur des mesures de ce qui coûte réellement.
   La latence à la frappe passe sous le cap de 16 ms pour l'écho ; l'image qui
   le montre vient une trame plus tard, à la cadence de l'écran. Rien à
   optimiser sur ce chemin.
-- **Découpage du paquet front.** 642 Ko en un seul module, surtout xterm.js.
-  L'exécution des modules coûte 189 ms au démarrage, soit l'essentiel du
-  délai avant DOMContentLoaded : ce n'est pas négligeable. Mais la sonde ne
-  sépare pas encore la compilation de xterm.js de l'initialisation d'avash
-  (écouteurs, dictionnaires, premier rendu) ; c'est cette part-là qu'un
-  chargement différé du terminal ferait gagner, et elle reste à mesurer avant
-  de découper.
+- **Découpage du paquet front — mesuré puis fait (05/09/2026).** Un seul
+  module de 666 Ko, dont xterm.js 331, l'application 149, le rendu WebGL 113,
+  la recherche 32, l'API Tauri 19, la sérialisation 15 (mesuré par un build
+  à un morceau par paquet). Deux repères `performance.mark` (premier module
+  évalué, fin des imports) ont ensuite séparé les trois parts de l'exécution
+  des modules : lecture et compilation du paquet 283 ms, évaluation 13 ms,
+  initialisation d'avash 7 ms — c'est le poids du paquet qui coûte, pas son
+  exécution. xterm.js et ses extensions sont donc chargés à part
+  (`web/xterm-charge.ts`, imports dynamiques), à l'oisiveté juste après
+  l'accueil ou au premier terminal. Après, cinq lancements, machine au repos :
+
+  | Mesure | Avant | Après |
+  |---|---:|---:|
+  | Exécution des modules (domInteractive → DOMContentLoaded) | 303 ms | 184 ms |
+  | dont lecture et compilation du paquet | 283 ms | 175 ms |
+  | DOMContentLoaded depuis la navigation | 323 ms | 205 ms |
+  | Premier contenu peint | 190 ms | 152 ms |
+  | Frappe → écho reçu (médiane) | 11 ms | 10 ms |
+
+  Le paquet principal fait 172 Ko. Le premier terminal ne paie rien de plus
+  quand le chargement à l'oisiveté l'a précédé, ce qui est le cas courant.
 
 *Principe* : aucune optimisation n'est retenue sans une mesure avant/après.
 

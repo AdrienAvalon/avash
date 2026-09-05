@@ -1,9 +1,9 @@
 // Deux mesures que la feuille de route (axe 3) réclamait avant toute décision :
 //
 // 1. le démarrage du front : ce que coûtent le chargement et l'exécution du
-//    paquet JavaScript (un seul module de 640 Ko, xterm.js pour l'essentiel)
-//    entre la navigation et le premier affichage. C'est le chiffre qui dit si
-//    charger le terminal à la demande vaudrait quelque chose ;
+//    paquet JavaScript entre la navigation et le premier affichage. C'est ce
+//    chiffre qui a décidé de charger xterm.js à part (web/xterm-charge.ts) :
+//    323 ms de DOMContentLoaded avant, 205 après (feuille de route, axe 3) ;
 // 2. la latence à la frappe sur une session SSH réelle (sshd local) : du
 //    `keydown` reçu par la page à l'arrivée de l'écho dans la webview
 //    (événement Tauri `pty-output`), puis à l'image suivante. Tout le chemin

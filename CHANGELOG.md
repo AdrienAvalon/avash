@@ -7,6 +7,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Démarrage plus court : xterm.js chargé à part.** Deux repères de mesure
+  ont montré que l'exécution des modules au démarrage (303 ms de médiane)
+  tenait presque entière dans la lecture et la compilation du paquet
+  (283 ms), l'évaluation (13 ms) et l'initialisation d'avash (7 ms) n'y
+  étant pour rien. xterm.js et ses extensions, la moitié du paquet, sont
+  désormais chargés par imports dynamiques (`web/xterm-charge.ts`), à
+  l'oisiveté juste après l'accueil ou au premier terminal : le paquet
+  principal passe de 666 à 172 Ko, DOMContentLoaded de 323 à 205 ms de
+  médiane, le premier contenu peint de 190 à 152 ms, la latence à la frappe
+  inchangée (mesures dans `docs/feuille-de-route.md`, axe 3).
 - **Sous `AVASH_HOME`, les téléchargements restent sous ce toit.** Le dossier
   de réception (panneau SFTP, fichiers reçus d'un bureau RDP) était celui du
   système même quand la variable isolait le reste : sous Windows, où

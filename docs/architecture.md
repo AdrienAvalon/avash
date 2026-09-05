@@ -409,6 +409,8 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Surfaces et cache du canal graphique | `rdp-sidecar/src/surface.rs` |
 | Magnétoscope (capture et rejeu) | `rdp-sidecar/src/magnetoscope.rs` |
 | Front (cœur : arbre, onglets, terminaux, amorçage) | `web/main.ts` |
+| Front (xterm.js et ses extensions, chargés à part au premier terminal) | `web/xterm-charge.ts` |
+| Front (repère de mesure du démarrage, premier module évalué) | `web/mesure-demarrage.ts` |
 | Front (un module par domaine : `etat`, `sftp`, `rdp`, `tunnels`, `snippets`, `dialogues`…) | `web/*.ts` |
 | Front (logique pure testable) | `web/filters.ts` |
 | Front (réglages persistants) | `web/prefs.ts` |
