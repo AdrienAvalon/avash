@@ -253,8 +253,12 @@ jobs:
       # déjà dans l'API de GitHub, mais un fichier à côté des binaires se
       # vérifie hors ligne (`gh attestation verify --bundle`), et le Scorecard
       # de l'OpenSSF ne comptait aucune provenance sans lui (8/10).
+      # Les valeurs passent par l'environnement, jamais interpolées dans le
+      # script : un nom de tag forgé ne doit pas devenir une commande.
       - name: Joindre le lot de provenance à la release
-        run: cp "${{ steps.provenance.outputs.bundle-path }}" "artefacts/avash-${{ github.ref_name }}.intoto.jsonl"
+        env:
+          LOT: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$LOT" "artefacts/avash-${GITHUB_REF_NAME}.intoto.jsonl"
 
       # La nomenclature est attestée à son tour, liée aux binaires : quelqu'un
       # peut vérifier que ce SBOM est bien celui de ces fichiers, et non un

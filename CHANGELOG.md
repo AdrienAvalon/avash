@@ -15,7 +15,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   lecteur partagé, le son et VeNCrypt, la section Sécurité les gardes qui
   vont avec ; `CONTRIBUTING.md` décrit la suite Windows complète ; les
   descriptions et sujets des dépôts GitHub et GitLab nomment VNC et le port
-  série.
+  série ; deux badges de plus, couverture et mutants, suivent le relevé du
+  workflow qualité.
 
 ## [0.9.0] - 2026-09-05
 

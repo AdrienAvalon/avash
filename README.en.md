@@ -20,6 +20,8 @@ application, which reads your `~/.ssh/config` as it is.
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
 [![Tests](https://img.shields.io/badge/tests-1219%20passing-brightgreen.svg)](docs/qualite.md)
+[![Coverage](https://img.shields.io/badge/coverage-76%25%20of%20lines-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
+[![Mutants](https://img.shields.io/badge/mutants-201%2F264%20caught-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
 <img src="docs/captures/demo.webp" alt="Demo: an SSH terminal, then a Windows 11 desktop, inside avash" width="880">
 

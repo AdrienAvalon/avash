@@ -63,8 +63,11 @@ ce qui n'est pas ici n'existe pas pour eux.
 - Le sidecar RDP est hors espace de travail : `cargo test --workspace` ne le
   voit pas, `check.sh` et la CI le lancent séparément.
 - Les compteurs de tests figurent dans `README.md` et `README.en.md` (badge et
-  section Qualité), `docs/qualite.md` et `docs/feuille-de-route.md` : les
-  mettre à jour quand ils changent.
+  section Qualité), `docs/qualite.md`, `docs/feuille-de-route.md` et le site
+  (`site/index.html`, `site/en/index.html`) : les mettre à jour quand ils
+  changent. Les badges « couverture » et « mutants » des README sont
+  statiques eux aussi : ils suivent le relevé du workflow qualité consigné
+  dans `docs/qualite.md`.
 
 ## Sécurité et secrets
 
