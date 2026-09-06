@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.9.2] - 2026-09-06
+
 - **Un fichier offert au bureau distant juste après en avoir reçu un n'échoue
   plus.** Le canal du presse-papiers met quelques PDU à revenir à l'état prêt
   après un collage ; une offre déposée dans cet intervalle était refusée
@@ -1625,7 +1627,8 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.9.1...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.9.2
 [0.9.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.9.1
 [0.9.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.9.0
 [0.8.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.8.0

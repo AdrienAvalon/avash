@@ -4,7 +4,7 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 5 septembre 2026, après la publication de la version 0.9.1
+Dernière révision : 6 septembre 2026, après la publication de la version 0.9.2
 — un lot de fond (panneau SFTP sur la session du terminal, mot de passe oublié
 dès la connexion, front et processus RDP découpés en modules, chaîne
 d'intégration complète, quarante tests de plus, fuzzing du parseur), après la
@@ -34,7 +34,7 @@ défaut n'est pas livrée, même terminée.
 
 ## Où nous en sommes (mesuré)
 
-| Indicateur | Valeur au 05/09/2026 |
+| Indicateur | Valeur au 06/09/2026 |
 |---|---|
 | Tests | 441 Rust (158 cœur, 47 intégration, 72 interface, 135 processus RDP, 29 serveurs de test) · 597 dans les paquets IronRDP et vnc-rs portés · 124 front · 71 scénarios bout en bout dans 36 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
@@ -42,7 +42,7 @@ défaut n'est pas livrée, même terminée.
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Couverture | 84 % des lignes de l'espace de travail (cœur 91 %, interface 70 %), 81 % du processus RDP, tests unitaires et suite bout en bout confondus sur des binaires instrumentés (`scripts/couverture.sh`, 06/09/2026) ; 201 mutants sur 264 attrapés sur les modules de sécurité |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.9.1 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
+| Version publiée | 0.9.2 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
