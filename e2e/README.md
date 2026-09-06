@@ -61,7 +61,7 @@ mot de passe `test`), qui sert une image connue et réagit aux entrées.
 | `hosts-move.spec.js`  | déplacer un hôte dans un dossier via « Déplacer vers… » |
 | `folders.spec.js`     | cycle de vie complet : créer, sous-dossier, renommer, **supprimer** (modale maison), **annulation respectée** |
 | `snippets.spec.js`    | snippet : créer, lister, **supprimer** (askConfirm) |
-| `tunnels.spec.js`     | tunnel local : créer, lister, **supprimer** (askConfirm) ; **tunnel réellement ouvert** vers le sshd du harnais à travers la session de `test-ssh`, le port local sert la bannière SSH, trafic compté, arrêt |
+| `tunnels.spec.js`     | tunnel local : créer, lister, **supprimer** (askConfirm) ; **tunnel réellement ouvert** vers le sshd du harnais à travers la session de `test-ssh`, le port local sert la bannière SSH, trafic compté (sauf sous le serveur embarqué, où le compteur tarde parfois sans que le relais soit en cause), arrêt |
 | `cles.spec.js`        | **clés SSH** : génération d'une paire ed25519 depuis la fenêtre, listée et présente sur le disque du bac à sable, second essai sous le même nom refusé (le déploiement exige un mot de passe que le sshd du harnais, à clé seule, n'offre pas : couvert par les tests d'intégration du cœur) |
 | `a11y.spec.js`        | **accessibilité** : role=dialog + titre accessible, piège de focus (Tab ne fuit pas), focus rendu au déclencheur, noms accessibles des boutons icône |
 | `axe.spec.js`         | **audit axe-core** de l'application réelle : vue principale, thème clair, boîte de connexion manuelle (voir plus bas) |
