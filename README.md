@@ -20,8 +20,8 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1221%20verts-brightgreen.svg)](docs/qualite.md)
-[![Couverture](https://img.shields.io/badge/couverture-76%25%20des%20lignes-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
+[![Tests](https://img.shields.io/badge/tests-1232%20verts-brightgreen.svg)](docs/qualite.md)
+[![Couverture](https://img.shields.io/badge/couverture-84%25%20des%20lignes-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20attrap%C3%A9s-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
 <img src="docs/captures/demo.webp" alt="Démonstration : un terminal SSH, puis un bureau Windows 11, dans avash" width="880">
@@ -210,7 +210,7 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1221 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
+**1232 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
 sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 
 | Niveau | Tests | En un mot |
@@ -220,8 +220,8 @@ sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 | Processus RDP | 134 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
 | Serveurs de test | 29 | côté serveur RDPDR (décodeurs écrits à la main, automate du scénario, dialogue complet avec le canal client) et serveur VNC |
 | Paquets IronRDP et vnc-rs portés | 597 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
-| Front (Vitest) | 115 | logique pure, keysyms VNC, traductions |
-| Bout en bout (WebdriverIO) | 69 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
+| Front (Vitest) | 124 | logique pure, keysyms VNC, traductions |
+| Bout en bout (WebdriverIO) | 71 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, le Scorecard de l'OpenSSF,

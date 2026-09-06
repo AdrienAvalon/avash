@@ -223,8 +223,13 @@ l'historique, et le **Scorecard** de l'OpenSSF sur la posture du dépôt ;
 actions. Deux outils servent à la main, de temps en temps : `cargo machete`
 (dépendances déclarées mais jamais utilisées — cinq retirées le jour de sa
 première exécution) et `cargo mutants` (force des tests : un mutant qui survit
-est un test qui manque). Il est versionné dans `scripts/hooks/` ; un clone neuf
-l'active une fois pour toutes :
+est un test qui manque). La couverture se mesure par `scripts/couverture.sh` :
+tests unitaires **et** suite bout en bout, sur des binaires instrumentés par
+cargo-llvm-cov, parce que les commandes Tauri et la boucle du processus RDP ne
+sont traversées que par la suite ; le workflow qualité le joue chaque lundi,
+et les chiffres à retenir vont dans `docs/qualite.md`. Le hook de pré-commit
+est versionné dans `scripts/hooks/` ; un clone neuf l'active une fois pour
+toutes :
 
 ```bash
 git config core.hooksPath scripts/hooks

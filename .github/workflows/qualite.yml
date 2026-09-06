@@ -18,17 +18,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Couverture réelle : tests unitaires ET suite bout en bout, sur des binaires
+  # instrumentés (scripts/couverture.sh). Le premier relevé, unitaires seuls
+  # (05/09/2026), donnait 76 % à l'espace de travail : les commandes Tauri
+  # et la boucle du processus RDP, que seule la suite bout en bout traverse,
+  # comptaient pour zéro. Ce job monte donc tout ce que le job E2E de ci.yml
+  # monte : pilotes WebDriver, serveurs de test, sshd du harnais.
   couverture:
-    name: Couverture (cargo-llvm-cov)
+    name: Couverture (unitaires + bout en bout, cargo-llvm-cov)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Dépendances système
+      - name: Dépendances système + WebDriver
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf
+            libayatana-appindicator3-dev librsvg2-dev patchelf \
+            webkit2gtk-driver xvfb socat
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -41,33 +48,36 @@ jobs:
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
           tool: cargo-llvm-cov
-      # avash-ui embarque web/dist à la compilation, et son build-script exige
-      # le binaire du sidecar : un fichier vide suffit hors bundle.
-      - name: Front et sidecar factice
+      - name: tauri-driver
+        run: cargo install tauri-driver --locked
+      # Le front que le binaire embarque, la suite, et les serveurs de test
+      # (non instrumentés : ce sont des serveurs, pas le code mesuré). Le
+      # certificat du serveur RDP de test n'est pas versionné.
+      - name: Front, suite bout en bout, serveurs de test
         run: |
           (cd web && npm ci && npx vite build)
-          mkdir -p crates/avash-ui/binaries
-          : > crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
-      - name: Couverture de l'espace de travail
+          (cd e2e && npm ci)
+          cargo build --release --manifest-path test-rdp-server/Cargo.toml
+          openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost" \
+            -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
+          cargo build --release --manifest-path test-vnc-server/Cargo.toml
+      - name: Couverture (binaires instrumentés, unitaires, suite bout en bout)
+        run: scripts/couverture.sh couverture
+      - name: Couverture du front (Vitest)
+        working-directory: web
+        run: npx vitest run --coverage --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=../couverture/front --silent | tee ../couverture/front.txt
+      - name: Résumé
         run: |
-          cargo llvm-cov --workspace --html --output-dir couverture/espace-de-travail
-          {
-            echo "## Couverture : espace de travail (cœur, interface)"
-            echo '```'
-            cargo llvm-cov report --summary-only
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: Couverture du processus RDP
-        working-directory: rdp-sidecar
-        run: |
-          cargo llvm-cov --html --output-dir ../couverture/processus-rdp
-          {
-            echo "## Couverture : processus RDP"
-            echo '```'
-            cargo llvm-cov report --summary-only
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          for f in espace-de-travail processus-rdp front; do
+            {
+              echo "## Couverture : $f"
+              echo '```'
+              cat "couverture/$f.txt"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
         with:
           name: couverture
           path: couverture

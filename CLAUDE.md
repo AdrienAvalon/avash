@@ -62,6 +62,13 @@ ce qui n'est pas ici n'existe pas pour eux.
   `fuzz/seeds/`. Quatre défauts ont été trouvés en moins d'une minute chacun.
 - Le sidecar RDP est hors espace de travail : `cargo test --workspace` ne le
   voit pas, `check.sh` et la CI le lancent séparément.
+- Couverture : `scripts/couverture.sh` mesure tests unitaires **et** suite
+  bout en bout sur des binaires instrumentés (le workflow qualité l'appelle).
+  Les deux `main` portent un fil `cfg(coverage)` qui réécrit le profil chaque
+  seconde, parce que le pilote WebDriver tue l'application sans sortie propre ;
+  ce cfg n'est posé que par cargo-llvm-cov, jamais dans un binaire publié.
+  Après un passage local, **reconstruire en release** : le script remplace
+  `target/release/avash-ui` et le sidecar par leurs versions instrumentées.
 - Les compteurs de tests figurent dans `README.md` et `README.en.md` (badge et
   section Qualité), `docs/qualite.md`, `docs/feuille-de-route.md` et le site
   (`site/index.html`, `site/en/index.html`) : les mettre à jour quand ils

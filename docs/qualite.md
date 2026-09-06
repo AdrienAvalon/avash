@@ -6,7 +6,7 @@ preuves (juge d'accessibilité extérieur, rejeu d'enregistrements réels,
 conformité RDP contre de vrais serveurs).
 
 
-**1221 tests** couvrent le projet, tous exécutés à chaque commit :
+**1232 tests** couvrent le projet, tous exécutés à chaque commit :
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
@@ -16,8 +16,8 @@ conformité RDP contre de vrais serveurs).
 | Processus RDP | 134 | lecteur partagé RDPDR (confinement des chemins, aller-retour créer-écrire-relire, énumération par motif DOS, suppression et renommage, volume, réponse par le fil), VeNCrypt (montage TLS, clé d'épinglage), son du distant (formats PCM, message, relais), fichiers par le presse-papiers (réception par morceaux dans le désordre, refus, réponse courte, offre et parcours des dossiers), session VNC (entrées, masque de boutons, copie de rectangles), empreinte du serveur, fichier des empreintes, écriture atomique, plafond de résolution, négociation, identifiants et domaine, format binaire des trames, nouvelle taille d'écran sans image vidée, configuration après redirection, origine WebSocket, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique (surfaces bornées, image refusée hors surface, cache, ClearCodec, RemoteFX Progressive : décodeur SRL, paliers d'affinage, tuiles en différence, tuile hors surface sans état), magnétoscope, rejeu d'enregistrements réels (icônes NSCodec non noires), fuzzing par mutation sur cinq enregistrements |
 | Serveurs de test | 29 | serveur VNC (2) et côté serveur RDPDR (`test-rdp-server/src/rdpdr/`, 27) : décodeurs des PDU client écrits à la main (aller-retour contre les encodeurs du paquet, préfixes tronqués sans panique), automate du scénario contre des complétions simulées, dialogue complet avec le canal client d'`ironrdp-rdpdr` sur un dossier temporaire |
 | Paquets IronRDP et vnc-rs portés | 597 | nos correctifs — remplissage des tuiles, bande passante, redirection de serveur, capacités précoces, **ordre des champs de ClearCodec**, RLEX à une couleur, **sous-codec NSCodec**, et pour le client VNC un serveur hostile scénarisé (allocations bornées, résultat d'authentification, rectangle hors cadre, refus sans raison) — et les tests amont de `ironrdp-pdu` et `ironrdp-graphics`, qui ne s'exécutaient nulle part (voir [rdp-sidecar/vendor](../rdp-sidecar/vendor/README.md)) |
-| Front (Vitest) | 115 | logique pure : arborescence, chemins de dossiers, filtres, scancodes, keysyms VNC, mappage souris, réglages, collage sûr, traductions (couverture des deux dictionnaires, variables, page) |
-| Bout en bout (WebdriverIO) | 69 | l'application réelle : connexions SSH, RDP et VNC effectives, SFTP, enregistrement asciicast, santé des hôtes, presse-papiers RDP, dossiers, import PuTTY, langue, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
+| Front (Vitest) | 124 | logique pure : arborescence, chemins de dossiers, filtres, scancodes, keysyms VNC, mappage souris, réglages, collage sûr, traductions (couverture des deux dictionnaires, variables, page) |
+| Bout en bout (WebdriverIO) | 71 | l'application réelle : connexions SSH, RDP et VNC effectives, SFTP, enregistrement asciicast, santé des hôtes, presse-papiers RDP, dossiers, import PuTTY, langue, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
 qui ne voient pas le même code — ESLint typé, stylelint, knip (code mort),
@@ -100,19 +100,51 @@ scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
 
 `.github/workflows/qualite.yml` (chaque lundi, ou à la demande) mesure ce que
 les tests exercent réellement, sans bloquer les poussées : la couverture par
-`cargo-llvm-cov` (rapports HTML en artefact, résumé dans le journal du
+`scripts/couverture.sh` (rapports HTML en artefact, résumé dans le journal du
 passage), puis `cargo-mutants` sur les modules de sécurité du cœur (`ssh.rs`,
 `keys.rs`, `secrets.rs`, `lib.rs`), qui altère le code un point à la fois et
-compte les mutants que les tests ne voient pas. Relevé du 05/09/2026 :
+compte les mutants que les tests ne voient pas.
 
-| Périmètre | Fonctions | Lignes | Régions |
-|---|---:|---:|---:|
-| Espace de travail (cœur et interface) | 66,4 % (776/1168) | 76,4 % (6407/8392) | 76,5 % |
-| Processus RDP | 75,0 % (467/623) | 71,2 % (4463/6270) | 71,5 % |
+**Comment la couverture est mesurée.** Tests unitaires **et** suite bout en
+bout, ensemble : `cargo-llvm-cov` seul ne voit que les tests unitaires, et
+les commandes Tauri (qui exigent une fenêtre) comme la boucle de session du
+processus RDP (qui exige un serveur) ne sont traversées que par les 71
+scénarios sur la vraie application. Le script construit l'application et le
+processus RDP instrumentés (en release, celui que la suite pilote, `strip`
+désactivé pour garder la table de couverture), joue les tests unitaires puis
+la suite dessus, et fusionne les profils. Un détail a compté : le pilote
+WebDriver tue l'application sans sortie propre, et le profil ne s'écrit qu'à
+la sortie ; sous `cfg(coverage)`, posé par cargo-llvm-cov seul, les deux
+`main` réécrivent donc le profil chaque seconde. Le front se mesure à part,
+par Vitest, sur les modules de logique pure qui ont des tests (le reste du
+front est du DOM, exercé par la suite).
 
-Ce que ces chiffres disent : l'essentiel du cœur est traversé par les tests,
-et la part non couverte de l'interface tient surtout aux commandes Tauri qui
-exigent une fenêtre.
+Relevé du 06/09/2026, et ce que la seule mesure unitaire du 05/09 donnait :
+
+| Périmètre | Lignes (unitaires + bout en bout) | Lignes (unitaires seuls) | Fonctions | Régions |
+|---|---:|---:|---:|---:|
+| Espace de travail (cœur et interface) | **84,3 %** (7129/8455) | 77,6 % | 72,8 % | 84,1 % |
+| dont cœur (`crates/avash`) | **91,3 %** (5254/5756) | 91,5 % | | |
+| dont interface Tauri (`crates/avash-ui`) | **69,5 %** (1875/2699) | 48,0 % | | |
+| Processus RDP | **81,2 %** (5098/6280) | 70,9 % | 81,9 % | 81,2 % |
+| Front (Vitest, modules testés) | **99,3 %** | 84,1 % | 95,8 % | branches 95,1 % |
+
+Ce que ces chiffres disent : le cœur, où vit la logique, est traversé à plus
+de neuf lignes sur dix ; l'interface l'est aux deux tiers, et ce qui reste
+est nommé. Deux trous réels de la suite ont été comblés ce jour-là, révélés
+par la mesure : aucun scénario ne générait de clé SSH, aucun ne démarrait un
+tunnel (le scénario ne faisait qu'en créer la définition). Ce qui reste
+découvert, et pourquoi : le déploiement d'une clé (`key_deploy`) et la
+mémorisation d'un mot de passe exigent une authentification par mot de passe
+et un trousseau que le sshd du harnais, non root et à clé seule, et
+l'exécuteur sans session de bureau n'offrent pas (le cœur les teste contre
+son propre serveur) ; l'envoi et la réception de fichiers par le panneau SFTP
+passent par le sélecteur de fichiers natif, que WebDriver ne pilote pas (le
+cœur teste les transferts contre un vrai sshd) ; dans le processus RDP, les
+codecs qu'aucun serveur de test ne produit (`egfx.rs`, une partie de
+`session.rs`) sont exercés par le job de conformité contre de vrais xrdp, non
+mesuré. Viser 95 % sur ces lignes-là demanderait des simulacres écrits pour le
+chiffre ; le score de mutation ci-dessous dit mieux si les tests mordent.
 
 Mutations, même passage : 264 mutants sur les quatre modules, en deux heures ;
 179 attrapés, 65 manqués, 19 non viables, 1 délai. Les survivants les plus

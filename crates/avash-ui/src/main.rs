@@ -1,6 +1,29 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+/// Sous cargo-llvm-cov (`cfg(coverage)`, posé par lui seul), le profil
+/// d'exécution est réécrit toutes les secondes. Le profil ne s'écrit
+/// normalement qu'à la sortie du processus ; or le pilote WebDriver de la
+/// suite bout en bout arrête l'application sans la laisser sortir, et cette
+/// suite est le seul test à traverser les commandes Tauri. Sans ce fil, leur
+/// couverture resterait à zéro (scripts/couverture.sh). Jamais dans un
+/// binaire publié.
+#[cfg(coverage)]
+fn ecrire_le_profil_en_continu() {
+    extern "C" {
+        fn __llvm_profile_write_file() -> i32;
+    }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        // SAFETY : fonction du runtime de profilage, liée dès que le binaire
+        // est instrumenté ; sans argument ni état partagé avec nous.
+        let _ = unsafe { __llvm_profile_write_file() };
+    });
+}
+
 fn main() {
+    #[cfg(coverage)]
+    ecrire_le_profil_en_continu();
+
     // Pilotage WebDriver (suite bout en bout) : tauri-driver le signale par
     // TAURI_WEBVIEW_AUTOMATION=true, que Tauri lit lui-même pour ouvrir
     // l'automatisation de la webview. Les deux durcissements ci-dessous en

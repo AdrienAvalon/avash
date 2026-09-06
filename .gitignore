@@ -41,3 +41,8 @@ build-flatpak/
 packaging/aur/avash/*.tar.gz
 packaging/aur/avash/src/
 packaging/aur/avash/pkg/
+
+# Rapports de scripts/couverture.sh (HTML et résumés), régénérés à chaque passage
+couverture/
+# Profils bruts de couverture écrits par un binaire instrumenté lancé hors du script
+*.profraw

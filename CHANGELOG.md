@@ -7,6 +7,24 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **La couverture mesurée sur ce que les tests exercent vraiment.** Le relevé
+  ne comptait que les tests unitaires : les commandes Tauri et la boucle du
+  processus RDP, que seule la suite bout en bout traverse, valaient zéro, et
+  l'espace de travail affichait 76 % pour un cœur à 91 %. `scripts/couverture.sh`
+  construit l'application et le processus RDP instrumentés, joue les tests
+  unitaires puis la suite dessus, et fusionne : 84 % de l'espace de travail
+  (interface 48 → 70 %), 81 % du processus RDP (71 → 81 %). Les deux `main`
+  réécrivent leur profil chaque seconde sous `cfg(coverage)`, parce que le
+  pilote WebDriver tue l'application sans sortie propre ; ce cfg n'existe que
+  sous cargo-llvm-cov. Le workflow qualité joue ce script et mesure aussi le
+  front.
+- **Deux trous de la suite bout en bout comblés, trouvés par la mesure.** Rien
+  ne générait de clé SSH depuis la fenêtre « Mes clés SSH », et le scénario des
+  tunnels ne faisait qu'en créer la définition : un tunnel est désormais
+  réellement ouvert vers le sshd du harnais, le port local sert la bannière
+  SSH, le trafic est compté, puis il s'arrête. Le front gagne neuf tests
+  (réglages sous stockage refusé, son du bureau, politique de lecture du
+  lecteur audio) : ses modules de logique pure passent de 84 à 99 %.
 - **Avash est sur winget.** `winget install AdrienCros.Avash` installe la
   0.9.1 : la première soumission au dépôt communautaire de Microsoft, mise à
   jour sur place de la 0.7.2 à la 0.9.1 pendant qu'elle attendait, a été

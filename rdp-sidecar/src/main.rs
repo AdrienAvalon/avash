@@ -61,8 +61,31 @@ mod trames;
 mod vnc;
 mod vnc_tls;
 
+/// Sous cargo-llvm-cov (`cfg(coverage)`, posé par lui seul), le profil
+/// d'exécution est réécrit toutes les secondes. Le profil ne s'écrit
+/// normalement qu'à la sortie du processus ; or la suite bout en bout, seul
+/// test à traverser la boucle de session, arrête ce processus quand
+/// l'application meurt, souvent sans sortie propre. Sans ce fil, cette
+/// couverture-là resterait à zéro (scripts/couverture.sh). Jamais dans un
+/// binaire publié.
+#[cfg(coverage)]
+fn ecrire_le_profil_en_continu() {
+    extern "C" {
+        fn __llvm_profile_write_file() -> i32;
+    }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        // SAFETY : fonction du runtime de profilage, liée dès que le binaire
+        // est instrumenté ; sans argument ni état partagé avec nous.
+        let _ = unsafe { __llvm_profile_write_file() };
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    #[cfg(coverage)]
+    ecrire_le_profil_en_continu();
+
     // Traces de diagnostic, sur une variable À NOUS et non sur RUST_LOG : beaucoup
     // l'exportent globalement, et ces traces contiennent le mot de passe en clair
     // — la requête CredSSP le porte encodé en UTF-16, lisible tel quel. Ce qui a

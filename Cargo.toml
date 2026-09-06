@@ -16,6 +16,11 @@ repository = "https://github.com/AdrienAvalon/avash"
 # repertoire target est partage au lieu d'etre duplique par crate.
 # Qualite de code : le mode pedant de clippy est le socle. Les exceptions
 # ci-dessous sont justifiees, pas des renoncements.
+# `cfg(coverage)` n'est posé que par cargo-llvm-cov (scripts/couverture.sh) :
+# le déclarer évite l'avertissement « cfg inattendu » partout ailleurs.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
+
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # Les commandes Tauri recoivent leurs arguments par valeur (deserialisation
