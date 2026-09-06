@@ -49,7 +49,15 @@ describe("Tunnels — démarrer un tunnel local vers le sshd du harnais", () => 
     await $("#tunnels-btn").click();
     await $("#tunnels-modal").waitForDisplayed({ timeout: 5000 });
     await browser.execute(() => document.getElementById("tunnel-block").setAttribute("open", ""));
-    await $("#t-alias").selectByAttribute("value", "test-ssh");
+    // Le choix de l'hôte se pose par le DOM : sous le serveur WebDriver
+    // embarqué (Windows), le clic sur une option n'atteint pas le formulaire,
+    // et le tunnel partait vers le premier hôte de la liste, injoignable.
+    await browser.execute(() => {
+      const s = document.getElementById("t-alias");
+      s.value = "test-ssh";
+      s.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(await $("#t-alias").getValue()).toBe("test-ssh");
     await $("#t-bind").setValue(String(PORT_LOCAL));
     await $("#t-host").setValue("127.0.0.1");
     await $("#t-port").setValue(String(SSH_PORT));
@@ -60,7 +68,11 @@ describe("Tunnels — démarrer un tunnel local vers le sshd du harnais", () => 
     // Démarrer : « test-ssh » s'authentifie par clé, aucun mot de passe demandé.
     await (await findRow()).$('[data-act="toggle"]').click();
     await browser.waitUntil(async () => ((await (await findRow())?.getAttribute("class")) ?? "").includes("alive"),
-      { timeout: 20000, timeoutMsg: "le tunnel n'est pas passé « vivant »" });
+      { timeout: 20000, timeoutMsg: "le tunnel n'est pas passé « vivant »" }).catch(async (e) => {
+        // L'erreur que la ligne affiche vaut mieux qu'un délai muet.
+        const erreur = await (await findRow())?.$(".terr").getProperty("textContent").catch(() => "");
+        throw new Error(`${e.message} ${erreur ? `(la ligne dit : ${erreur})` : ""}`);
+      });
 
     // Le port local est bien servi par le sshd, à travers la session.
     expect(await banniere(PORT_LOCAL)).toMatch(/^SSH-2\.0-/);

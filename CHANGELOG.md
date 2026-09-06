@@ -7,6 +7,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+- **Un fichier offert au bureau distant juste après en avoir reçu un n'échoue
+  plus.** Le canal du presse-papiers met quelques PDU à revenir à l'état prêt
+  après un collage ; une offre déposée dans cet intervalle était refusée
+  (« clipboard channel is not in Ready state »), vu en intégration continue
+  sur le scénario des fichiers RDP. L'offre attend désormais le canal, jusqu'à
+  trois secondes, et l'accusé part quand elle est annoncée ; passé le délai,
+  l'erreur est dite.
 - **La couverture mesurée sur ce que les tests exercent vraiment.** Le relevé
   ne comptait que les tests unitaires : les commandes Tauri et la boucle du
   processus RDP, que seule la suite bout en bout traverse, valaient zéro, et

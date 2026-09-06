@@ -228,6 +228,10 @@ pub(crate) async fn executer(
         None;
     let mut reception: Option<Reception> = None;
     let mut offre: Option<std::sync::Arc<Offre>> = None;
+    // Une offre déposée pendant que le canal du presse-papiers n'était pas
+    // prêt (juste après un collage, le temps que la bibliothèque termine son
+    // échange) : retentée au tic suivant, jusqu'à DELAI_CANAL_PRET.
+    let mut offre_en_attente: Option<(std::sync::Arc<Offre>, Instant)> = None;
     let mut offres_verrouillees: std::collections::HashMap<u32, std::sync::Arc<Offre>> =
         std::collections::HashMap::new();
     // Chaque réception prend ses identifiants de flux dans une plage à elle :
@@ -455,13 +459,18 @@ pub(crate) async fn executer(
                                         );
                                         offre = Some(o);
                                     }
-                                    Some(Err(e)) => envoyer_json!(
-                                        18u8,
-                                        serde_json::json!({ "sens": "offre", "fichiers": 0, "octets": 0, "erreurs": [e.to_string()] })
-                                    ),
+                                    // Le canal n'est pas encore revenu à l'état prêt :
+                                    // c'est le cas d'un fichier offert dans la foulée
+                                    // d'une réception (vu en CI le 06/09/2026, « clipboard
+                                    // channel is not in Ready state »). L'offre attend le
+                                    // canal au lieu d'échouer ; l'accusé partira alors.
+                                    Some(Err(e)) if canal_pas_pret(&e) => {
+                                        offre_en_attente = Some((o, Instant::now()));
+                                    }
+                                    Some(Err(e)) => envoyer_json!(18u8, accuse_offre_echec(&e.to_string())),
                                     None => envoyer_json!(
                                         18u8,
-                                        serde_json::json!({ "sens": "offre", "fichiers": 0, "octets": 0, "erreurs": ["le canal du presse-papiers n'est pas ouvert"] })
+                                        accuse_offre_echec("le canal du presse-papiers n'est pas ouvert")
                                     ),
                                 }
                             }
@@ -523,6 +532,37 @@ pub(crate) async fn executer(
                 }
             }
             _ = tick.tick() => {
+                // Une offre de fichiers qui attendait que le canal du
+                // presse-papiers soit prêt : ce sont les PDU reçus entre deux
+                // tics qui l'y ramènent. Passé le délai, l'erreur est dite.
+                if let Some((o, depuis)) = offre_en_attente.take() {
+                    let msgs = active
+                        .get_svc_processor_mut::<CliprdrClient>()
+                        .map(|c| c.initiate_file_copy(o.descripteurs()));
+                    match msgs {
+                        Some(Ok(msgs)) => {
+                            send_svc!(msgs);
+                            envoyer_json!(
+                                18u8,
+                                serde_json::json!({
+                                    "sens": "offre",
+                                    "fichiers": o.fichiers.len(),
+                                    "octets": o.taille_totale(),
+                                    "erreurs": Vec::<String>::new(),
+                                })
+                            );
+                            offre = Some(o);
+                        }
+                        Some(Err(e)) if canal_pas_pret(&e) && depuis.elapsed() < DELAI_CANAL_PRET => {
+                            offre_en_attente = Some((o, depuis));
+                        }
+                        Some(Err(e)) => envoyer_json!(18u8, accuse_offre_echec(&e.to_string())),
+                        None => envoyer_json!(
+                            18u8,
+                            accuse_offre_echec("le canal du presse-papiers n'est pas ouvert")
+                        ),
+                    }
+                }
                 // Annonce des capacités graphiques, une fois le canal ouvert et
                 // dans une écriture qui lui est propre (voir `egfx::start`).
                 // Deux issues selon ce que le serveur nous a laissé faire. Si
@@ -762,6 +802,24 @@ pub(crate) async fn executer(
 /// L'annonce de capacités graphiques à écrire, s'il y en a une.
 ///
 /// Rendue prête à l'emploi : le PDU est déjà encadré pour le canal statique.
+/// Combien de temps une offre de fichiers attend que le canal du
+/// presse-papiers revienne à l'état prêt. Un échange de collage se termine en
+/// quelques PDU ; trois secondes couvrent un serveur lent sans faire croire à
+/// l'utilisateur que sa copie est partie.
+const DELAI_CANAL_PRET: Duration = Duration::from_secs(3);
+
+/// « clipboard channel is not in Ready state » : la bibliothèque ne dit son
+/// état que par ce message (l'énumération est privée). C'est le seul refus
+/// qui vaille une attente ; les autres sont définitifs.
+fn canal_pas_pret(e: &impl std::fmt::Display) -> bool {
+    e.to_string().contains("not in Ready state")
+}
+
+/// L'accusé d'une offre qui n'a pas abouti, tel que le front l'attend.
+fn accuse_offre_echec(erreur: &str) -> serde_json::Value {
+    serde_json::json!({ "sens": "offre", "fichiers": 0, "octets": 0, "erreurs": [erreur] })
+}
+
 pub(crate) fn annonce_egfx(
     active: &mut ActiveStage,
     g: &Graphique<'_>,
@@ -773,4 +831,30 @@ pub(crate) fn annonce_egfx(
         .process_svc_processor_messages(egfx::lot_dvc(id, pdu)?)
         .context("encodage egfx")?;
     Ok(Some((id, bytes)))
+}
+
+#[cfg(test)]
+mod tests_offre_en_attente {
+    use super::*;
+
+    /// Le refus « pas prêt » de la bibliothèque est reconnu, et lui seul.
+    /// Régression vue en CI le 06/09/2026 : une offre déposée dans la foulée
+    /// d'une réception échouait au lieu d'attendre le canal.
+    #[test]
+    fn seul_le_refus_pas_pret_vaut_une_attente() {
+        assert!(canal_pas_pret(
+            &"[initiate_file_copy] other (clipboard channel is not in Ready state)"
+        ));
+        assert!(!canal_pas_pret(
+            &"[initiate_file_copy] other (file list too long)"
+        ));
+        assert!(!canal_pas_pret(&""));
+        let accuse = accuse_offre_echec("le canal du presse-papiers n'est pas ouvert");
+        assert_eq!(accuse["sens"], "offre");
+        assert_eq!(accuse["fichiers"], 0);
+        assert_eq!(
+            accuse["erreurs"][0],
+            "le canal du presse-papiers n'est pas ouvert"
+        );
+    }
 }
