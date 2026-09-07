@@ -325,6 +325,7 @@ dependencies = [
  "keyring",
  "libc",
  "log",
+ "pageant",
  "rand",
  "russh",
  "russh-sftp",

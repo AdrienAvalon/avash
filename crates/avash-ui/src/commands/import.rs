@@ -21,6 +21,10 @@ pub struct CandidatImport {
 pub struct BureauCandidat {
     #[serde(flatten)]
     pub bureau: avash::import::BureauImporte,
+    /// Défauts qui empêchent d'écrire ce bureau (utilisateur RDP vide, adresse à
+    /// espace) : le signet reste montrable mais l'import le sautera. Porter le
+    /// défaut ici évite que le front le propose coché pour rien.
+    pub remarques: Vec<String>,
     /// Nom d'un bureau déjà enregistré qui vise le même serveur.
     pub doublon: Option<String>,
 }
@@ -100,7 +104,12 @@ pub fn import_scan(chemin: Option<String>) -> Result<BilanImport, String> {
             (vec![lecture], vec![c.to_string()])
         }
     };
-    let existants = avash::parse_ssh_config().unwrap_or_default();
+    // Trouvé par l'audit du 7 septembre 2026 : un `unwrap_or_default()` ici
+    // importait à l'aveugle quand `~/.ssh/config` était illisible (non UTF-8) :
+    // `pris` partait vide, donc `alias_libre` ne renommait rien et proposait des
+    // alias entrant en collision avec ceux du fichier illisible. On propage
+    // désormais l'erreur pour la dire à l'utilisateur avant tout import.
+    let existants = avash::parse_ssh_config().map_err(|e| format!("{e:#}"))?;
     let bureaux_existants = avash::rdphost::load_hosts().unwrap_or_default();
     let mut pris: Vec<String> = existants.iter().map(|h| h.alias.clone()).collect();
     let mut candidats = Vec::new();
@@ -115,7 +124,20 @@ pub fn import_scan(chemin: Option<String>) -> Result<BilanImport, String> {
                     e.host.eq_ignore_ascii_case(&b.host) && e.port == b.port && e.user == b.user
                 })
                 .map(|e| e.name.clone());
-            bureaux.push(BureauCandidat { bureau: b, doublon });
+            // Le même contrôle que l'écriture (`RdpHost::validate`) : un signet
+            // sans utilisateur ou à adresse invalide serait sauté à l'import,
+            // autant le signaler au scan plutôt que de le proposer coché.
+            let remarques =
+                avash::rdphost::RdpHost::new(&b.name, &b.host, b.port, &b.user, 1280, 800)
+                    .validate()
+                    .err()
+                    .map(|e| vec![format!("{e:#}")])
+                    .unwrap_or_default();
+            bureaux.push(BureauCandidat {
+                bureau: b,
+                remarques,
+                doublon,
+            });
         }
         for s in lecture.sessions {
             let mut host = s.host;
@@ -157,47 +179,85 @@ pub fn import_apply(
     hosts: Vec<HoteAImporter>,
     bureaux: Vec<avash::import::BureauImporte>,
 ) -> Result<BilanApply, String> {
+    // Trouvé par l'audit du 7 septembre 2026 : comme `import_scan`, un
+    // `unwrap_or_default()` faisait partir `pris` vide sur un `~/.ssh/config`
+    // illisible (non UTF-8), si bien que `alias_libre` ne détectait plus les
+    // collisions et que `append_host` collait les blocs à un fichier cru vide.
+    // On refuse l'import plutôt que d'abîmer la configuration.
     let mut pris: Vec<String> = avash::parse_ssh_config()
-        .unwrap_or_default()
+        .map_err(|e| format!("{e:#}"))?
         .into_iter()
         .map(|h| h.alias)
         .collect();
     let mut bilan = BilanApply::default();
     let dossier_cles = avash::repertoire_personnel().map(|h| h.join(".ssh"));
+    // `puttygen` ne dépend pas de l'hôte : le sonder une seule fois, pas à
+    // chaque tour de boucle (l'audit du 7 septembre 2026 relevait un
+    // `Command::new("puttygen")` lancé par hôte importé).
+    let puttygen = avash::import::puttygen_disponible();
+    // Trouvé par l'audit du 7 septembre 2026 : dix sessions partageant la même
+    // `.ppk` (le cas courant, une clé pour tous les serveurs) ne convertissaient
+    // la clé que pour le premier hôte. `convertir_ppk` refuse d'écraser le
+    // fichier déjà écrit, donc les hôtes suivants tombaient en avertissement et
+    // étaient enregistrés sans `IdentityFile`. On mémorise ici la conversion et
+    // on réutilise la clé pour tout hôte suivant qui cite la même `.ppk`. La
+    // table est clée sur le chemin **source** de la `.ppk`, jamais sur la tige :
+    // deux `.ppk` distinctes de même nom (`C:\a\cle.ppk`, `C:\b\cle.ppk`) ne
+    // doivent surtout pas se voir attribuer la même clé.
+    let mut deja_converties: std::collections::HashMap<std::path::PathBuf, std::path::PathBuf> =
+        std::collections::HashMap::new();
     for HoteAImporter { mut host, ppk } in hosts {
         host.alias =
             avash::import::alias_libre(&avash::import::alias_depuis_nom(&host.alias), &pris);
         if let Some(ppk) = ppk.filter(|p| !p.trim().is_empty()) {
-            match dossier_cles.as_deref() {
-                Some(dir) if avash::import::puttygen_disponible() => {
-                    match avash::import::convertir_ppk(std::path::Path::new(&ppk), dir) {
+            let source = std::path::PathBuf::from(&ppk);
+            if let Some(cle) = deja_converties.get(&source) {
+                host.identity_file = Some(cle.display().to_string());
+            } else {
+                match dossier_cles.as_deref() {
+                    Some(dir) if puttygen => match avash::import::convertir_ppk(&source, dir) {
                         Ok(cle) => {
                             host.identity_file = Some(cle.display().to_string());
+                            deja_converties.insert(source, cle);
                             bilan.cles_converties += 1;
                         }
                         Err(e) => bilan
                             .avertissements
                             .push(format!("{} : clé non convertie ({e:#})", host.alias)),
-                    }
+                    },
+                    _ => bilan.avertissements.push(format!(
+                        "{} : clé PuTTY non reprise (puttygen absent)",
+                        host.alias
+                    )),
                 }
-                _ => bilan.avertissements.push(format!(
-                    "{} : clé PuTTY non reprise (puttygen absent)",
-                    host.alias
-                )),
             }
         }
-        avash::append_host(&host).map_err(|e| format!("{} : {e:#}", host.alias))?;
-        pris.push(host.alias);
-        bilan.hotes += 1;
+        // Trouvé par l'audit du 7 septembre 2026 : un `?` ici interrompait
+        // l'import APRÈS avoir écrit les hôtes précédents (config non
+        // inscriptible, collision d'alias, saut de ligne refusé). Le compte
+        // était perdu, le front affichait « interrompu » et un second essai
+        // renommait en `-2` les hôtes déjà écrits. Un échec devient un
+        // avertissement et la boucle continue.
+        match avash::append_host(&host) {
+            Ok(()) => {
+                pris.push(host.alias);
+                bilan.hotes += 1;
+            }
+            Err(e) => bilan.avertissements.push(format!("{} : {e:#}", host.alias)),
+        }
     }
     let chemin_bureaux = avash::rdphost::hosts_path();
     for b in bureaux {
         let mut h = avash::rdphost::RdpHost::new(&b.name, &b.host, b.port, &b.user, 1280, 800);
         h.folder = b.folder;
-        h.validate().map_err(|e| format!("{} : {e:#}", b.name))?;
-        avash::rdphost::upsert_host_in(&chemin_bureaux, h)
-            .map_err(|e| format!("{} : {e:#}", b.name))?;
-        bilan.bureaux += 1;
+        // Même règle que pour les hôtes SSH : un bureau invalide (utilisateur
+        // RDP vide, adresse à espace) ou une écriture ratée devient un
+        // avertissement, jamais une interruption après une première écriture.
+        // `upsert_host_in` revalide, ce qui couvre les deux cas d'un seul geste.
+        match avash::rdphost::upsert_host_in(&chemin_bureaux, h) {
+            Ok(_) => bilan.bureaux += 1,
+            Err(e) => bilan.avertissements.push(format!("{} : {e:#}", b.name)),
+        }
     }
     Ok(bilan)
 }
@@ -239,6 +299,36 @@ mod tests_import {
         assert!(db.doublon.is_none());
         assert_eq!(bilan.consultes, vec![dir.display().to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un `~/.ssh/config` illisible
+    /// (non UTF-8) faisait partir `pris` vide, si bien qu'`import_apply`
+    /// écrasait les collisions d'alias et collait les blocs à un fichier cru
+    /// vide. L'import doit refuser proprement et ne rien écrire.
+    #[test]
+    fn apply_refuse_une_config_non_lisible_et_n_ecrit_rien() {
+        let _g = with_ssh_config("");
+        let path = avash::repertoire_personnel()
+            .unwrap()
+            .join(".ssh")
+            .join("config");
+        let octets = b"# R\xe9seau\nHost a\n    IdentityFile ~/.ssh/k";
+        std::fs::write(&path, octets).unwrap();
+        let hotes = vec![HoteAImporter {
+            host: avash::SshHost {
+                alias: "b".into(),
+                hostname: Some("10.0.0.2".into()),
+                ..Default::default()
+            },
+            ppk: None,
+        }];
+        let e = import_apply(hotes, Vec::new()).unwrap_err();
+        assert!(e.contains("Impossible de lire"), "message inattendu : {e}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            octets,
+            "le fichier illisible a été modifié par un import qui aurait dû refuser"
+        );
     }
 
     /// L'écriture passe par `append_host` : les hôtes se relisent, avec leur
@@ -300,6 +390,268 @@ mod tests_import {
         assert_eq!(aliases, vec!["db", "db-2", "web-acme"]);
         assert_eq!(relus[1].folder, "Clients/Acme");
         assert_eq!(relus[2].port, Some(2222));
+    }
+
+    /// Génère une vraie `.ppk` sans phrase de passe dans `dir`. Rend son chemin.
+    #[cfg(unix)]
+    fn ppk_de_test(dir: &std::path::Path, nom: &str) -> String {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(nom);
+        // Sans `--new-passphrase`, puttygen demande une phrase au terminal ; un
+        // fichier vide vaut « aucune » (même astuce que le test cœur).
+        let gen = std::process::Command::new("puttygen")
+            .args(["-t", "ed25519", "-q", "--new-passphrase", "/dev/null", "-o"])
+            .arg(&p)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(gen.success());
+        p.display().to_string()
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : dix sessions partageant la même
+    /// `.ppk` (une clé pour tous les serveurs) ne voyaient la clé convertie que
+    /// pour le premier hôte, les autres étant écrits sans `IdentityFile` avec un
+    /// avertissement chacun. La clé convertie est désormais réutilisée.
+    #[cfg(unix)]
+    #[test]
+    fn une_meme_ppk_partagee_est_convertie_une_fois_et_reutilisee() {
+        if !avash::import::puttygen_disponible() {
+            eprintln!("puttygen absent : conversion partagée non testée ici");
+            return;
+        }
+        let _g = with_ssh_config("");
+        let dir = std::env::temp_dir().join(format!("avash-ppk-partagee-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ppk = ppk_de_test(&dir, "cle.ppk");
+        let hote = |alias: &str| HoteAImporter {
+            host: avash::SshHost {
+                alias: alias.into(),
+                hostname: Some("10.0.0.1".into()),
+                ..Default::default()
+            },
+            ppk: Some(ppk.clone()),
+        };
+        let bilan = import_apply(vec![hote("un"), hote("deux")], Vec::new()).unwrap();
+        assert_eq!(
+            bilan.cles_converties, 1,
+            "une seule conversion pour la clé partagée"
+        );
+        assert!(
+            bilan.avertissements.is_empty(),
+            "{:?}",
+            bilan.avertissements
+        );
+        let relus = avash::parse_ssh_config().unwrap();
+        let ids: Vec<Option<&str>> = relus.iter().map(|h| h.identity_file.as_deref()).collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert!(
+            ids[0].is_some_and(|s| !s.is_empty()),
+            "le premier hôte a bien la clé : {ids:?}"
+        );
+        assert_eq!(
+            ids[0], ids[1],
+            "les deux hôtes pointent la même clé convertie : {ids:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Deux `.ppk` distinctes de même nom de fichier ne doivent jamais faire
+    /// pointer deux hôtes vers la même clé : la mémoire d'import est clée sur le
+    /// chemin source. La seconde ne pouvant s'écrire sans écraser la première
+    /// (même tige, même destination), elle est signalée, jamais partagée.
+    #[cfg(unix)]
+    #[test]
+    fn deux_ppk_de_meme_nom_mais_de_sources_distinctes_ne_partagent_pas_la_cle() {
+        if !avash::import::puttygen_disponible() {
+            eprintln!("puttygen absent : test non joué ici");
+            return;
+        }
+        let _g = with_ssh_config("");
+        let base = std::env::temp_dir().join(format!("avash-ppk-tige-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ppk_a = ppk_de_test(&base.join("a"), "cle.ppk");
+        let ppk_b = ppk_de_test(&base.join("b"), "cle.ppk");
+        let hotes = vec![
+            HoteAImporter {
+                host: avash::SshHost {
+                    alias: "prod".into(),
+                    hostname: Some("10.0.0.1".into()),
+                    ..Default::default()
+                },
+                ppk: Some(ppk_a),
+            },
+            HoteAImporter {
+                host: avash::SshHost {
+                    alias: "dev".into(),
+                    hostname: Some("10.0.0.2".into()),
+                    ..Default::default()
+                },
+                ppk: Some(ppk_b),
+            },
+        ];
+        let bilan = import_apply(hotes, Vec::new()).unwrap();
+        // Une seule des deux clés peut s'écrire (même tige = même destination) :
+        // l'autre est signalée, jamais silencieusement partagée.
+        assert_eq!(bilan.cles_converties, 1, "{bilan:?}");
+        assert_eq!(bilan.avertissements.len(), 1, "{:?}", bilan.avertissements);
+        let relus = avash::parse_ssh_config().unwrap();
+        let ids: Vec<Option<String>> = relus.iter().map(|h| h.identity_file.clone()).collect();
+        assert!(
+            ids[0].as_deref().is_some_and(|s| !s.is_empty()),
+            "le premier hôte a sa clé : {ids:?}"
+        );
+        assert!(
+            ids[1].is_none(),
+            "le second hôte ne récupère pas la clé du premier : {ids:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un bureau `MobaXterm` sans
+    /// utilisateur (signet RDP qui demande les identifiants à la connexion, cas
+    /// ordinaire, refusé par `RdpHost::validate`) faisait échouer `import_apply`
+    /// APRÈS l'écriture des hôtes SSH. L'erreur remontait, le front laissait la
+    /// modale ouverte, et un second clic renommait les hôtes déjà écrits (alias
+    /// suffixés `-2`) : cinq doublons dans `~/.ssh/config`. Un bureau invalide
+    /// devient désormais un avertissement et la boucle continue.
+    #[test]
+    fn un_bureau_sans_utilisateur_n_interrompt_pas_l_import() {
+        let _g = with_ssh_config("");
+        let hotes = vec![HoteAImporter {
+            host: avash::SshHost {
+                alias: "web".into(),
+                hostname: Some("10.0.0.7".into()),
+                ..Default::default()
+            },
+            ppk: None,
+        }];
+        let bureaux = vec![avash::import::BureauImporte {
+            source: avash::import::Source::MobaXterm,
+            nom_origine: "Bureau".into(),
+            name: "Bureau".into(),
+            host: "10.0.0.9".into(),
+            port: 3389,
+            user: String::new(),
+            folder: String::new(),
+        }];
+        let bilan = import_apply(hotes, bureaux).unwrap();
+        assert_eq!(bilan.hotes, 1, "l'hôte SSH est bien compté");
+        assert_eq!(
+            bilan.bureaux, 0,
+            "le bureau sans utilisateur n'est pas écrit"
+        );
+        assert_eq!(bilan.avertissements.len(), 1, "{:?}", bilan.avertissements);
+        assert!(
+            bilan.avertissements[0].contains("Bureau"),
+            "l'avertissement nomme le bureau : {:?}",
+            bilan.avertissements
+        );
+        let relus = avash::parse_ssh_config().unwrap();
+        assert_eq!(relus.len(), 1, "l'hôte valide est écrit une fois");
+        assert!(
+            avash::rdphost::load_hosts().unwrap().is_empty(),
+            "aucun bureau invalide n'est enregistré"
+        );
+    }
+
+    /// Même porte que le bureau sans utilisateur : `validate` refuse aussi une
+    /// adresse à espace (elle casserait la clé du fichier d'empreintes RDP, donc
+    /// le TOFU). Le parseur ne filtrant que l'hôte vide, un tel signet arrivait
+    /// jusqu'à l'écriture et interrompait l'import de la même façon.
+    #[test]
+    fn un_bureau_a_l_adresse_invalide_n_interrompt_pas_l_import() {
+        let _g = with_ssh_config("");
+        let hotes = vec![HoteAImporter {
+            host: avash::SshHost {
+                alias: "web".into(),
+                hostname: Some("10.0.0.7".into()),
+                ..Default::default()
+            },
+            ppk: None,
+        }];
+        let bureaux = vec![avash::import::BureauImporte {
+            source: avash::import::Source::MobaXterm,
+            nom_origine: "Bureau".into(),
+            name: "Bureau".into(),
+            host: "mon serveur".into(),
+            port: 3389,
+            user: "adrien".into(),
+            folder: String::new(),
+        }];
+        let bilan = import_apply(hotes, bureaux).unwrap();
+        assert_eq!((bilan.hotes, bilan.bureaux), (1, 0));
+        assert_eq!(bilan.avertissements.len(), 1, "{:?}", bilan.avertissements);
+        assert!(
+            bilan.avertissements[0].contains("Bureau"),
+            "{:?}",
+            bilan.avertissements
+        );
+    }
+
+    /// La boucle SSH interrompait aussi l'import au premier hôte refusé
+    /// (`append_host` rejette un saut de ligne dans le hostname, tentative
+    /// d'injection de directive), perdant le compte des hôtes déjà écrits et
+    /// rejouant la même duplication au second essai. Un hôte refusé devient un
+    /// avertissement, les suivants sont quand même écrits.
+    #[test]
+    fn un_hote_ssh_refuse_n_interrompt_pas_les_suivants() {
+        let _g = with_ssh_config("");
+        let hotes = vec![
+            HoteAImporter {
+                host: avash::SshHost {
+                    alias: "mauvais".into(),
+                    hostname: Some("10.0.0.1\nProxyCommand touch /tmp/injecte".into()),
+                    ..Default::default()
+                },
+                ppk: None,
+            },
+            HoteAImporter {
+                host: avash::SshHost {
+                    alias: "bon".into(),
+                    hostname: Some("10.0.0.2".into()),
+                    ..Default::default()
+                },
+                ppk: None,
+            },
+        ];
+        let bilan = import_apply(hotes, Vec::new()).unwrap();
+        assert_eq!(bilan.hotes, 1, "seul l'hôte valide est écrit");
+        assert_eq!(bilan.avertissements.len(), 1, "{:?}", bilan.avertissements);
+        let relus = avash::parse_ssh_config().unwrap();
+        let aliases: Vec<&str> = relus.iter().map(|h| h.alias.as_str()).collect();
+        assert_eq!(
+            aliases,
+            vec!["bon"],
+            "le mauvais hôte est ignoré, pas écrit"
+        );
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un signet RDP sans utilisateur
+    /// traversait le scan sans marque et était proposé coché, puis interrompait
+    /// l'import à l'écriture. Le scan porte désormais le défaut sur le candidat.
+    #[test]
+    fn un_signet_rdp_sans_utilisateur_est_signale_au_scan() {
+        let _g = with_ssh_config("");
+        let fichier =
+            std::env::temp_dir().join(format!("avash-scan-bureau-{}.ini", std::process::id()));
+        std::fs::write(&fichier, "[Bookmarks]\nBureau=#91#4%10.0.0.9%3389%%\n").unwrap();
+        let bilan = import_scan(Some(fichier.display().to_string())).unwrap();
+        assert_eq!(bilan.bureaux.len(), 1);
+        let b = &bilan.bureaux[0];
+        assert!(b.doublon.is_none(), "aucun bureau existant ici");
+        assert_eq!(
+            b.remarques.len(),
+            1,
+            "le défaut est signalé : {:?}",
+            b.remarques
+        );
+        assert!(
+            b.remarques[0].contains("utilisateur"),
+            "la remarque cite l'utilisateur manquant : {:?}",
+            b.remarques
+        );
+        let _ = std::fs::remove_file(&fichier);
     }
 
     #[test]

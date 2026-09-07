@@ -1,6 +1,7 @@
 //! Enregistrement de session (asciicast) : démarrer, arrêter, lister.
 
-use super::{Enregistrement, SessionStore};
+use super::{finaliser_enregistrement, Enregistrement, SessionStore};
+use tauri::AppHandle;
 
 pub(crate) fn enregistreur_de(
     state: &tauri::State<'_, SessionStore>,
@@ -42,7 +43,15 @@ pub fn enregistrement_demarrer(
     let mut e = avash::enregistrement::Enregistreur::demarrer(&label, cols, rows)
         .map_err(|e| format!("{e:#}"))?;
     if let Some(ecran) = etat_initial.filter(|s| !s.is_empty()) {
-        e.sortie(&ecran).map_err(|e| format!("{e:#}"))?;
+        if let Err(err) = e.sortie(&ecran) {
+            // Trouvé par l'audit du 7 septembre 2026 : si la toute première
+            // écriture échoue (disque plein), le fichier déjà créé par
+            // `create_new` resterait sur le disque, vide ou réduit à
+            // l'en-tête, et s'afficherait dans la liste comme un enregistrement
+            // valide. On le retire avant de remonter l'erreur.
+            let _ = std::fs::remove_file(e.chemin());
+            return Err(format!("{err:#}"));
+        }
     }
     let chemin = e.chemin().display().to_string();
     *slot = Some(e);
@@ -103,7 +112,11 @@ pub fn enregistrement_en_cours(state: tauri::State<'_, SessionStore>, id: u64) -
 
 /// Ferme une session (fermeture d'onglet). Coupe aussi la session SFTP liée.
 #[tauri::command]
-pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result<(), String> {
+pub async fn pty_close<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+) -> Result<(), String> {
     // Retrait et note d'annulation sous le même verrou, dans le même ordre que
     // `open_on_target` (inner puis annules) : sans cela les deux pouvaient
     // s'entrelacer et laisser une session vivante sans onglet.
@@ -120,6 +133,10 @@ pub async fn pty_close(state: tauri::State<'_, SessionStore>, id: u64) -> Result
         h
     };
     if let Some(h) = handle {
+        // Fermer l'onglet ferme le fichier : on arrête explicitement
+        // l'enregistrement pour récupérer une erreur de vidage éventuelle,
+        // plutôt que de laisser le `Drop` du `BufWriter` l'avaler.
+        finaliser_enregistrement(&app, id, &h.enregistreur);
         // into_inner() echoue si le mutex a ete empoisonne par un panic
         // ailleurs. Fermer un onglet ne doit jamais planter pour autant :
         // on recupere la valeur malgre l'empoisonnement.

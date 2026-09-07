@@ -189,11 +189,17 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Applique un remap aux dossiers des hôtes RDP d'un fichier donné.
-fn remap_rdp(rdp: &Path, f: impl Fn(&str) -> Option<String>) -> Result<()> {
-    let Ok(mut hosts) = crate::rdphost::load_hosts_from(rdp) else {
-        return Ok(()); // fichier absent/illisible : rien à remapper
-    };
+/// Applique un remap aux dossiers d'une liste d'hôtes RDP déjà chargée, et
+/// réécrit `rdp.yaml` si quelque chose a bougé.
+///
+/// La liste est passée par l'appelant, qui l'a chargée AVANT toute écriture SSH
+/// (voir `rename_core`/`delete_core`) : un `rdp.yaml` illisible doit faire
+/// échouer l'opération avant qu'on ne touche `~/.ssh/config`, pas après.
+fn remap_rdp(
+    rdp: &Path,
+    mut hosts: Vec<crate::rdphost::RdpHost>,
+    f: impl Fn(&str) -> Option<String>,
+) -> Result<()> {
     let mut changed = false;
     for h in &mut hosts {
         if let Some(nf) = f(&h.folder) {
@@ -226,6 +232,16 @@ pub fn rename_core(
     if from.is_empty() || to.is_empty() {
         anyhow::bail!("Dossier invalide.");
     }
+    // Trouvé par l'audit du 7 septembre 2026 : `remap_rdp` avalait en silence un
+    // `rdp.yaml` illisible (YAML corrompu, champ requis manquant, permission
+    // refusée — seul le fichier absent est un `Ok(Vec::new())`). Le renommage
+    // continuait, le registre était réécrit, l'interface annonçait le succès,
+    // puis les bureaux réapparaissaient dans l'ancien dossier une fois le fichier
+    // réparé : deux dossiers là où on en attendait un. Même classe de défaut que
+    // `signaler_les_recales` côté SSH. On sonde donc `rdp.yaml` ICI, avant toute
+    // écriture SSH, pour qu'une erreur soit signalée sans renommage partiel.
+    let hosts_rdp = crate::rdphost::load_hosts_brut_from(rdp)
+        .with_context(|| format!("bureaux RDP de {} non remappés", rdp.display()))?;
     if let Some(content) = read_optional(ssh)? {
         let multiples = alias_a_alias_multiples(&content);
         let mut recales = Vec::new();
@@ -240,7 +256,7 @@ pub fn rename_core(
         }
         signaler_les_recales(&recales, "déplacés")?;
     }
-    remap_rdp(rdp, |f| remap(f, &from, &to))?;
+    remap_rdp(rdp, hosts_rdp, |f| remap(f, &from, &to))?;
     rename_in(reg, &from, &to)
 }
 
@@ -253,13 +269,21 @@ fn alias_a_alias_multiples(content: &str) -> std::collections::HashSet<String> {
     let mut multiples = std::collections::HashSet::new();
     for ligne in content.lines() {
         let l = ligne.trim();
-        let Some(reste) = l
-            .strip_prefix("Host ")
-            .or_else(|| l.strip_prefix("host "))
-            .or_else(|| l.strip_prefix("HOST "))
-        else {
+        // Trouvé par l'audit du 7 septembre 2026 : on découpait sur `"Host "`
+        // (espace) uniquement. Or OpenSSH accepte la tabulation comme séparateur
+        // et le mot-clé est insensible à la casse — `parse_config_str` et
+        // `set_host_folder_at` le savaient (split_once + to_lowercase), pas cette
+        // fonction. Un bloc `Host\tx y` ou `HoSt x y` échappait donc à `multiples` :
+        // ses alias, éclatés en hôtes mono par `parse_config_str`, échouaient tous
+        // dans `set_host_folder_at` (bloc non mono-alias) et remplissaient
+        // `recales`, faisant échouer tout le renommage sur un message accusant à
+        // tort les droits de `~/.ssh/config`. On découpe donc comme les deux autres.
+        let Some((mot, reste)) = l.split_once(char::is_whitespace) else {
             continue;
         };
+        if !mot.eq_ignore_ascii_case("host") {
+            continue;
+        }
         let alias: Vec<&str> = reste.split_whitespace().collect();
         if alias.len() > 1 {
             multiples.extend(alias.into_iter().map(str::to_owned));
@@ -297,6 +321,11 @@ pub fn delete_core(ssh: &Path, rdp: &Path, reg: &Path, path: &str) -> Result<Vec
     if norm.is_empty() {
         anyhow::bail!("Dossier invalide.");
     }
+    // Même défaut que `rename_core` (audit du 7 septembre 2026) : on sonde
+    // `rdp.yaml` avant toute écriture SSH pour qu'un fichier illisible fasse
+    // échouer la suppression sans laisser les bureaux dans un dossier disparu.
+    let hosts_rdp = crate::rdphost::load_hosts_brut_from(rdp)
+        .with_context(|| format!("bureaux RDP de {} non remappés", rdp.display()))?;
     if let Some(content) = read_optional(ssh)? {
         let multiples = alias_a_alias_multiples(&content);
         let mut recales = Vec::new();
@@ -310,7 +339,7 @@ pub fn delete_core(ssh: &Path, rdp: &Path, reg: &Path, path: &str) -> Result<Vec
         }
         signaler_les_recales(&recales, "ramenés à la racine")?;
     }
-    remap_rdp(rdp, |f| is_under(f, &norm).then(String::new))?;
+    remap_rdp(rdp, hosts_rdp, |f| is_under(f, &norm).then(String::new))?;
     remove_in(reg, &norm)
 }
 
@@ -461,6 +490,131 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Trouvé par l'audit du 7 septembre 2026 : `remap_rdp` réécrivait la liste
+    /// FILTRÉE des bureaux, si bien que renommer un dossier effaçait du fichier
+    /// tout bureau qu'une version antérieure (ou une édition manuelle) avait
+    /// laissé invalide — adresse à espace ici. `rename_core` charge désormais la
+    /// liste BRUTE avant le remap : l'entrée invalide traverse la réécriture,
+    /// son dossier remappé comme les autres.
+    #[test]
+    fn une_entree_invalide_survit_a_un_renommage_de_dossier() {
+        let d = scratch();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        let mut a = crate::rdphost::RdpHost::new("A", "10.0.0.1", 3389, "u", 0, 0);
+        a.folder = "prod".into();
+        let mut b = crate::rdphost::RdpHost::new("B", "x", 3389, "u", 0, 0);
+        b.host = "srv 01".into(); // adresse à espace : invalide, non affichable
+        b.folder = "prod".into();
+        assert!(b.validate().is_err(), "B doit bien être invalide");
+        crate::rdphost::save_hosts_to(&rdp, &[a, b.clone()]).unwrap();
+        create_in(&reg, "prod").unwrap();
+
+        rename_core(&ssh, &rdp, &reg, "prod", "production").unwrap();
+
+        let brut = crate::rdphost::load_hosts_brut_from(&rdp).unwrap();
+        let bb = brut
+            .iter()
+            .find(|h| h.id == b.id)
+            .expect("B effacée par le renommage de dossier");
+        assert_eq!(bb.name, "B");
+        assert_eq!(bb.folder, "production", "dossier de B non remappé");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : `alias_a_alias_multiples` ne
+    /// reconnaissait que le préfixe `"Host "` (espace). Or OpenSSH accepte la
+    /// tabulation comme séparateur (`Host\tx y`) — `parse_config_str` et
+    /// `set_host_folder_at` le savaient déjà, pas ce helper. Le bloc, éclaté en
+    /// hôtes mono par le parseur, échouait alors dans `set_host_folder_at`
+    /// (bloc non mono-alias) sans être reconnu comme multi-alias : les hôtes
+    /// remplissaient `recales` et tout le renommage échouait sur un message
+    /// accusant à tort les droits de `~/.ssh/config`. Le bloc doit être ignoré
+    /// en silence, comme sa variante à espace, et le renommage aboutir.
+    #[test]
+    fn un_bloc_multi_alias_tabule_est_ignore_sans_faire_echouer() {
+        let d = scratch();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        std::fs::write(
+            &ssh,
+            "Host a\n    HostName 1\n    #Folder: prod\n\nHost\tx y\n    HostName 4\n    #Folder: prod\n",
+        )
+        .unwrap();
+        create_in(&reg, "prod").unwrap();
+
+        let regs = rename_core(&ssh, &rdp, &reg, "prod", "production")
+            .expect("un bloc multi-alias tabulé ne doit pas faire échouer le renommage");
+
+        let hosts = crate::parse_config_str(&std::fs::read_to_string(&ssh).unwrap());
+        let f = |al: &str| {
+            hosts
+                .iter()
+                .find(|h| h.alias == al)
+                .map(|h| h.folder.clone())
+        };
+        assert_eq!(f("a").as_deref(), Some("production"));
+        assert!(regs.contains(&"production".to_string()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Même trou pour la casse : `HoSt x y` échappait aussi aux trois
+    /// `strip_prefix`, alors que les deux autres parseurs comparent le mot-clé
+    /// en minuscules. Le correctif (`split_once` + `eq_ignore_ascii_case`) ferme
+    /// les deux d'un coup. Audit du 7 septembre 2026.
+    #[test]
+    fn un_bloc_multi_alias_en_casse_melangee_est_ignore() {
+        let d = scratch();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        std::fs::write(
+            &ssh,
+            "Host a\n    HostName 1\n    #Folder: prod\n\nHoSt x y\n    HostName 4\n    #Folder: prod\n",
+        )
+        .unwrap();
+        create_in(&reg, "prod").unwrap();
+
+        let regs = rename_core(&ssh, &rdp, &reg, "prod", "production")
+            .expect("un bloc multi-alias en casse mélangée ne doit pas faire échouer le renommage");
+
+        let hosts = crate::parse_config_str(&std::fs::read_to_string(&ssh).unwrap());
+        let f = |al: &str| {
+            hosts
+                .iter()
+                .find(|h| h.alias == al)
+                .map(|h| h.folder.clone())
+        };
+        assert_eq!(f("a").as_deref(), Some("production"));
+        assert!(regs.contains(&"production".to_string()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `delete_core` partage le helper : le même bloc `Host\tx y` faisait
+    /// échouer la suppression du dossier avec « n'ont pas pu être ramenés à la
+    /// racine ». Test symétrique du précédent. Audit du 7 septembre 2026.
+    #[test]
+    fn delete_core_ignore_un_bloc_multi_alias_tabule() {
+        let d = scratch();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        std::fs::write(
+            &ssh,
+            "Host a\n    HostName 1\n    #Folder: prod\n\nHost\tx y\n    HostName 4\n    #Folder: prod\n",
+        )
+        .unwrap();
+        create_in(&reg, "prod").unwrap();
+
+        let regs = delete_core(&ssh, &rdp, &reg, "prod")
+            .expect("un bloc multi-alias tabulé ne doit pas faire échouer la suppression");
+
+        let hosts = crate::parse_config_str(&std::fs::read_to_string(&ssh).unwrap());
+        let f = |al: &str| {
+            hosts
+                .iter()
+                .find(|h| h.alias == al)
+                .map(|h| h.folder.clone())
+        };
+        assert_eq!(f("a").as_deref(), Some("")); // ramené à la racine
+        assert!(!regs.iter().any(|p| p.starts_with("prod")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn delete_core_ramene_a_la_racine() {
         let d = scratch();
@@ -496,6 +650,64 @@ mod tests {
         let (ssh, rdp, reg) = (d.join("nope"), d.join("nope.yaml"), d.join("folders.yaml"));
         create_in(&reg, "prod").unwrap();
         assert!(delete_core(&ssh, &rdp, &reg, "prod").is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un `rdp.yaml` illisible (ici un
+    /// YAML syntaxiquement cassé, mais aussi bien un champ requis retiré à la
+    /// main) était avalé en silence par `remap_rdp`. Le renommage aboutissait,
+    /// le registre était réécrit, l'interface annonçait le succès, puis les
+    /// bureaux réapparaissaient dans l'ancien dossier dès le fichier réparé.
+    /// L'erreur doit maintenant être signalée ET `~/.ssh/config` rester intact
+    /// (sonde avant écriture) : c'est ce qui distingue un échec propre d'un
+    /// renommage à moitié appliqué.
+    #[test]
+    fn rename_core_signale_un_rdp_yaml_corrompu() {
+        let d = scratch();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        let ssh_avant = "Host web-1\n    HostName 1.1.1.1\n    #Folder: prod\n";
+        std::fs::write(&ssh, ssh_avant).unwrap();
+        std::fs::write(&rdp, "- id: [\n").unwrap();
+        create_in(&reg, "prod").unwrap();
+
+        let e = rename_core(&ssh, &rdp, &reg, "prod", "production")
+            .expect_err("un rdp.yaml illisible doit être signalé")
+            .to_string();
+        assert!(
+            e.contains("rdp.yaml"),
+            "le message doit nommer rdp.yaml : {e}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&ssh).unwrap(),
+            ssh_avant,
+            "~/.ssh/config ne doit pas avoir bougé : la sonde est faite avant écriture"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Même défaut côté suppression : un `rdp.yaml` illisible laissait les
+    /// bureaux dans un dossier supprimé sans le dire.
+    #[test]
+    fn delete_core_signale_un_rdp_yaml_corrompu() {
+        let d = scratch();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        let ssh_avant = "Host web-1\n    HostName 1.1.1.1\n    #Folder: prod\n";
+        std::fs::write(&ssh, ssh_avant).unwrap();
+        std::fs::write(&rdp, "- id: [\n").unwrap();
+        create_in(&reg, "prod").unwrap();
+
+        let e = delete_core(&ssh, &rdp, &reg, "prod")
+            .expect_err("un rdp.yaml illisible doit être signalé")
+            .to_string();
+        assert!(
+            e.contains("rdp.yaml"),
+            "le message doit nommer rdp.yaml : {e}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&ssh).unwrap(),
+            ssh_avant,
+            "~/.ssh/config ne doit pas avoir bougé : la sonde est faite avant écriture"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 }

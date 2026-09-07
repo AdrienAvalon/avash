@@ -130,6 +130,33 @@ describe("isPasswordRequired", () => {
   });
 });
 
+import { isHostKeyChanged, nettoyerMarqueurs } from "./filters";
+
+describe("isHostKeyChanged", () => {
+  it("reconnaît le marqueur du backend", () => {
+    expect(isHostKeyChanged("[AVASH_HOST_KEY_CHANGED] LA CLÉ D'HÔTE A CHANGÉ pour 10.0.0.7:22.")).toBe(true);
+  });
+  it("ignore les autres erreurs", () => {
+    expect(isHostKeyChanged("Connection refused")).toBe(false);
+    expect(isHostKeyChanged("[AVASH_PASSWORD_REQUIRED] blabla")).toBe(false);
+  });
+});
+
+describe("nettoyerMarqueurs", () => {
+  it("retire les trois marqueurs internes, quel que soit le préfixe", () => {
+    // Trouvé par l'audit du 7 septembre 2026 : ces marqueurs, destinés à
+    // l'interface, s'affichaient bruts dans le formulaire de connexion directe.
+    expect(nettoyerMarqueurs("[AVASH_HOST_KEY_CHANGED] la clé a changé"))
+      .toBe("la clé a changé");
+    expect(nettoyerMarqueurs("[AVASH_PASSWORD_REQUIRED] mot de passe requis"))
+      .toBe("mot de passe requis");
+    expect(nettoyerMarqueurs("[AVASH_ANNULE]")).toBe("");
+  });
+  it("laisse intact un message sans marqueur", () => {
+    expect(nettoyerMarqueurs("Connection refused")).toBe("Connection refused");
+  });
+});
+
 describe("stripHtml", () => {
   it("retire les caractères d'injection", () => {
     expect(stripHtml("<img onerror=x>")).toBe("img onerror=x");

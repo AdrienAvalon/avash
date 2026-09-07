@@ -35,9 +35,16 @@ step "Validation complète (check.sh)"
 #      le nom attendu par Tauri (externalBin) pour être embarqué à côté de l'exe.
 step "Build du sidecar RDP (avash-rdp)"
 TRIPLE="$(rustc -vV | sed -n 's/host: //p')"
+# Trouvé par l'audit du 7 septembre 2026 : sous Windows le binaire s'appelle
+# avash-rdp.exe et Tauri (externalBin) attend binaries/avash-rdp-$TRIPLE.exe.
+# Sans l'extension, `cp` échouait (set -e) et le build « sur Windows » annoncé
+# en tête et dans RELEASE.md §2 s'arrêtait avant `cargo tauri build`. On aligne
+# le suffixe sur la cible, comme EXE_SUFFIX côté cœur (rdp.rs).
+EXT=""
+case "$TRIPLE" in *windows*) EXT=.exe ;; esac
 ( cd "$ROOT/rdp-sidecar" && cargo build --release )
 mkdir -p "$UI/binaries"
-cp -v "$ROOT/rdp-sidecar/target/release/avash-rdp" "$UI/binaries/avash-rdp-$TRIPLE"
+cp -v "$ROOT/rdp-sidecar/target/release/avash-rdp$EXT" "$UI/binaries/avash-rdp-$TRIPLE$EXT"
 
 # 2) Build des bundles pour la plateforme courante.
 step "Build des bundles Tauri"

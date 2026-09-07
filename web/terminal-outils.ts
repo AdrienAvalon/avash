@@ -126,8 +126,15 @@ async function arreterEnregistrement(s: Session) {
   try {
     const chemin = await invoke<string | null>("enregistrement_arreter", { id: s.id });
     s.tab.classList.remove("rec");
+    // Un chemin nul veut dire qu'aucun enregistrement n'était en cours : le
+    // dire, sinon le clic reste sans réponse. Trouvé par l'audit du 7 sept. 2026.
     if (chemin) notify(t("enregistrement-termine", { chemin }), "succes");
+    else notify(t("enregistrement-rien-a-arreter"), "info");
   } catch (e) {
+    // Retirer le voyant aussi en cas d'échec : `arreter` peut rendre une erreur
+    // (fichier incomplet) alors que l'enregistreur a déjà été retiré côté back ;
+    // sans cela l'onglet gardait un « rec » qui ne correspondait plus à rien.
+    s.tab.classList.remove("rec");
     notifyErreur(t("enregistrement-impossible", { e: String(e) }));
   }
 }

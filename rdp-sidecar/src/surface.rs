@@ -137,6 +137,10 @@ impl Surface {
 #[derive(Debug, Default)]
 pub struct Cache {
     entrees: std::collections::BTreeMap<u16, (u16, u16, Vec<u8>)>,
+    /// Somme des octets de pixels retenus, tenue à jour par `deposer` et
+    /// `oublier` : borner le nombre d'entrées ne borne pas la mémoire (voir
+    /// `OCTETS_MAX`).
+    octets: usize,
 }
 
 /// Nombre d'emplacements retenus. La spécification en autorise bien plus, mais
@@ -144,11 +148,33 @@ pub struct Cache {
 /// chaque entrée est une image, et rien ne borne leur taille par ailleurs.
 const EMPLACEMENTS_MAX: usize = 4096;
 
+/// Budget mémoire du cache, en octets. Le plafond en nombre d'emplacements ne
+/// suffit pas : une seule entrée peut peser 256 Mio (une surface 8192×8192),
+/// donc 4096 entrées jusqu'à 1 Tio résident. On s'aligne sur le « petit cache »
+/// de MS-RDPEGFX, celui que nous annonçons (`CAPS_FLAG_SMALL_CACHE`, egfx.rs),
+/// soit 16 Mio.
+const OCTETS_MAX: usize = 16 << 20;
+
 impl Cache {
     pub fn deposer(&mut self, emplacement: u16, largeur: u16, hauteur: u16, pixels: Vec<u8>) {
         if self.entrees.len() >= EMPLACEMENTS_MAX && !self.entrees.contains_key(&emplacement) {
             return;
         }
+        // Trouvé par l'audit du 7 septembre 2026 : le plafond en nombre d'entrées
+        // laissait un serveur hostile épuiser la mémoire avec de grosses images
+        // (4096 SurfaceToCache de 80 Kio de commandes → 1 Tio). On borne donc
+        // aussi les octets. Un dépôt sur un emplacement déjà pris écrase l'entrée
+        // (insert) : le budget se calcule au net de l'ancienne, sinon le compteur
+        // dériverait (à la hausse en écrasement ; à la baisse si l'on soustrayait
+        // l'ancienne PUIS refusait la nouvelle, laissant une entrée non comptée).
+        let anciens = self
+            .entrees
+            .get(&emplacement)
+            .map_or(0, |(_, _, p)| p.len());
+        if self.octets - anciens + pixels.len() > OCTETS_MAX {
+            return;
+        }
+        self.octets = self.octets - anciens + pixels.len();
         self.entrees.insert(emplacement, (largeur, hauteur, pixels));
     }
 
@@ -158,13 +184,18 @@ impl Cache {
     }
 
     pub fn oublier(&mut self, emplacement: u16) {
-        self.entrees.remove(&emplacement);
+        // Rendre au budget les octets de l'entrée retirée (EvictCacheEntry,
+        // egfx.rs), sinon le compteur ne redescend jamais et finit par tout
+        // refuser malgré un cache vidé.
+        if let Some((_, _, pixels)) = self.entrees.remove(&emplacement) {
+            self.octets -= pixels.len();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Cache, Surface, Zone, EMPLACEMENTS_MAX};
+    use super::{Cache, Surface, Zone, EMPLACEMENTS_MAX, OCTETS_MAX};
 
     #[test]
     fn une_zone_est_rognee_sur_la_surface() {
@@ -263,5 +294,38 @@ mod tests {
         );
         c.oublier(0);
         assert!(c.lire(0).is_none());
+    }
+
+    #[test]
+    fn le_cache_est_borne_en_octets() {
+        // Trouvé par l'audit du 7 septembre 2026 : le plafond en nombre d'entrées
+        // (le_cache_est_borne, qui n'emploie que des entrées 1×1) n'empêche pas un
+        // serveur de faire enfler la mémoire avec quelques grosses entrées. Ici
+        // huit entrées de 4 Mio réclament 32 Mio, mais le budget est de 16 Mio :
+        // seules quatre tiennent, et le refus vient de la mémoire, pas du nombre.
+        let mut c = Cache::default();
+        let gros = vec![0u8; 4 << 20];
+        for i in 0..8u16 {
+            c.deposer(i, 1024, 1024, gros.clone());
+        }
+        let retenus = (0..8u16).filter(|&i| c.lire(i).is_some()).count();
+        assert_eq!(retenus, OCTETS_MAX / gros.len(), "au plus 16 Mio retenus");
+        assert!(
+            c.lire(4).is_none(),
+            "refusée pour la mémoire, non le nombre"
+        );
+
+        // `oublier` rend du budget : une entrée passe là où elle était refusée.
+        c.oublier(0);
+        c.deposer(100, 1024, 1024, gros.clone());
+        assert!(c.lire(100).is_some(), "budget rendu par oublier");
+
+        // Réécrire un emplacement ne fait pas dériver le compteur : autant de
+        // dépôts qu'on veut sur la même clé sans épuiser le budget.
+        for _ in 0..1000 {
+            c.deposer(100, 1024, 1024, gros.clone());
+        }
+        assert!(c.lire(100).is_some());
+        assert!(c.lire(1).is_some(), "les autres entrées tiennent toujours");
     }
 }

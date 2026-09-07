@@ -65,7 +65,16 @@ jobs:
         run: scripts/couverture.sh couverture
       - name: Couverture du front (Vitest)
         working-directory: web
-        run: npx vitest run --coverage --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=../couverture/front --silent | tee ../couverture/front.txt
+        # Trouvé par l'audit du 7 septembre 2026 : sans `shell:` explicite,
+        # GitHub lance `bash -e {0}` SANS pipefail ; `… | tee front.txt` rendait
+        # alors le code de retour de `tee` (toujours 0) et un Vitest en échec
+        # (test régressé, config de couverture cassée, @vitest/coverage-v8
+        # manquant) laissait l'étape verte et le chiffre de couverture absent.
+        # La redirection propage le code de retour de vitest (et un crash sur
+        # stderr rend l'étape rouge, front.txt fût-il vide) ; le `cat` suit.
+        run: |
+          npx vitest run --coverage --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=../couverture/front --silent > ../couverture/front.txt
+          cat ../couverture/front.txt
       - name: Résumé
         run: |
           for f in espace-de-travail processus-rdp front; do

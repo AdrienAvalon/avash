@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
+import indexHtml from "./index.html?raw";
+
+// Tout le code TypeScript du dossier, chargé en chaîne par Vite : un nouveau
+// fichier entre dans la couverture sans rien changer ici. Les *.test.ts sont
+// exclus plus bas (ils posent puis suppriment des clés jetables).
+const SOURCES_TS = import.meta.glob("./*.ts", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 
 // Node déclare un `localStorage` global inerte que jsdom ne remplace pas (voir
 // prefs.test.ts) : on installe un stockage mémoire conforme à l'API Storage
@@ -114,5 +120,85 @@ describe("langue au premier lancement", () => {
     expect(lireLangue("fr-FR")).toBe("en");
     localStorage.setItem(CLE_LANGUE, "xx");
     expect(lireLangue("fr-FR")).toBe("fr"); // une valeur inattendue vaut « rien »
+  });
+});
+
+// Extrait les littéraux de clé passés en PREMIER argument d'un appel `t(` :
+// on scanne caractère par caractère depuis chaque `t(` en suivant la
+// profondeur des parenthèses et l'état « dans une chaîne », dans le seul
+// premier argument (arrêt à la première virgule de premier niveau, le reste
+// étant les variables). Ainsi les appels ternaires `t(vnc ? "a" : "b")` sont
+// couverts, là où la regex naïve `t(\s*"…"` les ratait ; les appels à clé
+// calculée (`t(el.dataset.i18n!)`, `t(sonBureau(...))`) n'ont aucun littéral
+// et restent hors couverture, sans fausse alerte.
+//
+// Un littéral n'est retenu que s'il est en position de VALEUR — précédé de
+// `(`, `?` ou `:` — et jamais opérande d'une comparaison : sinon les
+// conditions de ternaire comme `t(themePref === "system" ? …)` ou
+// `t(s.etat === "inconnu" ? …)` feraient prendre « system », « light »,
+// « inconnu » pour des clés (faux positifs vus le 7 septembre 2026).
+function clesAppelees(source: string): string[] {
+  const cles: string[] = [];
+  const re = /\bt\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source))) {
+    let i = m.index + m[0].length;
+    let profondeur = 0;
+    let prec = "("; // dernier caractère utile ; on vient de consommer `t(`
+    for (; i < source.length; i++) {
+      const c = source[i];
+      if (c === "\"" || c === "'") {
+        const j = i + 1;
+        let k = j;
+        while (k < source.length && source[k] !== c) {
+          if (source[k] === "\\") k++;
+          k++;
+        }
+        // Clé de premier niveau en position de valeur uniquement.
+        if (profondeur === 0 && (prec === "(" || prec === "?" || prec === ":")) cles.push(source.slice(j, k));
+        i = k;
+        prec = "\""; // neutre : la chaîne n'ouvre pas une position de valeur
+        continue;
+      }
+      if (c === "`") {
+        // Gabarit (dans les variables) : on saute jusqu'au dos-de-guillemet.
+        let k = i + 1;
+        while (k < source.length && source[k] !== "`") {
+          if (source[k] === "\\") k++;
+          k++;
+        }
+        i = k;
+        prec = "`";
+        continue;
+      }
+      if (c === "(" || c === "{" || c === "[") profondeur++;
+      else if (c === ")" || c === "}" || c === "]") {
+        if (profondeur === 0) break; // fin de l'appel `t(`
+        profondeur--;
+      } else if (c === "," && profondeur === 0) break; // fin du premier argument
+      if (!/\s/.test(c)) prec = c;
+    }
+  }
+  return cles;
+}
+
+describe("clés i18n effectivement demandées", () => {
+  it("chaque clé appelée par t() dans le code et posée dans la page existe en français", () => {
+    // Les *.test.ts posent puis suppriment des clés jetables (cle-de-test,
+    // cle-inconnue, salut) ; les *.d.ts ne contiennent aucun appel : exclus.
+    const sources = Object.entries(SOURCES_TS)
+      .filter(([f]) => !f.endsWith(".test.ts") && !f.endsWith(".d.ts"))
+      .flatMap(([, src]) => clesAppelees(src));
+
+    const posees: string[] = [];
+    // Les quatre attributs lus par appliquerLangue (i18n / -title /
+    // -placeholder / -aria).
+    for (const m of indexHtml.matchAll(/data-i18n(?:-\w+)?="([^"]+)"/g)) posees.push(m[1]);
+
+    const demandees = [...new Set([...sources, ...posees])];
+    const absentes = demandees.filter((k) => !(k in FR)).sort();
+    // Aurait listé « connexion-impossible » (échec d'ouverture d'un port série,
+    // web/main.ts) : clé jamais définie, affichée brute et sans le message du cœur.
+    expect(absentes).toEqual([]);
   });
 });

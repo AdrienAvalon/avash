@@ -405,6 +405,22 @@ pub fn rdp_hosts() -> Result<Vec<RdpHost>, String> {
     rdphost::load_hosts().map_err(|e| e.to_string())
 }
 
+/// Un bureau autre que celui d'`id_exclu` utilise-t-il encore ce compte de
+/// trousseau ?
+///
+/// Le compte dérive de `protocole:user@host:port`, jamais de l'`id` du bureau :
+/// deux bureaux vers le même serveur (que l'import repère lui-même comme
+/// doublons) partagent l'entrée. Avant d'oublier ou de déplacer le secret, on
+/// vérifie qu'aucun autre bureau ne le réclame. Trouvé par l'audit du
+/// 7 septembre 2026 : supprimer l'un des deux effaçait le mot de passe de l'autre.
+#[must_use]
+fn compte_encore_utilise(hosts: &[RdpHost], id_exclu: &str, compte: &str) -> bool {
+    hosts
+        .iter()
+        .filter(|h| h.id != id_exclu)
+        .any(|h| h.compte_trousseau() == compte)
+}
+
 /// Cree (`id` absent) ou modifie une connexion RDP enregistree.
 ///
 /// `protocole` : « rdp » (défaut) ou « vnc ».
@@ -499,7 +515,11 @@ pub fn rdp_host_save(
 /// Range un bureau RDP dans un dossier (déplacement).
 #[tauri::command]
 pub fn rdp_host_set_folder(id: String, folder: String) -> Result<(), String> {
-    let mut all = rdphost::load_hosts().map_err(|e| e.to_string())?;
+    // Liste brute : ranger un bureau ne doit pas effacer du fichier les autres
+    // entrées invalides (audit du 7 septembre 2026). `rdp_open` revalide, donc
+    // toucher une entrée invalide existante est sans danger.
+    let mut all =
+        rdphost::load_hosts_brut_from(&rdphost::hosts_path()).map_err(|e| e.to_string())?;
     let norm = avash::folders::normalize(&folder);
     let h = all
         .iter_mut()
@@ -516,13 +536,27 @@ pub fn rdp_host_set_folder(id: String, folder: String) -> Result<(), String> {
 /// Supprime une connexion enregistree et oublie son mot de passe.
 #[tauri::command]
 pub fn rdp_host_delete(id: String) -> Result<(), String> {
-    // Retrouver l'hote pour oublier son mot de passe avant suppression.
-    if let Ok(hosts) = rdphost::load_hosts() {
-        if let Some(h) = hosts.iter().find(|h| h.id == id) {
-            let _ = avash::secrets::forget(&h.compte_trousseau());
+    // Compte du trousseau AVANT suppression : après, le bureau n'existe plus et
+    // on ne saurait plus lequel oublier.
+    let compte = rdphost::load_hosts().ok().and_then(|hosts| {
+        hosts
+            .iter()
+            .find(|h| h.id == id)
+            .map(RdpHost::compte_trousseau)
+    });
+    // On supprime d'abord, on n'oublie le secret qu'APRÈS le succès (comme côté
+    // SSH depuis 664d45e : dans l'autre ordre, une suppression qui échouait
+    // perdait quand même le mot de passe) et seulement si aucun autre bureau ne
+    // partage ce compte. Trouvé par l'audit du 7 septembre 2026 : deux bureaux
+    // vers le même user@host:port partagent l'entrée, supprimer l'un l'effaçait
+    // pour l'autre.
+    let restants =
+        rdphost::remove_host_in(&rdphost::hosts_path(), &id).map_err(|e| e.to_string())?;
+    if let Some(compte) = compte {
+        if !compte_encore_utilise(&restants, &id, &compte) {
+            let _ = avash::secrets::forget(&compte);
         }
     }
-    rdphost::remove_host_in(&rdphost::hosts_path(), &id).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -585,9 +619,20 @@ pub fn rdp_password_move(
     };
     let nouveau = compte(protocole.as_deref(), &user, &host, port);
     avash::secrets::save(&nouveau, &secret).map_err(|e| format!("{e:#}"))?;
-    // L'oubli n'a lieu qu'après une écriture réussie : l'inverse perdrait le
-    // secret si le trousseau refusait la nouvelle entrée.
-    avash::secrets::forget(&ancien).map_err(|e| format!("{e:#}"))
+    // L'oubli n'a lieu qu'après une écriture réussie (l'inverse perdrait le
+    // secret si le trousseau refusait la nouvelle entrée) et seulement si aucun
+    // autre bureau ne partage encore l'ancien compte. Le bureau édité a déjà été
+    // enregistré avec le nouveau compte (rdp_host_save précède cet appel), donc
+    // il ne compte plus pour l'ancien. Trouvé par l'audit du 7 septembre 2026 :
+    // deux bureaux vers le même serveur partagent l'entrée, déplacer l'un
+    // effaçait le mot de passe de l'autre.
+    let partage =
+        rdphost::load_hosts().is_ok_and(|hosts| compte_encore_utilise(&hosts, "", &ancien));
+    if partage {
+        Ok(())
+    } else {
+        avash::secrets::forget(&ancien).map_err(|e| format!("{e:#}"))
+    }
 }
 
 /// Retient qu'un serveur ne sait pas faire de NLA, après accord de l'utilisateur.
@@ -598,7 +643,9 @@ pub fn rdp_password_move(
 #[tauri::command]
 pub fn rdp_host_set_sans_nla(id: String, valeur: bool) -> Result<(), String> {
     let chemin = avash::rdphost::hosts_path();
-    let mut tous = avash::rdphost::load_hosts_from(&chemin).map_err(|e| format!("{e:#}"))?;
+    // Liste brute : basculer le NLA d'un bureau ne doit pas effacer du fichier
+    // les autres entrées invalides (audit du 7 septembre 2026).
+    let mut tous = avash::rdphost::load_hosts_brut_from(&chemin).map_err(|e| format!("{e:#}"))?;
     let Some(h) = tous.iter_mut().find(|h| h.id == id) else {
         return Err(format!("Bureau RDP inconnu : {id}"));
     };
@@ -805,6 +852,55 @@ mod tests_annonce {
         assert_eq!(
             message_arret("connexion…\nError: Le certificat a changé.\n\nEmpreinte : abc\nRetirez la ligne.\n"),
             "Le certificat a changé.\n\nEmpreinte : abc\nRetirez la ligne."
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_compte_partage {
+    use super::*;
+
+    fn bureau(id: &str, host: &str, port: u16, user: &str) -> RdpHost {
+        let mut h = RdpHost::new("", host, port, user, 0, 0);
+        h.id = id.to_string();
+        h
+    }
+
+    #[test]
+    fn deux_bureaux_vers_le_meme_serveur_partagent_le_compte() {
+        // Trouvé par l'audit du 7 septembre 2026 : le compte du trousseau dérive
+        // de `rdp:user@host:port`, jamais de l'`id` du bureau. Deux bureaux vers
+        // le même serveur partagent l'entrée ; supprimer l'un ne doit pas oublier
+        // le mot de passe tant que l'autre le réclame.
+        let a = bureau("a", "srv", 3389, "admin");
+        let b = bureau("b", "srv", 3389, "admin");
+        let compte = a.compte_trousseau();
+        let restants = vec![b];
+        assert!(
+            compte_encore_utilise(&restants, "a", &compte),
+            "le bureau b réclame encore le compte : ne pas l'oublier"
+        );
+    }
+
+    #[test]
+    fn un_seul_bureau_vers_le_serveur_laisse_oublier_le_compte() {
+        let a = bureau("a", "srv", 3389, "admin");
+        let compte = a.compte_trousseau();
+        let restants = vec![a];
+        assert!(
+            !compte_encore_utilise(&restants, "a", &compte),
+            "plus aucun autre bureau : le compte est orphelin"
+        );
+    }
+
+    #[test]
+    fn un_port_different_ne_partage_pas_le_compte() {
+        let a = bureau("a", "srv", 3389, "admin");
+        let b = bureau("b", "srv", 3390, "admin");
+        let compte = a.compte_trousseau();
+        assert!(
+            !compte_encore_utilise(&[b], "a", &compte),
+            "port 3390 distinct : compte différent"
         );
     }
 }

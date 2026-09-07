@@ -68,6 +68,18 @@ pub(crate) async fn sftp_of(
 /// Un chemin distant sans nom de fichier exploitable (`/`, `.`, `..`) ne doit
 /// PAS retomber silencieusement sur le dossier de telechargement lui-meme :
 /// l'ecriture echouerait ensuite avec une erreur obscure.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : le front ne passe jamais `local`
+/// (`web/sftp.ts`), et l'on rendait `~/Téléchargements/<nom>` sans regarder si
+/// le fichier existait. Télécharger un second `backup.sql` (autre hôte, autre
+/// jour) écrasait le premier sans un mot ; télécharger un dossier distant sur un
+/// dossier local homonyme les fusionnait et remplaçait d'un coup tous les
+/// fichiers de même nom. On choisit donc un nom local libre (`nom (2).ext`),
+/// comme la réception RDP ne remplace jamais un fichier existant (SECURITY.md).
+/// C'est ici, à la racine du transfert, que le nom se décide : le cas dossier
+/// est couvert comme le cas fichier. La reprise n'en pâtit pas : elle s'appuie
+/// sur le `.part` dérivé de ce chemin, jamais sur la cible finale, et le nom est
+/// choisi une seule fois par téléchargement, ici, puis réutilisé.
 pub(crate) fn local_target(remote: &str, local: Option<String>) -> Result<String, String> {
     if let Some(l) = local {
         return Ok(l);
@@ -75,10 +87,37 @@ pub(crate) fn local_target(remote: &str, local: Option<String>) -> Result<String
     let name = std::path::Path::new(remote)
         .file_name()
         .ok_or_else(|| format!("Chemin distant sans nom de fichier : {remote}"))?;
-    Ok(avash::sftp::default_local_dir()
-        .join(name)
-        .to_string_lossy()
-        .into_owned())
+    let base = avash::sftp::default_local_dir().join(name);
+    Ok(chemin_local_libre(&base).to_string_lossy().into_owned())
+}
+
+/// Premier chemin libre à partir de `base` : `base`, puis `base (2)`,
+/// `base (3)`… en glissant le « (n) » avant l'extension.
+///
+/// Seule l'existence de la cible FINALE compte, jamais celle d'un `.part` : un
+/// téléchargement interrompu puis relancé doit retomber sur le même nom pour
+/// reprendre son `.part`, au lieu de glisser au nom suivant.
+fn chemin_local_libre(base: &std::path::Path) -> std::path::PathBuf {
+    if !base.exists() {
+        return base.to_path_buf();
+    }
+    let dir = base.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let tige = base
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = base.extension().map(|e| e.to_string_lossy().into_owned());
+    for n in 2..=u32::MAX {
+        let nom = match &ext {
+            Some(e) => format!("{tige} ({n}).{e}"),
+            None => format!("{tige} ({n})"),
+        };
+        let candidat = dir.join(nom);
+        if !candidat.exists() {
+            return candidat;
+        }
+    }
+    base.to_path_buf() // inatteignable : 2^32 homonymes déjà présents
 }
 
 /// Résout un chemin distant en absolu (`.` → home). Certains serveurs SFTP
@@ -148,8 +187,8 @@ fn retirer(store: &tauri::State<'_, TransfertsStore>, transfert: u64) {
 ///
 /// `transfert` identifie la ligne dans la file du panneau ; `termines` et
 /// `nombre` ne servent qu'aux dossiers.
-fn progress_reporter(
-    app: &AppHandle,
+fn progress_reporter<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     id: u64,
     transfert: u64,
     name: &str,
@@ -253,7 +292,9 @@ pub async fn sftp_upload(
         })
         .await
     } else {
-        sftp.upload_reprise(local_path, &remote, Some(&annulation), |f, t| {
+        // Envoi de fichier unitaire : on refuse d'écraser une cible du même nom
+        // (audit du 7 septembre 2026), sauf reprise d'un envoi interrompu.
+        sftp.upload_reprise(local_path, &remote, true, Some(&annulation), |f, t| {
             report(&name, f, t, 0, 1);
         })
         .await
@@ -274,8 +315,8 @@ pub async fn sftp_upload(
 /// contact et refusée si elle change, comme ici.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
-pub async fn sftp_copier_vers(
-    app: AppHandle,
+pub async fn sftp_copier_vers<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: tauri::State<'_, SessionStore>,
     transferts: tauri::State<'_, TransfertsStore>,
     id: u64,
@@ -292,6 +333,13 @@ pub async fn sftp_copier_vers(
         .ok_or_else(|| format!("Chemin distant sans nom : {remote}"))?;
     let chez_cible = remote_join(&remote_dir_cible, &name);
     if direct {
+        // Note (audit du 7 septembre 2026) : la copie DIRECTE laisse `scp -rpq`
+        // écrire chez la cible, y compris par-dessus un fichier du même nom. On
+        // ne sonde pas la cible pour l'en empêcher : le mode direct a justement
+        // pour contrat que le poste ne médie pas le transfert (aucun canal SFTP
+        // ouvert vers la cible), et ce mode est un choix avancé, décoché par
+        // défaut. La protection contre l'écrasement porte sur le mode relais (par
+        // défaut) et sur l'envoi/le téléchargement.
         // scp chez la source, vers la cible, avec l'agent du poste prêté.
         let (executer, cible) = {
             let store = state.inner.lock().unwrap();
@@ -330,7 +378,17 @@ pub async fn sftp_copier_vers(
             citer(&hote),
             citer(&chez_cible)
         );
-        let (sortie, code) = executer(commande).await?;
+        // Trouvé par l'audit du 7 septembre 2026 : cette branche n'inscrivait
+        // aucun drapeau, si bien que `sftp_annuler` rendait `false` et que le
+        // bouton « Annuler » du front (affiché sur toute ligne en cours) ne
+        // faisait rien, sans le dire. On inscrit désormais le transfert et l'on
+        // passe le drapeau à `run_avec_agent`, qui coupe le scp distant quand il
+        // est levé ; `retirer` l'ôte en succès comme en erreur (sinon un
+        // transfert terminé resterait « annulable »).
+        let annulation = inscrire(&transferts, transfert);
+        let issue = executer(commande, Some(annulation)).await;
+        retirer(&transferts, transfert);
+        let (sortie, code) = issue?;
         if code != 0 {
             let detail = sortie.trim();
             return Err(format!(
@@ -356,9 +414,18 @@ pub async fn sftp_copier_vers(
             .await
     } else {
         source
-            .relayer_vers(&remote, &cible, &chez_cible, Some(&annulation), |f, t| {
-                report(&name, f, t, 0, 1);
-            })
+            .relayer_vers(
+                &remote,
+                &cible,
+                &chez_cible,
+                // Copie d'un fichier unitaire : ne pas écraser une cible du même
+                // nom (audit du 7 septembre 2026). Le dossier, lui, fusionne.
+                true,
+                Some(&annulation),
+                |f, t| {
+                    report(&name, f, t, 0, 1);
+                },
+            )
             .await
     };
     retirer(&transferts, transfert);

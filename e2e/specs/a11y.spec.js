@@ -46,4 +46,25 @@ describe("Accessibilité des boîtes de dialogue", () => {
     );
     expect(sans).toEqual([]);
   });
+
+  // Trouvé par l'audit du 7 septembre 2026 : `.modal input:focus { outline:
+  // none }` écrasait l'anneau :focus-visible des radios cachées (0×0) des
+  // interrupteurs segmentés. En Maj+Tab depuis « Adresse ou IP » le focus
+  // arrivait sur la radio SSH sans qu'aucun indicateur n'apparaisse (WCAG
+  // 2.4.7). On met l'état complet DANS l'assertion (comme axe.spec.js) : un
+  // simple booléen rendrait un échec de CI indéchiffrable, et closest() renvoie
+  // null si le focus n'est pas où on croit.
+  it("l'interrupteur segmenté montre le focus clavier", async () => {
+    await $("#manual-btn").click();
+    await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
+    await browser.keys(["Shift", "Tab"]);
+    const etat = await browser.execute(() => {
+      const a = document.activeElement;
+      const pastille = a && a.closest(".auth-switch .radio");
+      if (!pastille) return { type: a && a.type, trouve: false };
+      return { type: a.type, trouve: true, contour: getComputedStyle(pastille).outlineStyle };
+    });
+    expect(etat).toEqual({ type: "radio", trouve: true, contour: "solid" });
+    await browser.keys("Escape");
+  });
 });

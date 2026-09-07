@@ -251,6 +251,15 @@ function makeHostDraggable(el: HTMLElement, kind: "ssh" | "rdp", id: string) {
 
 /** Déplace un hôte (SSH ou RDP) dans un dossier, puis recharge. */
 export async function moveHostTo(kind: string, id: string, folder: string) {
+  // Trouvé par l'audit du 7 septembre 2026 : redéposer un hôte dans son propre
+  // dossier réécrivait ~/.ssh/config pour rien. On ne bouge pas si la cible est
+  // déjà son dossier. (Ne suffit pas à fermer le dépôt racine sur une ligne :
+  // là, la cible « racine » diffère du dossier de l'hôte — voir setupFolderDrop.)
+  const actuel =
+    kind === "ssh"
+      ? (state.hosts.find((h) => h.alias === id)?.folder ?? "")
+      : (state.rdpHosts.find((h) => h.id === id)?.folder ?? "");
+  if (actuel === folder) return;
   try {
     if (kind === "ssh") await invoke("host_set_folder", { alias: id, folder });
     else await invoke("rdp_host_set_folder", { id, folder });
@@ -262,14 +271,28 @@ export async function moveHostTo(kind: string, id: string, folder: string) {
 
 /** Rend un élément « cible de dépôt » pour ranger un hôte dans `folder`. */
 export function setupFolderDrop(el: HTMLElement, folder: string, hover = true) {
+  // Trouvé par l'audit du 7 septembre 2026 : la zone racine (#host-list, câblée
+  // avec hover = false) couvre toute la liste. Les lignes `.host` n'ont aucun
+  // écouteur de dépôt et les événements y remontaient jusqu'ici : relâcher un
+  // hôte sur une autre ligne — ou sur lui-même après un micro-glissé, faute de
+  // pointer-events:none sur `.dragging` — le renvoyait à la racine et réécrivait
+  // ~/.ssh/config. À la racine, on n'accepte donc que le vide, hors de toute
+  // ligne (le placeholder `.host-empty` reste une cible racine légitime). Les
+  // `.folder-row` gardent leur propre écouteur (hover = true) et stoppent la
+  // propagation, ce cas ne passe pas par ici.
+  const surLigne = (e: Event) =>
+    !hover && (e.target as HTMLElement | null)?.closest(".host, .folder-row") != null;
   el.addEventListener("dragover", (e) => {
     if (!e.dataTransfer?.types.includes("text/avash-host")) return;
+    // Pas de preventDefault sur une ligne : le curseur affiche « interdit ».
+    if (surLigne(e)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (hover) el.classList.add("drop-hover");
   });
   el.addEventListener("dragleave", () => el.classList.remove("drop-hover"));
   el.addEventListener("drop", (e) => {
+    if (surLigne(e)) return;
     e.preventDefault();
     e.stopPropagation();
     el.classList.remove("drop-hover");
@@ -621,7 +644,12 @@ export async function openSerie(cible: { chemin: string; vitesse: number }) {
       session.tab.querySelector(".label")!.textContent = label;
       setSessionState(id, "live");
     } catch (e) {
-      term.write(`\r\n\x1b[31m${t("connexion-impossible", { e: String(e) })}\x1b[0m\r\n`);
+      // Trouvé par l'audit du 7 septembre 2026 : « connexion-impossible »
+      // n'existe dans aucun dictionnaire, t() affichait la clé brute et
+      // avalait le message du cœur (port occupé, chemin absent, droits).
+      // On réutilise « echec-connexion » (même variable {e}), déjà servie par
+      // le chemin SSH juste en dessous.
+      term.write(`\r\n\x1b[31m${t("echec-connexion", { e: String(e) })}\x1b[0m\r\n`);
       session.closed = true;
       setSessionState(id, "closed");
       throw e;
@@ -905,6 +933,14 @@ async function listenPty() {
       // marquer la nouvelle comme morte.
       if (!s || s.closed) return;
       markClosed(s, `── ${t("session-terminee-minuscule")} ──`);
+    });
+    // L'enregistrement a échoué en cours de route (disque plein) : le back a
+    // retiré l'enregistreur, on éteint le voyant et on prévient, plutôt que de
+    // laisser croire à un fichier complet. Trouvé par l'audit du 7 septembre 2026.
+    await listen<{ id: number; chemin: string; erreur: string }>("enregistrement-erreur", (ev) => {
+      const s = state.sessions.get(ev.payload.id);
+      s?.tab.classList.remove("rec");
+      notifyErreur(t("enregistrement-erreur", { e: ev.payload.erreur }));
     });
   } catch (e) {
     // Un echec ici rend TOUS les terminaux muets : la sortie du serveur

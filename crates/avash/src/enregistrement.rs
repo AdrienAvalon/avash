@@ -19,10 +19,20 @@ use std::time::Instant;
 
 /// Un enregistrement en cours : un fichier ouvert et l'instant de départ.
 pub struct Enregistreur {
-    fichier: std::io::BufWriter<std::fs::File>,
+    // Un écrivain effacé (`Box<dyn Write>`) plutôt que le `File` nu : ça ne
+    // change rien à la production, mais laisse les tests injecter un écrivain
+    // qui refuse après N octets pour rejouer un disque plein sans dépendre de
+    // `/dev/full` (absent sous Windows). Trouvé par l'audit du 7 septembre 2026.
+    fichier: std::io::BufWriter<Box<dyn std::io::Write + Send>>,
     chemin: PathBuf,
     depart: Instant,
     octets: u64,
+    // Première erreur d'écriture rencontrée. Mémorisée pour que `arreter` la
+    // signale même si le disque s'est libéré entre-temps : sans elle, une
+    // écriture refusée en cours de route était avalée, l'enregistrement
+    // reprenait avec un trou, et `arreter` rendait quand même le chemin —
+    // « Enregistrement terminé » sur un fichier lacunaire.
+    erreur: Option<String>,
 }
 
 impl std::fmt::Debug for Enregistreur {
@@ -156,22 +166,48 @@ impl Enregistreur {
                 ))
             })?;
         let mut moi = Self {
-            fichier: std::io::BufWriter::new(fichier),
+            fichier: std::io::BufWriter::new(Box::new(fichier)),
             chemin,
             depart: Instant::now(),
             octets: 0,
+            erreur: None,
         };
-        let horodatage = secondes_epoque();
+        moi.ecrire_entete(libelle, cols, rows)?;
+        Ok(moi)
+    }
+
+    /// Construit un enregistreur sur un écrivain quelconque. Réservé aux tests
+    /// (des deux crates) qui simulent un disque plein sans toucher au système
+    /// de fichiers ; `#[doc(hidden)]` : ce n'est pas une API publique.
+    #[doc(hidden)]
+    pub fn depuis_ecrivain(
+        ecrivain: Box<dyn std::io::Write + Send>,
+        chemin: PathBuf,
+        libelle: &str,
+        cols: u32,
+        rows: u32,
+    ) -> Result<Self> {
+        let mut moi = Self {
+            fichier: std::io::BufWriter::new(ecrivain),
+            chemin,
+            depart: Instant::now(),
+            octets: 0,
+            erreur: None,
+        };
+        moi.ecrire_entete(libelle, cols, rows)?;
+        Ok(moi)
+    }
+
+    fn ecrire_entete(&mut self, libelle: &str, cols: u32, rows: u32) -> Result<()> {
         let entete = serde_json::json!({
             "version": 2,
             "width": cols,
             "height": rows,
-            "timestamp": horodatage,
+            "timestamp": secondes_epoque(),
             "title": libelle,
             "env": { "TERM": "xterm-256color", "SHELL": "" },
         });
-        moi.ligne(&entete.to_string())?;
-        Ok(moi)
+        self.ligne(&entete.to_string())
     }
 
     fn secondes(&self) -> f64 {
@@ -179,9 +215,31 @@ impl Enregistreur {
     }
 
     fn ligne(&mut self, contenu: &str) -> Result<()> {
-        self.fichier.write_all(contenu.as_bytes())?;
-        self.fichier.write_all(b"\n")?;
-        self.fichier.flush()?;
+        // Une écriture déjà refusée condamne l'enregistrement : on ne tente
+        // plus rien et on rejoue l'erreur. Sinon, l'espace disque venant à se
+        // libérer, un événement s'écrivait après un trou (horodatages
+        // monotones : rien ne trahissait la lacune), et l'enregistrement
+        // paraissait complet. Trouvé par l'audit du 7 septembre 2026.
+        if let Some(e) = &self.erreur {
+            return Err(anyhow::anyhow!(e.clone()));
+        }
+        // Contenu et fin de ligne partent en une seule écriture : deux
+        // `write_all` séparés pouvaient, sur disque plein, laisser passer le
+        // contenu et perdre le « \n » ; l'événement suivant se collait alors à
+        // cette ligne, et la relecture s'arrête à la première ligne illisible —
+        // tout ce qui suivait disparaissait, pas seulement la lacune.
+        let mut ligne = Vec::with_capacity(contenu.len() + 1);
+        ligne.extend_from_slice(contenu.as_bytes());
+        ligne.push(b'\n');
+        let ecriture = self
+            .fichier
+            .write_all(&ligne)
+            .and_then(|()| self.fichier.flush());
+        if let Err(e) = ecriture {
+            let message = format!("écriture de l'enregistrement impossible : {e}");
+            self.erreur = Some(message.clone());
+            return Err(anyhow::anyhow!(message));
+        }
         Ok(())
     }
 
@@ -213,9 +271,18 @@ impl Enregistreur {
         self.octets
     }
 
-    /// Termine proprement et rend le chemin du fichier.
+    /// Termine proprement et rend le chemin du fichier. Rend une erreur si une
+    /// écriture a été refusée pendant l'enregistrement : le fichier est
+    /// incomplet, mieux vaut le dire que rendre « terminé ».
     pub fn arreter(mut self) -> Result<PathBuf> {
-        self.fichier.flush()?;
+        let vidage = self.fichier.flush();
+        // Une erreur mémorisée pendant l'enregistrement prime sur le vidage
+        // final : le fichier est lacunaire, `arreter` le signale au lieu de
+        // rendre le chemin comme si tout s'était bien passé.
+        if let Some(e) = self.erreur.take() {
+            return Err(anyhow::anyhow!(e));
+        }
+        vidage.context("vidage final de l'enregistrement")?;
         Ok(self.chemin.clone())
     }
 }
@@ -503,6 +570,71 @@ mod tests {
         assert!(l[0].octets > l[1].octets);
         assert!(l[0].modifie > l[1].modifie);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Un écrivain qui accepte `quota` octets (partagé, ajustable) puis renvoie
+    /// ENOSPC, en gardant ce qu'il a laissé passer. Il rejoue un disque qui se
+    /// remplit puis se libère, sans dépendre de `/dev/full`.
+    struct DisquePlein {
+        quota: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        ecrit: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl std::io::Write for DisquePlein {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            use std::sync::atomic::Ordering::SeqCst;
+            let q = self.quota.load(SeqCst);
+            if q == 0 {
+                return Err(std::io::Error::other("No space left on device"));
+            }
+            let n = buf.len().min(q);
+            self.ecrit.lock().unwrap().extend_from_slice(&buf[..n]);
+            self.quota.store(q - n, SeqCst);
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Une écriture refusée (disque plein) arrête l'enregistrement et le dit,
+    /// même si l'espace se libère ensuite. Avant l'audit du 7 septembre 2026,
+    /// l'erreur était avalée : l'enregistrement reprenait après le trou dès que
+    /// la place revenait, et `arreter` rendait le chemin comme si de rien
+    /// n'était — « Enregistrement terminé » sur un fichier lacunaire.
+    #[test]
+    fn une_ecriture_refusee_arrete_l_enregistrement_et_le_dit() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let quota = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(4096));
+        let ecrit = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut e = Enregistreur::depuis_ecrivain(
+            Box::new(DisquePlein {
+                quota: quota.clone(),
+                ecrit: ecrit.clone(),
+            }),
+            PathBuf::from("/inexistant/plein.cast"),
+            "h",
+            80,
+            24,
+        )
+        .expect("l'en-tête tient dans le quota");
+        // Une grosse sortie déborde le quota restant : elle doit échouer.
+        let gros = "x".repeat(8192);
+        assert!(
+            e.sortie(&gros).is_err(),
+            "une écriture au-delà du quota doit remonter l'erreur"
+        );
+        // L'espace se libère. L'enregistrement reste néanmoins condamné : sans
+        // cela, la sortie suivante s'écrirait après un trou muet.
+        quota.store(1_000_000, SeqCst);
+        assert!(
+            e.sortie("reprise\r\n").is_err(),
+            "après un refus, plus aucune sortie ne doit s'écrire"
+        );
+        assert!(
+            e.arreter().is_err(),
+            "arreter doit signaler que le fichier est incomplet"
+        );
     }
 
     #[test]

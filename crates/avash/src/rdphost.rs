@@ -165,8 +165,18 @@ pub fn load_hosts() -> Result<Vec<RdpHost>> {
     load_hosts_from(&hosts_path())
 }
 
-/// Un fichier absent n'est pas une erreur : c'est l'etat initial.
-pub fn load_hosts_from(path: &Path) -> Result<Vec<RdpHost>> {
+/// Toutes les entrées désérialisables du fichier, entrées invalides comprises
+/// (adresse à espace, RDP sans utilisateur), dans leur ordre d'origine. Un
+/// fichier absent n'est pas une erreur : c'est l'etat initial.
+///
+/// Les ÉCRIVAINS (`upsert_host_in`, `remove_host_in`, `folders::remap_rdp`,
+/// `rdp_host_set_folder`, `rdp_host_set_sans_nla`) relisent par ici. Trouvé par
+/// l'audit du 7 septembre 2026 : filtrer les entrées invalides à la lecture les
+/// détruisait à la réécriture suivante — un simple ajout par la fiche ou un
+/// renommage de dossier effaçait du fichier un bureau tapé à la main (nom,
+/// dossier, `sans_nla`), et son mot de passe restait orphelin dans le trousseau.
+/// L'affichage passe, lui, par `load_hosts_from`, qui écarte ces entrées.
+pub fn load_hosts_brut_from(path: &Path) -> Result<Vec<RdpHost>> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -175,13 +185,19 @@ pub fn load_hosts_from(path: &Path) -> Result<Vec<RdpHost>> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let tous: Vec<RdpHost> =
-        serde_yaml::from_str(&text).with_context(|| format!("{} est illisible", path.display()))?;
-    // Un fichier écrit par une version antérieure à la validation d'adresse — ou
-    // édité à la main — peut contenir une adresse à espace ou à saut de ligne.
-    // La laisser passer casserait la clé du fichier d'empreintes RDP, donc le
-    // TOFU, sans que rien ne le signale. Mieux vaut écarter l'entrée.
-    Ok(tous.into_iter().filter(|h| h.validate().is_ok()).collect())
+    serde_yaml::from_str(&text).with_context(|| format!("{} est illisible", path.display()))
+}
+
+/// Les bureaux AFFICHABLES : la lecture brute débarrassée des entrées qu'on
+/// refuse de servir. Une adresse à espace ou à saut de ligne casserait la clé
+/// du fichier d'empreintes RDP, donc le TOFU, sans que rien ne le signale ;
+/// un RDP sans utilisateur ne peut pas se connecter. Le listing et la sonde de
+/// santé passent par ici ; `rdp_open` revalide de son côté.
+pub fn load_hosts_from(path: &Path) -> Result<Vec<RdpHost>> {
+    Ok(load_hosts_brut_from(path)?
+        .into_iter()
+        .filter(|h| h.validate().is_ok())
+        .collect())
 }
 
 /// Ecriture atomique : un plantage en cours d'ecriture ne tronque pas le fichier.
@@ -190,8 +206,12 @@ pub fn save_hosts_to(path: &Path, hosts: &[RdpHost]) -> Result<()> {
 }
 
 pub fn upsert_host_in(path: &Path, host: RdpHost) -> Result<Vec<RdpHost>> {
+    // On refuse toujours d'écrire une entrée NEUVE invalide ; mais on relit la
+    // liste BRUTE (entrées invalides comprises), sans quoi la réécriture
+    // effacerait un bureau déjà présent qu'une version antérieure a laissé
+    // invalide — et le contrôle d'unicité d'`id` doit porter sur la liste brute.
     host.validate()?;
-    let mut all = load_hosts_from(path)?;
+    let mut all = load_hosts_brut_from(path)?;
     match all.iter_mut().find(|h| h.id == host.id) {
         Some(slot) => *slot = host,
         None => all.push(host),
@@ -201,7 +221,9 @@ pub fn upsert_host_in(path: &Path, host: RdpHost) -> Result<Vec<RdpHost>> {
 }
 
 pub fn remove_host_in(path: &Path, id: &str) -> Result<Vec<RdpHost>> {
-    let mut all = load_hosts_from(path)?;
+    // Liste brute : retirer un bureau ne doit pas emporter au passage les
+    // autres entrées invalides (audit du 7 septembre 2026).
+    let mut all = load_hosts_brut_from(path)?;
     all.retain(|h| h.id != id);
     save_hosts_to(path, &all)?;
     Ok(all)
@@ -330,6 +352,97 @@ mod tests {
         assert_eq!(brut.matches("partage").count(), 1, "{brut}");
         let all = remove_host_in(&p, &a.id).unwrap();
         assert_eq!(all, vec![b]);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Écrit un `rdp.yaml` avec un bureau valide A et un bureau invalide B
+    /// (adresse à espace, comme en laisserait une version antérieure à la
+    /// validation d'adresse, ou une édition à la main). `save_hosts_to` ne
+    /// valide pas, donc le fichier peut légitimement contenir B.
+    fn ecrire_a_et_b_invalide(p: &Path) -> (RdpHost, RdpHost) {
+        let a = RdpHost::new("A", "10.0.0.1", 3389, "u", 1280, 800);
+        let mut b = RdpHost::new("B", "x", 3389, "u", 1280, 800);
+        b.host = "srv 01".to_owned(); // adresse à espace : invalide
+        b.folder = "prod".to_owned();
+        b.sans_nla = true;
+        assert!(b.validate().is_err(), "B doit bien être invalide");
+        save_hosts_to(p, &[a.clone(), b.clone()]).unwrap();
+        (a, b)
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : les écrivains relisaient la
+    /// liste FILTRÉE (`load_hosts_from`) puis réécrivaient, si bien qu'un simple
+    /// ajout par la fiche ou une suppression effaçait définitivement du fichier
+    /// une entrée invalide — nom, dossier, `sans_nla` — et son mot de passe restait
+    /// orphelin dans le trousseau. La lecture brute conserve désormais B ; seul
+    /// le listing affichable l'écarte.
+    #[test]
+    fn une_entree_invalide_n_est_pas_effacee_par_un_upsert() {
+        let p = temp();
+        let _ = std::fs::remove_file(&p);
+        let (a, b) = ecrire_a_et_b_invalide(&p);
+
+        // L'utilisateur ajoute C par la fiche RDP.
+        let c = RdpHost::new("C", "10.0.0.3", 3389, "w", 1280, 800);
+        upsert_host_in(&p, c.clone()).unwrap();
+
+        // B figure encore dans le fichier brut, intacte et à sa place.
+        assert_eq!(
+            load_hosts_brut_from(&p).unwrap(),
+            vec![a.clone(), b.clone(), c.clone()],
+            "B effacée ou déplacée par l'upsert"
+        );
+        // ... mais le listing affichable ne montre pas B (adresse cassée).
+        assert_eq!(load_hosts_from(&p).unwrap(), vec![a.clone(), c.clone()]);
+
+        // remove_host_in ne l'emporte pas non plus.
+        remove_host_in(&p, &a.id).unwrap();
+        assert_eq!(
+            load_hosts_brut_from(&p).unwrap(),
+            vec![b, c],
+            "B effacée par la suppression de A"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Deux garanties du correctif du 7 septembre 2026 : une entrée invalide
+    /// garde sa PLACE (les écritures ne réordonnent pas le fichier), et le
+    /// contrôle d'unicité d'`id` porte sur la liste BRUTE (un upsert d'un `id`
+    /// présent seulement parmi les écartées remplace l'entrée au lieu de créer
+    /// un doublon d'`id`).
+    #[test]
+    fn une_entree_invalide_garde_sa_place_et_son_id_apres_upsert() {
+        let p = temp();
+        let _ = std::fs::remove_file(&p);
+        let (_, b) = ecrire_a_et_b_invalide(&p);
+        let id_b = b.id.clone();
+
+        // 1. Ajouter C garde B au milieu, pas rejetée en fin de fichier.
+        let c = RdpHost::new("C", "10.0.0.3", 3389, "w", 0, 0);
+        upsert_host_in(&p, c).unwrap();
+        let noms: Vec<_> = load_hosts_brut_from(&p)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.name)
+            .collect();
+        assert_eq!(noms, ["A", "B", "C"], "B a changé de place");
+
+        // 2. Un upsert de l'id de B (invisible dans la liste filtrée) remplace
+        // B au lieu de créer un doublon d'id.
+        let mut remplacant = RdpHost::new("B corrigé", "10.0.0.2", 3389, "u", 0, 0);
+        remplacant.id = id_b.clone();
+        upsert_host_in(&p, remplacant).unwrap();
+        let brut = load_hosts_brut_from(&p).unwrap();
+        assert_eq!(
+            brut.iter().filter(|h| h.id == id_b).count(),
+            1,
+            "doublon d'id créé : le contrôle d'unicité a raté l'entrée écartée"
+        );
+        assert_eq!(brut[1].id, id_b);
+        assert_eq!(
+            brut[1].name, "B corrigé",
+            "le remplacement a changé de place"
+        );
         let _ = std::fs::remove_file(&p);
     }
 }

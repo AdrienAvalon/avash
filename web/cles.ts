@@ -10,7 +10,8 @@ type KeyEntry = {
   name: string;
   path: string;
   public_line: string | null;
-  mode: string;
+  // null là où le système n'a pas de bits de permission (Windows : ACL).
+  mode: string | null;
 };
 
 const keysModal = () => $("keys-modal");
@@ -59,9 +60,19 @@ async function keysRefresh() {
     // Des droits trop ouverts font refuser la cle par OpenSSH : on le signale
     // plutot que de laisser l'utilisateur devant un echec incomprehensible.
     const mode = document.createElement("span");
-    mode.className = "kmode" + (k.mode === "600" ? "" : " warn");
-    mode.textContent = k.mode === "600" ? "600" : `${k.mode} ⚠`;
-    mode.title = k.mode === "600" ? t("cles-droits-corrects") : t("cles-droits-600");
+    if (k.mode === null) {
+      // Windows n'a pas de bits de permission : les droits passent par une ACL
+      // (posee par icacls). Afficher « - ⚠ OpenSSH exige 600 » accusait des
+      // droits que le systeme n'a pas ; on montre une etiquette neutre, sans
+      // avertissement (audit du 7 septembre 2026).
+      mode.className = "kmode";
+      mode.textContent = t("cles-droits-acl");
+      mode.title = t("cles-droits-acl-detail");
+    } else {
+      mode.className = "kmode" + (k.mode === "600" ? "" : " warn");
+      mode.textContent = k.mode === "600" ? "600" : `${k.mode} ⚠`;
+      mode.title = k.mode === "600" ? t("cles-droits-corrects") : t("cles-droits-600");
+    }
 
     row.append(name, mode);
 
@@ -116,19 +127,22 @@ async function keygenSubmit(ev: Event) {
   }
 }
 
-async function deploySubmit(ev: Event) {
+export async function deploySubmit(ev: Event) {
   ev.preventDefault();
   const btn = $("d-submit") as HTMLButtonElement;
   const val = (id: string) => ($(id) as HTMLInputElement).value.trim();
   const portRaw = val("d-port");
   btn.disabled = true;
-  btn.textContent = "Installation…";
+  btn.textContent = t("cles-installation-en-cours");
   try {
     const msg = await invoke<string>("key_deploy", {
       addr: val("d-addr"),
       port: portRaw ? Number(portRaw) : null,
       user: val("d-user"),
-      password: val("d-password"),
+      // Le mot de passe est lu brut (pas de trim) : une espace de tête ou de
+      // fin appartient au secret et le serveur le refuserait rogné (audit du
+      // 7 septembre 2026). Les autres champs restent rognés à dessein.
+      password: ($("d-password") as HTMLInputElement).value,
       publicLine: ($("d-key") as HTMLSelectElement).value,
     });
     keyFeedback(msg, "ok");

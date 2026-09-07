@@ -47,6 +47,15 @@ serialport = { version = "4", default-features = false }
 # futures. `futures` est déjà dans l'arbre (russh en dépend).
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
+# Pageant (agent SSH de PuTTY) : russh l'utilise déjà pour l'auth
+# (`connect_pageant`) et le tire donc dans l'arbre sous Windows. On le prend en
+# dépendance directe pour ouvrir son transport BRUT (`PageantStream`) et relayer
+# la redirection d'agent d'une copie directe d'hôte à hôte — l'`AgentClient` de
+# russh (couche protocole) n'expose pas ce flux. Cible Windows seulement : nul
+# effet sur les autres plateformes.
+[target.'cfg(windows)'.dependencies]
+pageant = "0.2"
+
 [dev-dependencies]
 bytes = "1.12.1"
 # Un pseudo-terminal pour éprouver la session série sans matériel (openpty).

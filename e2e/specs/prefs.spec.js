@@ -19,10 +19,6 @@ describe("Presse-papiers RDP — réglage de partage", () => {
   const libelle = async () => $("#palette-results .item .name").getProperty("textContent");
   const reglage = async () => browser.execute((k) => localStorage.getItem(k), CLE);
 
-  before(async () => {
-    await browser.execute((k) => localStorage.removeItem(k), CLE);
-  });
-
   it("propose la bascule à la palette, en annonçant l'état courant", async () => {
     await ouvrirPalette();
     // Rien n'a jamais été réglé : le partage est actif, la commande propose donc

@@ -57,7 +57,9 @@ function renderSnippets() {
     if (nVars > 0) {
       const b = document.createElement("span");
       b.className = "svar";
-      b.textContent = `${nVars} var${nVars > 1 ? "s" : ""}`;
+      // Pluriel par clé, jamais par concaténation : sinon l'anglais héritait
+      // du « s » posé sur la forme française (audit du 7 septembre 2026).
+      b.textContent = t(nVars > 1 ? "snippets-var-n" : "snippets-var-1", { n: nVars });
       row.querySelector(".sname")!.appendChild(b);
     }
     row.querySelector(".scmd")!.textContent = snippetPreview(sn.command);
@@ -75,7 +77,7 @@ function snippetFormReset() {
   ($("sn-id") as HTMLInputElement).value = "";
   ($("sn-run") as HTMLInputElement).checked = true;
   $("snippet-form-title").textContent = t("nouveau-snippet");
-  $("sn-submit").textContent = "Enregistrer";
+  $("sn-submit").textContent = t("enregistrer");
   $("sn-reset").hidden = true;
   $("sn-error").hidden = true;
   snippetSyncVars();
@@ -83,7 +85,9 @@ function snippetFormReset() {
 
 function snippetSyncVars() {
   const vars = snippetVars(($("sn-command") as HTMLTextAreaElement).value);
-  $("sn-vars").textContent = vars.length ? `Variables : ${vars.map((v) => `{{${v}}}`).join(", ")}` : "";
+  $("sn-vars").textContent = vars.length
+    ? t("snippets-variables", { liste: vars.map((v) => `{{${v}}}`).join(", ") })
+    : "";
 }
 
 function snippetEdit(sn: Snippet) {

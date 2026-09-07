@@ -105,19 +105,33 @@ describe("lecteur audio du bureau distant", () => {
     expect([lecteur.blocs, lecteur.echantillons]).toEqual([2, 960]);
   });
 
-  it("repart du présent quand le curseur a pris trop d'avance ou est resté en arrière", () => {
+  it("jette les blocs en trop sans les superposer quand le curseur a pris trop d'avance, et repart du présent quand il est resté en arrière", () => {
     const lecteur = new LecteurAudio();
-    // Un serveur qui pousse plus vite que le temps réel : 600 ms de son
-    // arrivent à l'instant 1. Le curseur file jusqu'à la demi-seconde
-    // d'avance tolérée, puis le bloc suivant repart de maintenant + 50 ms ;
-    // aucun bloc n'est jamais programmé plus d'une demi-seconde devant.
+    // Rafale après une coupure réseau (cas Wi-Fi le plus courant, audit du
+    // 7 septembre 2026) : 600 ms de son, 60 blocs de 10 ms, arrivent d'un coup
+    // à l'instant 1. Le curseur file jusqu'à la demi-seconde d'avance tolérée ;
+    // au-delà, les blocs sont jetés (le flux rattrape en sautant) au lieu
+    // d'être reprogrammés par-dessus les sources déjà en vol.
     for (let i = 0; i < 60; i++) lecteur.jouer(blocStereo(480));
     const ctx = ContexteFactice.instances[0];
-    expect(ctx.departs).toHaveLength(60);
+    // Aucun chevauchement : chaque départ est au moins la durée d'un bloc
+    // (10 ms) après le précédent. C'est ce que l'ancien code violait, en
+    // ramenant le curseur au présent pendant que les blocs 1-5 jouaient encore.
+    for (let i = 1; i < ctx.departs.length; i++) {
+      expect(ctx.departs[i]).toBeGreaterThanOrEqual(ctx.departs[i - 1] + 0.01 - 1e-9);
+    }
+    // Rien n'est programmé au-delà de la demi-seconde d'avance...
     expect(Math.max(...ctx.departs)).toBeLessThanOrEqual(1.5 + 1e-6);
-    const reprises = ctx.departs.slice(1).filter((t) => Math.abs(t - 1.05) < 1e-6);
-    expect(reprises.length).toBeGreaterThanOrEqual(1);
-    // Un onglet resté caché : le temps a couru, le curseur est en arrière.
+    // ... donc des blocs ont bien été jetés : moins de sources que de blocs, et
+    // aucune source jetée n'a été programmée (départs = sources créées).
+    expect(ctx.departs.length).toBeLessThan(60);
+    expect(ctx.departs.length).toBeLessThanOrEqual(51);
+    // Les blocs jetés restent comptés comme reçus (le décrochage reste lisible
+    // au diagnostic), mais pas comme joués.
+    expect(lecteur.echantillons).toBe(60 * 480);
+    expect(lecteur.blocs).toBe(ctx.departs.length);
+    // Un onglet resté caché : le temps a couru, le curseur est en arrière. Là
+    // rien n'est en vol, on repart du présent sans risque de superposition.
     ctx.currentTime = 10;
     lecteur.jouer(blocStereo(480));
     expect(ctx.departs.at(-1)).toBeCloseTo(10.05, 6);

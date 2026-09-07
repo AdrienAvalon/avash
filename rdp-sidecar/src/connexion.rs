@@ -16,31 +16,64 @@ use ironrdp::dvc::DrdynvcClient;
 use ironrdp::pdu::gcc::KeyboardType;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
+use std::time::Duration;
 use tokio::net::TcpStream;
+
+/// Drapeau MS-RDPBCGR 2.2.13.1.1 : le mot de passe de la redirection est chiffré
+/// par la clé publique du serveur d'arrivée. Il ne sert alors qu'à RDSTLS, qui le
+/// transporte tel quel ; CredSSP ne saurait qu'en faire.
+const LB_PASSWORD_IS_PK_ENCRYPTED: u32 = 0x0001_0000;
+
+/// Décode de l'UTF-16 petit-boutien (le mot de passe en clair d'une redirection),
+/// en s'arrêtant au terminateur nul. Le PDU de redirection porte ses chaînes en
+/// UTF-16LE : les décoder en UTF-8 donnerait un mot de passe faux.
+fn utf16le_vers_string(o: &[u8]) -> String {
+    let mots: Vec<u16> = o
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u16::from_le_bytes(*p))
+        .take_while(|c| *c != 0)
+        .collect();
+    String::from_utf16_lossy(&mots)
+}
 
 fn build_config(
     a: &Args,
     redirection: Option<&ironrdp::session::redirection::Redirection>,
 ) -> connector::Config {
     let (username, domain) = split_credentials(&a.user, a.domain.as_deref());
+    // Identité effective après une éventuelle redirection. Le serveur d'arrivée
+    // impose SES nom d'utilisateur et domaine — engendrés pour l'occasion : c'est
+    // ainsi que GNOME remet la connexion d'un démon à l'autre.
+    //
+    // Le mot de passe demande plus de soin. Trouvé par l'audit du 7 septembre
+    // 2026 : si le serveur d'arrivée retient HYBRID plutôt que RDSTLS (un hôte
+    // RDS Windows derrière un broker, quand la redirection ne porte pas de mot de
+    // passe), c'est CredSSP qui part — avec CES identifiants. Or le mot de passe
+    // fourni par la redirection est chiffré par la clé publique du serveur
+    // (LB_PASSWORD_IS_PK_ENCRYPTED) et ne sert qu'à RDSTLS, qui le transporte tel
+    // quel : CredSSP ne saurait qu'en faire. On ne réutilise donc le mot de passe
+    // de la redirection que s'il est présent ET en clair (UTF-16LE) ; sinon on
+    // retombe sur le mot de passe saisi. Sans quoi CredSSP partait avec un mot de
+    // passe vide et le domaine tapé (et non celui de la redirection) —
+    // STATUS_LOGON_FAILURE, et une tentative échouée journalisée sur l'hôte cible.
+    let (username, domain, password) = match redirection {
+        Some(r) => (
+            r.utilisateur.clone().unwrap_or(username),
+            r.domaine.clone().or(domain),
+            match (
+                r.mot_de_passe.as_deref(),
+                r.drapeaux & LB_PASSWORD_IS_PK_ENCRYPTED,
+            ) {
+                (Some(p), 0) => utf16le_vers_string(p),
+                _ => a.pass.clone(),
+            },
+        ),
+        None => (username, domain, a.pass.clone()),
+    };
     connector::Config {
-        // Après une redirection, le serveur impose SES identifiants — engendrés
-        // pour l'occasion — et non ceux de l'utilisateur. C'est ainsi que GNOME
-        // remet la connexion d'un démon à l'autre.
-        credentials: match redirection {
-            Some(r) if r.utilisateur.is_some() => Credentials::UsernamePassword {
-                username: r.utilisateur.clone().unwrap_or_default(),
-                password: r
-                    .mot_de_passe
-                    .as_ref()
-                    .map(|o| String::from_utf8_lossy(o).into_owned())
-                    .unwrap_or_default(),
-            },
-            _ => Credentials::UsernamePassword {
-                username,
-                password: a.pass.clone(),
-            },
-        },
+        credentials: Credentials::UsernamePassword { username, password },
         domain,
         // `enable_tls` annonce PROTOCOL_SSL au serveur, ce qui — la
         // documentation d'ironrdp le dit mot pour mot — revient à **accepter le
@@ -280,6 +313,77 @@ where
     Ok(())
 }
 
+/// TOFU sur le certificat du serveur RDP, AVANT CredSSP : premier contact
+/// mémorisé, certificat connu accepté, certificat changé refusé sans que rien ne
+/// soit réécrit dans le fichier des empreintes.
+///
+/// Extrait de `connect` pour être éprouvable sans une vraie poignée IronRDP
+/// (trouvé par l'audit du 7 septembre 2026 : le montage complet n'était testé
+/// que pour VNC via `vnc_tls::monter` ; côté RDP, rien ne verrouillait le format
+/// de la clé d'épinglage — « hôte:port » NUE, sans préfixe, contrairement à
+/// « vnc:hôte:port », et à ne surtout pas préfixer sous peine de réapprendre en
+/// silence toutes les empreintes déjà mémorisées — ni le refus au changement,
+/// qu'un `memoriser_empreinte` glissé à la place du `bail!` aurait mué en
+/// réapprentissage muet).
+fn epingler_certificat(hote: &str, port: u16, pubkey: &[u8]) -> Result<()> {
+    let cle = format!("{hote}:{port}");
+    let presentee = empreinte(pubkey);
+    // Un fichier de confiance illisible (droits, ou UTF-8 invalide) est un refus
+    // explicite, pas un « premier contact » : voir `empreinte_memorisee`.
+    let memorisee =
+        empreinte_memorisee(&cle).context("fichier de confiance illisible, connexion refusée")?;
+    match juger_certificat(memorisee.as_deref(), &presentee) {
+        VerdictCert::Connu => {}
+        VerdictCert::PremierContact => memoriser_empreinte(&cle, &presentee)
+            .context("mémorisation de l'empreinte du serveur RDP")?,
+        VerdictCert::Change { attendue } => {
+            anyhow::bail!(
+                "Le certificat de {cle} a changé.\n\nSoit le serveur a été \
+                 réinstallé, soit quelqu'un intercepte la connexion.\n\n\
+                 Empreinte présentée : {presentee}\nEmpreinte attendue  : {attendue}\n\n\
+                 Si le changement est légitime, retirez la ligne « {cle} » de \
+                 rdp_known_hosts."
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Délai propre à la phase TCP, distinct du délai global de la session (25 s).
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `connect` était enveloppé en entier
+/// dans l'unique délai de 25 s de `session::executer`, la connexion TCP comprise.
+/// Or un hôte dont les SYN restent sans réponse (pare-feu en DROP, machine
+/// éteinte hors du LAN, route noire) n'échoue au niveau du noyau qu'après ~127 s
+/// (`net.ipv4.tcp_syn_retries = 6`) : c'était donc le délai de 25 s qui tombait,
+/// et la boucle de session émettait « NLA n'a pas abouti » avec le marqueur
+/// `NLA_INDISPONIBLE` qui pousse l'interface à proposer de renoncer à NLA (choix
+/// mémorisé par serveur) — alors qu'aucun octet n'avait été échangé et que NLA
+/// n'avait jamais commencé. On borne donc la connexion TCP à part, avec un
+/// message neutre et SANS le marqueur ; le délai de 25 s ne couvre plus que
+/// TLS, TOFU et CredSSP, dont le message NLA reste juste.
+const DELAI_TCP: Duration = Duration::from_secs(10);
+
+/// Établit la connexion TCP en la bornant par `delai`. Le futur de connexion est
+/// injecté pour que le test puisse exercer le dépassement sans hôte réel. En cas
+/// de dépassement, l'erreur est neutre et ne porte PAS le marqueur
+/// `NLA_INDISPONIBLE` : une panne TCP pure n'est pas un échec d'authentification.
+async fn connecter_tcp(
+    host: &str,
+    port: u16,
+    delai: Duration,
+    connexion: impl std::future::Future<Output = std::io::Result<TcpStream>>,
+) -> Result<TcpStream> {
+    match tokio::time::timeout(delai, connexion).await {
+        Ok(r) => r.with_context(|| format!("connexion TCP à {host}:{port}")),
+        Err(_) => anyhow::bail!(
+            "Le serveur {host}:{port} ne répond pas (aucune réponse TCP en {} s) : \
+             vérifiez l'adresse, le réseau et le pare-feu.",
+            delai.as_secs()
+        ),
+    }
+}
+
 pub(crate) async fn connect(
     a: &Args,
     clip_backend: ClipBackend,
@@ -293,9 +397,13 @@ pub(crate) async fn connect(
     egfx::CanalPartage,
     egfx::FilePartagee,
 )> {
-    let tcp = TcpStream::connect((a.host.as_str(), a.port))
-        .await
-        .with_context(|| format!("connexion TCP à {}:{}", a.host, a.port))?;
+    let tcp = connecter_tcp(
+        &a.host,
+        a.port,
+        DELAI_TCP,
+        TcpStream::connect((a.host.as_str(), a.port)),
+    )
+    .await?;
     // Nagle OFF : les entrées et les petits rectangles d'écran partent sans délai.
     tcp.set_nodelay(true).ok();
     let client_addr = tcp.local_addr()?;
@@ -398,32 +506,35 @@ pub(crate) async fn connect(
 
     // TOFU sur le certificat, AVANT CredSSP : c'est CredSSP qui transmet les
     // identifiants. Vérifier après reviendrait à les avoir déjà livrés.
-    let cle = format!("{}:{}", a.host, a.port);
-    let presentee = empreinte(&pubkey);
-    match juger_certificat(empreinte_memorisee(&cle).as_deref(), &presentee) {
-        VerdictCert::Connu => {}
-        VerdictCert::PremierContact => memoriser_empreinte(&cle, &presentee)
-            .context("mémorisation de l'empreinte du serveur RDP")?,
-        VerdictCert::Change { attendue } => {
-            anyhow::bail!(
-                "Le certificat de {cle} a changé.\n\nSoit le serveur a été \
-                 réinstallé, soit quelqu'un intercepte la connexion.\n\n\
-                 Empreinte présentée : {presentee}\nEmpreinte attendue  : {attendue}\n\n\
-                 Si le changement est légitime, retirez la ligne « {cle} » de \
-                 rdp_known_hosts."
-            );
+    epingler_certificat(&a.host, a.port, &pubkey)?;
+
+    // `mark_as_upgraded` ne fait AUCUNE E/S : il ne fait qu'avancer la machine
+    // d'états (EnhancedSecurityUpgrade -> Credssp si le serveur a retenu
+    // HYBRID|HYBRID_EX, sinon BasicSettings). On le fait donc AVANT de décider de
+    // RDSTLS, pour pouvoir interroger `should_perform_credssp()`.
+    let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
+
+    // Connexion redirigée : RDSTLS ne se joue que si le serveur d'arrivée ne
+    // réclame pas CredSSP, et APRÈS la vérification du certificat — il transporte
+    // des identifiants, les livrer à un serveur non vérifié annulerait la
+    // protection qu'on vient d'appliquer.
+    //
+    // Trouvé par l'audit du 7 septembre 2026 : le connecteur porté annonce RDSTLS
+    // EN PLUS de HYBRID|HYBRID_EX (enable_credssp reste vrai) et c'est le serveur
+    // qui tranche. On jouait RDSTLS dès qu'une redirection était en cours, sans
+    // regarder ce choix : si le serveur retenait HYBRID (un hôte RDS Windows
+    // derrière un broker, quand la redirection ne porte pas de mot de passe
+    // chiffré par clé publique), `rdstls_authentifier` bloquait sur son
+    // `read_exact(8)` en attendant des capacités que le serveur — qui attend, lui,
+    // notre premier TSRequest — n'enverrait jamais : blocage mutuel jusqu'au délai
+    // de 25 s, puis « NLA n'a pas abouti ». `should_perform_credssp()` reflète le
+    // choix du serveur une fois `mark_as_upgraded` passé.
+    if let Some(r) = redirection {
+        if !connector.should_perform_credssp() {
+            rdstls_authentifier(&mut upgraded_stream, r).await?;
         }
     }
 
-    // Connexion redirigée : l'authentification RDSTLS vient ici, APRÈS la
-    // vérification du certificat — elle transporte des identifiants, et les
-    // livrer à un serveur non vérifié annulerait la protection qu'on vient
-    // d'appliquer.
-    if let Some(r) = redirection {
-        rdstls_authentifier(&mut upgraded_stream, r).await?;
-    }
-
-    let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
     let mut framed = ironrdp_tokio::TokioFramed::new(upgraded_stream);
     let mut net = ironrdp_tokio::reqwest::ReqwestNetworkClient::new();
     let result = ironrdp_tokio::connect_finalize(
@@ -578,6 +689,61 @@ mod tests_coupure {
 }
 
 #[cfg(test)]
+mod tests_delai_tcp {
+    use super::{connecter_tcp, NLA_INDISPONIBLE};
+    use std::time::Duration;
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un hôte dont les SYN restent
+    /// sans réponse (machine éteinte derrière un pare-feu en DROP) faisait tomber
+    /// le délai global de 25 s de la session, qui diagnostiquait alors « NLA n'a
+    /// pas abouti » avec le marqueur `NLA_INDISPONIBLE` — poussant l'interface à
+    /// proposer de renoncer à NLA sur une panne TCP pure, où aucun octet n'a
+    /// circulé. Le futur de connexion est ici simulé par un `pending` qui ne
+    /// répond jamais : le dépassement doit produire un message NEUTRE, sans le
+    /// marqueur, disant que le serveur ne répond pas.
+    #[tokio::test]
+    async fn un_hote_muet_ne_propose_pas_de_renoncer_a_nla() {
+        let erreur = connecter_tcp(
+            "10.0.0.9",
+            3389,
+            Duration::from_millis(50),
+            std::future::pending(),
+        )
+        .await
+        .expect_err("un hôte qui ne répond jamais doit dépasser le délai");
+        let message = format!("{erreur:#}");
+        assert!(
+            !message.contains(NLA_INDISPONIBLE),
+            "une panne TCP ne doit pas porter le marqueur NLA : {message}"
+        );
+        assert!(
+            message.contains("ne répond pas") && message.contains("10.0.0.9:3389"),
+            "le message doit désigner l'hôte injoignable : {message}"
+        );
+    }
+
+    /// La connexion qui aboutit avant le délai passe telle quelle : le
+    /// bornage n'avale pas le succès. On simule un `TcpStream` réel en se
+    /// connectant à un écouteur local ouvert pour l'occasion.
+    #[tokio::test]
+    async fn une_connexion_qui_aboutit_passe() {
+        let ecouteur = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("écouteur local");
+        let adresse = ecouteur.local_addr().expect("adresse locale");
+        let flux = connecter_tcp(
+            "127.0.0.1",
+            adresse.port(),
+            Duration::from_secs(5),
+            tokio::net::TcpStream::connect(adresse),
+        )
+        .await
+        .expect("la connexion locale doit aboutir");
+        assert_eq!(flux.peer_addr().expect("pair").port(), adresse.port());
+    }
+}
+
+#[cfg(test)]
 mod tests_rdstls {
     use super::verdict_rdstls;
 
@@ -609,11 +775,137 @@ mod tests_rdstls {
 }
 
 #[cfg(test)]
+mod tests_epinglage {
+    use super::epingler_certificat;
+
+    /// `AVASH_HOME` posé sur un répertoire jetable le temps du test, sous le
+    /// verrou que partagent tous les tests touchant cette variable globale, et
+    /// remis en place à la sortie même sur panique. Sans lui, le test écrirait
+    /// dans le fichier de confiance RÉEL du poste.
+    struct Bac {
+        chemin: std::path::PathBuf,
+        precedent: Option<std::ffi::OsString>,
+        _verrou: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Bac {
+        fn poser() -> Self {
+            let verrou = crate::empreintes::VERROU_AVASH_HOME
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let chemin =
+                std::env::temp_dir().join(format!("avash-rdp-tofu-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&chemin);
+            let precedent = std::env::var_os("AVASH_HOME");
+            unsafe { std::env::set_var("AVASH_HOME", &chemin) };
+            Self {
+                chemin,
+                precedent,
+                _verrou: verrou,
+            }
+        }
+
+        fn fichier_de_confiance(&self) -> std::path::PathBuf {
+            self.chemin
+                .join(".config")
+                .join("avash")
+                .join("rdp_known_hosts")
+        }
+    }
+
+    impl Drop for Bac {
+        fn drop(&mut self) {
+            unsafe {
+                match self.precedent.take() {
+                    Some(v) => std::env::set_var("AVASH_HOME", v),
+                    None => std::env::remove_var("AVASH_HOME"),
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.chemin);
+        }
+    }
+
+    /// Clé publique jetable, distincte à chaque appel (certificat auto-signé
+    /// neuf) : deux appels donnent deux empreintes, comme un serveur réinstallé.
+    /// On passe par `server_public_key`, le même chemin que `connect`.
+    fn cle_publique_jetable() -> Vec<u8> {
+        use x509_cert::der::Decode as _;
+        let cle = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let der = cle.cert.der().to_vec();
+        let cert = x509_cert::Certificate::from_der(&der).unwrap();
+        crate::empreintes::server_public_key(&cert).unwrap()
+    }
+
+    /// Le montage complet du TOFU RDP n'était éprouvé nulle part — seul VNC
+    /// l'était (`vnc_tls::tests::le_montage_epingle_le_certificat_et_refuse_qu_il_change`).
+    /// Trouvé par l'audit du 7 septembre 2026. On rejoue ici la même séquence :
+    /// premier contact mémorisé sous « hôte:port » NUE (sans préfixe, à la
+    /// différence de « vnc:hôte:port » — un préfixe RDP réapprendrait en silence
+    /// toutes les empreintes déjà mémorisées), même clé reconnue sans rien
+    /// réécrire, clé changée refusée avec les deux empreintes, et l'empreinte
+    /// d'origine conservée. Contrôle négatif : remplacer le `bail!` par un
+    /// `memoriser_empreinte` (réapprentissage silencieux), préfixer la clé ou en
+    /// retirer le port fait rougir ce test.
+    #[test]
+    fn l_epinglage_memorise_puis_refuse_le_changement() {
+        let bac = Bac::poser();
+        let port = 3389u16;
+        let origine = cle_publique_jetable();
+        let remplacant = cle_publique_jetable();
+
+        epingler_certificat("127.0.0.1", port, &origine).expect("le premier contact est accepté");
+        let contenu = std::fs::read_to_string(bac.fichier_de_confiance()).unwrap();
+        assert!(
+            contenu.starts_with(&format!("127.0.0.1:{port} ")),
+            "l'empreinte est mémorisée sous la clé « hôte:port » NUE : {contenu:?}"
+        );
+        assert!(
+            !contenu.contains("rdp:"),
+            "la clé RDP ne porte aucun préfixe, sous peine de tout réapprendre en silence : {contenu:?}"
+        );
+
+        epingler_certificat("127.0.0.1", port, &origine).expect("la même clé est reconnue");
+        assert_eq!(
+            std::fs::read_to_string(bac.fichier_de_confiance()).unwrap(),
+            contenu,
+            "un serveur connu ne fait rien réécrire"
+        );
+
+        let refus = epingler_certificat("127.0.0.1", port, &remplacant)
+            .expect_err("une clé changée est refusée");
+        let msg = format!("{refus:#}");
+        for attendu in [
+            "a changé",
+            "Empreinte présentée",
+            "Empreinte attendue",
+            "rdp_known_hosts",
+        ] {
+            assert!(msg.contains(attendu), "{attendu:?} absent de {msg:?}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(bac.fichier_de_confiance()).unwrap(),
+            contenu,
+            "le refus ne touche pas à l'empreinte d'origine"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests_configuration {
-    use super::build_config;
+    use super::{build_config, LB_PASSWORD_IS_PK_ENCRYPTED};
     use crate::args::parse_args_de;
     use ironrdp::connector::Credentials;
+    use ironrdp::pdu::nego::NegoRequestData;
     use ironrdp::session::redirection::Redirection;
+
+    /// Encode une chaîne en UTF-16LE avec terminateur nul, comme le fait un PDU
+    /// de redirection.
+    fn u16le(s: &str) -> Vec<u8> {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    }
 
     fn redirection() -> Redirection {
         Redirection {
@@ -623,7 +915,8 @@ mod tests_configuration {
             jeton: Some(b"Cookie: msts=2464288595\r\n".to_vec()),
             utilisateur: Some("69<;349v".to_owned()),
             domaine: None,
-            mot_de_passe: Some(b"secret".to_vec()),
+            // Le PDU porte le mot de passe en UTF-16LE, pas en UTF-8.
+            mot_de_passe: Some(u16le("secret")),
             fqdn: None,
             guid: None,
             utilisateur_brut: None,
@@ -649,6 +942,75 @@ mod tests_configuration {
         assert!(
             c.request_data.is_some(),
             "le jeton de routage doit être posé"
+        );
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : quand le serveur d'arrivée
+    /// retient HYBRID plutôt que RDSTLS, CredSSP part avec les identifiants de
+    /// `build_config`. Une redirection de ferme RDS derrière un broker ne porte
+    /// pas de mot de passe (LB_USERNAME + LB_DOMAIN sans LB_PASSWORD) : CredSSP
+    /// doit alors réutiliser le mot de passe saisi, et le domaine de la
+    /// redirection — et non un mot de passe vide avec le domaine tapé, qui
+    /// donnait STATUS_LOGON_FAILURE et une tentative journalisée côté cible.
+    #[test]
+    fn un_repli_hybrid_sans_mot_de_passe_reutilise_le_mot_de_passe_saisi() {
+        let mut r = redirection();
+        r.utilisateur = Some("svc-rds".to_owned());
+        r.domaine = Some("RDSFARM".to_owned());
+        r.mot_de_passe = None;
+        let a = parse_args_de(&["--host", "x", "-u", "TAPE\\adrien"], "mdp").unwrap();
+        let c = build_config(&a, Some(&r));
+        match c.credentials {
+            Credentials::UsernamePassword { username, password } => {
+                assert_eq!(username, "svc-rds");
+                assert_eq!(
+                    password, "mdp",
+                    "le mot de passe saisi doit servir à CredSSP"
+                );
+            }
+            autre => panic!("identifiants inattendus : {autre:?}"),
+        }
+        assert_eq!(
+            c.domain.as_deref(),
+            Some("RDSFARM"),
+            "le domaine de la redirection l'emporte sur celui tapé"
+        );
+    }
+
+    /// Le mot de passe d'une redirection chiffré par clé publique
+    /// (LB_PASSWORD_IS_PK_ENCRYPTED) ne sert qu'à RDSTLS, qui le transporte tel
+    /// quel. Il ne doit jamais atterrir dans les identifiants CredSSP : sur un
+    /// repli HYBRID, c'est le mot de passe saisi qui part.
+    #[test]
+    fn un_mot_de_passe_de_redirection_chiffre_ne_sert_pas_a_credssp() {
+        let mut r = redirection();
+        r.drapeaux |= LB_PASSWORD_IS_PK_ENCRYPTED;
+        r.mot_de_passe = Some(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        let a = parse_args_de(&["--host", "x", "-u", "adrien"], "mdp").unwrap();
+        let c = build_config(&a, Some(&r));
+        match c.credentials {
+            Credentials::UsernamePassword { password, .. } => {
+                assert_eq!(
+                    password, "mdp",
+                    "le blob chiffré ne doit pas servir à CredSSP"
+                );
+            }
+            autre => panic!("identifiants inattendus : {autre:?}"),
+        }
+    }
+
+    /// Une redirection annonce RDSTLS EN PLUS de HYBRID (enable_credssp reste
+    /// vrai) : le serveur peut donc retenir HYBRID. C'est ce qui rend le
+    /// garde-fou `should_perform_credssp()` de `connect` nécessaire — sans lui,
+    /// RDSTLS serait joué à tort et bloquerait.
+    #[test]
+    fn une_redirection_annonce_toujours_hybrid() {
+        let a = parse_args_de(&["--host", "x", "-u", "adrien"], "mdp").unwrap();
+        let c = build_config(&a, Some(&redirection()));
+        assert!(c.enable_credssp, "HYBRID doit rester annoncé");
+        assert!(
+            matches!(c.request_data, Some(NegoRequestData::RoutingToken(_))),
+            "le jeton de routage annonce aussi RDSTLS : le serveur tranche"
         );
     }
 

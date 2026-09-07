@@ -18,14 +18,25 @@ async function checkForUpdates() {
   const prev = ver.textContent;
   ver.textContent = "…";
   try {
-    // Trouvé par l'audit du 7 septembre 2026 : sur Flatpak (/app en lecture
-    // seule) et sur un binaire Linux non estampillé par le bundler (AUR,
-    // Flathub), le greffon updater retombe sur l'AppImage et échoue à
-    // l'installation après ~100 Mo. Là, c'est le gestionnaire de paquets qui
-    // met à jour : on le dit au lieu d'appeler checkUpdate().
-    if (await invoke<boolean>("emballage_gere_ses_mises_a_jour").catch(() => false)) {
+    // Trouvé par l'audit du 7 septembre 2026 (et complété par la relecture) : le
+    // greffon updater ne peut pas installer sur plusieurs emballages, car
+    // latest.json ne sert que l'AppImage, le setup NSIS et l'app macOS. Sur
+    // Flatpak (/app en lecture seule), AUR, Flathub, .deb/.rpm, il retombe sur
+    // l'AppImage et échoue après ~100 Mo : c'est le gestionnaire de paquets qui
+    // met à jour. Sur l'archive portable Windows (avash-ui.exe brut, non
+    // estampillé), il installerait le setup NSIS ailleurs en laissant le dossier
+    // portable en arrière : on renvoie télécharger la nouvelle archive. La
+    // commande dit qui installe ; « greffon » (défaut) garde la mise à jour
+    // intégrée, les autres canaux la court-circuitent avec le bon message.
+    const canal = await invoke<string>("canal_de_mise_a_jour").catch(() => "greffon");
+    if (canal === "gestionnaire") {
       ver.textContent = prev;
       notify(t("maj-gere-par-paquet"), "info");
+      return;
+    }
+    if (canal === "archive") {
+      ver.textContent = prev;
+      notify(t("maj-archive-portable"), "info");
       return;
     }
     const update = await checkUpdate();

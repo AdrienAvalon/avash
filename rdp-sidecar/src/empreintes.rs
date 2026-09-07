@@ -1,6 +1,5 @@
 //! Confiance au serveur (TOFU) : empreinte du certificat, fichier des empreintes, répertoire de configuration.
 
-use crate::atomique;
 use anyhow::{Context, Result};
 
 pub(crate) fn server_public_key(cert: &x509_cert::Certificate) -> Result<Vec<u8>> {
@@ -93,9 +92,28 @@ fn chemin_empreintes() -> anyhow::Result<std::path::PathBuf> {
 }
 
 /// Empreinte mémorisée pour `hote:port`, s'il y en a une.
-pub(crate) fn empreinte_memorisee(cle: &str) -> Option<String> {
-    let contenu = std::fs::read_to_string(chemin_empreintes().ok()?).ok()?;
-    chercher_empreinte(&contenu, cle)
+///
+/// Rend `Ok(None)` UNIQUEMENT quand le fichier n'existe pas (aucun contact
+/// mémorisé). Toute autre erreur — droits, ou octet non UTF-8 laissé par un
+/// éditeur Windows qui aurait réenregistré `rdp_known_hosts` en UTF-16 ou
+/// Latin-1, précisément le fichier que le message de refus invite à éditer à la
+/// main — est PROPAGÉE. Trouvé par l'audit du 7 septembre 2026 : le
+/// `read_to_string(...).ok()?` d'avant réduisait ces erreurs à « rien de
+/// mémorisé », l'appelant enchaînait sur `PremierContact`, acceptait l'empreinte
+/// présentée (fût-elle celle d'un intercepteur) et `memoriser_empreinte`
+/// réécrivait le fichier avec une seule ligne — désarmant le TOFU pour TOUS les
+/// hôtes et effaçant toutes les autres empreintes, sans un mot.
+pub(crate) fn empreinte_memorisee(cle: &str) -> Result<Option<String>> {
+    let chemin = chemin_empreintes()?;
+    match std::fs::read(&chemin) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("lecture de {}", chemin.display())),
+        Ok(octets) => {
+            let contenu =
+                String::from_utf8(octets).context("rdp_known_hosts n'est pas en UTF-8")?;
+            Ok(chercher_empreinte(&contenu, cle))
+        }
+    }
 }
 
 /// Cherche l'empreinte de `cle` dans le contenu d'un fichier d'empreintes.
@@ -121,15 +139,48 @@ pub(crate) fn memoriser_empreinte(cle: &str, empreinte: &str) -> anyhow::Result<
             let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
         }
     }
-    let mut contenu = std::fs::read_to_string(&chemin).unwrap_or_default();
-    if !contenu.is_empty() && !contenu.ends_with('\n') {
-        contenu.push('\n');
+    // On relit d'abord l'existant pour deux raisons : refuser un fichier non
+    // UTF-8 (un octet laissé par un ré-enregistrement Windows en UTF-16/Latin-1 ;
+    // `unwrap_or_default()` le prenait pour un fichier vide) sans jamais y toucher,
+    // et décider s'il faut préfixer un saut de ligne devant un fichier hérité qui
+    // n'en aurait pas.
+    let besoin_saut = match std::fs::read(&chemin) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e).with_context(|| format!("lecture de {}", chemin.display())),
+        Ok(octets) => {
+            let contenu =
+                String::from_utf8(octets).context("rdp_known_hosts n'est pas en UTF-8")?;
+            !contenu.is_empty() && !contenu.ends_with('\n')
+        }
+    };
+    // On AJOUTE la ligne en O_APPEND au lieu de réécrire tout le fichier. Trouvé
+    // par l'audit du 7 septembre 2026 : la lecture-modification-réécriture (relire
+    // puis renommer un temporaire par-dessus, via `atomique::ecrire`) perdait une
+    // empreinte quand deux sidecars atteignaient ce point ensemble — deux onglets
+    // ouverts à la suite lisaient le même contenu et le dernier `rename` effaçait
+    // la ligne du premier ; l'atomicité du rename ne couvre pas ce cas, et l'hôte
+    // perdu redevenait « premier contact ». Un `write_all` unique en O_APPEND est
+    // atomique entre processus sur un FS local et ne tronque jamais. Une seconde
+    // ligne pour le même hôte serait inoffensive : `chercher_empreinte` retient la
+    // première (test `la_premiere_entree_fait_foi`).
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    contenu.push_str(&format!("{cle} {empreinte}\n"));
-    // Écriture atomique (voir `atomique`) : c'est ce fichier-ci qui compte le
-    // plus — le perdre ramène TOUS les serveurs à « premier contact », et le
-    // TOFU cesse de protéger sans que rien ne le signale.
-    atomique::ecrire(&chemin, contenu.as_bytes())
+    let mut fichier = options
+        .open(&chemin)
+        .with_context(|| format!("ouverture de {}", chemin.display()))?;
+    let ligne = if besoin_saut {
+        format!("\n{cle} {empreinte}\n")
+    } else {
+        format!("{cle} {empreinte}\n")
+    };
+    fichier
+        .write_all(ligne.as_bytes())
         .with_context(|| format!("écriture de {}", chemin.display()))
 }
 
@@ -238,5 +289,133 @@ mod tests_fichier_empreintes {
             chercher_empreinte(contenu, "srv:3389").as_deref(),
             Some("originale")
         );
+    }
+
+    /// Un `rdp_known_hosts` non-UTF-8 refuse la connexion au lieu de désarmer le
+    /// TOFU, et ne se fait pas écraser.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : l'utilisateur, invité par le
+    /// message de refus à retirer une ligne de `rdp_known_hosts`, ouvre le
+    /// fichier sous Windows et l'enregistre en UTF-16 (ou y colle un accent en
+    /// Latin-1). Avant le correctif, `read_to_string(...).ok()?` rendait `None`
+    /// pour un octet non UTF-8, l'appelant concluait `PremierContact` (empreinte
+    /// acceptée, identifiants livrés à un éventuel intercepteur) et
+    /// `memoriser_empreinte` réécrivait le fichier d'une seule ligne, effaçant
+    /// toutes les autres empreintes. Désormais : erreur des deux côtés, fichier
+    /// intact.
+    #[test]
+    fn un_rdp_known_hosts_non_utf8_refuse_au_lieu_de_desarmer_le_tofu() {
+        use super::{empreinte_memorisee, memoriser_empreinte};
+        let _verrou = super::VERROU_AVASH_HOME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bac = std::env::temp_dir().join(format!("avash-rdp-utf8-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bac);
+        let precedent = std::env::var_os("AVASH_HOME");
+        unsafe { std::env::set_var("AVASH_HOME", &bac) };
+
+        let resultat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let chemin = super::chemin_empreintes().expect("un chemin");
+            std::fs::create_dir_all(chemin.parent().unwrap()).unwrap();
+            // Une entrée légitime, suivie d'un octet non UTF-8 (0xFF) comme en
+            // laisserait un ré-enregistrement en UTF-16/Latin-1.
+            let octets_abimes = b"srv.exemple:3389 aaaa\n\xff\n";
+            std::fs::write(&chemin, octets_abimes).unwrap();
+
+            // Lecture : erreur explicite, jamais « rien de mémorisé ».
+            let lu = empreinte_memorisee("srv.exemple:3389");
+            assert!(
+                lu.is_err(),
+                "un fichier non-UTF-8 doit être une erreur, pas Ok(None) : {lu:?}"
+            );
+
+            // Mémorisation : erreur AUSSI, et le fichier n'est pas écrasé.
+            let ecrit = memoriser_empreinte("autre.hote:3389", "bbbb");
+            assert!(
+                ecrit.is_err(),
+                "on ne réécrit pas un fichier qu'on n'a pas su lire : {ecrit:?}"
+            );
+            assert_eq!(
+                std::fs::read(&chemin).unwrap(),
+                octets_abimes,
+                "l'empreinte d'origine et le contenu abîmé restent intacts"
+            );
+        }));
+
+        unsafe {
+            match precedent {
+                Some(v) => std::env::set_var("AVASH_HOME", v),
+                None => std::env::remove_var("AVASH_HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&bac);
+        if let Err(p) = resultat {
+            std::panic::resume_unwind(p);
+        }
+    }
+
+    /// Plusieurs sidecars `avash-rdp` mémorisant un premier contact au même
+    /// instant — deux onglets ouverts à la suite, restauration de plusieurs
+    /// bureaux — ne doivent perdre aucune empreinte.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : `memoriser_empreinte` relisait
+    /// tout le fichier, ajoutait sa ligne et renommait un temporaire par-dessus
+    /// (`atomique::ecrire`). Deux processus lisant le même contenu voyaient le
+    /// dernier `rename` effacer la ligne du premier — l'atomicité du rename ne
+    /// couvre pas la lecture-modification-écriture concurrente. L'hôte perdu
+    /// redevenait « premier contact » et acceptait n'importe quelle clé à la
+    /// connexion suivante, TOFU désarmé en silence. L'ajout en O_APPEND, atomique
+    /// entre processus sur un FS local, fait survivre toutes les lignes.
+    #[test]
+    fn des_premiers_contacts_simultanes_survivent_tous() {
+        use super::{chemin_empreintes, chercher_empreinte, memoriser_empreinte};
+        let _verrou = super::VERROU_AVASH_HOME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bac = std::env::temp_dir().join(format!("avash-rdp-conc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bac);
+        let precedent = std::env::var_os("AVASH_HOME");
+        unsafe { std::env::set_var("AVASH_HOME", &bac) };
+
+        let resultat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            const N: usize = 16;
+            // Tous les fils s'élancent ensemble (barrière) pour maximiser le
+            // recouvrement des lectures-écritures, comme des sidecars lancés à la
+            // suite. Sans le correctif, plusieurs lignes disparaissent.
+            let depart = std::sync::Arc::new(std::sync::Barrier::new(N));
+            let fils: Vec<_> = (0..N)
+                .map(|i| {
+                    let depart = std::sync::Arc::clone(&depart);
+                    std::thread::spawn(move || {
+                        depart.wait();
+                        memoriser_empreinte(&format!("hote{i}:3389"), &format!("fp{i}"))
+                            .expect("mémorisation");
+                    })
+                })
+                .collect();
+            for f in fils {
+                f.join().expect("fil terminé");
+            }
+            let chemin = chemin_empreintes().expect("un chemin");
+            let contenu = std::fs::read_to_string(&chemin).expect("lecture");
+            for i in 0..N {
+                assert_eq!(
+                    chercher_empreinte(&contenu, &format!("hote{i}:3389")).as_deref(),
+                    Some(format!("fp{i}").as_str()),
+                    "empreinte de hote{i} perdue ; fichier :\n{contenu}"
+                );
+            }
+        }));
+
+        unsafe {
+            match precedent {
+                Some(v) => std::env::set_var("AVASH_HOME", v),
+                None => std::env::remove_var("AVASH_HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&bac);
+        if let Err(p) = resultat {
+            std::panic::resume_unwind(p);
+        }
     }
 }

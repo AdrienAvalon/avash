@@ -23,6 +23,7 @@ use ironrdp::pdu::PduResult;
 use crate::args::TAILLE_MAX;
 use crate::progressif;
 use crate::surface::{Cache, Surface, Zone};
+use crate::trames::RECTS_MAX;
 
 /// Trace du canal graphique : évaluée une seule fois, pas à chaque PDU. `var_os`
 /// prend le verrou global de l'environnement et parcourt `environ` ; l'appeler
@@ -411,11 +412,80 @@ pub struct Sortie {
 
 pub type FilePartagee = std::sync::Arc<std::sync::Mutex<Sortie>>;
 
+/// Nombre maximal de surfaces vivantes. `surfaces` accepte 65536 identifiants
+/// distincts (u16) ; borner les CÔTÉS d'une surface (`TAILLE_MAX`) ne borne pas
+/// leur NOMBRE. Même en allocation paresseuse, chaque `CreateSurface` ajoute un
+/// mappage mémoire, et 65536 d'entre eux dépassent `vm.max_map_count` : le
+/// sidecar est tué, donc la session. On plafonne comme le cache plafonne ses
+/// emplacements (`EMPLACEMENTS_MAX`, surface.rs). Un bureau réel n'en emploie
+/// qu'une poignée ; 64 laisse toute la marge utile.
+const SURFACES_MAX: usize = 64;
+
+/// Budget global d'octets de pixels des surfaces vivantes. Le plafond de nombre
+/// ne suffit pas seul : 64 surfaces de 8192×8192×4 feraient encore 17 Gio. On
+/// borne la somme à 512 Mio (deux écrans 8K), engagés au fur et à mesure des
+/// `SolidFill` et images, et rendus à `DeleteSurface`.
+const OCTETS_SURFACES_MAX: usize = 512 * 1024 * 1024;
+
+/// Octets de pixels d'une surface de `largeur`×`hauteur` (RGBA).
+fn octets_surface(largeur: u16, hauteur: u16) -> usize {
+    usize::from(largeur) * usize::from(hauteur) * 4
+}
+
+/// Budget d'octets de pixels publiés vers la file d'affichage par appel à
+/// `process` (un segment ZGFX). Trouvé par l'audit du 7 septembre 2026 :
+/// `publier` extrayait une copie compacte par zone sans rien borner, si bien
+/// qu'un segment portant des milliers de PDU (chacun un `SolidFill`, une
+/// `SurfaceToSurface` ou une `CacheToSurface` couvrant tout l'écran) faisait
+/// empiler des centaines de gigaoctets dans la file avant que la boucle de
+/// session ne la vide, et tuait le sidecar par OOM — donc toutes ses sessions.
+/// La première zone d'un appel passe toujours (le test précède l'extraction) :
+/// une trame plein écran isolée n'est jamais perdue ; seul un flot au-delà du
+/// budget cesse d'être empilé. 64 Mio dépassent de loin une image légitime.
+const OCTETS_PUBLIES_MAX: usize = 64 * 1024 * 1024;
+
+/// Boîte englobante d'un ensemble de zones déjà rognées sur leur surface.
+/// Au-delà de `RECTS_MAX` zones dans un même PDU, `publier` ne publie qu'elle :
+/// la surface porte déjà l'état final de toutes les écritures, et `peindre_egfx!`
+/// refusionne de toute façon la zone sale en `RECTS_MAX` rectangles. `None` pour
+/// une tranche vide. Les zones étant rognées, `x + largeur` ne dépasse pas
+/// `TAILLE_MAX` et tient dans un `u16` ; `saturating_add` garde par défense.
+fn boite_englobante(zones: &[Zone]) -> Option<Zone> {
+    let mut it = zones.iter();
+    let p = it.next()?;
+    let (mut x0, mut y0) = (p.x, p.y);
+    let mut x1 = p.x.saturating_add(p.largeur);
+    let mut y1 = p.y.saturating_add(p.hauteur);
+    for z in it {
+        x0 = x0.min(z.x);
+        y0 = y0.min(z.y);
+        x1 = x1.max(z.x.saturating_add(z.largeur));
+        y1 = y1.max(z.y.saturating_add(z.hauteur));
+    }
+    Some(Zone {
+        x: x0,
+        y: y0,
+        largeur: x1 - x0,
+        hauteur: y1 - y0,
+    })
+}
+
 #[derive(Default)]
 pub struct Egfx {
     canal: CanalPartage,
     file: FilePartagee,
     surfaces: std::collections::BTreeMap<u16, Surface>,
+    /// Somme des octets de pixels des surfaces vivantes, tenue à jour à chaque
+    /// `CreateSurface`/`DeleteSurface` pour faire respecter `OCTETS_SURFACES_MAX`
+    /// sans reparcourir la table. Trouvé par l'audit du 7 septembre 2026 : le
+    /// nombre de surfaces n'était borné ni en compte ni en octets.
+    octets_surfaces: usize,
+    /// Octets de pixels déjà publiés vers la file pendant l'appel à `process`
+    /// courant, remis à zéro au début de chacun. Fait respecter
+    /// `OCTETS_PUBLIES_MAX` pour qu'un segment portant beaucoup de zones ou
+    /// beaucoup de PDU ne puisse pas faire enfler la file sans limite. Trouvé
+    /// par l'audit du 7 septembre 2026.
+    octets_publies: usize,
     cache: Cache,
     planaire: ironrdp::graphics::rdp6::BitmapStreamDecoder,
     clair: ironrdp::graphics::clearcodec::ClearCodecDecoder,
@@ -580,11 +650,33 @@ impl Egfx {
                     eprintln!("egfx : surface {id} refusée ({l}×{h})");
                     return None;
                 }
+                // Trouvé par l'audit du 7 septembre 2026 : borner les côtés ne
+                // borne ni le nombre de surfaces ni la mémoire totale. Un serveur
+                // hostile crée 65536 identifiants (16 Tio en 8192², 512 Gio en
+                // 1920×1080) et tue le sidecar par OOM ou dépassement de
+                // `vm.max_map_count`. On refuse au-delà du plafond de nombre ET
+                // du budget d'octets, comme la surface déraisonnable ci-dessus.
+                let deja = self
+                    .surfaces
+                    .get(&id)
+                    .map_or(0, |s| octets_surface(s.largeur, s.hauteur));
+                let apres = self.octets_surfaces - deja + octets_surface(l, h);
+                if !self.surfaces.contains_key(&id) && self.surfaces.len() >= SURFACES_MAX {
+                    eprintln!("egfx : surface {id} refusée ({SURFACES_MAX} surfaces vivantes)");
+                    return None;
+                }
+                if apres > OCTETS_SURFACES_MAX {
+                    eprintln!("egfx : surface {id} refusée (budget mémoire dépassé)");
+                    return None;
+                }
+                self.octets_surfaces = apres;
                 self.surfaces.insert(id, Surface::nouvelle(l, h));
             }
             CMD_DELETE_SURFACE if c.len() >= 2 => {
                 let id = u16::from_le_bytes([c[0], c[1]]);
-                self.surfaces.remove(&id);
+                if let Some(s) = self.surfaces.remove(&id) {
+                    self.octets_surfaces -= octets_surface(s.largeur, s.hauteur);
+                }
                 self.origines.remove(&id);
             }
             CMD_MAP_SURFACE_TO_OUTPUT if c.len() >= 12 => {
@@ -657,16 +749,39 @@ impl Egfx {
     }
 
     /// Publie une zone modifiée d'une surface vers la boucle d'affichage.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : `solid_fill`, `surface_vers_surface`
+    /// et `cache_vers_surface` acceptent jusqu'à 65535 rectangles ou points de
+    /// destination (compteur `u16`) et poussaient ici une copie compacte par
+    /// zone. 65535 zones plein écran demandaient ~530 Gio, et rien ne bornait le
+    /// cumul sur les milliers de PDU d'un même segment : OOM du sidecar, donc de
+    /// toutes ses sessions. Deux gardes, sans effet visible puisque `peindre_egfx!`
+    /// refusionne la zone sale en `RECTS_MAX` rectangles : au-delà de `RECTS_MAX`
+    /// zones on ne publie que leur boîte englobante (la surface en porte déjà
+    /// l'état final), et un budget d'octets par appel à `process` borne le cumul.
     fn publier(&mut self, id: u16, zones: &[Zone]) {
         let Some(surface) = self.surfaces.get(&id) else {
             return;
         };
         let (ox, oy) = self.origines.get(&id).copied().unwrap_or((0, 0));
+        let englobante = (zones.len() > RECTS_MAX)
+            .then(|| boite_englobante(zones))
+            .flatten();
+        let a_publier: &[Zone] = match &englobante {
+            Some(z) => std::slice::from_ref(z),
+            None => zones,
+        };
         let mut sortie = self.file.lock().unwrap();
-        for z in zones {
-            let Some((z, pixels)) = surface.extraire(*z) else {
+        for &z in a_publier {
+            // La première zone passe toujours : une trame plein écran isolée
+            // n'est jamais perdue, seul un flot au-delà du budget cesse d'empiler.
+            if self.octets_publies >= OCTETS_PUBLIES_MAX {
+                break;
+            }
+            let Some((z, pixels)) = surface.extraire(z) else {
                 continue;
             };
+            self.octets_publies = self.octets_publies.saturating_add(pixels.len());
             sortie.trames.push(Trame {
                 x: ox.saturating_add(z.x),
                 y: oy.saturating_add(z.y),
@@ -952,6 +1067,11 @@ impl DvcProcessor for Egfx {
     }
 
     fn process(&mut self, _channel_id: u32, charge: &[u8]) -> PduResult<Vec<DvcMessage>> {
+        // Budget de publication remis à zéro à chaque segment (audit du
+        // 7 septembre 2026) : un segment portant beaucoup de PDU ne peut pas
+        // faire enfler la file au-delà d'`OCTETS_PUBLIES_MAX`, quel que soit
+        // le nombre de PDU que `decouper` en tire.
+        self.octets_publies = 0;
         // Même précaution que dans le décodeur d'images : la décompression ZGFX
         // lit des longueurs et des index de fenêtre fournis par le serveur, et
         // le fuzzing par mutation y a trouvé une panique. Un serveur, même
@@ -1353,6 +1473,81 @@ mod tests {
     }
 
     #[test]
+    fn trop_de_surfaces_vivantes_sont_refusees() {
+        // Trouvé par l'audit du 7 septembre 2026 : borner les CÔTÉS d'une surface
+        // (une_surface_deraisonnable_est_refusee) ne borne pas leur NOMBRE. Un
+        // serveur hostile crée 65536 identifiants distincts ; même en allocation
+        // paresseuse, chaque CreateSurface ajoute un mappage et le nombre finit
+        // par dépasser vm.max_map_count, ce qui tue le sidecar (donc la session).
+        let (mut e, _canal, _file) = super::Egfx::nouveau();
+        let cree = |e: &mut super::Egfx, id: u16| {
+            let [a, b] = id.to_le_bytes();
+            e.traiter(&pdu(0x0009, &[a, b, 1, 0, 1, 0, 0x20]));
+        };
+        let max = u16::try_from(super::SURFACES_MAX).unwrap();
+        // SURFACES_MAX surfaces 1×1 : toutes acceptées.
+        for id in 0..max {
+            cree(&mut e, id);
+        }
+        assert_eq!(e.surfaces.len(), super::SURFACES_MAX);
+        // Un identifiant de plus est refusé : la table ne grossit plus.
+        cree(&mut e, max);
+        assert_eq!(e.surfaces.len(), super::SURFACES_MAX, "le plafond tient");
+        assert!(
+            !e.surfaces.contains_key(&max),
+            "la surface en trop n'existe pas"
+        );
+        // Recréer un identifiant déjà présent n'ouvre pas de nouvelle place.
+        cree(&mut e, 0);
+        assert_eq!(e.surfaces.len(), super::SURFACES_MAX);
+        // Supprimer une surface libère une place : la suivante repasse.
+        e.traiter(&pdu(0x000A, &[0, 0]));
+        assert_eq!(e.surfaces.len(), super::SURFACES_MAX - 1);
+        cree(&mut e, max);
+        assert!(
+            e.surfaces.contains_key(&max),
+            "une place libérée est réutilisable"
+        );
+    }
+
+    #[test]
+    fn le_budget_memoire_des_surfaces_est_borne() {
+        // Trouvé par l'audit du 7 septembre 2026 : le plafond de nombre ne suffit
+        // pas seul, 64 surfaces de 8192² feraient 16 Tio. On borne la somme des
+        // octets de pixels ; DeleteSurface la rend. Une surface pleine de 8192²
+        // vaut 256 Mio, le budget de 512 Mio en tient deux (deux écrans 8K) mais
+        // pas une troisième.
+        let (mut e, _canal, _file) = super::Egfx::nouveau();
+        let cote = super::TAILLE_MAX.to_le_bytes();
+        let cree = |e: &mut super::Egfx, id: u16| {
+            let [a, b] = id.to_le_bytes();
+            e.traiter(&pdu(
+                0x0009,
+                &[a, b, cote[0], cote[1], cote[0], cote[1], 0x20],
+            ));
+        };
+        cree(&mut e, 1);
+        cree(&mut e, 2);
+        assert!(
+            e.surfaces.contains_key(&1) && e.surfaces.contains_key(&2),
+            "deux 8192² tiennent dans les 512 Mio du budget"
+        );
+        // La troisième porterait le total au-delà de 512 Mio : refusée.
+        cree(&mut e, 3);
+        assert!(
+            !e.surfaces.contains_key(&3),
+            "la troisième dépasse le budget mémoire"
+        );
+        // Rendre l'une libère le budget : une nouvelle 8192² repasse.
+        e.traiter(&pdu(0x000A, &[1, 0]));
+        cree(&mut e, 3);
+        assert!(
+            e.surfaces.contains_key(&3),
+            "le budget rendu est réutilisable"
+        );
+    }
+
+    #[test]
     fn une_image_hors_de_la_surface_est_refusee_avant_decodage() {
         // Surface de 64 × 64. Trouvé par l'audit du 7 septembre 2026 : l'ancienne
         // version posait une image ClearCodec de 128 × 64 avec quatre octets 0xFF
@@ -1408,6 +1603,87 @@ mod tests {
             (trames[0].largeur, trames[0].hauteur),
             (32, 32),
             "aux dimensions annoncées"
+        );
+    }
+
+    #[test]
+    fn un_solid_fill_a_n_rectangles_ne_fait_pas_enfler_la_file() {
+        // Trouvé par l'audit du 7 septembre 2026 : SolidFill accepte jusqu'à
+        // 65535 rectangles (compteur u16) et `publier` en extrayait UNE copie
+        // compacte par rectangle. 65535 rectangles plein écran demandaient
+        // ~530 Gio dans la file, jusqu'à l'OOM du sidecar (donc de la session).
+        // Ici mille rectangles couvrant toute une petite surface : sans la
+        // garde, la file portait mille trames ; avec, on ne publie que la boîte
+        // englobante, donc au plus RECTS_MAX trames — comme `peindre_egfx!`
+        // refusionne de toute façon la zone sale.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        // Surface 64×64.
+        e.traiter(&pdu(0x0009, &[0, 0, 64, 0, 64, 0, 0x20]));
+        // SolidFill rouge : surface 0, couleur B,G,R,X = 0,0,255,0, n = 1000
+        // rectangles identiques couvrant tout (bords gauche,haut,droite,bas).
+        let n = 1000u16;
+        let mut c = vec![0, 0, 0, 0, 255, 0];
+        c.extend_from_slice(&n.to_le_bytes());
+        for _ in 0..n {
+            c.extend_from_slice(&[0, 0, 0, 0, 64, 0, 64, 0]);
+        }
+        e.traiter(&pdu(super::CMD_SOLIDFILL, &c));
+        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        assert!(
+            trames.len() <= super::RECTS_MAX,
+            "mille rectangles ne doivent pas faire mille trames : {}",
+            trames.len()
+        );
+        assert_eq!(
+            trames.len(),
+            1,
+            "un seul PDU se résume à sa boîte englobante"
+        );
+        assert_eq!(
+            (trames[0].largeur, trames[0].hauteur),
+            (64, 64),
+            "la boîte englobante couvre toute la surface"
+        );
+        assert_eq!(
+            trames[0].pixels[..4],
+            [255, 0, 0, 255],
+            "et porte bien le rouge demandé"
+        );
+    }
+
+    #[test]
+    fn le_cumul_des_zones_publiees_est_borne_dans_un_segment() {
+        // Trouvé par l'audit du 7 septembre 2026 : un segment ZGFX peut porter
+        // des milliers de PDU, chacun un SolidFill d'UN seul rectangle plein
+        // écran — la boîte englobante n'y change rien (une seule zone par PDU),
+        // c'est le cumul inter-PDU qui doit être borné. On simule le segment en
+        // enchaînant les PDU sans repasser par `process` (qui remet le budget à
+        // zéro). Surface 2048×2048 = 16 Mio la copie ; le budget de 64 Mio en
+        // laisse passer quatre, puis plus rien, quel que soit le nombre de PDU.
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        let cote = 2048u16.to_le_bytes();
+        e.traiter(&pdu(
+            0x0009,
+            &[0, 0, cote[0], cote[1], cote[0], cote[1], 0x20],
+        ));
+        let plein = {
+            let mut c = vec![0, 0, 0, 0, 255, 0, 1, 0];
+            c.extend_from_slice(&[0, 0, 0, 0, cote[0], cote[1], cote[0], cote[1]]);
+            c
+        };
+        for _ in 0..8 {
+            e.traiter(&pdu(super::CMD_SOLIDFILL, &plein));
+        }
+        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        assert_eq!(
+            trames.len(),
+            4,
+            "quatre copies de 16 Mio épuisent le budget de 64 Mio, le reste est écarté"
+        );
+        assert_eq!(
+            e.octets_publies,
+            super::OCTETS_PUBLIES_MAX,
+            "le budget est exactement atteint puis tenu"
         );
     }
 }

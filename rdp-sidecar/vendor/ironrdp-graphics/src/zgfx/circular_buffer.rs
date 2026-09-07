@@ -14,7 +14,24 @@ impl FixedCircularBuffer {
         }
     }
 
-    pub(crate) fn read_with_offset(&self, offset: usize, length: usize, output: &mut impl io::Write) -> io::Result<()> {
+    pub(crate) fn read_with_offset(
+        &self,
+        offset: usize,
+        length: usize,
+        output: &mut impl io::Write,
+    ) -> io::Result<()> {
+        // Trouvé par l'audit du 7 septembre 2026 : un jeton Match de ZGFX peut porter une distance
+        // jusqu'à ~33 Mio (distance_base 17 094 304 + 24 bits de valeur), très au-delà de la fenêtre
+        // glissante de 2,5 Mio. Le calcul ci-dessous soustrayait alors `offset` d'un total plus petit
+        // en usize : dépassement (panique en debug, index faux en release). Une distance plus grande
+        // que l'historique, ou nulle, est une référence arrière invalide : on la refuse plutôt que de
+        // replier sur de mauvais octets.
+        if offset == 0 || offset > self.buffer.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "distance ZGFX hors de la fenêtre glissante",
+            ));
+        }
         let position = (self.buffer.len() + self.position - offset) % self.buffer.len();
 
         // will take the offset if the destination length is greater than the offset,
@@ -138,7 +155,8 @@ mod tests {
     }
 
     #[test]
-    fn fixed_circular_buffer_correctly_writes_buffer_bigger_then_internal_buffer_size_with_position_at_end() {
+    fn fixed_circular_buffer_correctly_writes_buffer_bigger_then_internal_buffer_size_with_position_at_end(
+    ) {
         let size = 8;
         let mut circular_buffer = FixedCircularBuffer::new(size);
         circular_buffer.position = 6;
@@ -148,6 +166,20 @@ mod tests {
 
         assert_eq!(vec![3, 4, 5, 6, 7, 8, 9, 10], circular_buffer.buffer);
         assert_eq!(0, circular_buffer.position);
+    }
+
+    #[test]
+    fn lire_avec_un_offset_au_dela_de_l_historique_est_refuse() {
+        // Trouvé par l'audit du 7 septembre 2026 : une distance de jeton Match supérieure à la
+        // fenêtre (les distance_base montent à ~33 Mio, la fenêtre fait 2,5 Mio) faisait déborder
+        // `buffer.len() + position - offset` en usize (panique en debug, index faux en release). On
+        // refuse une distance plus grande que le tampon, ou nulle.
+        let circular_buffer = FixedCircularBuffer::new(8);
+
+        let mut sortie = Vec::new();
+        assert!(circular_buffer.read_with_offset(9, 3, &mut sortie).is_err());
+        assert!(circular_buffer.read_with_offset(0, 3, &mut sortie).is_err());
+        assert!(sortie.is_empty());
     }
 
     #[test]
@@ -203,7 +235,8 @@ mod tests {
     }
 
     #[test]
-    fn fixed_circular_buffer_correctly_reads_buffer_with_repeating_multiple_bytes_from_end_to_start() {
+    fn fixed_circular_buffer_correctly_reads_buffer_with_repeating_multiple_bytes_from_end_to_start(
+    ) {
         let circular_buffer = FixedCircularBuffer {
             buffer: vec![11, 12, 3, 4, 5, 6, 7, 8, 9, 10],
             position: 2,

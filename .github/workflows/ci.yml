@@ -16,6 +16,12 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # Déclenchement manuel pour amorcer volontairement les références visuelles :
+  # avec VISUEL_INIT (posé sur l'étape « régression visuelle »), une référence
+  # absente est (ré)enregistrée au lieu de faire rougir l'étape. On récupère
+  # ensuite l'artefact « visuel » pour commiter les PNG. Voir wdio.conf.js
+  # (audit du 7 septembre 2026).
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -453,6 +459,10 @@ jobs:
         run: xvfb-run -a npx wdio run wdio.conf.js --spec specs/visuel.spec.js
         env:
           VISUEL: "1"
+          # Amorçage volontaire des références UNIQUEMENT sur déclenchement
+          # manuel : sur push et pull_request, une référence absente fait rougir
+          # l'étape (cf. wdio.conf.js, audit du 7 septembre 2026).
+          VISUEL_INIT: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
 
       # Régression visuelle : les captures produites (réelles et différences)
       # sont publiées quoi qu'il arrive. Pour rafraîchir les références après

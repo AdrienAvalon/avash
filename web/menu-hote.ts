@@ -28,7 +28,19 @@ export function closeAllContextMenus() {
  *  clic de souris en sortait, ce qui annulait la raison d'être du raccourci.
  *
  *  Le focus revient à l'élément d'où l'on vient, comme pour les modales. */
+// Un écouteur clavier par menu au plus : on retient le retrait du précédent
+// pour l'appeler avant d'en poser un neuf.
+const nettoyagesClavier = new WeakMap<HTMLElement, () => void>();
 export function ouvrirMenuAuClavier(menu: HTMLElement, origine: HTMLElement): void {
+  // Trouvé par l'audit du 7 septembre 2026 : fermer() ne s'appelait qu'au clavier
+  // (Échap, Entrée, Tab), jamais sur une fermeture souris (clic global window,
+  // clic sur un item, perte de focus fenêtre), qui ne retire que la classe
+  // `open`. surTouche restait alors attaché ; les menus étant des éléments
+  // statiques réutilisés, chaque cycle « ouverture clavier -> fermeture souris »
+  // empilait un écouteur, si bien qu'une flèche Bas sautait plusieurs crans et
+  // qu'Entrée déclenchait une action parasite. On retire tout écouteur restant
+  // avant d'en poser un, quel qu'ait été le chemin de fermeture.
+  nettoyagesClavier.get(menu)?.();
   const items = [...menu.querySelectorAll<HTMLElement>("[data-act]")].filter((i) => !i.hidden);
   if (items.length === 0) return;
   for (const i of items) i.tabIndex = -1;
@@ -47,7 +59,11 @@ export function ouvrirMenuAuClavier(menu: HTMLElement, origine: HTMLElement): vo
       items[(i + pas + items.length) % items.length].focus();
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      const choisi = items[i] ?? items[0];
+      // Si le focus a quitté les items (état incohérent), on ne clique rien :
+      // le repli `items[0]` valait « Se connecter » et ouvrait une session non
+      // demandée quand on validait « Modifier… » ou « Supprimer ».
+      if (i < 0) { fermer(); return; }
+      const choisi = items[i];
       fermer();
       choisi.click();
     } else if (e.key === "Tab") {
@@ -58,10 +74,12 @@ export function ouvrirMenuAuClavier(menu: HTMLElement, origine: HTMLElement): vo
   };
   function fermer() {
     menu.removeEventListener("keydown", surTouche, true);
+    nettoyagesClavier.delete(menu);
     menu.classList.remove("open");
     if (origine.isConnected) origine.focus();
   }
   menu.addEventListener("keydown", surTouche, true);
+  nettoyagesClavier.set(menu, () => menu.removeEventListener("keydown", surTouche, true));
 }
 /**
  * Positionne un menu contextuel en le gardant dans la fenêtre.

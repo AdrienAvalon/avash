@@ -10,7 +10,8 @@ import { partageClipboard, sonBureau } from "./prefs";
 import { LecteurAudio } from "./audio";
 import { rdpScancode, le16, rdpMousePos, humanSize } from "./filters";
 import { langue } from "./i18n";
-import { keysymDe, messageKeysym } from "./vnc-clavier";
+import { FiltreCtrlAltGrWindows, estWindows, keysymDe, messageKeysym } from "./vnc-clavier";
+import { ToucheTenues } from "./touches-tenues";
 import { $, type RdpHostT, state } from "./etat";
 import { askConfirm, askPassword } from "./dialogues";
 import { majMemoireOnglets } from "./onglets-restauration";
@@ -63,11 +64,23 @@ async function pushLocalClipboard(force = false): Promise<void> {
     s.ws.send(msg);
   }
 }
-// Le presse-papiers local n'est PAS poussé au simple retour de la fenêtre : cela
-// envoyait son contenu — souvent un mot de passe fraîchement copié — à tout
-// serveur RDP ouvert, sans le moindre geste de l'utilisateur, et à chaque
-// bascule de fenêtre. Il ne part plus que sur un collage explicite (Ctrl+V) ou
-// quand le serveur le réclame, dans l'onglet actif.
+// Quand le presse-papiers du poste part vers le bureau distant (message [8]).
+// RDP : [8] fait annoncer le format au serveur, qui peut alors réclamer le texte
+// tout de suite. On ne l'envoie donc que sur un geste réel dans le bureau — un
+// clic dans le canvas (mousedown) —, jamais au simple retour de la fenêtre, à la
+// connexion, ni à une bascule d'onglet (Ctrl+Tab, Ctrl+1..9, clic d'onglet) : le
+// focus n'est pas un geste (il se déclenche aussi au retour de la fenêtre), et
+// sinon un mot de passe fraîchement copié partait vers tout serveur RDP ouvert
+// qu'on ne faisait que traverser. Le serveur qui réclame ensuite
+// (on_request_format_list) n'a du texte qu'après une telle annonce.
+// VNC : [8] ne fait que mémoriser le texte côté sidecar ; rien ne part au serveur
+// tant que l'utilisateur ne colle pas explicitement (Ctrl+V/Maj+Inser -> [22]).
+// L'annonce peut donc y rester liée au focus, sans fuite.
+// Trouvé par l'audit du 7 septembre 2026 : SECURITY.md promet « sur un geste dans
+// le bureau distant », le code poussait au focus, à la connexion et à la bascule.
+export function pousseAuGeste(vnc: boolean, evenement: "focus" | "mousedown" | "connexion" | "bascule"): boolean {
+  return vnc ? evenement !== "mousedown" : evenement === "mousedown";
+}
 /** Ce que le bureau distant a copié en dernier : liste et total, tels que le
  *  processus les annonce (message [15]). Rien n'est téléchargé avant l'accord. */
 type FichiersDistants = { dossier: string; octets: number; fichiers: { chemin: string; taille: number; dossier: boolean }[] };
@@ -229,6 +242,30 @@ export async function openRdp(cible: RdpTarget) {
     const s = rdpSessions.get(id);
     if (s?.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array(bytes));
   };
+  // Touches et boutons tenus enfoncés dans CETTE session, pour tout relâcher si
+  // le canvas perd le focus alors qu'une touche l'est encore (Alt+Tab, Super,
+  // ou Ctrl+Tab — le raccourci d'onglet d'Avash) : sinon le keyup part à l'autre
+  // fenêtre et la touche reste tenue sur le bureau distant. Audit du 7 sept 2026.
+  const tenues = new ToucheTenues(
+    cible.vnc
+      ? (jeton) => messageKeysym(Number(jeton), false)
+      : (jeton) => { const sc = rdpScancode(jeton); return sc ? [4, ...le16(sc), 0] : null; },
+  );
+  const boutonsTenus = new Set<number>();
+  let moveX = 0, moveY = 0; // dernière position souris connue (relâchement d'un bouton au blur)
+  // Relâche tout ce qui est tenu (touches puis boutons souris) et vide le suivi.
+  const relacherTenues = () => {
+    for (const m of tenues.relacherTout()) send(m);
+    // Un glissé commencé sur le canvas et relâché ailleurs (barre d'onglets,
+    // panneau SFTP, hors de la fenêtre) ne produit jamais de mouseup ici : le
+    // bouton resterait enfoncé côté distant. Message [2] bouton, relâché.
+    for (const b of boutonsTenus) send([2, b, 0, ...le16(moveX), ...le16(moveY)]);
+    boutonsTenus.clear();
+  };
+  // L'onglet passe en arrière-plan (fenêtre minimisée, autre onglet système) :
+  // les keyup ne viendront plus. On relâche comme au blur.
+  const surVisibiliteCachee = () => { if (document.hidden) relacherTenues(); };
+  document.addEventListener("visibilitychange", surVisibiliteCachee);
   // Mappage souris -> pixels du bureau (letterbox object-fit:contain), testé.
   // getBoundingClientRect force un recalcul de mise en page synchrone : l'appeler
   // à CHAQUE mousemove (jusqu'à 1000/s sur une souris rapide) rivalisait avec les
@@ -247,30 +284,58 @@ export async function openRdp(cible: RdpTarget) {
   const detachRect = () => {
     window.removeEventListener("resize", invaliderRect);
     window.removeEventListener("scroll", invaliderRect, true);
+    document.removeEventListener("visibilitychange", surVisibiliteCachee);
   };
   // Mouvements souris throttlés au rAF : un seul paquet par frame d'affichage.
-  let moveX = 0, moveY = 0, movePending = false;
+  let movePending = false;
   canvas.addEventListener("mousemove", (e) => {
     [moveX, moveY] = pos(e);
     if (movePending) return;
     movePending = true;
     requestAnimationFrame(() => { movePending = false; send([1, ...le16(moveX), ...le16(moveY)]); });
   });
-  canvas.addEventListener("mousedown", (e) => { e.preventDefault(); canvas.focus(); const [x, y] = pos(e); send([2, e.button, 1, ...le16(x), ...le16(y)]); });
-  canvas.addEventListener("mouseup", (e) => { const [x, y] = pos(e); send([2, e.button, 0, ...le16(x), ...le16(y)]); });
+  canvas.addEventListener("mousedown", (e) => { e.preventDefault(); canvas.focus(); const [x, y] = pos(e); boutonsTenus.add(e.button); send([2, e.button, 1, ...le16(x), ...le16(y)]);
+    // Un clic dans le bureau = geste réel : on annonce le presse-papiers du poste
+    // (le seul chemin qui le fait en RDP). Forcé pour couvrir un second bureau
+    // dont le sidecar n'a pas encore reçu ce texte. Cf. `pousseAuGeste`.
+    if (pousseAuGeste(cible.vnc === true, "mousedown")) void pushLocalClipboard(true);
+  });
+  canvas.addEventListener("mouseup", (e) => { const [x, y] = pos(e); boutonsTenus.delete(e.button); send([2, e.button, 0, ...le16(x), ...le16(y)]); });
   // Clic droit : uniquement pour le bureau distant. On empêche le menu du
   // navigateur ET la remontée vers #terminal (qui ouvrirait le menu d'Avash).
   canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); });
   canvas.addEventListener("wheel", (e) => { e.preventDefault(); const d = e.deltaY > 0 ? -120 : 120; send([3, ...le16(d & 0xffff), 0, 0, 0, 0]); });
+  // Traitement VNC réel d'une touche (keysym, suivi des tenues, envoi). Passé au
+  // filtre Ctrl/AltGr pour qu'il puisse différer ou abandonner un keydown.
+  const emettreVnc = (e: { key: string; code: string }, enfonce: boolean) => {
+    const ks = keysymDe(e);
+    if (ks === null) return;
+    const jeton = String(ks);
+    if (enfonce) tenues.enfoncer(jeton);
+    // Un keyup sans keydown dans cette session (le relâchement de Ctrl après
+    // un Ctrl+Tab atterrit sur le nouveau canvas) ne doit rien envoyer : le
+    // serveur VNC recevrait un release fantôme d'une touche jamais pressée.
+    else if (!tenues.relacher(jeton)) return;
+    send(messageKeysym(ks, enfonce));
+  };
+  // Sous Windows, AltGr est émulé par un Ctrl gauche synthétique suivi d'Alt
+  // droite : sans ce filtre, « @ # { } | \ ~ € » arrivaient comme Ctrl+caractère
+  // sur un serveur VNC X11. Trouvé par l'audit du 7 septembre 2026. RDP (scancodes)
+  // et Linux (vraie ISO_Level3_Shift) ne sont pas concernés.
+  const filtreClavier = new FiltreCtrlAltGrWindows(cible.vnc === true && estWindows(), emettreVnc);
   // RDP transporte la touche physique (scancode), VNC le caractère obtenu
   // (keysym) : même écouteur, deux messages.
   const touche = (e: KeyboardEvent, enfonce: boolean) => {
     if (cible.vnc) {
-      const ks = keysymDe(e);
-      if (ks !== null) send(messageKeysym(ks, enfonce));
+      filtreClavier.traiter(e, enfonce);
     } else {
       const sc = rdpScancode(e.code);
-      if (sc) send([4, ...le16(sc), enfonce ? 1 : 0]);
+      if (!sc) return;
+      // RDP : ironrdp filtre déjà un release non pressé (was_pressed=false), on
+      // envoie donc comme avant ; on tient juste le suivi à jour pour le blur.
+      if (enfonce) tenues.enfoncer(e.code);
+      else tenues.relacher(e.code);
+      send([4, ...le16(sc), enfonce ? 1 : 0]);
     }
   };
   // Un collage local -> distant en VNC (Ctrl+V ou Maj+Inser). En RFB il n'y a
@@ -294,12 +359,19 @@ export async function openRdp(cible: RdpTarget) {
     touche(e, true);
   });
   canvas.addEventListener("keyup", (e) => { e.preventDefault(); touche(e, false); });
-  // Focus du bureau distant = l'utilisateur va sans doute coller : on lui pousse
-  // le presse-papiers local à jour (fiabilise le collage local->distant).
+  // Le canvas perd le focus (Alt+Tab, changement d'onglet, clic sur la barre
+  // d'onglets ou le panneau SFTP) : les keyup/mouseup restants partiront
+  // ailleurs. On relâche tout de suite pour ne rien laisser tenu côté distant.
+  canvas.addEventListener("blur", relacherTenues);
+  // Au focus du canvas : le rect est peut-être périmé (onglet redevenu visible)
+  // et les verrous du poste sont à resynchroniser. Le presse-papiers, lui, ne
+  // part qu'en VNC (le sidecar le retient jusqu'au collage) : en RDP, le focus
+  // n'est PAS un geste — il survient aussi au retour de la fenêtre — et [8] y
+  // ferait fuir un mot de passe fraîchement copié. Cf. `pousseAuGeste`.
   canvas.addEventListener("focus", () => {
     invaliderRect(); // l'onglet vient (peut-être) de devenir visible : rect à relire
     void currentLocks().then((l) => { if (l !== null) send([10, l]); });
-    void pushLocalClipboard(true);
+    if (pousseAuGeste(cible.vnc === true, "focus")) void pushLocalClipboard(true);
   });
 
   // Redimensionnement NATIF du bureau distant : quand la zone Avash change, on
@@ -357,8 +429,10 @@ export async function openRdp(cible: RdpTarget) {
     ws.onopen = () => {
       ws.send(new TextEncoder().encode(conn.token));
       annoncerPartageClip(ws);
-      // Annonce initiale du presse-papiers local au bureau distant.
-      window.setTimeout(() => void pushLocalClipboard(), 600);
+      // Annonce initiale du presse-papiers seulement en VNC (le sidecar le retient
+      // jusqu'au collage explicite). En RDP, rien à la connexion : l'annoncer sans
+      // geste ferait fuir le presse-papiers vers un serveur qu'on vient d'ouvrir.
+      if (pousseAuGeste(cible.vnc === true, "connexion")) window.setTimeout(() => void pushLocalClipboard(), 600);
     };
     ws.onmessage = (ev) => {
       if (!rdpSessions.has(id)) return;
@@ -484,8 +558,15 @@ export async function openRdp(cible: RdpTarget) {
       // canvas mort. L'onglet et le canvas restent, eux — « Reconnecter »
       // doit rester possible.
       rdpSessions.get(id)?.ro?.disconnect();
-      void invoke("rdp_close", { id }).catch(() => {});
+      // Trouvé par l'audit du 7 septembre 2026 : `rdp_close` et `rdp_diagnostic`
+      // sont des commandes synchrones, exécutées en ligne côté Rust dans l'ordre
+      // d'émission. Appeler `rdp_close` (qui retire le journal) avant
+      // `showRdpClosed` (qui lit `rdp_diagnostic`) faisait lire un journal déjà
+      // effacé : l'incrustation « Connexion RDP fermée » restait muette. On
+      // montre l'incrustation d'abord, sa lecture du diagnostic part donc avant
+      // la fermeture et retrouve la raison de la coupure.
       showRdpClosed(id);
+      void invoke("rdp_close", { id }).catch(() => {});
     };
     ws.onerror = () => { /* onclose suivra */ };
   } catch (e) {
@@ -596,10 +677,14 @@ export function focusRdp(id: number) {
     }
   }
   state.sessions.forEach((s) => { s.tab.classList.remove("active"); });
-  // Le switch d'onglet ne déclenche pas l'événement focus fenêtre : on renvoie
-  // explicitement le presse-papiers local à la session qui devient active,
-  // sinon le collage local->distant ne marche pas après un changement d'onglet.
-  void pushLocalClipboard(true);
+  // Bascule d'onglet : en VNC on renvoie le presse-papiers à la session qui
+  // devient active (le sidecar le retient jusqu'au collage explicite, sans
+  // fuite), sinon le collage local->distant ne marche pas après un changement
+  // d'onglet. En RDP, NON : une bascule n'est pas un geste dans le bureau et [8]
+  // ferait annoncer un mot de passe fraîchement copié à un serveur qu'on ne fait
+  // que traverser (Ctrl+Tab). Le contenu part alors au premier clic dans le
+  // canvas. Trouvé par l'audit du 7 septembre 2026.
+  if (pousseAuGeste(rdpSessions.get(id)?.target?.vnc === true, "bascule")) void pushLocalClipboard(true);
   renderHosts(); // met à jour le surlignage « sélectionné »
 }
 
@@ -637,6 +722,29 @@ export function closeRdp(id: number) {
 
 /** Bureau RDP fermé (serveur/réseau) : propose de reconnecter ou fermer l'onglet
  *  — équivalent du message « Entrée : reconnecter · Ctrl+W : fermer » du SSH. */
+/** Lit le diagnostic d'un bureau fermé, en relançant tant que la réponse est vide.
+ *
+ *  Trouvé par l'audit du 7 septembre 2026 : la dernière ligne « Error: … »
+ *  d'anyhow est écrite par le sidecar APRÈS la fermeture de la WebSocket (le
+ *  poste est libéré au retour d'`executer`), donc une lecture unique et immédiate
+ *  est une course perdue d'avance et rend souvent une chaîne vide. On relit
+ *  quelques fois à 300 ms pour attraper cette dernière ligne.
+ *
+ *  `lire` et `pause` sont injectables pour les tests (invoke moqué, sans délai).
+ */
+export async function lireDiagnosticRdp(
+  id: number,
+  lire: (id: number) => Promise<string> = (i) => invoke<string>("rdp_diagnostic", { id: i }),
+  pause: (ms: number) => Promise<void> = (ms) => new Promise((r) => { setTimeout(r, ms); }),
+): Promise<string> {
+  for (let essai = 0; essai < 3; essai++) {
+    const diag = (await lire(id).catch(() => "")).trim();
+    if (diag) return diag;
+    if (essai < 2) await pause(300);
+  }
+  return "";
+}
+
 function showRdpClosed(id: number) {
   const s = rdpSessions.get(id);
   if (!s) return; // fermeture volontaire (l'onglet est déjà retiré)
@@ -653,11 +761,13 @@ function showRdpClosed(id: number) {
     `</div></div>`;
   // « Connexion RDP fermée » sans un mot de plus ne dit pas si le serveur a
   // redémarré, si le réseau a lâché ou si le processus a échoué. Le sidecar
-  // écrit ses raisons ; on les montre.
-  void invoke<string>("rdp_diagnostic", { id }).then((diag) => {
+  // écrit ses raisons ; on les montre (avec relances, cf. `lireDiagnosticRdp`).
+  void lireDiagnosticRdp(id).then((diag) => {
     const zone = ov.querySelector(".rdp-closed-diag") as HTMLElement | null;
-    if (!zone || !diag.trim()) return;
-    zone.textContent = diag.trim().split("\n").slice(-4).join("\n");
+    // L'utilisateur a pu reconnecter ou fermer l'onglet pendant les relances :
+    // ne rien écrire dans une incrustation déjà retirée du document.
+    if (!zone || !zone.isConnected || !diag) return;
+    zone.textContent = diag.split("\n").slice(-4).join("\n");
     zone.hidden = false;
   }).catch(() => { /* pas de diagnostic : l'incrustation reste sobre */ });
   ov.querySelector('[data-act="reconnect"]')!.addEventListener("click", () => {

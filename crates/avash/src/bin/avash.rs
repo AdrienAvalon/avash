@@ -19,9 +19,9 @@ fn main() -> anyhow::Result<()> {
                 .get(3..)
                 .map(|s| s.join(" "))
                 .ok_or_else(|| anyhow::anyhow!("Commande manquante"))?;
-            let host = avash::parse_ssh_config()?
-                .into_iter()
-                .find(|h| h.alias == *alias)
+            // `resoudre_hote` : `avash run` doit appliquer les valeurs par
+            // défaut d'un `Host *` (User, IdentityFile, Port), comme `ssh`.
+            let host = avash::resoudre_hote(alias)
                 .ok_or_else(|| anyhow::anyhow!("Hôte introuvable : {alias}"))?;
             // Le moteur SSH est tokio : runtime dédié sur ce thread.
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -53,6 +53,10 @@ fn cmd_list() {
     );
     println!("{:-<62}", "");
     for h in &hosts {
+        // Résolu (blocs à motif compris) : la liste montre l'utilisateur, le
+        // port et le rebond effectifs — ceux avec lesquels `avash run` et `ssh`
+        // se connectent — au lieu de « ? » quand ils viennent d'un `Host *`.
+        let h = avash::resoudre_hote(&h.alias).unwrap_or_else(|| h.clone());
         let target = format!(
             "{}@{}:{}",
             h.user.as_deref().unwrap_or("?"),

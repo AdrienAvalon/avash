@@ -139,6 +139,50 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   l'application renvoie au gestionnaire de paquets là où l'installation intégrée
   est impossible.
 
+### Vague des constats moyens (audit du 7 septembre 2026)
+
+Soixante-treize constats de sévérité moyenne, corrigés par voie (cœur, interface,
+processus RDP, front, chaîne), chacun avec le test qui l'aurait vu et un contrôle
+négatif ; check.sh et la suite bout en bout au vert.
+
+- **Robustesse du processus RDP face à un serveur hostile.** Bornage des
+  allocations pilotables par le serveur, jusque-là sans plafond ou contournant
+  celui existant : nombre et taille des surfaces EGFX, ResetGraphics, cache de
+  surfaces (en octets, pas seulement en entrées), réassemblage du presse-papiers,
+  nom du bureau VNC (ServerInit), longueur d'une correspondance ZGFX et indice de
+  palette ZRLE/TRLE (portages `vendor/`). Un rectangle EGFX hors image ne fait
+  plus paniquer le sidecar (bornage à l'image). Un fichier spécial (FIFO) ou un
+  motif DOS récursif dans le lecteur partagé ne fige plus son fil.
+- **Sécurité.** Le durcissement WebKit retire aussi `WEBKIT_INSPECTOR_HTTP_SERVER` ;
+  le canal d'agent ouvert le temps d'une commande est bien refermé ; un fichier
+  d'empreintes illisible n'est plus traité comme « aucun serveur connu » (fin de
+  TOFU silencieuse) et sa mise à jour est atomique ; `set_readonly(false)` ne rend
+  plus un fichier accessible en écriture à tous les comptes ; le presse-papiers du
+  poste ne part au bureau distant (RDP et VNC) que sur un geste.
+- **Justesse.** Import : une même clé `.ppk` partagée par plusieurs sessions est
+  convertie une fois et rattachée à tous ; un bureau MobaXterm sans utilisateur ne
+  fait plus échouer l'import ni le dupliquer. Trousseau : modifier ou supprimer un
+  alias ne déplace ni n'oublie plus le secret d'un autre alias visant le même
+  compte. SFTP : téléchargement et envoi ne remplacent plus un fichier existant
+  sans prévenir ; une reprise ne promeut plus un `.part` tronqué. La configuration
+  applique les valeurs par défaut d'un bloc `Host *` comme `ssh`, et une réécriture
+  ne mange plus le commentaire du bloc suivant. La sonde de santé borne sa
+  résolution DNS.
+- **Interface et accessibilité.** Le panneau SFTP est pilotable au clavier
+  (flèches, Entrée, Maj+F10) ; le focus est visible sur les interrupteurs
+  segmentés ; le thème clair corrige les couleurs des messages de modale ; la
+  bascule de langue met à jour les libellés restés figés ; la perte de focus
+  relâche les touches maintenues côté distant ; le glisser-déposer d'un hôte sur
+  lui-même ne le renvoie plus à la racine. Un échec de tunnel, une clé i18n
+  manquante et un diagnostic RDP effacé trop tôt sont désormais montrés.
+- **Chaîne d'intégration et tests.** L'échec de Vitest en CI n'est plus masqué
+  (pipefail) ; le corpus de fuzz est conservé et rejoué ; le stockage web est
+  remis à zéro entre fichiers E2E ; plusieurs scénarios (palette, enregistrement,
+  visuel) et tests unitaires (TOFU RDP, jeton du canal local, canal d'agent
+  refusé) ne peuvent plus passer à tort. La redirection d'agent tente Pageant sous
+  Windows ; `puttygen` ne fait plus clignoter de fenêtre ; le manifeste Flathub
+  ouvre le son et les périphériques série.
+
 ## [0.9.2] - 2026-09-06
 
 - **Un fichier offert au bureau distant juste après en avoir reçu un n'échoue

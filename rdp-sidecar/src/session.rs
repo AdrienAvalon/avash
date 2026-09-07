@@ -280,14 +280,33 @@ pub(crate) async fn executer(
                 dessine.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             for t in sortie.trames {
+                // Trouvé par l'audit du 7 septembre 2026 : l'origine d'une surface
+                // EGFX vient du serveur (`MapSurfaceToOutput`, jusqu'à 65535) et
+                // une surface va jusqu'à 8192×8192, quelle que soit la taille
+                // négociée du bureau. Une trame dont l'origine tombe hors de
+                // l'image est ignorée (rectangle dégénéré, `peindre_rgba` n'en
+                // peint rien de toute façon) ; sinon on borne le rectangle poussé
+                // dans la zone sale à l'image, faute de quoi `frames_msg`
+                // découpait `data` hors du tampon et tuait le sidecar.
+                if t.x >= image.width() || t.y >= image.height() {
+                    continue;
+                }
                 image.peindre_rgba(t.x, t.y, t.largeur, t.hauteur, &t.pixels);
                 ajouter_rect(
                     &mut dirty,
                     &InclusiveRectangle {
                         left: t.x,
                         top: t.y,
-                        right: t.x.saturating_add(t.largeur).saturating_sub(1),
-                        bottom: t.y.saturating_add(t.hauteur).saturating_sub(1),
+                        right: t
+                            .x
+                            .saturating_add(t.largeur)
+                            .saturating_sub(1)
+                            .min(image.width().saturating_sub(1)),
+                        bottom: t
+                            .y
+                            .saturating_add(t.hauteur)
+                            .saturating_sub(1)
+                            .min(image.height().saturating_sub(1)),
                     },
                 );
             }

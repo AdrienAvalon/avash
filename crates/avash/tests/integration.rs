@@ -15,11 +15,28 @@ use tokio::sync::Mutex;
 /// Reponses recues par le serveur sur ses canaux `forwarded-tcpip` (test -R).
 static REMOTE_REPLY: Mutex<Vec<Vec<u8>>> = Mutex::const_new(Vec::new());
 
+/// État partagé des tests d'inondation (marqueurs « INONDE » / « GOUTTE »).
+///
+/// Le serveur émet des données sans fin sur le canal exec ; ces compteurs, lus
+/// côté test, prouvent que le client borne bien le FLUX et pas seulement
+/// l'attente : au plafond (`run`) comme à l'échéance (`run_borne`), il ferme le
+/// canal, ce que `channel_close` constate, et le flux se tarit alors.
+#[derive(Clone, Default)]
+struct EtatInondation {
+    /// Octets remis à `handle.data` par la tâche d'inondation.
+    octets: Arc<std::sync::atomic::AtomicU64>,
+    /// Levé par `channel_close` : preuve que le client a envoyé `CHANNEL_CLOSE`,
+    /// et signal d'arrêt pour la tâche d'inondation.
+    close_recu: Arc<std::sync::atomic::AtomicBool>,
+}
+
 #[derive(Clone, Default)]
 struct TestSshServer {
     /// Connexions TCP acceptées par CETTE instance : de quoi prouver qu'une
     /// opération n'a pas rouvert de session derrière le dos du test.
     connexions: Arc<std::sync::atomic::AtomicUsize>,
+    /// Partagé avec chaque session ouverte, pour les tests de bornage du flux.
+    inondation: EtatInondation,
 }
 
 impl russh::server::Server for TestSshServer {
@@ -27,7 +44,10 @@ impl russh::server::Server for TestSshServer {
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
         self.connexions
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        TestSshSession::default()
+        TestSshSession {
+            inondation: self.inondation.clone(),
+            ..Default::default()
+        }
     }
 }
 
@@ -37,6 +57,8 @@ struct TestSshSession {
     /// Canaux ayant demande le sous-systeme SFTP : ils transportent du binaire,
     /// l'echo du test PTY les corromprait.
     sftp_channels: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
+    /// État d'inondation partagé avec le serveur (tests de bornage du flux).
+    inondation: EtatInondation,
 }
 
 impl russh::server::Handler for TestSshSession {
@@ -144,6 +166,83 @@ impl russh::server::Handler for TestSshSession {
         let channel = self.channels.lock().await.remove(&channel_id).unwrap();
         let _ = session.channel_success(channel_id);
         let cmd = String::from_utf8_lossy(request).into_owned();
+        // Marqueurs de test « sonde-* » : le serveur, en dehors de toute
+        // commande lancée avec redirection d'agent, tente d'ouvrir un canal que
+        // le client ne doit prêter que sur demande explicite, puis rapporte le
+        // verdict du client sur le canal exec (préfixe `SONDE:`). Servent à
+        // exercer le chemin de REFUS de `server_channel_open_agent_forward` et
+        // de son jumeau `server_channel_open_forwarded_tcpip`, sans test jusque
+        // là (audit du 7 septembre 2026).
+        //
+        // L'ouverture se fait dans une tâche détachée, PAS ici : `exec_request`
+        // tourne dans la boucle `select!` de la session serveur, celle-là même
+        // qui traite la confirmation du canal ouvert ; un `.await` d'ouverture
+        // posé directement l'attendrait d'une boucle qu'il bloque
+        // (interblocage). On ne renvoie donc pas eof/exit-status ici : la tâche
+        // les émet une fois le verdict écrit, sinon `run()` sortirait sur
+        // `Close` avant de l'avoir lu.
+        if cmd.contains("sonde-agent") || cmd.contains("sonde-forward") {
+            let handle = session.handle();
+            let ouvre_agent = cmd.contains("sonde-agent");
+            tokio::spawn(async move {
+                let verdict = if ouvre_agent {
+                    handle.channel_open_agent().await.map(|_| ())
+                } else {
+                    // Un port jamais passé à `remote_forward` : le client doit
+                    // refuser cette destination locale arbitraire.
+                    handle
+                        .channel_open_forwarded_tcpip("localhost", 59_999, "10.9.8.7", 5555)
+                        .await
+                        .map(|_| ())
+                };
+                let msg = match verdict {
+                    Ok(()) => "SONDE:ok".to_string(),
+                    Err(e) => format!("SONDE:{e:?}"),
+                };
+                let _ = handle
+                    .data(channel_id, bytes::Bytes::from(msg.into_bytes()))
+                    .await;
+                let _ = handle.eof(channel_id).await;
+                let _ = handle.exit_status_request(channel_id, 0).await;
+                let _ = handle.close(channel_id).await;
+                drop(channel);
+            });
+            return Ok(());
+        }
+        // Marqueurs de test « INONDE » (plein débit) et « GOUTTE » (lent) : le
+        // serveur émet des données sans fin sur le canal exec, en comptant les
+        // octets remis, jusqu'à ce que le client ferme le canal (`channel_close`
+        // lève `close_recu`). Prouve que le client borne le FLUX : `run` au
+        // plafond de 1 Mio, `run_borne` à l'échéance. Audit du 7 septembre 2026.
+        if cmd.contains("INONDE") || cmd.contains("GOUTTE") {
+            let handle = session.handle();
+            let etat = self.inondation.clone();
+            let lent = cmd.contains("GOUTTE");
+            tokio::spawn(async move {
+                use std::sync::atomic::Ordering;
+                // Bloc large pour saturer vite la fenêtre initiale (2 Mio) et
+                // faire atteindre le plafond ; petit et espacé pour « GOUTTE »,
+                // qui doit rester SOUS le plafond jusqu'à l'échéance.
+                let bloc = if lent {
+                    bytes::Bytes::from(vec![b'Z'; 256])
+                } else {
+                    bytes::Bytes::from(vec![b'Z'; 64 * 1024])
+                };
+                while !etat.close_recu.load(Ordering::SeqCst) {
+                    if handle.data(channel_id, bloc.clone()).await.is_err() {
+                        break; // session terminée
+                    }
+                    etat.octets.fetch_add(bloc.len() as u64, Ordering::SeqCst);
+                    if lent {
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                }
+                // Le canal reste vivant tant qu'on inonde : le lâcher enverrait
+                // CLOSE au client, qui sortirait avant d'atteindre le plafond.
+                drop(channel);
+            });
+            return Ok(());
+        }
         let output = format!("CMD:{cmd}\r\n");
         let _ = session.data(channel_id, bytes::Bytes::from(output.into_bytes()));
         let _ = session.extended_data(channel_id, 1, bytes::Bytes::from_static(b"stderr-ok"));
@@ -228,6 +327,20 @@ impl russh::server::Handler for TestSshSession {
     ) -> Result<(), Self::Error> {
         self.channels.lock().await.remove(&channel_id);
         let _ = session.close(channel_id);
+        Ok(())
+    }
+
+    /// Le client ferme un canal. On le note pour les tests de bornage du flux :
+    /// c'est la preuve que le client a envoyé `CHANNEL_CLOSE` (et pas seulement
+    /// lâché son canal), et le signal d'arrêt de la tâche d'inondation.
+    async fn channel_close(
+        &mut self,
+        _channel_id: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.inondation
+            .close_recu
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -369,6 +482,10 @@ struct TestSftpSession {
     gros_fichier: bool,
     /// Le chemin ouvert annonce plus d'octets qu'il n'en sert.
     tronque: bool,
+    /// Le chemin ouvert sert PLUS d'octets qu'il n'en annonce : le fichier a
+    /// grossi entre la lecture de sa taille et sa lecture (journal en cours
+    /// d'écriture). Le transfert reste complet et doit rester un succès.
+    petit_agrandi: bool,
     /// Descripteurs de dossiers /fs déjà lus : la seconde lecture rend Eof.
     dossiers_lus: std::collections::HashSet<String>,
 }
@@ -388,6 +505,13 @@ static FS_FICHIERS: std::sync::Mutex<Option<std::collections::HashMap<String, Ve
     std::sync::Mutex::new(None);
 /// Dossiers en mémoire : chemins absolus.
 static FS_DOSSIERS: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+/// Liens symboliques en mémoire : chemin absolu du lien → longueur de la cible
+/// (la « taille » qu'un `lstat` rend pour un lien). Ces entrées apparaissent
+/// dans `readdir` avec des permissions `0o120xxx` (`S_IFLNK`) mais n'ont ni octets
+/// dans `FS_FICHIERS` ni dossier dans `FS_DOSSIERS` : `stat` et `open` échouent
+/// dessus (lien cassé), ce qui reproduit le cas de l'audit du 7 septembre 2026.
+static FS_LIENS: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> =
     std::sync::Mutex::new(None);
 /// Lectures servies sous /fs/ : (chemin, décalage).
 static FS_LECTURES: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -427,6 +551,28 @@ fn fs_poser(chemin: &str, contenu: &[u8]) {
         .as_mut()
         .unwrap()
         .insert(chemin.to_owned(), contenu.to_vec());
+}
+fn fs_liens() -> std::sync::MutexGuard<'static, Option<std::collections::HashMap<String, u64>>> {
+    let mut g = FS_LIENS.lock().unwrap();
+    if g.is_none() {
+        *g = Some(std::collections::HashMap::new());
+    }
+    g
+}
+/// Pose un lien symbolique cassé (sans cible servable) dans un dossier, depuis
+/// un test : il sera listé mais ni ouvrable ni statable.
+fn fs_poser_lien(chemin: &str, taille_cible: u64) {
+    let mut d = fs_dossiers();
+    let parent = chemin.rsplit_once('/').map(|(a, _)| a.to_owned());
+    if let Some(p) = parent {
+        if !p.is_empty() && p != "/fs" {
+            d.as_mut().unwrap().insert(p);
+        }
+    }
+    fs_liens()
+        .as_mut()
+        .unwrap()
+        .insert(chemin.to_owned(), taille_cible);
 }
 fn fs_lire(chemin: &str) -> Option<Vec<u8>> {
     fs_fichiers().as_ref().unwrap().get(chemin).cloned()
@@ -478,6 +624,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
         // premier quart : c'est le cas du journal en rotation, que huit lectures
         // concurrentes rendent bien plus probable qu'une lecture séquentielle.
         self.tronque = filename.contains("tronque");
+        self.petit_agrandi = filename.contains("petit-agrandi");
         async move {
             if sous_fs(&filename) {
                 use russh_sftp::protocol::OpenFlags;
@@ -520,6 +667,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
         let coupure = self.coupure_en_lecture;
         let gros = self.gros_fichier;
         let tronque = self.tronque;
+        let agrandi = self.petit_agrandi;
         async move {
             if let Some(chemin) = handle.strip_prefix("fs:") {
                 let Some(contenu) = fs_lire(chemin) else {
@@ -560,6 +708,18 @@ impl russh_sftp::server::Handler for TestSftpSession {
                 return Ok(russh_sftp::protocol::Data {
                     id,
                     data: GROS_FICHIER[debut..fin].to_vec(),
+                });
+            }
+            if agrandi {
+                // Le fichier a grossi depuis la lecture de sa taille : on sert
+                // 40 octets là où `stat` en annonce 20. Le transfert est
+                // complet (done >= total) et doit rester un succès.
+                if done {
+                    return Err(StatusCode::Eof);
+                }
+                return Ok(russh_sftp::protocol::Data {
+                    id,
+                    data: (0..40u8).collect(),
                 });
             }
             if done {
@@ -785,6 +945,21 @@ impl russh_sftp::server::Handler for TestSftpSession {
                         });
                     }
                 }
+                // Les liens symboliques : permissions `S_IFLNK` (0o120xxx), que le
+                // client traduit en FileType::Symlink (ni fichier ni dossier).
+                for (l, taille) in fs_liens().as_ref().unwrap() {
+                    if parent_de(l) == chemin {
+                        files.push(File {
+                            filename: l.rsplit('/').next().unwrap_or(l).to_owned(),
+                            longname: String::new(),
+                            attrs: FileAttributes {
+                                size: Some(*taille),
+                                permissions: Some(0o120_777),
+                                ..Default::default()
+                            },
+                        });
+                    }
+                }
                 return Ok(russh_sftp::protocol::Name { id, files });
             }
             if self.root_read_done {
@@ -831,12 +1006,24 @@ impl russh_sftp::server::Handler for TestSftpSession {
         id: u32,
         path: String,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Attrs, Self::Error>> + Send {
-        // Le lecteur en bandes se règle sur la taille annoncée : elle doit être
-        // exacte pour le fichier de démonstration.
+        // Le lecteur (en bandes comme séquentiel) se règle sur la taille
+        // annoncée : elle doit correspondre à ce que `read` sert réellement,
+        // sinon un transfert complet passerait pour incomplet (le mock
+        // annonçait 42 là où il ne servait que 20, ce qui masquait le défaut du
+        // chemin séquentiel une fois la garde posée).
         let taille = if path.contains("gros") {
             GROS_FICHIER.len() as u64
+        } else if path.contains("petit-tronque") {
+            // Annonce 80 mais `read` ne sert que 20 puis Eof : la troncature
+            // séquentielle que la garde de `download_with` doit rejeter.
+            80
+        } else if path.contains("petit-agrandi") {
+            // Annonce 20 mais `read` en sert 40 : le fichier a grossi, le
+            // transfert reste complet et doit réussir.
+            20
         } else {
-            42
+            // Ce que le `read` générique sert réellement (« CONTENU-FICHIER-TEST »).
+            20
         };
         async move {
             if sous_fs(&path) {
@@ -925,6 +1112,26 @@ async fn spawn_test_sshd_compte() -> (u16, Arc<std::sync::atomic::AtomicUsize>) 
     (port, connexions)
 }
 
+/// Comme `spawn_test_sshd`, avec l'état d'inondation partagé de ce serveur,
+/// pour les tests de bornage du flux (marqueurs « INONDE » / « GOUTTE »).
+async fn spawn_test_sshd_inondation() -> (u16, EtatInondation) {
+    let config = russh::server::Config {
+        keys: vec![CLE_HOTE.clone()],
+        ..Default::default()
+    };
+    let config = Arc::new(config);
+    let mut server = TestSshServer::default();
+    let etat = server.inondation.clone();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = server.run_on_socket(config, &listener).await;
+    });
+    (port, etat)
+}
+
 /// Répertoire personnel virtuel, pour ne pas toucher au `known_hosts` réel.
 ///
 /// `/tmp` était codé en dur, et `HOME` seul n'isole rien sous Windows — où
@@ -992,6 +1199,12 @@ static HOME_POSE: std::sync::LazyLock<()> = std::sync::LazyLock::new(|| {
     let home = virtual_home();
     std::env::set_var("HOME", &home);
     std::env::set_var("AVASH_HOME", &home);
+    // Aucun agent SSH joignable pendant les tests : `ouvrir_agent_local` rend
+    // alors None, et la garde d'agent, quand le drapeau est levé, refuse en
+    // `ConnectFailed` — verdict déterministe qui ne dépend pas de l'agent réel
+    // du poste. Posé ici une seule fois, pour ne pas muter l'environnement
+    // depuis un test parallèle (cf. `un_canal_d_agent_hors_commande...`).
+    std::env::set_var("SSH_AUTH_SOCK", home.join("agent-inexistant.sock"));
 });
 
 fn test_auth() -> avash::ssh::ClientAuth {
@@ -1061,6 +1274,96 @@ async fn exec_rapporte_le_code_de_sortie() {
 
     let (_out, zero) = session.run("true").await.unwrap();
     assert_eq!(zero, 0);
+    session.disconnect().await.unwrap();
+}
+
+/// Attend que le serveur signale `CHANNEL_CLOSE`, avec une échéance : sinon le
+/// test rougirait par un `assert` clair plutôt que de pendre.
+async fn attendre_close(etat: &EtatInondation, quoi: &str) {
+    let echeance = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    while !etat.close_recu.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < echeance,
+            "le canal n'a pas été fermé ({quoi}) : CHANNEL_CLOSE jamais reçu par le serveur"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Le flux doit s'être tari : on laisse d'abord la dernière itération en vol se
+/// poser, puis on vérifie que le compteur d'octets servis ne bouge plus.
+async fn affirmer_flux_tari(etat: &EtatInondation) {
+    use std::sync::atomic::Ordering;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let avant = etat.octets.load(Ordering::SeqCst);
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let apres = etat.octets.load(Ordering::SeqCst);
+    assert_eq!(
+        avant, apres,
+        "le serveur inonde encore après la fermeture du canal ({avant} -> {apres} octets)"
+    );
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : `run` sortait au plafond de 1 Mio
+/// sans fermer le canal. `russh::Channel` n'envoie pas de `CHANNEL_CLOSE` à sa
+/// chute et le client réalimente la fenêtre : un serveur qui répond
+/// `cat /dev/zero` continuait de nous inonder toute la vie de la session. On
+/// vérifie que `run` ferme le canal (le serveur reçoit `CHANNEL_CLOSE`), que le
+/// flux se tarit, et que la session reste utilisable derrière.
+#[tokio::test]
+async fn le_plafond_de_sortie_ferme_le_canal() {
+    let (port, etat) = spawn_test_sshd_inondation().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion échouée");
+
+    let (stdout, _code) = session.run("INONDE").await.unwrap();
+    assert!(
+        stdout.contains("plafond de 1 Mio atteint"),
+        "la sortie aurait dû être tronquée au plafond : {}",
+        &stdout[..stdout.len().min(120)]
+    );
+
+    attendre_close(&etat, "plafond").await;
+    affirmer_flux_tari(&etat).await;
+
+    // La même session reste utilisable après la fermeture du canal inondé.
+    let (ok, code) = session.run("echo ok").await.unwrap();
+    assert_eq!(code, 0);
+    assert!(ok.contains("CMD:echo ok"), "session inutilisable : {ok}");
+    session.disconnect().await.unwrap();
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : la sonde d'OS bornait l'attente par
+/// un `timeout` posé par-dessus `run`, mais lâchait son canal à l'échéance sans
+/// le fermer. Un serveur qui débite lentement (jamais le plafond) continuait
+/// donc d'inonder la session longue de l'onglet. `run_borne` ferme le canal à
+/// l'échéance : on vérifie qu'elle rend une erreur, que le serveur reçoit
+/// `CHANNEL_CLOSE`, que le flux se tarit et que la session reste utilisable.
+#[tokio::test]
+async fn la_sonde_d_os_ferme_son_canal_a_l_echeance() {
+    let (port, etat) = spawn_test_sshd_inondation().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion échouée");
+
+    // Débit lent : le plafond n'est jamais atteint, seule l'échéance tranche.
+    let probe = session
+        .run_borne("GOUTTE", std::time::Duration::from_millis(300))
+        .await;
+    assert!(
+        probe.is_err(),
+        "la sonde bornée aurait dû rendre une erreur d'échéance : {probe:?}"
+    );
+
+    attendre_close(&etat, "échéance").await;
+    affirmer_flux_tari(&etat).await;
+
+    let (ok, code) = session.run("echo ok").await.unwrap();
+    assert_eq!(code, 0);
+    assert!(ok.contains("CMD:echo ok"), "session inutilisable : {ok}");
     session.disconnect().await.unwrap();
 }
 
@@ -1452,12 +1755,19 @@ async fn tunnel_distant_relaie_vers_un_service_local() {
         .await
         .unwrap();
     let local_port = local.local_addr().unwrap().port();
+    // Réponse propre à CE test. Trouvé par l'audit du 7 septembre 2026 : ce
+    // test et `une_redirection_distante_en_port_zero_prend_le_port_du_serveur`
+    // tournent en parallèle et poussent tous deux « HELLO » dans le statique
+    // partagé REMOTE_REPLY ; avec une charge utile identique, la boucle de l'un
+    // pouvait être satisfaite par la réponse de l'autre. On marque la réponse
+    // par le port local (unique au test) et on filtre dessus.
+    let attendu = format!("HELLO-{local_port}");
+    let reponse = attendu.clone();
     tokio::spawn(async move {
         let (mut s, _) = local.accept().await.unwrap();
         let mut buf = [0u8; 16];
-        let n = s.read(&mut buf).await.unwrap();
-        let up = String::from_utf8_lossy(&buf[..n]).to_uppercase();
-        s.write_all(up.as_bytes()).await.unwrap();
+        let _ = s.read(&mut buf).await.unwrap();
+        s.write_all(reponse.as_bytes()).await.unwrap();
     });
 
     let port = spawn_test_sshd().await;
@@ -1476,28 +1786,36 @@ async fn tunnel_distant_relaie_vers_un_service_local() {
     // Le serveur de test ouvre le canal de lui-meme et attend la reponse.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
-        if let Some(reply) = REMOTE_REPLY.lock().await.first().cloned() {
-            assert_eq!(
-                reply, b"HELLO",
-                "la reponse du service local doit revenir au serveur"
-            );
+        if REMOTE_REPLY
+            .lock()
+            .await
+            .iter()
+            .any(|r| r == attendu.as_bytes())
+        {
             break;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "aucune reponse recue via -R"
+            "aucune reponse marquée recue via -R"
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
+    // `bytes_up` compte le sens serveur -> service local (le « hello » de 5
+    // octets), `bytes_down` le retour service local -> serveur (notre réponse
+    // marquée) : cf. ForwardCounters::relay(a = canal serveur, b = local).
+    let attendu_len = attendu.len() as u64;
     let snap = attendre_compteurs(
         &tunnel,
-        |s| s.total == 1 && s.bytes_down == 5 && s.bytes_up == 5,
-        "un aller-retour de 5 octets dans chaque sens",
+        |s| s.total == 1 && s.bytes_up == 5 && s.bytes_down == attendu_len,
+        "un aller de 5 octets et le retour marqué de ce test",
     )
     .await;
     assert_eq!(snap.total, 1);
-    assert_eq!(snap.bytes_down, 5, "« hello » vers le service local");
-    assert_eq!(snap.bytes_up, 5, "« HELLO » vers le serveur");
+    assert_eq!(snap.bytes_up, 5, "« hello » vers le service local");
+    assert_eq!(
+        snap.bytes_down, attendu_len,
+        "la réponse marquée vers le serveur"
+    );
     tunnel.close().await;
 }
 
@@ -1751,6 +2069,77 @@ async fn un_fichier_plus_court_que_promis_ne_passe_pas_pour_un_succes() {
     let partiel = local.with_extension("bin.part");
     assert!(!partiel.exists(), "un .part orphelin est resté");
 
+    sftp.close().await.unwrap();
+}
+
+/// Jumeau séquentiel du test précédent : un PETIT fichier (<= 128 Kio, donc
+/// chemin séquentiel de `download_with`) tronqué en cours de lecture ne doit
+/// pas non plus passer pour un succès.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : le chemin séquentiel renommait le
+/// `.part` sur la cible sans vérifier `done == total`. Un journal distant
+/// rotationné/tronqué pendant la lecture atteint un EOF propre plus tôt
+/// (`stat` annonce 80, `read` sert 20 puis Eof) : sans garde, le préfixe de
+/// 20 octets était promu sur la cible, transfert annoncé réussi.
+#[tokio::test]
+async fn un_petit_fichier_tronque_ne_passe_pas_pour_un_succes() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    let local =
+        std::env::temp_dir().join(format!("avash-petit-tronque-{}.bin", std::process::id()));
+    let _ = std::fs::remove_file(&local);
+
+    let issue = sftp
+        .download_with("/srv/petit-tronque.bin", &local, |_, _| {})
+        .await;
+
+    let Err(e) = issue else {
+        panic!("un petit fichier incomplet ne doit pas être un succès")
+    };
+    assert!(
+        e.to_string().contains("Transfert incomplet"),
+        "message inattendu : {e}"
+    );
+    assert!(
+        !local.exists(),
+        "la cible ne doit pas exister : {}",
+        local.display()
+    );
+    let partiel = local.with_extension("bin.part");
+    assert!(!partiel.exists(), "un .part orphelin est resté");
+
+    sftp.close().await.unwrap();
+}
+
+/// Miroir du précédent : un PETIT fichier qui a GROSSI pendant la lecture
+/// (`stat` annonce 20, `read` en sert 40 puis Eof) reste un transfert complet
+/// et doit RÉUSSIR — c'est ce qui impose une garde `done < total`, et non
+/// `done != total` qui rejetterait à tort un journal en cours d'écriture.
+#[tokio::test]
+async fn un_petit_fichier_qui_a_grossi_reste_un_succes() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    let local =
+        std::env::temp_dir().join(format!("avash-petit-agrandi-{}.bin", std::process::id()));
+    let _ = std::fs::remove_file(&local);
+
+    let n = sftp
+        .download_with("/srv/petit-agrandi.bin", &local, |_, _| {})
+        .await
+        .expect("un fichier complet, même plus gros qu'annoncé, doit réussir");
+
+    assert_eq!(n, 40, "les 40 octets réellement servis sont écrits");
+    assert_eq!(
+        std::fs::read(&local).unwrap(),
+        (0..40u8).collect::<Vec<u8>>(),
+        "la cible porte les octets servis, pas le préfixe annoncé"
+    );
+    let partiel = local.with_extension("bin.part");
+    assert!(!partiel.exists(), "un .part orphelin est resté");
+
+    let _ = std::fs::remove_file(&local);
     sftp.close().await.unwrap();
 }
 
@@ -2298,6 +2687,60 @@ async fn la_reprise_ne_relit_pas_les_bandes_que_la_carte_dit_faites() {
     sftp.close().await.unwrap();
 }
 
+/// Une carte disant une bande « faite » alors que le `.part` est plus court
+/// que cette bande ne doit pas promouvoir un fichier faux.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : la carte `.part.reprise` est écrite
+/// avec un `fsync` (`ecrire_atomiquement`), mais les octets d'une bande
+/// n'avaient qu'un `flush` (pas de `fsync`) au moment de l'annonce « bande
+/// faite ». Après une coupure de courant, la carte durable pouvait promettre
+/// une bande que le `.part` n'avait pas encore reçue, plus courte sur le disque.
+/// À la reprise, la bande dite faite n'était pas relue, `fait == total` comptait
+/// `deja_fait` sans regarder le fichier, et le `rename` promouvait un fichier
+/// troué (zéros là où l'écriture d'une bande suivante avait étendu le `.part`
+/// en sparse). Ici, la carte annonce `(0, bande)` faite mais le `.part` s'arrête
+/// à `bande / 2` : la reprise doit refuser cette carte et repartir de zéro, donc
+/// relire la bande 0, et rendre le fichier entier.
+#[tokio::test]
+async fn une_carte_de_reprise_survit_a_un_part_tronque() {
+    let gros = motif(2 * 1024 * 1024, 6);
+    fs_poser("/fs/reprise3/gros.bin", &gros);
+    let sftp = sftp_de_test().await;
+    let local = dossier_temp("reprise3").join("gros.bin");
+    let partiel = local.with_file_name("gros.bin.part");
+    let carte = local.with_file_name("gros.bin.part.reprise");
+    // Huit bandes de 256 Kio : la carte prétend la première faite, mais le
+    // `.part` s'arrête au milieu de cette bande (crash entre la donnée non
+    // durable et la carte durable).
+    let bande = 256 * 1024u64;
+    let faites = vec![(0u64, bande)];
+    let tronque = (bande / 2) as usize;
+    std::fs::write(&partiel, &gros[..tronque]).unwrap();
+    std::fs::write(
+        &carte,
+        serde_json::json!({ "taille": gros.len(), "mtime": 1_700_000_000u64, "faites": faites })
+            .to_string(),
+    )
+    .unwrap();
+
+    let n = sftp
+        .download_reprise("/fs/reprise3/gros.bin", &local, None, |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(n as usize, gros.len());
+    assert_eq!(
+        std::fs::read(&local).unwrap(),
+        gros,
+        "un .part tronqué sous une carte optimiste ne doit pas être promu tel quel"
+    );
+    assert!(
+        !partiel.exists() && !carte.exists(),
+        "plus de trace après la reprise"
+    );
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
+
 /// Même chose en montée : la carte `.envoi.reprise` note ce qui est
 /// sûrement écrit, la reprise repart de là et le fichier distant finit entier.
 #[tokio::test]
@@ -2314,6 +2757,7 @@ async fn un_envoi_annule_reprend_sans_renvoyer_les_bandes_faites() {
         .upload_reprise(
             &local,
             "/fs/envoi/gros.bin",
+            true,
             Some(&annulation),
             move |fait, _| {
                 if fait >= 9 * 1024 * 1024 {
@@ -2327,7 +2771,7 @@ async fn un_envoi_annule_reprend_sans_renvoyer_les_bandes_faites() {
     assert!(carte.exists(), "la carte d'envoi reste");
     let mut premiere = None;
     let n = sftp
-        .upload_reprise(&local, "/fs/envoi/gros.bin", None, |fait, _| {
+        .upload_reprise(&local, "/fs/envoi/gros.bin", true, None, |fait, _| {
             premiere.get_or_insert(fait);
         })
         .await
@@ -2339,6 +2783,43 @@ async fn un_envoi_annule_reprend_sans_renvoyer_les_bandes_faites() {
     );
     assert_eq!(fs_lire("/fs/envoi/gros.bin").unwrap(), gros);
     assert!(!carte.exists());
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : un envoi de fichier unitaire faisait
+/// `create(remote)`, qui tronque une cible du même nom sans un mot. Avec
+/// `refuser_ecrasement`, une cible distante déjà présente fait refuser l'envoi et
+/// reste intacte ; vers un chemin libre, le même envoi passe.
+#[tokio::test]
+async fn un_envoi_unitaire_ne_remplace_pas_une_cible_existante() {
+    let sftp = sftp_de_test().await;
+    let local = dossier_temp("envoi_ecrase").join("note.txt");
+    std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+    std::fs::write(&local, b"nouveau contenu").unwrap();
+    fs_poser("/fs/ecrase/note.txt", b"precieux, a garder");
+
+    let issue = sftp
+        .upload_reprise(&local, "/fs/ecrase/note.txt", true, None, |_, _| {})
+        .await;
+    assert!(
+        issue.is_err(),
+        "un envoi ne doit pas écraser une cible existante"
+    );
+    assert_eq!(
+        fs_lire("/fs/ecrase/note.txt").as_deref(),
+        Some(&b"precieux, a garder"[..]),
+        "la cible existante doit rester intacte"
+    );
+
+    // Vers un chemin libre, le même envoi passe.
+    let n = sftp
+        .upload_reprise(&local, "/fs/ecrase/neuf.txt", true, None, |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(n, b"nouveau contenu".len() as u64);
+    assert_eq!(fs_lire("/fs/ecrase/neuf.txt").unwrap(), b"nouveau contenu");
+
     let _ = std::fs::remove_dir_all(local.parent().unwrap());
     sftp.close().await.unwrap();
 }
@@ -2361,6 +2842,7 @@ async fn relayer_vers_echoue_sur_une_source_illisible_sans_toucher_la_cible() {
             "/fs/relaisko/absente.log",
             &cible,
             "/fs/relaisko/garde.txt",
+            false,
             None,
             |_, _| {},
         )
@@ -2378,6 +2860,7 @@ async fn relayer_vers_echoue_sur_une_source_illisible_sans_toucher_la_cible() {
             "/fs/relaisko/absente2.log",
             &cible,
             "/fs/relaisko/neuf.bin",
+            false,
             None,
             |_, _| {},
         )
@@ -2386,6 +2869,42 @@ async fn relayer_vers_echoue_sur_une_source_illisible_sans_toucher_la_cible() {
     assert!(
         fs_lire("/fs/relaisko/neuf.bin").is_none(),
         "aucune cible vide ne doit être créée"
+    );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : `relayer_vers` faisait
+/// `create(remote_cible)`, qui tronque un fichier du même nom chez la cible — une
+/// copie de fichier vers un autre hôte écrasait sans un mot. Avec
+/// `refuser_ecrasement`, une cible existante fait refuser la copie et reste
+/// intacte (le serveur en mémoire honore `OpenFlags::TRUNCATE`, la troncature
+/// serait donc visible sinon).
+#[tokio::test]
+async fn relayer_vers_ne_remplace_pas_une_cible_existante() {
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+    fs_poser("/fs/copie/src.bin", &motif(200 * 1024, 7));
+    fs_poser("/fs/copie/deja.bin", b"a garder chez la cible");
+
+    let issue = source
+        .relayer_vers(
+            "/fs/copie/src.bin",
+            &cible,
+            "/fs/copie/deja.bin",
+            true,
+            None,
+            |_, _| {},
+        )
+        .await;
+    assert!(
+        issue.is_err(),
+        "la copie ne doit pas écraser une cible existante"
+    );
+    assert_eq!(
+        fs_lire("/fs/copie/deja.bin").as_deref(),
+        Some(&b"a garder chez la cible"[..]),
+        "la cible existante doit rester intacte"
     );
     source.close().await.unwrap();
     cible.close().await.unwrap();
@@ -2420,6 +2939,75 @@ async fn un_dossier_se_relaie_d_un_serveur_a_l_autre() {
             .any(|e| e.file_name().to_string_lossy().contains("x.bin.part")),
         "le relais a écrit sur le disque du poste"
     );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : un dossier distant qui contient un
+/// lien symbolique (ici cassé, comme un `current -> releases/1.2.3` dont la
+/// cible a disparu) faisait échouer TOUT le téléchargement. `parcourir` rangeait
+/// le lien en fichier (son `file_type` n'est ni dossier ni fichier régulier),
+/// puis `download_reprise` tentait d'`open`/`read` dessus, l'échec remontait par
+/// `?` et les fichiers listés après le lien n'étaient jamais reçus. Le lien doit
+/// désormais être ignoré (comme `scp -r` sans `-L`) et le reste du dossier arriver.
+#[tokio::test]
+async fn un_lien_symbolique_dans_un_dossier_ne_casse_pas_le_telechargement() {
+    fs_poser("/fs/liens/a.txt", b"alpha");
+    fs_poser("/fs/liens/b.txt", b"bravo");
+    // Lien cassé « courant » : listé, mais ni ouvrable ni statable.
+    fs_poser_lien("/fs/liens/courant", 14);
+    let sftp = sftp_de_test().await;
+    let local = dossier_temp("liens");
+    let mut dernier = avash::sftp::Avancement::default();
+    let n = sftp
+        .download_dir_with("/fs/liens", &local, None, |a| {
+            dernier = a;
+        })
+        .await
+        .expect("le lien doit être ignoré, pas faire échouer le dossier");
+    assert_eq!(n, b"alpha".len() as u64 + b"bravo".len() as u64);
+    assert_eq!(std::fs::read(local.join("a.txt")).unwrap(), b"alpha");
+    assert_eq!(std::fs::read(local.join("b.txt")).unwrap(), b"bravo");
+    assert!(
+        !local.join("courant").exists(),
+        "le lien n'a pas à être matérialisé en local"
+    );
+    // Seuls les deux fichiers réguliers comptent, la progression ne compte pas le lien.
+    assert_eq!((dernier.termines, dernier.nombre), (2, 2));
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
+
+/// Même défaut sur le relais serveur à serveur : `relayer_dir_vers` réutilise
+/// `parcourir`, donc un lien cassé dans la source faisait tout échouer et, pire,
+/// `relayer_vers` créait un fichier VIDE à la place du lien (total nul → `Ok`).
+/// Le lien doit être ignoré et rien de faux créé chez la cible.
+#[tokio::test]
+async fn un_lien_symbolique_dans_un_dossier_ne_casse_pas_le_relais() {
+    fs_poser("/fs/lienrelais/src/x.bin", b"donnees");
+    fs_poser_lien("/fs/lienrelais/src/courant", 14);
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+    let mut dernier = avash::sftp::Avancement::default();
+    let n = source
+        .relayer_dir_vers(
+            "/fs/lienrelais/src",
+            &cible,
+            "/fs/lienrelais/dst",
+            None,
+            |a| {
+                dernier = a;
+            },
+        )
+        .await
+        .expect("le lien doit être ignoré, pas faire échouer le relais");
+    assert_eq!(n, b"donnees".len() as u64);
+    assert_eq!(fs_lire("/fs/lienrelais/dst/x.bin").unwrap(), b"donnees");
+    assert!(
+        fs_lire("/fs/lienrelais/dst/courant").is_none(),
+        "aucun fichier vide ne doit être créé à la place du lien"
+    );
+    assert_eq!((dernier.termines, dernier.nombre), (1, 1));
     source.close().await.unwrap();
     cible.close().await.unwrap();
 }
@@ -2505,7 +3093,7 @@ async fn les_deux_executions_rendent_toute_une_sortie_de_trois_kilo_octets() {
         out.len()
     );
     let (out, code) = session
-        .run_avec_agent(&format!("echo {long} ; exit 7"))
+        .run_avec_agent(&format!("echo {long} ; exit 7"), None)
         .await
         .unwrap();
     assert_eq!(code, 7, "le code de sortie de run_avec_agent");
@@ -2530,7 +3118,7 @@ async fn run_avec_agent_echoue_quand_le_canal_ferme_sans_statut() {
         .expect("connexion");
     // Le serveur de test ferme le canal sans exit-status sur ce marqueur.
     let err = session
-        .run_avec_agent("echo SANS_STATUT")
+        .run_avec_agent("echo SANS_STATUT", None)
         .await
         .expect_err("une fermeture sans statut doit échouer");
     assert!(
@@ -2538,7 +3126,10 @@ async fn run_avec_agent_echoue_quand_le_canal_ferme_sans_statut() {
         "message inattendu : {err}"
     );
     // Une commande normale, elle, rend toujours son code.
-    let (_out, code) = session.run_avec_agent("echo ok ; exit 3").await.unwrap();
+    let (_out, code) = session
+        .run_avec_agent("echo ok ; exit 3", None)
+        .await
+        .unwrap();
     assert_eq!(code, 3);
 }
 
@@ -2607,38 +3198,144 @@ async fn une_redirection_distante_en_port_zero_prend_le_port_du_serveur() {
         .await
         .unwrap();
     let local_port = local.local_addr().unwrap().port();
+    // Réponse marquée par le port local : le statique REMOTE_REPLY est partagé
+    // avec `tunnel_distant_relaie_vers_un_service_local` (audit du 7 septembre
+    // 2026), qui poussait le même « HELLO » ; la moitié « relaie » de ce test
+    // était alors satisfaite par la réponse de l'AUTRE test, sans jamais lire
+    // les compteurs de son propre tunnel.
+    let attendu = format!("HELLO-{local_port}");
+    let reponse = attendu.clone();
     tokio::spawn(async move {
         let (mut s, _) = local.accept().await.unwrap();
         let mut buf = [0u8; 16];
-        let n = s.read(&mut buf).await.unwrap();
-        let up = String::from_utf8_lossy(&buf[..n]).to_uppercase();
-        s.write_all(up.as_bytes()).await.unwrap();
+        let _ = s.read(&mut buf).await.unwrap();
+        s.write_all(reponse.as_bytes()).await.unwrap();
     });
     let port = spawn_test_sshd().await;
     let session = connect_for_tunnel(port).await;
     // Directement par la session : la définition d'un tunnel refuse le port 0
     // (validation_refuse_un_port_d_ecoute_a_zero), c'est la couche SSH qui
     // sait laisser le serveur choisir.
+    // Compteurs de CE tunnel : c'est le vrai garde-fou. Sous un mutant qui
+    // garderait le calcul de `bound` mais supprimerait la ré-indexation
+    // `f.insert(bound, dest)` (ssh.rs), la table reste clée sur 0, le canal
+    // forwarded-tcpip sur 40 000 est refusé et ces compteurs restent à zéro,
+    // quel que soit l'état de REMOTE_REPLY.
+    let compteurs = Arc::new(avash::ssh::ForwardCounters::default());
     let bound = session
-        .remote_forward(
-            "localhost",
-            0,
-            "127.0.0.1",
-            local_port,
-            Arc::new(avash::ssh::ForwardCounters::default()),
-        )
+        .remote_forward("localhost", 0, "127.0.0.1", local_port, compteurs.clone())
         .await
         .expect("redirection distante en port 0");
     assert_eq!(bound, 40_000, "le port choisi par le serveur");
+    // Le relais est asynchrone : attente bornée sur l'Arc<ForwardCounters>
+    // (attendre_compteurs ne prend qu'un &Tunnel). `bytes_up` = « hello » du
+    // serveur vers le service local (5), `bytes_down` = notre réponse marquée
+    // vers le serveur ; cf. ForwardCounters::relay(a = canal serveur, b = local).
+    let attendu_len = attendu.len() as u64;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
-        if REMOTE_REPLY.lock().await.iter().any(|r| r == b"HELLO") {
+        use std::sync::atomic::Ordering::Relaxed;
+        let compteurs_ok = compteurs.total.load(Relaxed) == 1
+            && compteurs.bytes_up.load(Relaxed) == 5
+            && compteurs.bytes_down.load(Relaxed) == attendu_len;
+        let reply_ok = REMOTE_REPLY
+            .lock()
+            .await
+            .iter()
+            .any(|r| r == attendu.as_bytes());
+        if compteurs_ok && reply_ok {
             break;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "rien n'est revenu par la redirection en port 0"
+            "le relais en port 0 n'a pas atteint MON service : total={}, up={}, down={}",
+            compteurs.total.load(Relaxed),
+            compteurs.bytes_up.load(Relaxed),
+            compteurs.bytes_down.load(Relaxed),
         );
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     }
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : la garde
+/// `server_channel_open_agent_forward` — qui empêche un serveur déjà accepté
+/// par TOFU d'emprunter l'agent du poste hors d'une commande explicitement
+/// lancée avec redirection — n'avait AUCUN test sur son chemin de refus. Un
+/// mutant qui inversait le drapeau (`!load` -> `load`), l'initialisait à
+/// `true`, ou vidait le `Drop` de `GardeAgent`, survivait à toute la suite.
+///
+/// Le serveur de test ouvre un canal d'agent hors commande (`run`) puis pendant
+/// une commande à redirection (`run_avec_agent`) et rapporte le verdict rendu
+/// par le client. Les DEUX moitiés sont nécessaires : le `Drop` du handle de
+/// russh rejette déjà en `AdministrativelyProhibited` quand la réponse est
+/// simplement lâchée, donc « refusé hors commande » seul ne prouverait pas que
+/// le drapeau commande le prêt. C'est le passage à `ConnectFailed` sous
+/// `run_avec_agent` (drapeau levé, la garde atteint l'agent, absent ici) qui le
+/// prouve. La troisième sonde vérifie la retombée : le `Drop` de `GardeAgent`
+/// remet le drapeau à false, et l'agent n'est plus prêté ensuite.
+#[cfg(unix)]
+#[tokio::test]
+async fn un_canal_d_agent_hors_commande_est_refuse_mais_prete_le_temps_d_une_commande() {
+    // `HOME_POSE` a posé `SSH_AUTH_SOCK` sur un chemin inexistant : aucun agent
+    // n'est joignable, la garde refuse en `ConnectFailed` quand le drapeau est
+    // levé, sans dépendre de l'agent réel du poste ni le muter.
+    std::sync::LazyLock::force(&HOME_POSE);
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+
+    // 1) Hors commande : le serveur ne doit pas obtenir l'agent du poste.
+    let (out, _) = session.run("sonde-agent").await.unwrap();
+    assert!(
+        out.contains("AdministrativelyProhibited"),
+        "hors commande, le canal d'agent doit être administrativement refusé : {out}"
+    );
+
+    // 2) Pendant `run_avec_agent` : le drapeau est levé, la garde laisse passer
+    // et échoue plus loin faute d'agent joignable — verdict distinct, preuve que
+    // le drapeau a bien changé avec la commande.
+    let (out, _) = session.run_avec_agent("sonde-agent", None).await.unwrap();
+    assert!(
+        out.contains("ConnectFailed"),
+        "pendant une commande à redirection, la garde doit atteindre l'agent (absent ici) : {out}"
+    );
+
+    // 3) Retombée : après la commande, le `Drop` de `GardeAgent` a remis le
+    // drapeau à false ; un canal d'agent est de nouveau refusé.
+    let (out, _) = session.run("sonde-agent").await.unwrap();
+    assert!(
+        out.contains("AdministrativelyProhibited"),
+        "après la commande, l'agent ne doit plus être prêté : {out}"
+    );
+
+    session.disconnect().await.unwrap();
+}
+
+/// Jumeau du précédent pour `server_channel_open_forwarded_tcpip` : le serveur
+/// ouvre un canal `forwarded-tcpip` sur un port JAMAIS enregistré par
+/// `remote_forward`, et le client doit refuser cette destination locale
+/// arbitraire. Trouvé par l'audit du 7 septembre 2026 : seul le chemin
+/// acceptant (port enregistré, cf. `une_redirection_distante_en_port_zero...`)
+/// était testé, le chemin de refus ne l'était pas.
+///
+/// Le refus se lit `ConnectFailed` (et non `AdministrativelyProhibited`) : c'est
+/// le code de rejet que pose `server_channel_open_forwarded_tcpip` pour une
+/// destination inconnue (ssh.rs). Ce qui compte est que le canal soit REFUSÉ
+/// (jamais `SONDE:ok`, qui signifierait un relais accordé) : un mutant qui
+/// accepterait le canal produirait `SONDE:ok` et ferait rougir l'assertion.
+#[tokio::test]
+async fn un_forwarded_tcpip_sur_un_port_non_enregistre_est_refuse() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+    let (out, _) = session.run("sonde-forward").await.unwrap();
+    assert!(
+        out.contains("ChannelOpenFailure(ConnectFailed)"),
+        "un forwarded-tcpip sur un port non enregistré doit être refusé : {out}"
+    );
+    session.disconnect().await.unwrap();
 }

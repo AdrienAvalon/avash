@@ -1,7 +1,7 @@
 use futures::TryStreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 
-use std::{future::Future, sync::Arc, vec};
+use std::{future::Future, sync::Arc};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
@@ -431,7 +431,16 @@ where
     }
 
     let name_len = stream.read_u32().await?;
-    let mut name_buf = vec![0_u8; name_len as usize];
+    // Trouvé par l'audit du 7 septembre 2026 : la longueur du nom du bureau
+    // (name-length, u32 lu sur le fil) devenait une allocation directe
+    // (`vec![0; name_len]`) sans passer par la borne du codec, seule voie non
+    // bornée qui restait. Un serveur hostile annonçant 0xFFFFFFFF faisait
+    // réclamer 4 Gio avant de lire un octet : abandon du processus sous Windows
+    // (`handle_alloc_error`, session perdue), attente jusqu'au délai de lecture
+    // sous Linux (l'allocation à zéro y est paresseuse). Comme le texte du
+    // presse-papiers, le nom passe désormais par `codec::tampon`, qui ferme la
+    // session sur un message clair au lieu d'allouer sans borne.
+    let mut name_buf = codec::tampon(name_len as usize)?;
     stream.read_exact(&mut name_buf).await?;
     let name = String::from_utf8_lossy(&name_buf).into_owned();
 

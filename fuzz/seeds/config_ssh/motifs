@@ -1,0 +1,9 @@
+# Blocs à motif : valeurs par défaut et négation, résolues par resoudre_hote.
+Host prod
+  HostName 10.0.0.1
+Host !prod *.interne
+  ProxyJump bastion
+Host *
+  User adrien
+  IdentityFile ~/.ssh/id_ed25519
+  Port 2222

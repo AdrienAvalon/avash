@@ -373,3 +373,92 @@ async fn le_serveur_deja_connu_en_tls_refuse_la_retrogradation() {
         "le client a envoyé plus que sa version : le mot de passe a pu fuir ({recu:?})"
     );
 }
+
+/// La longueur du nom du bureau (ServerInit, name-length en u32) était allouée
+/// telle quelle (`vec![0; name_len]`), sans passer par la borne du codec : un
+/// serveur hostile annonçant 0xFFFFFFFF faisait réclamer 4 Gio avant de lire un
+/// octet — abandon du processus sous Windows (`handle_alloc_error`), attente
+/// jusqu'au délai de lecture sous Linux (l'allocation à zéro y est paresseuse,
+/// d'où l'angle mort de la cible fuzz). Le nom doit être borné AVANT toute
+/// allocation, comme le texte du presse-papiers. Trouvé par l'audit du
+/// 7 septembre 2026.
+#[tokio::test]
+async fn un_nom_de_bureau_deraisonnable_est_refuse_avant_toute_allocation() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 1]); // un seul type de sécurité : None
+    s.extend_from_slice(&0u32.to_be_bytes()); // SecurityResult : ok
+    s.extend_from_slice(&4u16.to_be_bytes()); // largeur
+    s.extend_from_slice(&4u16.to_be_bytes()); // hauteur
+    s.extend_from_slice(&FORMAT);
+    s.extend_from_slice(&u32::MAX.to_be_bytes()); // name-length = 0xFFFFFFFF
+                                                  // ...et pas un octet de nom : la borne doit tomber avant toute lecture. Le
+                                                  // serveur lit les 14 octets que le client envoie (version 12, choix None 1,
+                                                  // drapeau partagé 1) puis raccroche, pour qu'un échec de lecture (ancien
+                                                  // code, après une allocation de 4 Gio) se distingue de la borne du codec
+                                                  // (code corrigé, aucune allocation).
+    let flux = serveur_qui_raccroche(s, VERSION.len() + 1 + 1);
+    let Err(e) = connecteur(flux).try_start().await else {
+        panic!("un nom de bureau de 0xFFFFFFFF octets a été accepté")
+    };
+    assert!(
+        e.to_string().contains("borne"),
+        "le nom doit être refusé par la borne du codec avant toute allocation : {e}"
+    );
+}
+
+/// Un serveur hostile peut coder une tuile TRLE à palette de 2 couleurs puis y
+/// désigner un indice hors palette : l'octet de contrôle du RLE indexé porte
+/// `index = control & 0x7f`, jusqu'à 127. `copy_indexed` tranchait alors
+/// `palette[start..start + bpp]` hors des bornes et paniquait la tâche de
+/// décodage tokio. La panique n'abattait pas tout le sidecar (pas de
+/// `panic=abort`), mais elle fermait le canal de sortie : `recv` rendait `None`
+/// et l'utilisateur voyait « Le serveur a fermé la connexion. » (avec la ligne
+/// de panique en incrustation) alors que c'est le client qui avait planté. Un
+/// indice hors palette doit devenir une `VncEvent::Error` franche.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : la cible fuzz ne construisait jamais
+/// de flux TRLE/ZRLE valide (elle ne vérifiait qu'un invariant de taille), d'où
+/// l'angle mort. La même faille existe en ZRLE (codage que le client demande),
+/// mais elle exigerait un flux zlib forgé ; le chemin `copy_indexed` est
+/// identique et éprouvé ici en TRLE, non compressé.
+#[tokio::test]
+async fn un_indice_de_palette_hors_borne_en_trle_est_une_erreur_pas_une_panique() {
+    let mut s = script_sans_auth(4, 4);
+    // Une mise à jour d'un seul rectangle 4×4 en (0,0), codé TRLE (encodage 15).
+    s.extend_from_slice(&[0, 0, 0, 1]);
+    s.extend_from_slice(&[0, 0, 0, 0, 0, 4, 0, 4, 0, 0, 0, 15]);
+    // Ce portage lit d'abord une longueur u32 (bloc préfixé, ignoré ici avec 0)
+    // puis la tuile depuis le flux. Tuile TRLE : octet de contrôle 0x82 (RLE
+    // indexé, palette de 2 couleurs), six octets CPIXEL (deux couleurs sur
+    // 3 octets chacune), puis 0x05 : indice 5, série de 1. La palette n'a que
+    // deux entrées (indices 0 et 1) : l'indice 5 vise palette[20..24] sur
+    // 8 octets.
+    s.extend_from_slice(&[0, 0, 0, 0]);
+    s.extend_from_slice(&[0x82, 1, 2, 3, 4, 5, 6, 0x05]);
+    let flux = serveur(&s).await;
+    let client = connecteur(flux)
+        .try_start()
+        .await
+        .unwrap()
+        .finish()
+        .unwrap();
+    let mut evenements = client.take_events().await.expect("file des événements");
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(3), evenements.recv()).await {
+            Ok(Some(VncEvent::Error(message))) => {
+                // Chemin corrigé : une erreur d'image franche, pas une panique.
+                assert!(
+                    message.contains("decoded"),
+                    "l'erreur doit venir d'une donnée d'image invalide : {message}"
+                );
+                return;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => panic!(
+                "le canal de sortie s'est fermé sans erreur : la tâche de décodage a paniqué \
+                 sur l'indice de palette hors borne"
+            ),
+            Err(_) => panic!("aucun événement : le décodeur n'a ni abouti ni signalé d'erreur"),
+        }
+    }
+}

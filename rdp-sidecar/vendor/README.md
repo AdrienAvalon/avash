@@ -270,6 +270,55 @@ menteurs), plus la fixture.
 Les tests du paquet sont réactivés (`test = true`) et comptés par
 `verifier-portes.sh`, comme pour les trois autres.
 
+## `ironrdp-graphics` — la décompression ZGFX amplifiait sa sortie sans borne
+
+Deux changements dans `src/zgfx/`, trouvés par l'audit du 7 septembre 2026 :
+`mod.rs` (`read_encoded_bytes`, `read_unencoded_bytes`, le type d'erreur) et
+`circular_buffer.rs` (`read_with_offset`).
+
+Le défaut : la longueur d'une correspondance ZGFX vaut `2^(n+1) + valeur`, où
+`n` est le nombre de bits à 1 en tête du préfixe de longueur, lu sans plafond
+(`leading_ones`). Un serveur envoyait sur le canal graphique un segment d'une
+quinzaine d'octets — un littéral pour amorcer l'historique, un jeton Match de
+distance 1, puis un long préfixe de longueur (n = 34) — et `read_with_offset`
+tentait alors d'écrire ~2³⁵ octets (32 Gio) dans le tampon de sortie, par
+morceaux, sans jamais borner par la taille de l'historique ni par un plafond de
+segment. Ni `decompress` ni `handle_segment` ne bornaient la sortie ; le
+`catch_unwind` du sidecar (`egfx.rs`) ne protège pas : la croissance du `Vec`
+finit en échec d'allocation (abort) ou en OOM-kill, pas en panique, et emporte
+alors **toutes** les sessions RDP du sidecar, pas seulement celle du serveur
+hostile. Le compresseur du même dossier plafonne pourtant à
+`MAX_MATCH_LENGTH = 65535`, et FreeRDP refuse au-delà de son `OutputBuffer[65536]`
+par segment.
+
+Le correctif : `decompress_segment` tient un `bytes_written` de segment (il
+existait déjà) et refuse (`ZgfxError::SegmentDeSortieTropGrand`) tout jeton qui
+porterait la sortie du segment au-delà de `OCTETS_MAX_SEGMENT` (65 535 octets,
+comme FreeRDP et la taille maximale d'un segment) **avant** `read_with_offset`
+(correspondance) **et avant** l'écriture d'un bloc brut ; la borne est passée à
+`handle_match`, `read_encoded_bytes` et `read_unencoded_bytes`. Le calcul de
+`base` passe de `2usize.pow` (qui débordait, panique en debug, pour n ≥ 63) à
+`checked_pow`, un débordement valant refus. Enfin `read_with_offset` refuse une
+distance nulle ou plus grande que la fenêtre glissante (les `distance_base`
+montent à ~33 Mio, la fenêtre fait 2,5 Mio) : le calcul `buffer.len() + position
+- offset` débordait sinon en usize (panique en debug, index faux en release).
+
+Trois tests de régression : un segment réclamant 65 536 octets de sortie est
+refusé (`zgfx::mod`), une lecture au-delà de la fenêtre est refusée
+(`zgfx::circular_buffer`), et le round-trip haute entropie du compresseur, qui
+décompressait 100 000 octets en un seul segment (désormais interdit, conforme au
+fil), se vérifie sur un bloc conforme tout en gardant sa borne de table de
+hachage.
+
+Portée volontairement limitée : les paniques d'**indexation de bits** du
+décodeur ZGFX sur un flux tronqué restent confinées par le `catch_unwind` du
+sidecar, comme décrit plus haut (« Deux paniques de plus sur le chemin
+graphique ») — les durcir toutes serait le patch disproportionné que l'on a
+refusé, et une cible cargo-fuzz les traiterait à tort comme des plantages
+(le hook de panique de libFuzzer avorte avant tout `catch_unwind`). Seule
+l'amplification, qui n'est **pas** rattrapable par `catch_unwind`, est corrigée
+dans le code.
+
 ## `vnc-rs` — un serveur VNC hostile, et une file qu'on ne peut pas attendre
 
 Copie de `vnc-rs` 0.5.3 (client RFB : poignée de main, authentification VNC
@@ -345,3 +394,49 @@ Note d'usage : un poste dont la session de l'utilisateur est déjà ouverte
 n'émet pas de Server User Logged On à la reconnexion, et le lecteur n'y
 apparaît qu'à la prochaine ouverture de session. C'est le comportement de
 Windows, indépendant de ce correctif.
+
+
+## `ironrdp-svc` — le réassemblage des morceaux d'un canal statique était illimité
+
+Copie d'`ironrdp-svc` 0.8.0 avec **un seul changement**, dans `src/lib.rs`
+(`ChunkProcessor::dechunkify` et `process_header`). `diff -r` avec la version de
+crates.io ne doit signaler que ce fichier (et le manifeste : `test = false`
+retiré du `[lib]` pour que les tests s'exécutent, plus un `rustfmt.toml` au
+style d'IronRDP). Ce paquet n'a aucun `#[expect]` à convertir.
+
+### Le défaut
+
+`dechunkify` réassemble les morceaux d'un PDU de canal statique dans un
+`Vec<u8>` (`chunked_pdu`) : chaque morceau porte un CHANNEL_PDU_HEADER dont le
+champ `length` donne la longueur totale du PDU, et le drapeau
+`CHANNEL_FLAG_LAST` marque le dernier morceau. Le code décodait l'en-tête,
+**ignorait `length`**, et étendait le tampon sans aucune borne jusqu'à voir
+`FLAG_LAST`. Deux abus, pilotables par le serveur sur **n'importe quel** canal
+statique (cliprdr, rdpdr, rdpsnd, drdynvc) puisque tous passent par
+`StaticVirtualChannel::process` :
+
+- des morceaux `FIRST` puis intermédiaires **sans jamais** poser `FLAG_LAST` :
+  `chunked_pdu` grossit sans fin (1 Gio, 2 Gio…) jusqu'à l'OOM ;
+- une réponse géante (une FormatDataResponse d'un gigaoctet en réponse à une
+  demande de presse-papiers) : tout est réassemblé avant le moindre contrôle.
+
+Le « plafond 8 Mio » du presse-papiers (`presse_papiers.rs`) ne bornait, lui,
+que la transmission au front : il s'applique à un texte **déjà** réassemblé et
+décodé, trop tard pour la mémoire.
+
+### Le correctif
+
+`process_header` rend désormais aussi le `length` annoncé. `dechunkify` refuse,
+**avant d'allouer**, un `length` au-delà de `REASSEMBLAGE_MAX` (16 Mio, de quoi
+couvrir texte, listes de fichiers et son) puis un cumul qui dépasserait ce
+plafond, en vidant le tampon et en rendant une erreur de champ invalide. Le
+processus RDP étant isolé de russh, un OOM n'aurait de toute façon tué que la
+session RDP courante, mais un DoS distant déclenchable par le serveur reste un
+DoS. Quatre tests dans `src/lib.rs` (`tests_reassemblage`) : un flux sans
+`FLAG_LAST` refusé avant l'OOM, un `length` géant refusé sans allouer, un PDU
+complet raisonnable qui passe, et la valeur du plafond.
+
+### À retirer quand l'amont corrigera
+
+Défaut d'IronRDP, pas propre à avash : dès qu'une version publiée borne le
+réassemblage, supprimer ce répertoire et sa ligne `[patch.crates-io]`.

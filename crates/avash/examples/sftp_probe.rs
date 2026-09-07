@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
     let cible = format!("{distant}.avash-sonde-montee");
     let depart = Instant::now();
     let envoyes = sftp
-        .upload_reprise(&local_envoi(&par_bandes)?, &cible, None, |_, _| {})
+        .upload_reprise(&local_envoi(&par_bandes)?, &cible, false, None, |_, _| {})
         .await?;
     let m = depart.elapsed();
     println!("montée du même fichier vers {cible}");

@@ -1,11 +1,16 @@
 //! Écriture atomique d'un petit fichier d'état, en 0600.
 //!
 //! Le processus RDP ne dépend pas du crate `avash`, qui a déjà cette fonction :
-//! on la refait ici, plus courte, pour les deux fichiers qu'il écrit — les
-//! empreintes de serveurs et la liste des serveurs à canal graphique. Perdre le
-//! premier ramène tous les serveurs à « premier contact » sans que rien ne le
-//! signale ; une lecture-modification-écriture non atomique perdait aussi
-//! l'entrée d'un premier contact concurrent.
+//! on la refait ici, plus courte, pour la liste des serveurs à canal graphique
+//! (`rdp_canal_graphique`) : une coupure pendant l'écriture ne doit pas la
+//! laisser vide, ce qui coûterait une reconnexion par serveur.
+//!
+//! Le fichier d'empreintes (`rdp_known_hosts`), lui, n'écrit PLUS par ce chemin :
+//! le rename est certes atomique, mais la lecture-modification-écriture qui le
+//! précède perdait l'entrée d'un premier contact concurrent (deux sidecars
+//! lisant le même contenu, le dernier `rename` effaçant la ligne du premier).
+//! `memoriser_empreinte` ajoute désormais sa ligne en O_APPEND (voir
+//! `empreintes`), atomique entre processus.
 
 use std::path::Path;
 

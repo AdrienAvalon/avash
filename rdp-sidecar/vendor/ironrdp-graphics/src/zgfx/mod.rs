@@ -9,7 +9,7 @@ mod wrapper;
 use std::io::{self, Write as _};
 use std::sync::LazyLock;
 
-pub use api::{CompressionMode, compress_and_wrap_egfx};
+pub use api::{compress_and_wrap_egfx, CompressionMode};
 use bitvec::bits;
 use bitvec::field::BitField as _;
 use bitvec::order::Msb0;
@@ -24,6 +24,22 @@ use crate::utils::Bits;
 
 /// Sliding window size shared by compressor and decompressor.
 pub(crate) const HISTORY_SIZE: usize = 2_500_000;
+
+/// Plafond de sortie d'un seul segment ZGFX décompressé (comme le
+/// `OutputBuffer[65536]` de FreeRDP, et la taille maximale d'un segment,
+/// `ZGFX_SEGMENTED_MAXSIZE`).
+///
+/// Trouvé par l'audit du 7 septembre 2026 : la longueur d'une correspondance,
+/// `2^(n+1) + valeur` (read_encoded_bytes), n'était bornée par rien (`n` venait
+/// d'un `leading_ones()` non plafonné). Un serveur envoyait un segment d'une
+/// quinzaine d'octets — un littéral pour amorcer l'historique, un jeton Match de
+/// distance 1, puis un long préfixe de longueur — et réclamait des dizaines de
+/// gigaoctets de sortie (n = 34 → ~32 Gio). Le `Vec` de sortie enflait jusqu'à
+/// l'échec d'allocation (abort) ou l'OOM-kill : hors de portée du `catch_unwind`
+/// qui entoure l'appel, qui n'attrape qu'une panique. Chaque jeton est désormais
+/// refusé s'il porte la sortie du segment au-delà de ce plafond, avant toute
+/// écriture, comme le fait FreeRDP.
+const OCTETS_MAX_SEGMENT: usize = 65_535;
 
 pub struct Decompressor {
     history: FixedCircularBuffer,
@@ -63,9 +79,16 @@ impl Decompressor {
         }
     }
 
-    fn handle_segment(&mut self, segment: &BulkEncodedData<'_>, output: &mut Vec<u8>) -> Result<usize, ZgfxError> {
+    fn handle_segment(
+        &mut self,
+        segment: &BulkEncodedData<'_>,
+        output: &mut Vec<u8>,
+    ) -> Result<usize, ZgfxError> {
         if !segment.data.is_empty() {
-            if segment.compression_flags.contains(CompressionFlags::COMPRESSED) {
+            if segment
+                .compression_flags
+                .contains(CompressionFlags::COMPRESSED)
+            {
                 self.decompress_segment(segment.data, output)
             } else {
                 self.history.write_all(segment.data)?;
@@ -78,7 +101,11 @@ impl Decompressor {
         }
     }
 
-    fn decompress_segment(&mut self, encoded_data: &[u8], output: &mut Vec<u8>) -> Result<usize, ZgfxError> {
+    fn decompress_segment(
+        &mut self,
+        encoded_data: &[u8],
+        output: &mut Vec<u8>,
+    ) -> Result<usize, ZgfxError> {
         if encoded_data.is_empty() {
             return Ok(0);
         }
@@ -86,8 +113,8 @@ impl Decompressor {
         let mut bits = BitSlice::from_slice(encoded_data);
 
         // The value of the last byte indicates the number of unused bits in the final byte
-        bits = &bits
-            [..8 * (encoded_data.len() - 1) - usize::from(*encoded_data.last().expect("encoded_data is not empty"))];
+        bits = &bits[..8 * (encoded_data.len() - 1)
+            - usize::from(*encoded_data.last().expect("encoded_data is not empty"))];
         let mut bits = Bits::new(bits);
         let mut bytes_written = 0;
 
@@ -119,8 +146,14 @@ impl Decompressor {
                     distance_value_size,
                     distance_base,
                 } => {
-                    let written =
-                        handle_match(&mut bits, distance_value_size, distance_base, &mut self.history, output)?;
+                    let written = handle_match(
+                        &mut bits,
+                        distance_value_size,
+                        distance_base,
+                        &mut self.history,
+                        output,
+                        bytes_written,
+                    )?;
                     bytes_written += written;
                 }
             }
@@ -142,17 +175,19 @@ fn handle_match(
     distance_base: u32,
     history: &mut FixedCircularBuffer,
     output: &mut Vec<u8>,
+    bytes_written: usize,
 ) -> Result<usize, ZgfxError> {
     // Each token has been assigned a different base distance
     // and number of additional value bits to be added to compute the full distance.
 
-    let distance = usize::try_from(distance_base + bits.split_to(distance_value_size).load_be::<u32>())
-        .map_err(|_| ZgfxError::InvalidIntegralConversion("token's full distance"))?;
+    let distance =
+        usize::try_from(distance_base + bits.split_to(distance_value_size).load_be::<u32>())
+            .map_err(|_| ZgfxError::InvalidIntegralConversion("token's full distance"))?;
 
     if distance == 0 {
-        read_unencoded_bytes(bits, history, output).map_err(ZgfxError::from)
+        read_unencoded_bytes(bits, history, output, bytes_written)
     } else {
-        read_encoded_bytes(bits, distance, history, output)
+        read_encoded_bytes(bits, distance, history, output, bytes_written)
     }
 }
 
@@ -160,11 +195,19 @@ fn read_unencoded_bytes(
     bits: &mut Bits<'_>,
     history: &mut FixedCircularBuffer,
     output: &mut Vec<u8>,
-) -> io::Result<usize> {
+    bytes_written: usize,
+) -> Result<usize, ZgfxError> {
     // A match distance of zero is a special case,
     // which indicates that an unencoded run of bytes follows.
     // The count of bytes is encoded as a 15-bit value
     let length = bits.split_to(15).load_be::<usize>();
+
+    // Trouvé par l'audit du 7 septembre 2026 : borner AUSSI la sortie brute
+    // (jusqu'à ~32 Ko par jeton, mais cumulable) au plafond de segment, avant
+    // d'allouer. Voir OCTETS_MAX_SEGMENT.
+    if bytes_written.saturating_add(length) > OCTETS_MAX_SEGMENT {
+        return Err(ZgfxError::SegmentDeSortieTropGrand);
+    }
 
     if bits.remaining_bits_of_last_byte() > 0 {
         let pad_to_byte_boundary = 8 - bits.remaining_bits_of_last_byte();
@@ -187,6 +230,7 @@ fn read_encoded_bytes(
     distance: usize,
     history: &mut FixedCircularBuffer,
     output: &mut Vec<u8>,
+    bytes_written: usize,
 ) -> Result<usize, ZgfxError> {
     // A match length prefix follows the token and indicates
     // how many additional bits will be needed to get the full length
@@ -205,10 +249,25 @@ fn read_encoded_bytes(
         let length_token_size = u32::try_from(length_token_size)
             .map_err(|_| ZgfxError::InvalidIntegralConversion("length of the token size"))?;
 
-        let base = 2usize.pow(length_token_size + 1);
+        // Trouvé par l'audit du 7 septembre 2026 : `2usize.pow` débordait pour un
+        // préfixe assez long (n >= 63), donc au lieu d'un plafond honnête on
+        // avait une panique (debug) ou un repli silencieux (release). Un `base`
+        // qui ne tient pas en usize est de toute façon très au-delà du plafond
+        // de segment : on le refuse.
+        let base = 2usize
+            .checked_pow(length_token_size + 1)
+            .ok_or(ZgfxError::SegmentDeSortieTropGrand)?;
 
-        base + length
+        base.saturating_add(length)
     };
+
+    // Trouvé par l'audit du 7 septembre 2026 : la longueur d'une correspondance
+    // n'était bornée par rien. On refuse tout jeton qui porterait la sortie du
+    // segment au-delà du plafond, AVANT `read_with_offset` (qui écrirait sinon
+    // `length` octets dans `output`). Voir OCTETS_MAX_SEGMENT.
+    if bytes_written.saturating_add(length) > OCTETS_MAX_SEGMENT {
+        return Err(ZgfxError::SegmentDeSortieTropGrand);
+    }
 
     let output_length = output.len();
     history.read_with_offset(distance, length, output)?;
@@ -243,103 +302,153 @@ static TOKEN_TABLE: LazyLock<[Token; 40]> = LazyLock::new(|| {
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 0, 0, 0],
-            ty: TokenType::Literal { literal_value: 0x00 },
+            ty: TokenType::Literal {
+                literal_value: 0x00,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 0, 0, 1],
-            ty: TokenType::Literal { literal_value: 0x01 },
+            ty: TokenType::Literal {
+                literal_value: 0x01,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 0, 1, 0, 0],
-            ty: TokenType::Literal { literal_value: 0x02 },
+            ty: TokenType::Literal {
+                literal_value: 0x02,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 0, 1, 0, 1],
-            ty: TokenType::Literal { literal_value: 0x03 },
+            ty: TokenType::Literal {
+                literal_value: 0x03,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 0, 1, 1, 0],
-            ty: TokenType::Literal { literal_value: 0x0ff },
+            ty: TokenType::Literal {
+                literal_value: 0x0ff,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 0, 1, 1, 1, 0],
-            ty: TokenType::Literal { literal_value: 0x04 },
+            ty: TokenType::Literal {
+                literal_value: 0x04,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 0, 1, 1, 1, 1],
-            ty: TokenType::Literal { literal_value: 0x05 },
+            ty: TokenType::Literal {
+                literal_value: 0x05,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 0, 0, 0, 0],
-            ty: TokenType::Literal { literal_value: 0x06 },
+            ty: TokenType::Literal {
+                literal_value: 0x06,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 0, 0, 0, 1],
-            ty: TokenType::Literal { literal_value: 0x07 },
+            ty: TokenType::Literal {
+                literal_value: 0x07,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 0, 0, 1, 0],
-            ty: TokenType::Literal { literal_value: 0x08 },
+            ty: TokenType::Literal {
+                literal_value: 0x08,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 0, 0, 1, 1],
-            ty: TokenType::Literal { literal_value: 0x09 },
+            ty: TokenType::Literal {
+                literal_value: 0x09,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 0, 1, 0, 0],
-            ty: TokenType::Literal { literal_value: 0x0a },
+            ty: TokenType::Literal {
+                literal_value: 0x0a,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 0, 1, 0, 1],
-            ty: TokenType::Literal { literal_value: 0x0b },
+            ty: TokenType::Literal {
+                literal_value: 0x0b,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 0, 1, 1, 0],
-            ty: TokenType::Literal { literal_value: 0x3a },
+            ty: TokenType::Literal {
+                literal_value: 0x3a,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 0, 1, 1, 1],
-            ty: TokenType::Literal { literal_value: 0x3b },
+            ty: TokenType::Literal {
+                literal_value: 0x3b,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 0, 0, 0],
-            ty: TokenType::Literal { literal_value: 0x3c },
+            ty: TokenType::Literal {
+                literal_value: 0x3c,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 0, 0, 1],
-            ty: TokenType::Literal { literal_value: 0x3d },
+            ty: TokenType::Literal {
+                literal_value: 0x3d,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 0, 1, 0],
-            ty: TokenType::Literal { literal_value: 0x3e },
+            ty: TokenType::Literal {
+                literal_value: 0x3e,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 0, 1, 1],
-            ty: TokenType::Literal { literal_value: 0x3f },
+            ty: TokenType::Literal {
+                literal_value: 0x3f,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 1, 0, 0],
-            ty: TokenType::Literal { literal_value: 0x40 },
+            ty: TokenType::Literal {
+                literal_value: 0x40,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 1, 0, 1],
-            ty: TokenType::Literal { literal_value: 0x80 },
+            ty: TokenType::Literal {
+                literal_value: 0x80,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 1, 1, 0, 0],
-            ty: TokenType::Literal { literal_value: 0x0c },
+            ty: TokenType::Literal {
+                literal_value: 0x0c,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 1, 1, 0, 1],
-            ty: TokenType::Literal { literal_value: 0x38 },
+            ty: TokenType::Literal {
+                literal_value: 0x38,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 1, 1, 1, 0],
-            ty: TokenType::Literal { literal_value: 0x39 },
+            ty: TokenType::Literal {
+                literal_value: 0x39,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 1, 1, 1, 1, 1, 1, 1],
-            ty: TokenType::Literal { literal_value: 0x66 },
+            ty: TokenType::Literal {
+                literal_value: 0x66,
+            },
         },
         Token {
             prefix: bits![static u8, Msb0; 1, 0, 0, 0, 1],
@@ -453,6 +562,9 @@ pub enum ZgfxError {
     },
     TokenBitsNotFound,
     InvalidIntegralConversion(&'static str),
+    /// Un jeton porterait la sortie du segment au-delà de `OCTETS_MAX_SEGMENT`.
+    /// Trouvé par l'audit du 7 septembre 2026 (amplification de décompression).
+    SegmentDeSortieTropGrand,
 }
 
 impl core::fmt::Display for ZgfxError {
@@ -470,8 +582,15 @@ impl core::fmt::Display for ZgfxError {
             ),
             Self::TokenBitsNotFound => write!(f, "token bits not found"),
             Self::InvalidIntegralConversion(type_name) => {
-                write!(f, "invalid `{type_name}`: out of range integral type conversion")
+                write!(
+                    f,
+                    "invalid `{type_name}`: out of range integral type conversion"
+                )
             }
+            Self::SegmentDeSortieTropGrand => write!(
+                f,
+                "un jeton dépasserait le plafond de sortie du segment ({OCTETS_MAX_SEGMENT} octets)"
+            ),
         }
     }
 }
@@ -485,6 +604,7 @@ impl core::error::Error for ZgfxError {
             Self::InvalidDecompressedSize { .. } => None,
             Self::TokenBitsNotFound => None,
             Self::InvalidIntegralConversion(_) => None,
+            Self::SegmentDeSortieTropGrand => None,
         }
     }
 }
@@ -522,11 +642,15 @@ mod tests {
             .copied()
             .zip(DECODED_ZGFX_SINGLE.iter().copied());
         let mut zgfx = Decompressor::new();
-        let mut decompressed = Vec::with_capacity(pairs.clone().map(|(_, d)| d.len()).max().unwrap());
+        let mut decompressed =
+            Vec::with_capacity(pairs.clone().map(|(_, d)| d.len()).max().unwrap());
         for (i, (encode, decode)) in pairs.enumerate() {
             let bytes_written = zgfx.decompress(encode.as_ref(), &mut decompressed).unwrap();
             assert_eq!(decode.len(), bytes_written);
-            assert_eq!(decompressed, *decode, "Failed to decompress encoded PDU #{i}");
+            assert_eq!(
+                decompressed, *decode,
+                "Failed to decompress encoded PDU #{i}"
+            );
             decompressed.clear();
         }
     }
@@ -538,7 +662,8 @@ mod tests {
 
         let mut zgfx = Decompressor::new();
         let mut decompressed = Vec::with_capacity(expected.len());
-        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed).unwrap();
+        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed)
+            .unwrap();
         assert_eq!(decompressed, expected);
     }
 
@@ -549,7 +674,8 @@ mod tests {
 
         let mut zgfx = Decompressor::new();
         let mut decompressed = Vec::with_capacity(expected.len());
-        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed).unwrap();
+        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed)
+            .unwrap();
         assert_eq!(decompressed, expected);
     }
 
@@ -560,7 +686,8 @@ mod tests {
 
         let mut zgfx = Decompressor::new();
         let mut decompressed = Vec::with_capacity(expected.len());
-        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed).unwrap();
+        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed)
+            .unwrap();
         assert_eq!(decompressed, expected);
     }
 
@@ -571,7 +698,8 @@ mod tests {
 
         let mut zgfx = Decompressor::new();
         let mut decompressed = Vec::with_capacity(expected.len());
-        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed).unwrap();
+        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed)
+            .unwrap();
         assert_eq!(decompressed, expected);
     }
 
@@ -591,7 +719,8 @@ mod tests {
 
         let mut zgfx = Decompressor::new();
         let mut decompressed = Vec::with_capacity(expected.len());
-        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed).unwrap();
+        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed)
+            .unwrap();
         assert_eq!(decompressed, expected);
     }
 
@@ -604,7 +733,8 @@ mod tests {
 
         let mut zgfx = Decompressor::new();
         let mut decompressed = Vec::with_capacity(expected.len());
-        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed).unwrap();
+        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed)
+            .unwrap();
         assert_eq!(decompressed, expected);
     }
 
@@ -616,14 +746,16 @@ mod tests {
             0x2B, 0x00, 0x00, 0x00, // 0x0000002B total bytes uncompressed
             0x11, 0x00, 0x00, 0x00, // first segment is the next 17 bytes:
             0x04, // type 4, not PACKET_COMPRESSED
-            0x54, 0x68, 0x65, 0x20, 0x71, 0x75, 0x69, 0x63, 0x6B, 0x20, 0x62, 0x72, 0x6F, 0x77, 0x6E,
-            0x20, // "The quick brown "
+            0x54, 0x68, 0x65, 0x20, 0x71, 0x75, 0x69, 0x63, 0x6B, 0x20, 0x62, 0x72, 0x6F, 0x77,
+            0x6E, 0x20, // "The quick brown "
             0x0E, 0x00, 0x00, 0x00, // second segment is the next 14 bytes:
             0x04, // type 4, not PACKET_COMPRESSED
-            0x66, 0x6F, 0x78, 0x20, 0x6A, 0x75, 0x6D, 0x70, 0x73, 0x20, 0x6F, 0x76, 0x65, // "fox jumps ove"
+            0x66, 0x6F, 0x78, 0x20, 0x6A, 0x75, 0x6D, 0x70, 0x73, 0x20, 0x6F, 0x76,
+            0x65, // "fox jumps ove"
             0x10, 0x00, 0x00, 0x00, // third segment is the next 16 bytes
             0x24, // type 4 + PACKET_COMPRESSED
-            0x39, 0x08, 0x0E, 0x91, 0xF8, 0xD8, 0x61, 0x3D, 0x1E, 0x44, 0x06, 0x43, 0x79, 0x9C, // encoded:
+            0x39, 0x08, 0x0E, 0x91, 0xF8, 0xD8, 0x61, 0x3D, 0x1E, 0x44, 0x06, 0x43, 0x79,
+            0x9C, // encoded:
             // 0 01110010 = literal 0x72 = "r"
             // 0 00100000 = literal 0x20 = " "
             // 0 01110100 = literal 0x74 = "t"
@@ -646,18 +778,21 @@ mod tests {
         let mut decompressed = Vec::with_capacity(expected.len());
         let bytes_written = zgfx.decompress(buffer.as_ref(), &mut decompressed).unwrap();
         assert_eq!(expected.len(), bytes_written);
-        assert_eq!(decompressed, expected, "\n{decompressed:x?} != \n{expected:x?}");
+        assert_eq!(
+            decompressed, expected,
+            "\n{decompressed:x?} != \n{expected:x?}"
+        );
     }
 
     #[test]
     fn zgfx_decompresses_single_match_unencoded_block() {
         let buffer = [
-            0xe0, 0x04, 0x13, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x01, 0x06, 0x0a, 0x00, 0x04, 0x00, 0x00, 0x00,
-            0x20, 0x00, 0x00, 0x00,
+            0xe0, 0x04, 0x13, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x01, 0x06, 0x0a, 0x00,
+            0x04, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
         ];
         let expected = vec![
-            0x13, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x01, 0x06, 0x0a, 0x00, 0x04, 0x00, 0x00, 0x00, 0x20, 0x00,
-            0x00, 0x00,
+            0x13, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x01, 0x06, 0x0a, 0x00, 0x04, 0x00,
+            0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
         ];
 
         let mut zgfx = Decompressor::new();
@@ -668,13 +803,58 @@ mod tests {
     }
 
     #[test]
+    fn zgfx_refuse_un_segment_dont_la_sortie_depasse_le_plafond() {
+        // Trouvé par l'audit du 7 septembre 2026 : la longueur d'une
+        // correspondance (`2^(n+1) + valeur`, read_encoded_bytes) n'était bornée
+        // par rien. Un serveur envoyait un segment d'une quinzaine d'octets — un
+        // littéral pour amorcer l'historique, un jeton Match de distance 1, puis
+        // un long préfixe de longueur (n = 34) — et réclamait ~32 Gio de sortie :
+        // le sidecar mourait par échec d'allocation ou OOM, hors de portée du
+        // catch_unwind qui n'attrape qu'une panique.
+        //
+        // Ici la MÊME absence de borne est exercée à petite échelle sûre : un
+        // seul segment qui demande 65 536 octets de sortie (un littéral 'A', un
+        // Match distance 1, préfixe de longueur n = 15 → base 65 536, valeur 0),
+        // juste au-delà du plafond de 65 535 (le OutputBuffer[65536] de FreeRDP).
+        // Avant le correctif, decompress_segment l'acceptait et allouait 64 Kio ;
+        // il doit désormais le refuser sans rien produire de la correspondance.
+        //
+        // Détail des bits (MSB d'abord), sans l'octet final « bits inutilisés » :
+        //   0 01000001            littéral nul 'A' (0x41)
+        //   10001 00001           Match, distance_value_size 5, distance = 1
+        //   111111111111111 0     15 bits à 1 + le zéro : length_token_size = 15
+        //   0000000000000000      16 bits de valeur = 0 → longueur 65 536
+        // soit 51 bits utiles sur 7 octets (5 bits de bourrage), puis 0x05.
+        let segment = [0x20, 0xC4, 0x3F, 0xFF, 0xC0, 0x00, 0x00, 0x05];
+
+        let mut zgfx = Decompressor::new();
+        let mut clair = Vec::new();
+        let issue = zgfx.decompress_segment(segment.as_ref(), &mut clair);
+
+        assert!(
+            matches!(issue, Err(ZgfxError::SegmentDeSortieTropGrand)),
+            "un segment réclamant plus de 65 535 octets doit être refusé, obtenu : {issue:?} \
+             ({} octets produits)",
+            clair.len()
+        );
+    }
+
+    #[test]
     fn zgfx_decompresses_unencoded_block_without_padding() {
-        let buffer = [0b1110_0101, 0b0001_0000, 0b0000_0000, 0b00000001, 0b1111_0000, 0x0];
+        let buffer = [
+            0b1110_0101,
+            0b0001_0000,
+            0b0000_0000,
+            0b00000001,
+            0b1111_0000,
+            0x0,
+        ];
         let expected = vec![0x08, 0xf0];
 
         let mut zgfx = Decompressor::new();
         let mut decompressed = Vec::with_capacity(expected.len());
-        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed).unwrap();
+        zgfx.decompress_segment(buffer.as_ref(), &mut decompressed)
+            .unwrap();
         assert_eq!(decompressed, expected);
     }
 }

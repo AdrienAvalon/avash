@@ -82,13 +82,27 @@ export function parentDir(path: string): string {
 /** Marqueur pose par le backend quand seul le mot de passe manque. */
 const PASSWORD_REQUIRED = "[AVASH_PASSWORD_REQUIRED]";
 
-/** L'echec de connexion tient-il seulement a un mot de passe manquant ? */
+/** La clé d'hôte a-t-elle changé (serveur réinstallé, usurpation possible) ? */
 export function isHostKeyChanged(errorMessage: string): boolean {
   return errorMessage.includes("[AVASH_HOST_KEY_CHANGED]");
 }
 
+/** L'echec de connexion tient-il seulement a un mot de passe manquant ? */
 export function isPasswordRequired(errorMessage: string): boolean {
   return errorMessage.includes(PASSWORD_REQUIRED);
+}
+
+/**
+ * Retire les marqueurs internes `[AVASH_…]` d'un message avant de le montrer.
+ *
+ * Le cœur préfixe certaines erreurs d'un marqueur destiné à l'interface, pas à
+ * l'utilisateur : `[AVASH_HOST_KEY_CHANGED]`, `[AVASH_PASSWORD_REQUIRED]`,
+ * `[AVASH_ANNULE]`. Le formulaire de connexion directe les affichait bruts
+ * (audit du 7 septembre 2026) ; un nettoyage générique du préfixe couvre les
+ * trois d'un coup, quel que soit le marqueur ajouté ensuite.
+ */
+export function nettoyerMarqueurs(errorMessage: string): string {
+  return errorMessage.replace(/\[AVASH_[A-Z_]+\]/g, "").trim();
 }
 
 /**

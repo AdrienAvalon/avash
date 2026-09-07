@@ -120,7 +120,11 @@ async fn monter(
     };
     let presentee = empreinte(&server_public_key(&cert)?);
     let cle = format!("vnc:{hote}:{port}");
-    match juger_certificat(empreinte_memorisee(&cle).as_deref(), &presentee) {
+    // Un fichier de confiance illisible (droits, ou UTF-8 invalide) est un refus
+    // explicite, pas un « premier contact » : voir `empreinte_memorisee`.
+    let memorisee =
+        empreinte_memorisee(&cle).context("fichier de confiance illisible, connexion refusée")?;
+    match juger_certificat(memorisee.as_deref(), &presentee) {
         VerdictCert::Connu => {}
         VerdictCert::PremierContact => memoriser_empreinte(&cle, &presentee)
             .context("mémorisation de l'empreinte du serveur VNC")?,

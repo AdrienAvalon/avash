@@ -268,6 +268,17 @@ struct RemoteTarget {
 /// adresse locale relayer.
 type RemoteForwards = Arc<std::sync::Mutex<HashMap<u32, Arc<RemoteTarget>>>>;
 
+/// Relais d'agent (`copy_bidirectional` canal <-> agent local) lancés pendant un
+/// `run_avec_agent`, conservés pour être interrompus à la fin de la commande.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : sans cette poignée, un canal
+/// `auth-agent@openssh.com` ouvert par le serveur PENDANT la commande et gardé
+/// ouvert survivait à `GardeAgent::drop` (qui ne remettait que le drapeau à
+/// false), si bien que le serveur pouvait faire signer l'agent du poste pour
+/// toute la durée de l'onglet — la borne « pendant cette commande, et seulement
+/// pendant elle » de SECURITY.md n'était donc pas tenue.
+type RelaisAgent = Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>;
+
 /// Handler d'auth + vérification `known_hosts`.
 struct AvashAuth {
     host: String,
@@ -278,6 +289,9 @@ struct AvashAuth {
     /// Levé par `run_avec_agent` le temps d'une commande, jamais autrement :
     /// un serveur qui ouvrirait un canal d'agent hors de ce moment est refusé.
     agent_redirige: Arc<std::sync::atomic::AtomicBool>,
+    /// Relais d'agent lancés pour cette session, interrompus à la fin de chaque
+    /// commande par `GardeAgent::drop`.
+    relais_agent: RelaisAgent,
 }
 
 /// Le socket (ou le tube) de l'agent SSH du poste, tel qu'OpenSSH le désigne.
@@ -286,11 +300,77 @@ async fn ouvrir_agent_local() -> Option<tokio::net::UnixStream> {
     let chemin = std::env::var_os("SSH_AUTH_SOCK")?;
     tokio::net::UnixStream::connect(chemin).await.ok()
 }
+
+/// Transports possibles de l'agent SSH du poste sous Windows.
+///
+/// Défini hors `cfg(windows)` — c'est de la donnée, exerçable partout — pour que
+/// le test verrouille l'ordre d'essai sans compiler la couche Windows.
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum TransportAgentWindows {
+    /// Tube nommé du service `ssh-agent` d'OpenSSH.
+    TubeOpenSsh,
+    /// Pageant, l'agent de `PuTTY`.
+    Pageant,
+}
+
+/// Ordre d'essai des transports de l'agent sous Windows : tube OpenSSH d'abord,
+/// puis Pageant. Le MÊME que suivent l'auth (`authenticate_agent`,
+/// `agent_has_identities`), et la source unique de l'ordre de la redirection.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `ouvrir_agent_local` n'ouvrait que
+/// le tube OpenSSH, jamais Pageant, alors que l'auth essaie déjà les deux. Un
+/// poste `PuTTY` où seul Pageant tourne (le cas visé par l'import `PuTTY` et la
+/// conversion `.ppk`) s'authentifiait donc bien par l'agent, mais quand
+/// `run_avec_agent` prêtait l'agent pour la « copie directe » d'un hôte à un
+/// autre, `server_channel_open_agent_forward` répondait `ConnectFailed` au canal
+/// `auth-agent@openssh.com` : le `scp` lancé chez la source n'avait aucune clé
+/// et échouait en « Permission denied (publickey) », alors que la même clé avait
+/// ouvert la session. Type slice (et non tableau fixe) pour que le test constate
+/// un ordre incomplet à l'exécution plutôt qu'à la compilation.
+#[cfg(any(windows, test))]
+const ORDRE_TRANSPORTS_AGENT_WINDOWS: &[TransportAgentWindows] = &[
+    TransportAgentWindows::TubeOpenSsh,
+    TransportAgentWindows::Pageant,
+];
+
+/// Un flux d'octets bidirectionnel vers l'agent, quel que soit son transport.
+///
+/// `dyn AsyncRead + AsyncWrite` ne se dit pas (deux traits non-auto dans un même
+/// objet) : ce trait fourre-tout les réunit pour que le tube OpenSSH et Pageant,
+/// de types concrets différents, se rangent dans un même `Box`.
 #[cfg(windows)]
-async fn ouvrir_agent_local() -> Option<tokio::net::windows::named_pipe::NamedPipeClient> {
-    tokio::net::windows::named_pipe::ClientOptions::new()
-        .open(OPENSSH_AGENT_PIPE)
-        .ok()
+trait FluxAgent: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+#[cfg(windows)]
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> FluxAgent for T {}
+
+/// Ouvre le premier transport d'agent disponible, dans l'ordre partagé avec
+/// l'auth. Rend un flux BRUT boxé (relayé octet à octet par
+/// `copy_bidirectional`), et non l'`AgentClient` de la couche protocole que
+/// `connect_pageant` construit : le canal `auth-agent@openssh.com` attend le
+/// dialogue d'agent tel quel, pas une couche par-dessus.
+#[cfg(windows)]
+async fn ouvrir_agent_local() -> Option<Box<dyn FluxAgent>> {
+    for transport in ORDRE_TRANSPORTS_AGENT_WINDOWS {
+        match transport {
+            TransportAgentWindows::TubeOpenSsh => {
+                if let Ok(pipe) =
+                    tokio::net::windows::named_pipe::ClientOptions::new().open(OPENSSH_AGENT_PIPE)
+                {
+                    return Some(Box::new(pipe));
+                }
+            }
+            // `PageantStream` est le transport brut de Pageant (celui que russh
+            // ouvre lui-même sous `connect_pageant`) : un flux tokio à relayer,
+            // pas l'`AgentClient` protocole.
+            TransportAgentWindows::Pageant => {
+                if let Ok(flux) = pageant::PageantStream::new().await {
+                    return Some(Box::new(flux));
+                }
+            }
+        }
+    }
+    None
 }
 
 impl russh::client::Handler for AvashAuth {
@@ -400,6 +480,13 @@ impl russh::client::Handler for AvashAuth {
     /// **seulement** pendant une commande lancée par `run_avec_agent`. Hors de
     /// ce moment, un serveur qui le tente est refusé : l'agent signe avec les
     /// clés du poste, et c'est l'utilisateur qui décide quand le prêter.
+    ///
+    /// La poignée du relais est conservée dans `relais_agent` pour que
+    /// `GardeAgent::drop` l'interrompe à la fin de la commande : sans quoi un
+    /// canal ouvert pendant la commande et gardé ouvert par le serveur
+    /// continuerait de faire signer l'agent après elle (audit du 7 septembre
+    /// 2026). Interrompre la tâche lâche le flux du canal, dont le `Drop`
+    /// (russh `ChannelCloseOnDrop`) envoie `Close` au serveur.
     async fn server_channel_open_agent_forward(
         &mut self,
         channel: russh::Channel<russh::client::Msg>,
@@ -420,10 +507,16 @@ impl russh::client::Handler for AvashAuth {
             return Ok(());
         };
         reply.accept().await;
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut flux = channel.into_stream();
             let _ = tokio::io::copy_bidirectional(&mut flux, &mut agent).await;
         });
+        if let Ok(mut relais) = self.relais_agent.lock() {
+            // Purge les relais déjà terminés d'eux-mêmes (canal fermé côté
+            // serveur) pour ne pas accumuler sur une session longue.
+            relais.retain(|h| !h.is_finished());
+            relais.push(handle);
+        }
         Ok(())
     }
 
@@ -442,9 +535,7 @@ impl russh::client::Handler for AvashAuth {
     ) -> Result<(), Self::Error> {
         let dest = self.forwards.lock().unwrap().get(&connected_port).cloned();
         let Some(target) = dest else {
-            reply
-                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
-                .await;
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
             return Ok(());
         };
         // On accepte AVANT de joindre la destination : le serveur attend une
@@ -477,6 +568,9 @@ pub struct AvashSession {
     forwards: RemoteForwards,
     /// Partagé avec le Handler : levé le temps d'un `run_avec_agent`.
     agent_redirige: Arc<std::sync::atomic::AtomicBool>,
+    /// Partagé avec le Handler : relais d'agent en cours, interrompus à la fin
+    /// de chaque commande par la garde.
+    relais_agent: RelaisAgent,
     /// Rebonds gardes vivants : le transport de cette session passe par leurs
     /// canaux ; les lacher couperait la connexion. Jamais relu, seulement
     /// possede — d'ou l'allow.
@@ -541,10 +635,56 @@ where
 
 /// Referme la redirection d'agent avec la commande qui l'avait ouverte, même
 /// si elle sort en erreur.
-struct GardeAgent(Arc<std::sync::atomic::AtomicBool>);
+struct GardeAgent {
+    drapeau: Arc<std::sync::atomic::AtomicBool>,
+    relais: RelaisAgent,
+}
 impl Drop for GardeAgent {
     fn drop(&mut self) {
-        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.drapeau
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        // Trouvé par l'audit du 7 septembre 2026 : abaisser le drapeau ne
+        // suffisait pas. Un canal d'agent ouvert PENDANT la commande et gardé
+        // ouvert par le serveur avait déjà son relais lancé ; le drapeau ne
+        // gouverne que l'OUVERTURE de nouveaux canaux, pas ceux déjà relayés.
+        // On interrompt donc chaque relais : `abort()` (synchrone) lâche le flux
+        // du canal, dont le `Drop` envoie `Close` au serveur et referme aussi le
+        // lien vers l'agent. La commande fixe ainsi bien la borne du prêt.
+        if let Ok(mut relais) = self.relais.lock() {
+            for h in relais.drain(..) {
+                h.abort();
+            }
+        }
+    }
+}
+
+/// Bras de `tokio::select!` de `run_avec_agent` : ne se résout que lorsque
+/// l'interface lève le drapeau d'annulation. On scrute plutôt qu'on n'attend un
+/// `Notify` parce que le drapeau (un `AtomicBool` partagé) est déjà l'outil que
+/// tout le reste des transferts consulte.
+///
+/// Prend l'`Option` et non `&Annulation` : `tokio::select!` évalue l'expression
+/// asynchrone de chaque bras même quand sa condition `if` est fausse, donc un
+/// `unwrap()` au point d'appel paniquerait sur une commande non annulable. Sans
+/// drapeau, ce futur patiente indéfiniment et ne remporte jamais le `select!`.
+async fn attendre_leve(annulation: Option<&crate::sftp::Annulation>) {
+    match annulation {
+        Some(a) => {
+            while !a.load(Ordering::Relaxed) {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// Bras `tokio::select!` de la boucle d'exécution bornée : ne se résout qu'à
+/// l'échéance fournie. Sans échéance (`run` non borné), il patiente
+/// indéfiniment et ne remporte jamais le `select!`, comme `attendre_leve`.
+async fn attendre_echeance(echeance: Option<tokio::time::Instant>) {
+    match echeance {
+        Some(t) => tokio::time::sleep_until(t).await,
+        None => std::future::pending::<()>().await,
     }
 }
 
@@ -575,23 +715,26 @@ impl AvashSession {
         HostKeyVerdict,
         RemoteForwards,
         Arc<std::sync::atomic::AtomicBool>,
+        RelaisAgent,
     ) {
         let verdict: HostKeyVerdict = Arc::new(std::sync::Mutex::new(None));
         let forwards: RemoteForwards = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let agent_redirige = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let relais_agent: RelaisAgent = Arc::new(std::sync::Mutex::new(Vec::new()));
         let handler = AvashAuth {
             host: host.to_string(),
             port,
             verdict: verdict.clone(),
             forwards: forwards.clone(),
             agent_redirige: agent_redirige.clone(),
+            relais_agent: relais_agent.clone(),
         };
-        (handler, verdict, forwards, agent_redirige)
+        (handler, verdict, forwards, agent_redirige, relais_agent)
     }
 
     /// Connexion directe (TCP), sans rebond.
     pub async fn connect(host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
-        let (handler, verdict, forwards, agent_redirige) = Self::handler(host, port);
+        let (handler, verdict, forwards, agent_redirige, relais_agent) = Self::handler(host, port);
         let mut session = match russh::client::connect(Self::config(), (host, port), handler).await
         {
             Ok(s) => s,
@@ -609,6 +752,7 @@ impl AvashSession {
             session,
             forwards,
             agent_redirige,
+            relais_agent,
             jumps: Vec::new(),
         })
     }
@@ -652,7 +796,7 @@ impl AvashSession {
             .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
             .await
             .with_context(|| format!("Le rebond n'a pas pu joindre {host}:{port}"))?;
-        let (handler, verdict, forwards, agent_redirige) = Self::handler(host, port);
+        let (handler, verdict, forwards, agent_redirige, relais_agent) = Self::handler(host, port);
         let mut session =
             match russh::client::connect_stream(Self::config(), channel.into_stream(), handler)
                 .await
@@ -671,6 +815,7 @@ impl AvashSession {
             session,
             forwards,
             agent_redirige,
+            relais_agent,
             jumps: Vec::new(),
         })
     }
@@ -881,6 +1026,39 @@ impl AvashSession {
 
     /// Exécution one-shot : stdout + exit code.
     pub async fn run(&mut self, command: &str) -> Result<(String, u32)> {
+        self.executer_borne(command, None).await
+    }
+
+    /// Comme [`run`](Self::run), mais borné dans le temps : au terme de `delai`,
+    /// on ferme le canal exec et l'on rend une erreur, au lieu de laisser la
+    /// commande courir.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : la sonde d'OS s'appuyait sur un
+    /// `tokio::time::timeout` posé PAR-DESSUS `run`. À l'échéance, le futur de
+    /// `run` était lâché avec son canal — mais `russh::Channel` n'envoie pas de
+    /// `CHANNEL_CLOSE` à sa chute, et la boucle de session du client réalimente la
+    /// fenêtre AVANT de livrer les données : un serveur qui débite lentement
+    /// (moins d'un mébioctet en quatre secondes, jamais le plafond) continuait
+    /// donc d'inonder toute la vie de l'onglet. Le délai bornait l'attente, pas
+    /// le flux. En bornant à l'intérieur, on ferme le canal avant de rendre :
+    /// `close()` retire le canal de la table du client, la fenêtre cesse d'être
+    /// réalimentée, et le serveur se bloque de lui-même.
+    pub async fn run_borne(
+        &mut self,
+        command: &str,
+        delai: std::time::Duration,
+    ) -> Result<(String, u32)> {
+        self.executer_borne(command, Some(tokio::time::Instant::now() + delai))
+            .await
+    }
+
+    /// Boucle d'exécution one-shot partagée par `run` (échéance `None`) et
+    /// `run_borne` (échéance `Some`).
+    async fn executer_borne(
+        &mut self,
+        command: &str,
+        echeance: Option<tokio::time::Instant>,
+    ) -> Result<(String, u32)> {
         const PLAFOND: usize = 1024 * 1024;
         let mut channel = self.session.channel_open_session().await?;
         channel.exec(false, command).await?;
@@ -900,25 +1078,45 @@ impl AvashSession {
         // qui tombe, avec tous ses autres onglets, tunnels et transferts. Aucun
         // appelant de `run` n'attend plus que quelques kilo-octets.
         let mut tronquee = false;
-        while let Some(msg) = channel.wait().await {
-            match msg {
-                russh::ChannelMsg::Data { ref data }
-                | russh::ChannelMsg::ExtendedData { ref data, .. } => {
-                    if stdout.len() >= PLAFOND {
-                        // On sort de la boucle : `continue` cessait d'allouer
-                        // mais laissait le serveur nous inonder indéfiniment
-                        // (`cat /dev/zero`), tâche vivante et lien saturé —
-                        // borné en pratique pour la sonde d'OS, qui a un délai
-                        // de garde, mais pas pour le déploiement de clé.
-                        tronquee = true;
-                        break;
+        let mut expire = false;
+        loop {
+            tokio::select! {
+                msg = channel.wait() => {
+                    let Some(msg) = msg else { break };
+                    match msg {
+                        russh::ChannelMsg::Data { ref data }
+                        | russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                            if stdout.len() >= PLAFOND {
+                                tronquee = true;
+                                break;
+                            }
+                            stdout.push_str(&String::from_utf8_lossy(data));
+                        }
+                        russh::ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status,
+                        russh::ChannelMsg::Close => break,
+                        _ => {}
                     }
-                    stdout.push_str(&String::from_utf8_lossy(data));
                 }
-                russh::ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status,
-                russh::ChannelMsg::Close => break,
-                _ => {}
+                // Sans échéance, ce bras ne se résout jamais et la boucle se
+                // comporte comme l'ancienne. Le futur `wait()` abandonné, on
+                // ferme le canal HORS du `select!` (pas de double emprunt).
+                () = attendre_echeance(echeance) => {
+                    expire = true;
+                    break;
+                }
             }
+        }
+        // Trouvé par l'audit du 7 septembre 2026 : on sortait au plafond sans
+        // fermer le canal. Or `russh::Channel` n'envoie pas de CHANNEL_CLOSE à
+        // sa chute, et le client réalimente la fenêtre quoi qu'il arrive : le
+        // serveur pouvait donc continuer de nous inonder à plein débit toute la
+        // vie de la session, un cœur brûlé par onglet. On ferme sur TOUTE sortie
+        // (plafond, échéance, EOF, Close) : `close()` retire le canal de la
+        // table du client, la fenêtre n'est plus réalimentée, le serveur cale de
+        // lui-même. Inoffensif quand le canal est déjà clos.
+        let _ = channel.close().await;
+        if expire {
+            anyhow::bail!("La commande distante n'a pas répondu dans le délai imparti.");
         }
         if tronquee {
             stdout.push_str("\n[sortie tronquée : plafond de 1 Mio atteint]\n");
@@ -934,13 +1132,34 @@ impl AvashSession {
     ///
     /// La redirection n'est ouverte que pendant cet appel : avant, après, ou
     /// pour toute autre commande, un canal d'agent demandé par le serveur est
-    /// refusé.
-    pub async fn run_avec_agent(&self, command: &str) -> Result<(String, u32)> {
+    /// refusé. Et la fin de la commande ne se contente pas d'interdire les
+    /// canaux suivants : elle interrompt aussi ceux ouverts pendant elle (voir
+    /// `GardeAgent::drop`), pour qu'un serveur ne garde pas l'agent prêté au-delà
+    /// en laissant un canal ouvert.
+    ///
+    /// `annulation` (quand elle est fournie) rend la commande interruptible :
+    /// l'interface la lève pour annuler une copie directe. Trouvé par l'audit
+    /// du 7 septembre 2026 : sans elle, la copie directe (scp lancé chez la
+    /// source par cet appel) n'était pas interruptible — le front montrait un
+    /// bouton « Annuler » inerte, et pendant une copie de plusieurs Go la
+    /// session source restait verrouillée et l'agent prêté du début à la fin.
+    /// On scrute donc le drapeau entre deux blocs et, quand il est levé, on
+    /// ferme le canal exec : le serveur envoie SIGHUP au scp distant, la garde
+    /// referme la redirection d'agent en sortant, et l'appelant reçoit `ANNULE`.
+    pub async fn run_avec_agent(
+        &self,
+        command: &str,
+        annulation: Option<&crate::sftp::Annulation>,
+    ) -> Result<(String, u32)> {
         const PLAFOND: usize = 1024 * 1024;
         let drapeau = self.agent_redirige.clone();
         drapeau.store(true, std::sync::atomic::Ordering::Relaxed);
-        // Quoi qu'il arrive, la redirection se referme avec la commande.
-        let _garde = GardeAgent(drapeau);
+        // Quoi qu'il arrive, la redirection se referme avec la commande : le
+        // drapeau retombe ET les relais d'agent déjà ouverts sont interrompus.
+        let _garde = GardeAgent {
+            drapeau,
+            relais: self.relais_agent.clone(),
+        };
 
         let mut channel = self.session.channel_open_session().await?;
         channel
@@ -952,32 +1171,57 @@ impl AvashSession {
         let mut exit_code = 0u32;
         let mut statut_recu = false;
         let mut tronquee = false;
-        while let Some(msg) = channel.wait().await {
-            match msg {
-                russh::ChannelMsg::Data { ref data }
-                | russh::ChannelMsg::ExtendedData { ref data, .. } => {
-                    if sortie.len() >= PLAFOND {
-                        tronquee = true;
-                        break;
+        let mut annule = false;
+        loop {
+            tokio::select! {
+                msg = channel.wait() => {
+                    let Some(msg) = msg else { break };
+                    match msg {
+                        russh::ChannelMsg::Data { ref data }
+                        | russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                            if sortie.len() >= PLAFOND {
+                                tronquee = true;
+                                break;
+                            }
+                            sortie.push_str(&String::from_utf8_lossy(data));
+                        }
+                        russh::ChannelMsg::ExitStatus { exit_status } => {
+                            exit_code = exit_status;
+                            statut_recu = true;
+                        }
+                        // Commande tuée par un signal : pas de code de sortie, mais un
+                        // échec bien réel — surtout pour une copie directe (scp).
+                        russh::ChannelMsg::ExitSignal {
+                            ref signal_name, ..
+                        } => {
+                            return Err(anyhow!(
+                                "La commande distante a été interrompue par un signal ({signal_name:?})."
+                            ));
+                        }
+                        russh::ChannelMsg::Close => break,
+                        _ => {}
                     }
-                    sortie.push_str(&String::from_utf8_lossy(data));
                 }
-                russh::ChannelMsg::ExitStatus { exit_status } => {
-                    exit_code = exit_status;
-                    statut_recu = true;
+                // Sans drapeau, ce bras patiente sans jamais se résoudre :
+                // `channel.wait()` seul reste, comme avant. On ferme le canal
+                // hors du `select!`, une fois le futur `wait()` abandonné, pour
+                // ne pas emprunter `channel` deux fois.
+                () = attendre_leve(annulation) => {
+                    annule = true;
+                    break;
                 }
-                // Commande tuée par un signal : pas de code de sortie, mais un
-                // échec bien réel — surtout pour une copie directe (scp).
-                russh::ChannelMsg::ExitSignal {
-                    ref signal_name, ..
-                } => {
-                    return Err(anyhow!(
-                        "La commande distante a été interrompue par un signal ({signal_name:?})."
-                    ));
-                }
-                russh::ChannelMsg::Close => break,
-                _ => {}
             }
+        }
+        // On ferme le canal sur TOUTE sortie de la boucle, pas seulement à
+        // l'annulation. Trouvé par l'audit du 7 septembre 2026 : au plafond de
+        // 1 Mio on sortait sans fermer, et `russh::Channel` n'envoie pas de
+        // CHANNEL_CLOSE à sa chute pendant que le client réalimente la fenêtre —
+        // le serveur pouvait donc continuer de nous inonder toute la vie de la
+        // session. `close()` retire le canal de la table du client, la fenêtre
+        // n'est plus réalimentée, le serveur cale. Inoffensif si déjà clos.
+        let _ = channel.close().await;
+        if annule {
+            anyhow::bail!(crate::sftp::ANNULE);
         }
         if tronquee {
             sortie.push_str("\n[sortie tronquée : plafond de 1 Mio atteint]\n");
@@ -1243,6 +1487,36 @@ mod tests {
 }
 
 #[cfg(test)]
+mod tests_transport_agent {
+    use super::{TransportAgentWindows, ORDRE_TRANSPORTS_AGENT_WINDOWS};
+
+    /// La redirection d'agent sous Windows doit essayer Pageant, et pas seulement
+    /// le tube OpenSSH. Trouvé par l'audit du 7 septembre 2026 :
+    /// `ouvrir_agent_local` (cfg windows) n'ouvrait que le tube OpenSSH, alors que
+    /// l'authentification essaie tube OpenSSH PUIS Pageant. Un poste `PuTTY` où seul
+    /// Pageant tourne s'authentifiait donc, mais voyait la « copie directe » d'un
+    /// hôte à un autre refusée « Permission denied (publickey) », le canal
+    /// `auth-agent@openssh.com` rejeté (`ConnectFailed`) faute de joindre Pageant.
+    ///
+    /// On ne peut pas éprouver le vrai choix de transport sans Windows et un
+    /// Pageant vivant (ce serait un test bout en bout) ; on verrouille ici la
+    /// source unique de l'ordre d'essai que suit `ouvrir_agent_local`. Sans le
+    /// correctif, cette liste ne contenait que le tube OpenSSH et l'assertion
+    /// échoue.
+    #[test]
+    fn la_redirection_d_agent_windows_essaie_pageant_apres_le_tube_openssh() {
+        assert_eq!(
+            ORDRE_TRANSPORTS_AGENT_WINDOWS,
+            &[
+                TransportAgentWindows::TubeOpenSsh,
+                TransportAgentWindows::Pageant,
+            ],
+            "la redirection doit essayer les deux transports, dans le même ordre que l'auth"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests_marqueurs {
     use super::marqueur_bloquant_dans;
 
@@ -1443,6 +1717,81 @@ mod tests_cle_hote {
         assert_eq!(
             juger_cle_hote(&[(1, a), (2, b.clone())], &b),
             VerdictCle::Connue
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_garde_agent {
+    use super::{GardeAgent, RelaisAgent};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un canal `auth-agent@openssh.com`
+    /// ouvert par le serveur PENDANT `run_avec_agent`, puis gardé ouvert, faisait
+    /// survivre son relais vers l'agent du poste à la fin de la commande. Le
+    /// `Drop` de `GardeAgent` ne remettait que le drapeau à false sans interrompre
+    /// les relais déjà lancés : le serveur pouvait continuer à faire signer
+    /// l'agent du poste pour toute la durée de l'onglet, alors que SECURITY.md
+    /// promet une borne à la seule durée de la commande. On vérifie ici que la
+    /// chute de la garde interrompt bien un relais encore vivant (aucun EOF de
+    /// part et d'autre) — ce qui, en vrai, lâche le flux du canal et envoie
+    /// `Close` au serveur.
+    ///
+    /// Test unitaire sur le mécanisme corrigé plutôt qu'intégration : le relais
+    /// n'est lancé que si `ouvrir_agent_local` joint un agent, or `SSH_AUTH_SOCK`
+    /// est un chemin de process global que toute la suite pointe volontairement
+    /// sur un socket absent (pour un verdict `ConnectFailed` déterministe et
+    /// partagé, cf. `un_canal_d_agent_hors_commande...`) ; y brancher un vrai
+    /// agent le temps d'un seul test ferait courir les tests parallèles derrière
+    /// son dos. On éprouve donc directement ce que corrige le défaut : la garde
+    /// possède les relais et les interrompt à sa chute.
+    #[tokio::test]
+    async fn la_garde_interrompt_les_relais_d_agent_a_la_fin_de_la_commande() {
+        let drapeau = Arc::new(AtomicBool::new(true));
+        let relais: RelaisAgent = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        // Un relais qui ne se termine jamais seul : deux tubes en mémoire dont
+        // les pairs sont gardés ouverts (aucun EOF), comme un canal d'agent que
+        // le serveur laisse ouvert. Sans interruption, la tâche vit indéfiniment.
+        //
+        // `tx` est capturé par la tâche : tant que le relais tourne, il le garde
+        // vivant. Dès que la tâche est interrompue (son futur lâché), `tx` tombe
+        // et le récepteur se résout — peu importe qu'il rende Ok ou une erreur,
+        // c'est la RÉSOLUTION qui prouve la fin du relais. Un relais non
+        // interrompu garderait `tx` et le récepteur ne se résoudrait jamais : le
+        // `timeout` ci-dessous échouerait, ce qui est exactement le défaut.
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let (mut a, _pair_a) = tokio::io::duplex(64);
+        let (mut b, _pair_b) = tokio::io::duplex(64);
+        let handle = tokio::spawn(async move {
+            let _tx = tx;
+            let _ = tokio::io::copy_bidirectional(&mut a, &mut b).await;
+        });
+        relais.lock().unwrap().push(handle);
+
+        // Fin de la commande : la garde tombe. Elle doit abaisser le drapeau ET
+        // interrompre le relais encore vivant.
+        let garde = GardeAgent {
+            drapeau: drapeau.clone(),
+            relais: relais.clone(),
+        };
+        drop(garde);
+
+        assert!(
+            !drapeau.load(Ordering::Relaxed),
+            "la garde doit abaisser le drapeau de redirection d'agent"
+        );
+        tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect(
+                "le relais doit être interrompu à la chute de la garde, pas survivre à la commande",
+            )
+            .ok();
+        assert!(
+            relais.lock().unwrap().is_empty(),
+            "la garde doit vider la liste des relais pour ne pas les accumuler"
         );
     }
 }

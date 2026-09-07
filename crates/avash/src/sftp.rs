@@ -24,6 +24,11 @@ use super::ssh::AvashSession;
 pub struct SftpEntry {
     pub name: String,
     pub is_dir: bool,
+    /// Fichier régulier ? Distinct de `!is_dir` : un lien symbolique et un
+    /// fichier spécial ne sont ni l'un ni l'autre. `parcourir` s'en sert pour
+    /// écarter ces entrées d'un transfert récursif (voir l'audit du 7 septembre
+    /// 2026, plus bas).
+    pub is_file: bool,
     pub size: u64,
     pub modified: Option<u64>,
 }
@@ -81,6 +86,7 @@ impl SftpHandle {
                 SftpEntry {
                     name: e.file_name(),
                     is_dir: e.file_type().is_dir(),
+                    is_file: e.file_type().is_file(),
                     size: m.len(),
                     modified: m.mtime.map(u64::from),
                 }
@@ -173,6 +179,25 @@ impl SftpHandle {
         if let Err(e) = issue {
             let _ = tokio::fs::remove_file(&partiel).await;
             return Err(e);
+        }
+        // Trouvé par l'audit du 7 septembre 2026 : le chemin en bandes contrôle
+        // `fait == total` (fichier distant rétréci en cours de route), mais le
+        // chemin séquentiel renommait le `.part` sans rien vérifier. Un journal
+        // distant rotationné/tronqué pendant la lecture atteint un EOF propre
+        // plus tôt : `done < total`, aucune erreur, et le préfixe était promu
+        // sur la cible, transfert annoncé réussi. On ne contrôle qu'une taille
+        // connue (`total > 0` : `download_reprise` renvoie aussi ici quand le
+        // serveur ne donne pas de taille) et on n'exige que `done >= total` :
+        // un fichier qui GROSSIT pendant la lecture (journal en cours
+        // d'écriture) reste un transfert complet et correct — d'où `<` et non
+        // `!=`. Le `drop(local_file)` a déjà eu lieu : le `.part` peut être
+        // supprimé même sous Windows.
+        if total > 0 && done < total {
+            let _ = tokio::fs::remove_file(&partiel).await;
+            anyhow::bail!(
+                "Transfert incomplet : {done} octets reçus sur {total} annoncés \
+                 (le fichier distant a changé pendant le transfert)."
+            );
         }
         tokio::fs::rename(&partiel, local)
             .await
@@ -347,6 +372,19 @@ impl SftpHandle {
             progress(done, total);
         }
         remote_file.shutdown().await.context("Fermeture distante")?;
+        // Trouvé par l'audit du 7 septembre 2026 : jumeau du défaut de
+        // `download_with`. `upload_reprise` renvoie ici tout fichier <= 128 Kio,
+        // qui ne vérifiait pas `done == total`. Un fichier local tronqué pendant
+        // l'envoi (rotation, écrasement par un autre processus) atteint un EOF
+        // plus tôt : `done < total`, aucune erreur, et le distant recevait un
+        // fichier court annoncé réussi — le chemin long, lui, contrôle
+        // (`ensure! fait == total`). Même règle : taille connue (`total > 0`) et
+        // `done >= total` toléré (un fichier local qui grossit reste complet).
+        if total > 0 && done < total {
+            anyhow::bail!(
+                "Envoi incomplet : {done} octets envoyés sur {total} (le fichier local a changé pendant l'envoi)."
+            );
+        }
         Ok(done)
     }
 
@@ -451,6 +489,12 @@ struct Reprise {
     mtime: Option<u64>,
     /// Bandes complètes, `[debut, fin)`.
     faites: Vec<(u64, u64)>,
+    /// Chemin distant que cette carte vise (envoi seulement ; `None` en
+    /// téléchargement, où la carte est repérée par le `.part` local).
+    /// `default` de serde : une vieille carte sans ce champ se relit encore, et
+    /// vaut alors pour aucune cible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cible: Option<String>,
 }
 
 impl Reprise {
@@ -465,6 +509,19 @@ impl Reprise {
     /// Cette carte vaut-elle pour un fichier de cette taille et de cette date ?
     fn vaut_pour(&self, taille: u64, mtime: Option<u64>) -> bool {
         self.taille == taille && self.mtime == mtime
+    }
+    /// Cette carte d'envoi vise-t-elle bien ce chemin distant ?
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : une carte `.envoi.reprise`
+    /// laissée par un envoi interrompu vers un chemin (ou un hôte) était
+    /// réutilisée pour un autre envoi du même fichier local vers un chemin
+    /// différent. `upload_reprise` reprenait alors à l'octet `deja` et greffait
+    /// la queue du fichier au milieu d'un fichier distant sans rapport, pourvu
+    /// qu'il soit assez gros pour passer le test `fin <= distant_len` : ni
+    /// troncature ni erreur, un fichier distant corrompu en silence. La carte
+    /// porte donc désormais sa cible et ne vaut que pour elle.
+    fn vise(&self, remote: &str) -> bool {
+        self.cible.as_deref() == Some(remote)
     }
 }
 
@@ -510,6 +567,19 @@ impl SftpHandle {
                     "Le serveur annonce une entrée au nom interdit sous {chemin} : {:?}",
                     e.name
                 );
+                // Liens symboliques et fichiers spéciaux : ignorés, comme
+                // `scp -r` sans `-L`, symétriquement à `upload_dir_with`.
+                // Trouvé par l'audit du 7 septembre 2026 : `list` déduit le type
+                // d'un `lstat` (SSH_FXP_READDIR), donc un lien y est un
+                // `FileType::Symlink` dont `is_dir` est faux ; `parcourir` le
+                // rangeait alors en fichier et `download_reprise`/`relayer_vers`
+                // tentaient d'`open` dessus. Un lien vers un dossier ouvrait un
+                // répertoire (échec à la lecture), un lien cassé échouait à
+                // l'ouverture, et l'erreur remontait par `?` en interrompant TOUT
+                // le dossier ; un relais créait même un fichier vide à sa place.
+                if !e.is_dir && !e.is_file {
+                    continue;
+                }
                 anyhow::ensure!(
                     entrees.len() < ENTREES_MAX,
                     "Plus de {ENTREES_MAX} entrées sous {racine} : le parcours s'arrête."
@@ -659,6 +729,9 @@ impl SftpHandle {
                 .upload_reprise(
                     &local.join(rel),
                     &joindre(remote_dir, &nom),
+                    // Fusion volontaire : un fichier déjà présent est remplacé,
+                    // comme une resynchronisation de dossier l'attend.
+                    false,
                     annulation,
                     |f, _| {
                         progress(Avancement {
@@ -706,9 +779,28 @@ impl SftpHandle {
         }
         let partiel = chemin_partiel(local);
         let carte = chemin_reprise(&partiel);
-        let deja = Reprise::lire(&carte)
+        let mut deja = Reprise::lire(&carte)
             .filter(|r| r.vaut_pour(total, mtime) && partiel.exists())
             .unwrap_or_default();
+        // Trouvé par l'audit du 7 septembre 2026 : la carte est écrite avec un
+        // `fsync` (`ecrire_atomiquement`), mais les octets d'une bande n'avaient
+        // qu'un `flush` (pas de `fsync`) à l'annonce « faite ». Après une coupure,
+        // la carte durable pouvait promettre une bande que le `.part` n'avait pas
+        // encore sur le disque, plus court d'autant. On tient désormais chaque
+        // bande durable avant de l'annoncer (voir `une_bande_annulable`), et à la
+        // reprise on refuse une carte dont le `.part` est plus court que la plus
+        // grande bande dite faite (ou dont la métadonnée est illisible) : on
+        // repart de zéro, comme pour une carte périmée. Garde nécessaire mais
+        // partielle : un `.part` de la bonne longueur mais troué (zéros au milieu
+        // d'une bande dite faite) n'est pas rattrapé ici, seul le `fsync` par
+        // bande le ferme (il faudrait un condensé par bande pour l'attraper).
+        let plus_grande_fin = deja.faites.iter().map(|(_, f)| *f).max().unwrap_or(0);
+        let part_assez_long = tokio::fs::metadata(&partiel)
+            .await
+            .is_ok_and(|m| m.len() >= plus_grande_fin);
+        if !part_assez_long {
+            deja.faites.clear();
+        }
         if deja.faites.is_empty() {
             tokio::fs::File::create(&partiel)
                 .await
@@ -718,6 +810,7 @@ impl SftpHandle {
             taille: total,
             mtime,
             faites: deja.faites,
+            cible: None,
         };
         let deja_fait: u64 = reprise.faites.iter().map(|(d, f)| f - d).sum();
         progress(deja_fait, total);
@@ -821,9 +914,55 @@ impl SftpHandle {
         }
         local.flush().await.context("Vidage local")?;
         if reste == 0 {
+            // Trouvé par l'audit du 7 septembre 2026 : la carte de reprise est
+            // écrite avec un `fsync`, mais `flush` (tokio) n'attend que la fin de
+            // l'écriture en cours, sans `fsync`. Sans ce `sync_data`, une coupure
+            // pouvait laisser la carte durable promettre une bande que le `.part`
+            // n'avait pas encore sur le disque. On rend donc la bande durable
+            // AVANT d'en annoncer la fin (la carte est écrite par une autre tâche
+            // dès réception) ; une erreur d'E/S fait échouer la bande plutôt que
+            // de la déclarer faite à tort.
+            local.sync_data().await.context("Synchronisation local")?;
             let _ = tx.send(Bande::Finie(debut, fin));
         }
         Ok(())
+    }
+
+    /// Où reprendre un envoi (octet `deja`, 0 = départ), et refus d'un
+    /// écrasement silencieux.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : un envoi de fichier unitaire
+    /// (`sftp_upload`, glisser-déposer) faisait `create(remote)`, qui TRONQUE une
+    /// cible du même nom — l'ancien fichier distant perdu sans un mot, quand la
+    /// réception RDP, elle, n'écrase jamais (SECURITY.md). On refuse désormais
+    /// d'écraser une cible qui existe déjà, SAUF quand c'est la reprise d'un envoi
+    /// interrompu vers ce même chemin (carte `.envoi.reprise` valable, donc
+    /// `deja > 0`). L'envoi de DOSSIER fusionne volontairement dans une
+    /// arborescence déjà là (`refuser_ecrasement = false`) : la resynchro d'un
+    /// dossier n'est pas cassée.
+    async fn plan_envoi(
+        &self,
+        remote: &str,
+        carte: &Path,
+        total: u64,
+        mtime: Option<u64>,
+        refuser_ecrasement: bool,
+    ) -> Result<u64> {
+        let distant = self.sftp.metadata(remote).await.ok();
+        let distant_len = distant
+            .as_ref()
+            .map_or(0, russh_sftp::protocol::FileAttributes::len);
+        let deja = Reprise::lire(carte)
+            .filter(|r| r.vaut_pour(total, mtime) && r.vise(remote))
+            .and_then(|r| r.faites.first().map(|(_, fin)| *fin))
+            .filter(|fin| *fin <= distant_len && *fin < total)
+            .unwrap_or(0);
+        if refuser_ecrasement && deja == 0 && distant.is_some() {
+            anyhow::bail!(
+                "Le fichier distant « {remote} » existe déjà : envoi refusé pour ne pas l'écraser."
+            );
+        }
+        Ok(deja)
     }
 
     /// Téléversement d'un fichier, annulable, repris là où il s'était arrêté.
@@ -842,6 +981,7 @@ impl SftpHandle {
         &self,
         local: &Path,
         remote: &str,
+        refuser_ecrasement: bool,
         annulation: Option<&Annulation>,
         mut progress: impl FnMut(u64, u64),
     ) -> Result<u64> {
@@ -855,10 +995,6 @@ impl SftpHandle {
             .await
             .with_context(|| format!("Lecture de {}", local.display()))?;
         let total = meta.len();
-        if total <= (2 * CHUNK) as u64 {
-            verifier(annulation)?;
-            return self.upload_with(local, remote, progress).await;
-        }
         let mtime = meta
             .modified()
             .ok()
@@ -867,12 +1003,15 @@ impl SftpHandle {
         let mut carte = local.as_os_str().to_owned();
         carte.push(".envoi.reprise");
         let carte = PathBuf::from(carte);
-        let distant_len = self.sftp.metadata(remote).await.map_or(0, |m| m.len());
-        let deja = Reprise::lire(&carte)
-            .filter(|r| r.vaut_pour(total, mtime))
-            .and_then(|r| r.faites.first().map(|(_, fin)| *fin))
-            .filter(|fin| *fin <= distant_len && *fin < total)
-            .unwrap_or(0);
+        // Reprise éventuelle et refus d'un écrasement silencieux (voir
+        // `plan_envoi`) : `deja` est l'octet où l'envoi doit reprendre.
+        let deja = self
+            .plan_envoi(remote, &carte, total, mtime, refuser_ecrasement)
+            .await?;
+        if total <= (2 * CHUNK) as u64 {
+            verifier(annulation)?;
+            return self.upload_with(local, remote, progress).await;
+        }
 
         let mut source = tokio::fs::File::open(local)
             .await
@@ -902,6 +1041,7 @@ impl SftpHandle {
             taille: total,
             mtime,
             faites: vec![(0, deja)],
+            cible: Some(remote.to_string()),
         };
         let mut fait = deja;
         let mut dernier_point = deja;
@@ -958,6 +1098,7 @@ impl SftpHandle {
         remote: &str,
         cible: &SftpHandle,
         remote_cible: &str,
+        refuser_ecrasement: bool,
         annulation: Option<&Annulation>,
         mut progress: impl FnMut(u64, u64),
     ) -> Result<u64> {
@@ -982,6 +1123,16 @@ impl SftpHandle {
                 .await
                 .with_context(|| format!("Ouverture distant {remote}"))?;
             drop(sonde); // les bandes rouvrent leur propre descripteur
+        }
+        // Trouvé par l'audit du 7 septembre 2026 : `create(remote_cible)` TRONQUE
+        // un fichier du même nom chez la cible — une copie de fichier vers un
+        // autre hôte écrasait sans un mot. On refuse d'écraser une cible qui
+        // existe déjà (copie unitaire) ; la copie de DOSSIER fusionne
+        // (`refuser_ecrasement = false`), comme l'envoi.
+        if refuser_ecrasement && cible.sftp.metadata(remote_cible).await.is_ok() {
+            anyhow::bail!(
+                "Le fichier « {remote_cible} » existe déjà chez la cible : copie refusée pour ne pas l'écraser."
+            );
         }
         cible
             .sftp
@@ -1092,6 +1243,8 @@ impl SftpHandle {
                     &joindre(remote_dir, &e.chemin),
                     cible,
                     &chez_cible,
+                    // Fusion volontaire dans l'arborescence cible déjà là.
+                    false,
                     annulation,
                     |f, _| {
                         progress(Avancement {
@@ -1209,11 +1362,36 @@ mod tests_bandes {
             taille: 10,
             mtime: Some(5),
             faites: vec![(0, 5)],
+            cible: None,
         };
         assert!(r.vaut_pour(10, Some(5)));
         assert!(!r.vaut_pour(11, Some(5)));
         assert!(!r.vaut_pour(10, Some(6)));
         assert!(!r.vaut_pour(10, None));
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : une carte d'envoi ne vaut que
+    /// pour la cible distante qu'elle porte. Sans ce contrôle, une carte laissée
+    /// par un envoi interrompu vers `/a/backup.sql` était réutilisée pour un
+    /// envoi du même fichier local vers `/b/backup.sql` et greffait la queue du
+    /// fichier au milieu de ce fichier distant sans rapport.
+    #[test]
+    fn une_carte_d_envoi_ne_vaut_que_pour_la_meme_cible_distante() {
+        let r = Reprise {
+            taille: 10,
+            mtime: Some(5),
+            faites: vec![(0, 4)],
+            cible: Some("/a/backup.sql".into()),
+        };
+        assert!(r.vise("/a/backup.sql"));
+        assert!(!r.vise("/b/backup.sql"), "chemin distant différent");
+        // Une vieille carte sans cible enregistrée ne vaut pour aucun envoi :
+        // mieux vaut repartir de zéro que se greffer sur un fichier inconnu.
+        let ancienne = Reprise {
+            cible: None,
+            ..r.clone()
+        };
+        assert!(!ancienne.vise("/a/backup.sql"));
     }
 
     /// Trouvé par la revue de sécurité du commit : un serveur hostile qui

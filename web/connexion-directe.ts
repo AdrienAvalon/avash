@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { $ } from "./etat";
 import { loadHosts, openManualSession, openSerie } from "./main";
 import { choisirDossierPartage, openRdp } from "./rdp";
+import { askConfirm } from "./dialogues";
+import { isHostKeyChanged, nettoyerMarqueurs } from "./filters";
 import { t } from "./i18n";
 
 type PortSerie = { chemin: string; description: string };
@@ -102,7 +104,7 @@ function manualSyncAuthRows() {
   $("m-key-row").hidden = mode !== "key";
 }
 
-function manualReadForm(): ManualTarget {
+export function manualReadForm(): ManualTarget {
   const val = (id: string) => ($(id) as HTMLInputElement).value.trim();
   const mode = (document.querySelector('input[name="auth"]:checked') as HTMLInputElement).value;
   const portRaw = val("m-port");
@@ -110,12 +112,15 @@ function manualReadForm(): ManualTarget {
     addr: val("m-addr"),
     port: portRaw ? Number(portRaw) : null,
     user: val("m-user"),
-    password: mode === "password" ? val("m-password") || null : null,
+    // Mot de passe lu brut (pas de trim) : ses espaces de bord font partie du
+    // secret (audit du 7 septembre 2026). `|| null` sur la valeur brute garde
+    // la distinction du vide, mais « espaces seuls » reste un vrai mot de passe.
+    password: mode === "password" ? ($("m-password") as HTMLInputElement).value || null : null,
     key_path: mode === "key" ? val("m-key") || null : null,
   };
 }
 
-async function manualSubmit(ev: Event) {
+export async function manualSubmit(ev: Event) {
   ev.preventDefault();
   const submit = $("m-submit") as HTMLButtonElement;
   const proto = protocoleChoisi();
@@ -160,7 +165,7 @@ async function manualSubmit(ev: Event) {
     }
     submit.disabled = true;
     const libelleRdp = submit.textContent;
-    submit.textContent = "Connexion…";
+    submit.textContent = t("cd-connexion-en-cours");
     try {
       if (enregistrer) {
         await invoke("rdp_host_save", {
@@ -191,7 +196,7 @@ async function manualSubmit(ev: Event) {
   const target = manualReadForm();
   manualError().hidden = true;
   submit.disabled = true;
-  submit.textContent = "Connexion…";
+  submit.textContent = t("cd-connexion-en-cours");
   // Retenu hors du bloc : l'onglet doit porter ce nom-là, pas
   // « utilisateur@adresse ».
   let alias: string | undefined;
@@ -216,10 +221,36 @@ async function manualSubmit(ev: Event) {
     await openManualSession(target, alias);
     manualClose();
   } catch (e) {
-    // Le backend renvoie un message deja redige pour l'utilisateur
-    // (cle introuvable, cle d'hote modifiee, identifiants manquants).
-    manualError().textContent = e instanceof Error ? e.message : String(e);
-    manualError().hidden = false;
+    // Trouvé par l'audit du 7 septembre 2026 : le cœur préfixe certains messages
+    // d'un marqueur destiné à l'interface ([AVASH_HOST_KEY_CHANGED],
+    // [AVASH_PASSWORD_REQUIRED], [AVASH_ANNULE]). Affichés bruts, ils n'avaient
+    // aucun sens ; et pour une clé d'hôte changée (serveur réinstallé), la
+    // connexion directe n'offrait aucune sortie — il fallait éditer known_hosts
+    // à la main — alors que le chemin par alias propose de l'oublier. On reprend
+    // ce flux ici, puis on retire tout marqueur restant avant affichage.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isHostKeyChanged(msg)) {
+      const clean = nettoyerMarqueurs(msg);
+      const ok = await askConfirm(`${clean}\n\n${t("cle-hote-oublier-question")}`);
+      if (!ok) {
+        manualError().textContent = clean;
+        manualError().hidden = false;
+        return;
+      }
+      try {
+        await invoke("known_hosts_forget", { addr: target.addr, port: target.port });
+        // Un seul nouvel essai, sans ré-enregistrer l'hôte : l'alias existe déjà
+        // (host_save au-dessus a réussi), le réécrire échouerait.
+        await openManualSession(target, alias);
+        manualClose();
+      } catch (fe) {
+        manualError().textContent = nettoyerMarqueurs(fe instanceof Error ? fe.message : String(fe));
+        manualError().hidden = false;
+      }
+    } else {
+      manualError().textContent = nettoyerMarqueurs(msg);
+      manualError().hidden = false;
+    }
   } finally {
     submit.disabled = false;
     submit.textContent = t("se-connecter");

@@ -131,8 +131,12 @@ impl CliprdrBackend for ClipBackend {
     fn on_format_data_response(&mut self, resp: FormatDataResponse<'_>) {
         if !resp.is_error() {
             if let Ok(text) = resp.to_unicode_string() {
-                // Plafond anti-abus : un serveur ne sature pas la mémoire via un
-                // presse-papiers géant (le texte normal reste très en dessous).
+                // Plafond de TRANSMISSION au front (8 Mio) : on ne pousse pas un
+                // presse-papiers déraisonnable vers l'interface. Ce n'est PAS la
+                // borne d'allocation — corrigé le 7 septembre 2026 : `text` est
+                // déjà décodé ici, et en amont le réassemblage des morceaux du
+                // canal statique était illimité ; la borne mémoire vit désormais
+                // dans `ironrdp-svc` (dechunkify, REASSEMBLAGE_MAX à 16 Mio).
                 if text.len() <= 8 * 1024 * 1024 {
                     let _ = self.tx.send(ClipReq::RemoteText(text));
                 }

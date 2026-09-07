@@ -113,11 +113,49 @@ run "garde"              "$ROOT" ./scripts/guard.sh
 # et échoue à l'installer. Contrôle guardé par PyYAML (pas une dépendance du dépôt).
 if python3 -c "import yaml" >/dev/null 2>&1; then
   run "manifeste maj (deb/rpm)" "$ROOT" ./scripts/tests/manifeste-maj.sh
+  # L'étape « Couverture du front » de qualite.yml masquait l'échec de Vitest à
+  # travers un tube (`| tee`) sans pipefail : une régression du front laissait
+  # le job Qualité vert et le chiffre de couverture faux ou absent.
+  run "qualité : échec vitest visible" "$ROOT" ./scripts/tests/qualite-couverture-front-echec.sh
+  # Le job `fuzz` de securite.yml était sauté sur les PR et `check.sh` ne compile
+  # pas le crate `fuzz` (hors espace de travail) : un renommage ou une signature
+  # changée d'un parseur passait vert et ne cassait le job qu'après la fusion.
+  run "sécurité : fuzz compile sur PR" "$ROOT" ./scripts/tests/securite-fuzz-compile-pr.sh
+  # Le job `fuzz` jetait le corpus enrichi par la couverture (`fuzz/corpus`,
+  # ignoré par git, hors du cache rust-cache) : l'exploration repartait des
+  # seules graines à chaque poussée et chaque lundi, sans jamais réutiliser ce
+  # que les runs précédents avaient découvert.
+  run "sécurité : corpus de fuzz persistant" "$ROOT" ./scripts/tests/securite-fuzz-corpus-persistant.sh
+  # Le manifeste Flathub doit accorder le son du bureau distant (--socket=pulseaudio,
+  # webview WebKitGTK/GStreamer) et les consoles série (--device=all, /dev/ttyUSB*
+  # et /dev/ttyACM*) : sans eux, ces deux fonctions sont muettes/vides dans le bac à
+  # sable, alors qu'elles marchent en AppImage. Les droits sont à justifier (§8).
+  run "flathub : son et série accordés" "$ROOT" ./scripts/tests/flathub-permissions-audio-serie.sh
 fi
+# release.sh s'annonce « à lancer SUR Windows » mais copiait le sidecar RDP sans
+# extension : sous Windows le binaire est avash-rdp.exe et Tauri (externalBin)
+# attend binaries/avash-rdp-<triple>.exe, si bien que `cp` échouait (set -e)
+# avant `cargo tauri build`. Ce contrôle rejoue la vraie ligne de copie pour une
+# cible Windows (suffixe .exe) et Linux (sans).
+run "release : suffixe .exe du sidecar (windows)" "$ROOT" ./scripts/tests/release-sidecar-suffixe-windows.sh
 # Sous Windows, le harnais e2e modifie le sshd du SYSTÈME (port 22) : ce chemin
 # doit refuser de s'exécuter hors CI, sans quoi un `npm test` en terminal élevé
 # écrase les clés d'admin de la machine et y laisse la clé de test.
 run "garde sshd windows (e2e)" "$ROOT" node --test scripts/tests/sshd-windows-garde.mjs
+# Le harnais e2e doit remettre à zéro le STOCKAGE WEB (langue, santé…) entre
+# fichiers et le confiner au bac à sable : sinon les scénarios fuient l'un sur
+# l'autre et, sur un poste où XDG_DATA_HOME est exporté, écrivent dans les
+# données réelles de l'utilisateur.
+run "isolation stockage web (e2e)" "$ROOT" node --test scripts/tests/e2e-isolation-stockage-web.mjs
+# La relance du pilote WebDriver doit vivre dans le LANCEUR (onWorkerStart), pas
+# dans beforeSession (processus de travail) : là-bas la poignée tauriDriver vaut
+# undefined et relances repart de zéro, si bien qu'un pilote orphelin gardait le
+# port 4444 et empoisonnait le run suivant.
+run "relance pilote côté lanceur (e2e)" "$ROOT" node --test scripts/tests/e2e-relance-pilote-lanceur.mjs
+# En CI, une référence visuelle absente doit faire ROUGIR l'étape : autoSaveBaseline
+# doit être off en CI (sinon un tag ajouté/renommé sans PNG refabrique sa référence
+# et passe vert sans rien comparer), rouvert par VISUEL_INIT pour amorcer.
+run "régression visuelle : rougit sans référence en CI (e2e)" "$ROOT" node --test scripts/tests/e2e-visuel-baseline-ci.mjs
 run "lint"               "$WEB" npx eslint .
 # Le CSS vit dans index.html : stylelint le lit à travers postcss-html.
 run "lint css"           "$WEB" npx stylelint index.html

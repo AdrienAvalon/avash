@@ -39,9 +39,25 @@ where
     Ok(())
 }
 
-fn copy_indexed(palette: &[u8], pixels: &mut Vec<u8>, bpp: usize, index: u8) {
+// Trouvé par l'audit du 7 septembre 2026 : un serveur hostile peut désigner un
+// indice hors de la palette (l'octet de contrôle du RLE indexé porte
+// `index = control & 0x7f`, jusqu'à 127, pour une palette de 2 ; une tuile à
+// 3 couleurs encode ses indices sur 2 bits, d'où l'indice 3 hors des trois
+// entrées). Le tranchage `palette[start..start + bpp]` paniquait alors la tâche
+// de décodage tokio, qui refermait la session sur un message trompeur. L'indice
+// hors palette est désormais une erreur d'image franche, pas une panique.
+fn copy_indexed(
+    palette: &[u8],
+    pixels: &mut Vec<u8>,
+    bpp: usize,
+    index: u8,
+) -> Result<(), VncError> {
     let start = index as usize * bpp;
-    pixels.extend_from_slice(&palette[start..start + bpp])
+    let couleur = palette
+        .get(start..start + bpp)
+        .ok_or(VncError::InvalidImageData)?;
+    pixels.extend_from_slice(couleur);
+    Ok(())
 }
 
 pub struct Decoder {}
@@ -132,7 +148,7 @@ impl Decoder {
                     (false, 1) => {
                         // Color fill
                         for _ in 0..pixel_count {
-                            copy_indexed(&palette, &mut pixels, bpp, 0)
+                            copy_indexed(&palette, &mut pixels, bpp, 0)?
                         }
                     }
                     (false, 2..=16) => {
@@ -155,7 +171,7 @@ impl Decoder {
                                 }
                                 let idx = (encoded >> shift) & mask;
 
-                                copy_indexed(&palette, &mut pixels, bpp, idx);
+                                copy_indexed(&palette, &mut pixels, bpp, idx)?;
                                 shift -= bits_per_index;
                             }
                             if shift < 8 - bits_per_index && y < height - 1 {
@@ -172,6 +188,14 @@ impl Decoder {
                             copy_true_color(input, &mut pixel, alpha_at_first, compressed_bpp, bpp)
                                 .await?;
                             let run_length = read_run_length(input).await?;
+                            // Trouvé par l'audit du 7 septembre 2026 : `run_length`
+                            // (lu sans plafond) pouvait dépasser ce qui reste de la
+                            // tuile ; `pixels` enflait alors bien au-delà de
+                            // pixel_count*bpp, produisant un RawImage démesuré pour
+                            // un rectangle annoncé petit. Un dépassement est refusé.
+                            if run_length > pixel_count - count {
+                                return Err(VncError::InvalidImageData);
+                            }
                             for _ in 0..run_length {
                                 pixels.extend(&pixel)
                             }
@@ -190,8 +214,13 @@ impl Decoder {
                             } else {
                                 1
                             };
+                            // Même borne que le RLE couleur vraie : une série qui
+                            // dépasse la tuile est refusée (audit du 7 septembre 2026).
+                            if run_length > pixel_count - count {
+                                return Err(VncError::InvalidImageData);
+                            }
                             for _ in 0..run_length {
-                                copy_indexed(&palette, &mut pixels, bpp, index);
+                                copy_indexed(&palette, &mut pixels, bpp, index)?;
                             }
                             count += run_length;
                         }

@@ -209,7 +209,13 @@ Trois allocations n'avaient aucun plafond, toutes pilotables par un serveur :
 - la résolution annoncée par un serveur RDP était allouée telle quelle
   (`largeur × hauteur × 4`), soit 17 Gio pour un 65535×65535, rejouable à
   volonté par renégociation. Plafond : 8192×8192.
-- le presse-papiers reçu du serveur était déjà borné à 8 Mio.
+- le réassemblage des morceaux d'un canal statique (`dechunkify` d'`ironrdp-svc`,
+  presse-papiers mais aussi rdpdr, rdpsnd, drdynvc) était illimité : un serveur
+  envoyant des morceaux sans jamais poser `CHANNEL_FLAG_LAST`, ou une réponse
+  d'un gigaoctet, faisait grossir le tampon jusqu'à l'OOM du processus RDP (isolé
+  de russh : il n'emporte que sa session, pas Avash entier). Plafond : 16 Mio, en
+  amont de toute allocation, refus au-delà. Le plafond de 8 Mio du texte du
+  presse-papiers, lui, ne borne que la transmission au front, pas l'allocation.
 - sur le canal graphique (MS-RDPEGFX), le même 65535×65535 pouvait passer par
   `CreateSurface`, hors de toute négociation : même plafond. Une image posée
   sur une surface (`WireToSurface1`) était décodée aux dimensions annoncées
@@ -311,17 +317,34 @@ renonce alors en citant l'invite, plutôt que de tenter à l'aveugle.
 L'authentification à plusieurs facteurs n'est donc **pas encore prise en
 charge** — c'est une limite connue, pas un oubli silencieux.
 
-### Pas de repli de NLA vers TLS seul (RDP)
+### NLA exigé par défaut, repli vers TLS seul sur décision explicite (RDP)
 
 C'est le serveur qui choisit le protocole de sécurité parmi ceux que le client
 annonce. Annoncer `PROTOCOL_SSL` revient — la documentation d'IronRDP le dit mot
 pour mot — à lui signifier qu'on **accepte de renoncer à NLA**. Un serveur
-répondant « SSL seul » faisait alors sauter CredSSP, et le mot de passe partait
-dans le *Client Info PDU*, sans authentification mutuelle du serveur.
+répondant « SSL seul » fait alors sauter CredSSP, et le mot de passe part dans le
+*Client Info PDU*, sans authentification mutuelle du serveur.
 
-Avash n'annonce que `HYBRID` : un serveur incapable de NLA fait échouer la
-négociation. C'est au **premier contact** — le seul moment où l'épinglage
-ci-dessous ne protège pas encore — que cette différence compte le plus.
+Par défaut, Avash n'annonce que `HYBRID` : un serveur incapable de NLA fait
+échouer la négociation. C'est au **premier contact** — le seul moment où
+l'épinglage ci-dessous ne protège pas encore — que cette différence compte le
+plus.
+
+Certains serveurs légitimes n'offrent pourtant pas NLA (un xrdp dont le module
+PAM n'est pas configuré, par exemple). Quand la négociation échoue pour cette
+raison — refus explicite du serveur ou coupure brutale pendant l'échange —
+l'interface le signale et propose **« Se connecter sans NLA »**, précédé d'un
+avertissement. Sur accord de l'utilisateur, ce choix est retenu **pour ce seul
+bureau** (`sans_nla: true` dans `~/.config/avash/rdp.yaml`) : le processus reçoit
+alors `--sans-nla` et annonce `HYBRID` **et** `SSL`, laissant le serveur choisir
+— NLA reste préféré s'il sait le faire. Le repli ne porte donc que sur le
+premier contact, et l'épinglage TOFU (section suivante) reste actif dans tous les
+cas : ce n'est que l'authentification mutuelle CredSSP du premier échange qui est
+abandonnée, pas la vérification de la clé du serveur.
+
+Pour rétablir l'exigence de NLA sur un bureau, retirer la ligne `sans_nla: true`
+qui le concerne dans `rdp.yaml` : aucun élément d'interface ne le fait
+aujourd'hui.
 
 ### Vérification du serveur RDP (TOFU)
 

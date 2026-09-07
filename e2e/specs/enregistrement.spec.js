@@ -6,7 +6,7 @@
 // mot. Seule la sortie est enregistrée : le fichier ne doit contenir aucun
 // événement de frappe.
 import { readFileSync } from "node:fs";
-import { doubleCliquerHote } from "./helpers.js";
+import { doubleCliquerHote, ecouterSortiePty, sortiePty } from "./helpers.js";
 import { EMBARQUE } from "../wdio.conf.js";
 
 describe("Enregistrement de session (asciicast)", () => {
@@ -56,6 +56,10 @@ describe("Enregistrement de session (asciicast)", () => {
   const marqueur = (base) => `${base}-${String(Date.now()).replace(/(.)(?=\1)/g, "$1x")}`;
 
   it("enregistre la sortie du terminal dans un fichier relisible", async () => {
+    // On écoute `pty-output` AVANT de connecter : l'assertion finale (l'écho
+    // d'après l'arrêt n'entre pas dans le .cast) doit être prise après un état
+    // observable prouvant que le cœur a vu les octets, pas après un délai fixe.
+    await ecouterSortiePty();
     await doubleCliquerHote("test-ssh");
     await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
       { timeout: 20000, timeoutMsg: "session SSH jamais live" });
@@ -127,7 +131,20 @@ describe("Enregistrement de session (asciicast)", () => {
     // et le proposerait en autosuggestion — donc dans la sortie — avant l'arrêt.
     const apres = marqueur("apres-stop");
     await taper(`echo ${apres}\n`);
-    await browser.pause(800);
+    // Trouvé par l'audit du 7 septembre 2026 : une pause fixe de 800 ms jugeait
+    // l'assertion négative avant que l'écho n'ait fait le trajet
+    // xterm → IPC → russh → sshd → shell → retour ; sous charge l'écho arrive
+    // après le délai, le fichier est encore vide du marqueur au moment de la
+    // lecture et le test passe même si l'enregistrement continue. On attend
+    // plutôt que le cœur ait vu l'écho (même trajet, 10 s accordées aux
+    // l. 76-77 et 95-96) : `e.sortie(&text)` (sessions.rs) capte l'octet AVANT
+    // l'émission `pty-output`, donc voir `apres` dans `sortiePty()` prouve que
+    // la pompe a franchi le point de captation. Si l'enregistreur était resté
+    // en place, `apres` serait déjà sur disque (flush à chaque ligne). Le
+    // marqueur est unique (Date.now), donc `includes` ne fait pas de faux
+    // positif avec un écho précédent.
+    await browser.waitUntil(async () => (await sortiePty()).includes(apres),
+      { timeout: 10000, timeoutMsg: "l'écho après arrêt n'est jamais revenu" });
     expect(readFileSync(chemin, "utf8")).not.toContain(apres);
   });
 });

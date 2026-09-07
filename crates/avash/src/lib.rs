@@ -164,7 +164,13 @@ fn dequote(value: &str) -> &str {
         .unwrap_or(v)
 }
 
-pub fn parse_config_str(content: &str) -> Vec<SshHost> {
+/// Blocs `Host` du fichier, motifs bruts et champs parsés, dans l'ordre.
+///
+/// L'`alias` de chaque bloc est la ligne `Host` telle quelle (`db bastion`,
+/// `*`, `!prod *`) : [`parse_config_str`] la découpe ensuite pour la liste
+/// éditable, tandis que [`resoudre_hote_dans`] a besoin des motifs entiers pour
+/// appliquer les valeurs par défaut d'un bloc à joker.
+fn blocs_bruts(content: &str) -> Vec<SshHost> {
     let mut hosts: Vec<SshHost> = Vec::new();
     let mut current: Option<SshHost> = None;
 
@@ -249,9 +255,19 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
     if let Some(h) = current.take() {
         hosts.push(h);
     }
+    hosts
+}
 
+/// Parse `~/.ssh/config` en liste ÉDITABLE : un hôte par alias littéral, les
+/// blocs à joker (`Host *`, `Host !prod`) écartés — ils ne désignent pas un
+/// hôte connectable. Les valeurs par défaut qu'ils posent ne sont pas perdues
+/// pour autant : elles sont appliquées à la résolution ([`resoudre_hote`]), pas
+/// ici, pour que la liste et le formulaire d'édition ne montrent que ce que
+/// l'utilisateur a réellement écrit dans le bloc.
+#[must_use]
+pub fn parse_config_str(content: &str) -> Vec<SshHost> {
     let mut expanded = Vec::new();
-    for h in hosts {
+    for h in blocs_bruts(content) {
         for alias in h.alias.split_whitespace() {
             expanded.push(SshHost {
                 alias: alias.to_string(),
@@ -261,6 +277,103 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
     }
     expanded.retain(|h| !h.alias.contains('*') && !h.alias.starts_with('!'));
     expanded
+}
+
+/// Un bloc `Host` s'applique-t-il à `alias` ? (sémantique OpenSSH)
+///
+/// Le bloc s'applique si au moins un motif positif correspond ET qu'aucun motif
+/// de négation `!` ne correspond : un `!motif` qui matche annule tout le bloc,
+/// un bloc de négations seules ne matche jamais. La comparaison est insensible à
+/// la casse (`match_pattern_list` avec `dolower=1`) et porte sur l'alias tapé,
+/// pas sur le `HostName`.
+fn bloc_s_applique(motifs: &str, alias: &str) -> bool {
+    let alias = alias.to_ascii_lowercase();
+    let mut positif = false;
+    for jeton in motifs.split_whitespace() {
+        if let Some(negatif) = jeton.strip_prefix('!') {
+            if glob_match(&negatif.to_ascii_lowercase(), &alias) {
+                return false;
+            }
+        } else if glob_match(&jeton.to_ascii_lowercase(), &alias) {
+            positif = true;
+        }
+    }
+    positif
+}
+
+/// Résout un alias en appliquant les valeurs par défaut posées par les blocs à
+/// motif (`Host *`, `Host *.interne`…), comme le fait `ssh <alias>`.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : [`parse_config_str`] jetait les
+/// blocs à joker, si bien qu'un `User`/`IdentityFile`/`Port`/`ProxyJump` posé
+/// dans `Host *` ne s'appliquait pas. Avash résolvait alors l'hôte avec
+/// l'utilisateur courant, sans clé et sur le port 22, là où `ssh` faisait autre
+/// chose — mauvais utilisateur, mot de passe demandé à tort faute de clé, ou
+/// sonde de santé lancée en direct vers un hôte pourtant derrière un rebond.
+///
+/// On reproduit « la première valeur obtenue est retenue » d'OpenSSH : parcours
+/// des blocs dans l'ordre du fichier, en ne remplissant qu'un champ encore
+/// `None`. Un `Host *` placé en fin de fichier (disposition recommandée par le
+/// man) ne peut donc pas écraser un bloc littéral placé avant. On n'hérite que
+/// `user`, `port`, `identity_file` et `proxy_jump` : jamais `hostname` (Avash ne
+/// développe aucun jeton `%h`, un `HostName` de bloc à motif remonterait faux),
+/// ni les conventions Avash `tags`/`folder` (propres au bloc littéral). Comme
+/// chez OpenSSH `IdentityFile` s'accumule et toutes les clés sont tentées alors
+/// que [`SshHost`] n'en garde qu'une, « première valeur » est ici une
+/// approximation acceptable.
+///
+/// Rend `None` si aucun bloc littéral ne déclare exactement `alias` : ce n'est
+/// pas un hôte connu d'Avash.
+#[must_use]
+pub fn resoudre_hote_dans(content: &str, alias: &str) -> Option<SshHost> {
+    let blocs = blocs_bruts(content);
+    let mut resolu = SshHost {
+        alias: alias.to_string(),
+        ..Default::default()
+    };
+    let mut trouve = false;
+    for bloc in &blocs {
+        if !bloc_s_applique(&bloc.alias, alias) {
+            continue;
+        }
+        // Un bloc qui liste EXACTEMENT cet alias est son bloc littéral : lui
+        // seul porte le `HostName` propre de l'hôte et ses conventions Avash.
+        // Un bloc purement à motif ne fournit que les défauts de connexion.
+        if bloc.alias.split_whitespace().any(|jeton| jeton == alias) {
+            trouve = true;
+            if resolu.hostname.is_none() {
+                resolu.hostname.clone_from(&bloc.hostname);
+            }
+            if resolu.tags.is_empty() {
+                resolu.tags.clone_from(&bloc.tags);
+            }
+            if resolu.folder.is_empty() {
+                resolu.folder.clone_from(&bloc.folder);
+            }
+        }
+        if resolu.user.is_none() {
+            resolu.user.clone_from(&bloc.user);
+        }
+        if resolu.port.is_none() {
+            resolu.port = bloc.port;
+        }
+        if resolu.identity_file.is_none() {
+            resolu.identity_file.clone_from(&bloc.identity_file);
+        }
+        if resolu.proxy_jump.is_none() {
+            resolu.proxy_jump.clone_from(&bloc.proxy_jump);
+        }
+    }
+    trouve.then_some(resolu)
+}
+
+/// Comme [`resoudre_hote_dans`], en lisant `~/.ssh/config` (Include résolus).
+#[must_use]
+pub fn resoudre_hote(alias: &str) -> Option<SshHost> {
+    let path = ssh_config_path();
+    let content = std::fs::read_to_string(&path).ok()?;
+    let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    resoudre_hote_dans(&resolve_includes(&content, &base, 0), alias)
 }
 
 #[cfg(test)]
@@ -399,11 +512,75 @@ Host db bastion
     }
 
     #[test]
-    fn skips_wildcards() {
+    fn les_blocs_a_motif_sont_absents_de_la_liste_editable() {
+        // La liste éditable ne montre que des hôtes connectables : un bloc à
+        // joker (`Host db*`) n'en est pas un, on ne le liste donc pas. Il n'est
+        // pas ignoré pour autant — ses valeurs par défaut sont appliquées à la
+        // résolution (`resoudre_hote_dans`), comme le fait `ssh`.
         let cfg = "Host db*\n  User admin\nHost prod-1\n  User root";
         let hosts = parse_config_str(cfg);
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0].alias, "prod-1");
+    }
+
+    #[test]
+    fn les_valeurs_par_defaut_de_host_etoile_s_appliquent() {
+        // Trouvé par l'audit du 7 septembre 2026 : un `User`/`IdentityFile` posé
+        // dans `Host *` s'applique à chaque hôte. `parse_config_str` jetait le
+        // bloc à joker, et Avash résolvait `prod` avec l'utilisateur courant et
+        // sans clé, là où `ssh prod` prenait l'utilisateur et la clé du `Host *`.
+        let cfg = "Host *\n  User adrien\n  IdentityFile ~/.ssh/id_ed25519\n\n\
+                   Host prod\n  HostName 10.0.0.1\n";
+        let h = resoudre_hote_dans(cfg, "prod").expect("prod est un hôte littéral");
+        assert_eq!(h.user.as_deref(), Some("adrien"));
+        assert_eq!(h.identity_file.as_deref(), Some("~/.ssh/id_ed25519"));
+        assert_eq!(h.hostname.as_deref(), Some("10.0.0.1"));
+        // Le tilde n'est PAS développé ici : la résolution le laisse au fichier,
+        // les appelants (Target::from_alias…) appellent `developper_tilde`. Le
+        // port reste vide, le défaut 22 étant appliqué par les appelants.
+        assert_eq!(h.port, None);
+    }
+
+    #[test]
+    fn la_premiere_valeur_obtenue_est_retenue() {
+        // Ordre du fichier : `Host *` en tête pose `User root` AVANT que le bloc
+        // littéral `Host prod` ne pose `User adrien`. OpenSSH retient la première
+        // valeur obtenue : root l'emporte.
+        let cfg = "Host *\n  User root\n\nHost prod\n  HostName 10.0.0.1\n  User adrien\n";
+        assert_eq!(
+            resoudre_hote_dans(cfg, "prod").unwrap().user.as_deref(),
+            Some("root"),
+            "première valeur = Host *"
+        );
+        // Bloc littéral d'abord : c'est lui qui l'emporte alors (disposition
+        // recommandée par le man, `Host *` en fin de fichier).
+        let cfg2 = "Host prod\n  HostName 10.0.0.1\n  User adrien\n\nHost *\n  User root\n";
+        assert_eq!(
+            resoudre_hote_dans(cfg2, "prod").unwrap().user.as_deref(),
+            Some("adrien"),
+            "le bloc littéral vient avant"
+        );
+    }
+
+    #[test]
+    fn un_motif_de_negation_annule_le_bloc() {
+        // `Host !prod *` : le `!prod` matche `prod` et annule tout le bloc, donc
+        // `prod` n'hérite pas de son `User`. Un autre hôte, lui, en hérite.
+        let cfg = "Host !prod *\n  User root\n\nHost prod\n  HostName 10.0.0.1\n\n\
+                   Host web\n  HostName 10.0.0.2\n";
+        assert_eq!(resoudre_hote_dans(cfg, "prod").unwrap().user, None);
+        assert_eq!(
+            resoudre_hote_dans(cfg, "web").unwrap().user.as_deref(),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn un_alias_inconnu_ne_se_resout_pas() {
+        // Sans bloc littéral, ce n'est pas un hôte connu d'Avash, même si
+        // `Host *` le couvrirait : `resoudre_hote` rend alors `None`.
+        let cfg = "Host *\n  User root\n";
+        assert!(resoudre_hote_dans(cfg, "inexistant").is_none());
     }
 }
 
@@ -480,7 +657,20 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
         }
     }
 
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    // Trouvé par l'audit du 7 septembre 2026 : un `unwrap_or_default()` ici
+    // avalait l'erreur de lecture d'un `~/.ssh/config` existant mais non UTF-8
+    // (un commentaire Latin-1 `# R\xe9seau` d'un vieil éditeur). `existing`
+    // devenait vide, le contrôle d'unicité ne voyait plus aucun alias (doublon
+    // possible) et, le fichier étant cru vide, le bloc était collé au dernier
+    // octet, soudant `Host x` à la directive précédente si elle ne finissait
+    // pas par un saut de ligne. Seul `NotFound` (fichier absent) vaut `""` ;
+    // toute autre erreur est propagée comme le font `remove_host` et
+    // `parse_ssh_config`.
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(anyhow::anyhow!("Lecture de {} : {e}", path.display())),
+    };
     // Unicité vérifiée sur la configuration COMPLÈTE, Include résolus : sinon on
     // ajoutait un second bloc pour un alias déjà déclaré dans un fichier inclus.
     // OpenSSH retenant la première occurrence, les modifications ultérieures
@@ -544,6 +734,21 @@ pub fn remove_host(alias: &str) -> anyhow::Result<()> {
     let mut out = String::with_capacity(content.len());
     let mut skipping = false;
     let mut removed = false;
+    // Trouvé par l'audit du 7 septembre 2026 : le saut du bloc emportait les
+    // lignes vides et les commentaires libres qui le SUIVENT, alors que dans une
+    // config éditée à la main ils annoncent le bloc suivant (« # Staging » avant
+    // `Host staging`) ; la docstring promettait pourtant de les garder. On les
+    // met en tampon : réémis au prochain `Host`/`Match` ou en fin de fichier,
+    // mais jetés (donc supprimés avec le bloc) dès qu'une directive du bloc sauté
+    // suit. Les marqueurs Avash `#Tags:`/`#Folder:` appartiennent au bloc et
+    // partent avec lui.
+    let mut tampon: Vec<&str> = Vec::new();
+    let vider = |out: &mut String, tampon: &mut Vec<&str>| {
+        for l in tampon.drain(..) {
+            out.push_str(l);
+            out.push('\n');
+        }
+    };
     for line in content.lines() {
         let trimmed = line.trim_start();
         let (key, value) = trimmed
@@ -555,19 +760,38 @@ pub fn remove_host(alias: &str) -> anyhow::Result<()> {
             // Un bloc Host commence : on saute celui qui matche exactement.
             // Les alias multiples (`Host a b`) : on ne retire que si l'alias
             // vise est le seul du bloc — sinon on toucherait aux autres.
-            skipping = value.split_whitespace().eq(std::iter::once(alias));
-            if skipping {
+            let matche = value.split_whitespace().eq(std::iter::once(alias));
+            // Ce que le tampon gardait annonçait ce nouveau bloc (ou la fin du
+            // bloc précédent non supprimé) : on le rend avant de décider.
+            vider(&mut out, &mut tampon);
+            skipping = matche;
+            if matche {
                 removed = true;
                 continue;
             }
         } else if key_lower == "match" {
+            vider(&mut out, &mut tampon);
             skipping = false;
         }
-        if !skipping {
-            out.push_str(line);
-            out.push('\n');
+        if skipping {
+            if trimmed.is_empty()
+                || (trimmed.starts_with('#') && !is_tags_comment(line) && !is_folder_comment(line))
+            {
+                // Vide ou commentaire libre : peut annoncer le bloc suivant.
+                tampon.push(line);
+            } else {
+                // Directive du bloc sauté (marqueur Avash compris) : ce qui était
+                // en tampon lui était intérieur, on le jette avec.
+                tampon.clear();
+            }
+            continue;
         }
+        out.push_str(line);
+        out.push('\n');
     }
+    // Bloc cible en fin de fichier : le tampon garde d'éventuels commentaires ou
+    // lignes vides de fin qui n'appartiennent pas au bloc supprimé.
+    vider(&mut out, &mut tampon);
 
     if !removed {
         return Err(anyhow::anyhow!(
@@ -621,11 +845,23 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
     // Directives du bloc cible qu'Avash ne régénère pas : on les reconduit après
     // le bloc réécrit, au lieu de les perdre.
     let mut preserves: Vec<&str> = Vec::new();
-    // Émet le bloc cible (régénéré) suivi de ses directives préservées.
-    let emettre = |out: &mut String, preserves: &mut Vec<&str>| {
+    // Trouvé par l'audit du 7 septembre 2026 : lignes vides et commentaires
+    // libres en attente. À la FIN du bloc ils séparent/annoncent le bloc suivant
+    // (la note « # Staging » avant `Host staging`, la ligne vide de séparation)
+    // et doivent lui rester ; suivis d'une autre directive du bloc, ils lui sont
+    // intérieurs (commentaires reconduits, lignes vides régénérées). Sans ce
+    // tampon, le séparateur était avalé et le bloc réécrit se collait au suivant.
+    let mut tampon: Vec<&str> = Vec::new();
+    // Émet le bloc cible (régénéré), ses directives préservées, puis le tampon de
+    // fin (séparateur et commentaire annonçant le bloc suivant).
+    let emettre = |out: &mut String, preserves: &mut Vec<&str>, tampon: &mut Vec<&str>| {
         out.push_str(render_host_block(host).trim_end());
         out.push('\n');
         for l in preserves.drain(..) {
+            out.push_str(l);
+            out.push('\n');
+        }
+        for l in tampon.drain(..) {
             out.push_str(l);
             out.push('\n');
         }
@@ -640,7 +876,7 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
         if key_lower == "host" {
             // Un nouveau bloc met fin au bloc cible : on l'émet d'abord.
             if skipping {
-                emettre(&mut out, &mut preserves);
+                emettre(&mut out, &mut preserves, &mut tampon);
                 skipping = false;
             }
             if value.split_whitespace().eq(std::iter::once(old_alias)) {
@@ -649,13 +885,28 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
                 continue;
             }
         } else if key_lower == "match" && skipping {
-            emettre(&mut out, &mut preserves);
+            emettre(&mut out, &mut preserves, &mut tampon);
             skipping = false;
         }
         if skipping {
-            // Ligne interne au bloc cible : préservée si Avash ne la régénère pas.
-            if !directive_regeneree(line) {
-                preserves.push(line);
+            if trimmed.is_empty()
+                || (trimmed.starts_with('#') && !is_tags_comment(line) && !is_folder_comment(line))
+            {
+                // Vide ou commentaire libre : en attente, on ne tranche entre
+                // « intérieur » et « annonce du bloc suivant » qu'à la ligne d'après.
+                tampon.push(line);
+            } else {
+                // Directive réelle (ou marqueur Avash) : le bloc continue, donc le
+                // tampon lui est intérieur — commentaires reconduits, vides jetés.
+                for l in tampon.drain(..) {
+                    if !l.trim().is_empty() {
+                        preserves.push(l);
+                    }
+                }
+                // Ligne interne au bloc cible : préservée si Avash ne la régénère pas.
+                if !directive_regeneree(line) {
+                    preserves.push(line);
+                }
             }
             continue;
         }
@@ -664,7 +915,7 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
     }
     // Bloc cible en fin de fichier : rien après lui ne l'a émis.
     if skipping {
-        emettre(&mut out, &mut preserves);
+        emettre(&mut out, &mut preserves, &mut tampon);
     }
 
     if !replaced {
@@ -1569,6 +1820,40 @@ Host autre
     }
 
     #[test]
+    fn append_host_refuse_une_config_non_lisible_au_lieu_de_l_abimer() {
+        // Trouvé par l'audit du 7 septembre 2026 : un `~/.ssh/config` non UTF-8
+        // (commentaire Latin-1 `# R\xe9seau` d'un vieil éditeur) et sans saut de
+        // ligne final. Avec l'ancien `unwrap_or_default()`, `existing` devenait
+        // vide : le contrôle d'unicité ne voyait plus l'alias `a` (doublon
+        // possible) et le bloc `Host b` se soudait à `IdentityFile ~/.ssh/k`,
+        // cassant la directive pour OpenSSH. `append_host` doit refuser et
+        // laisser le fichier strictement intact.
+        let _h = temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let octets = b"# R\xe9seau\nHost a\n    IdentityFile ~/.ssh/k";
+        std::fs::write(&path, octets).unwrap();
+        let e = append_host(&host("b")).unwrap_err().to_string();
+        assert!(e.contains("Lecture de"), "message inattendu : {e}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            octets,
+            "le fichier illisible a été modifié"
+        );
+    }
+
+    #[test]
+    fn append_host_cree_le_fichier_absent_sans_erreur() {
+        // Garde-fou du correctif ci-dessus : seul `NotFound` vaut `""`. Sur un
+        // fichier absent (cas normal du premier hôte), l'écriture doit réussir.
+        let _h = temp_home();
+        let path = ssh_config_path();
+        assert!(!path.exists());
+        append_host(&host("premier")).unwrap();
+        assert_eq!(parse_ssh_config().unwrap().len(), 1);
+    }
+
+    #[test]
     fn append_host_voit_les_alias_declares_dans_un_include() {
         let _h = temp_home();
         let ssh = repertoire_personnel().unwrap().join(".ssh");
@@ -1854,6 +2139,83 @@ Host autre
         assert!(e.contains("introuvable"), "{e}");
     }
 
+    #[test]
+    fn remove_host_garde_le_commentaire_qui_annonce_le_bloc_suivant() {
+        // Trouvé par l'audit du 7 septembre 2026 : le saut du bloc retiré
+        // emportait la ligne vide et le commentaire qui SUIT le bloc, alors
+        // qu'ils annoncent le bloc suivant (« # Staging » avant `Host staging`).
+        // La note se perdait et « # Prod » coiffait alors staging.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "# Prod\nHost prod\n  HostName 1\n\n# Staging — accès via Jean, clé chez ops\nHost staging\n  HostName 2\n",
+        )
+        .unwrap();
+
+        remove_host("prod").unwrap();
+
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            apres.contains("# Staging — accès via Jean, clé chez ops\nHost staging"),
+            "la note sur staging doit rester devant son bloc :\n{apres}"
+        );
+        assert!(
+            !apres.contains("HostName 1"),
+            "prod aurait dû partir :\n{apres}"
+        );
+    }
+
+    #[test]
+    fn remove_host_emporte_les_marqueurs_avash_du_bloc() {
+        // Complément du cas précédent : un `#Tags:` non indenté que le parseur
+        // rattache à prod (jusqu'au prochain Host/Match) doit partir AVEC prod,
+        // sans que le tampon ne le prenne pour l'annonce du bloc suivant.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "Host prod\n  HostName 1\n#Tags: x\n\n# Staging note\nHost staging\n  HostName 2\n",
+        )
+        .unwrap();
+
+        remove_host("prod").unwrap();
+
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !apres.contains("#Tags: x"),
+            "le marqueur Avash aurait dû partir :\n{apres}"
+        );
+        assert!(
+            apres.contains("# Staging note\nHost staging"),
+            "l'annonce de staging doit rester :\n{apres}"
+        );
+    }
+
+    #[test]
+    fn remove_host_garde_un_commentaire_de_fin_de_fichier() {
+        // Bloc en fin de fichier suivi d'un commentaire : le tampon est réémis à
+        // la fin, le commentaire survit à la suppression du dernier bloc.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "Host last\n  HostName x\n\n# fin\n").unwrap();
+
+        remove_host("last").unwrap();
+
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            apres.contains("# fin"),
+            "commentaire de fin perdu :\n{apres}"
+        );
+        assert!(
+            !apres.contains("HostName x"),
+            "last aurait dû partir :\n{apres}"
+        );
+    }
+
     // ---------- update_host ----------
 
     #[test]
@@ -1964,6 +2326,42 @@ Host autre
         assert_eq!(
             parse_ssh_config().unwrap()[0].user.as_deref(),
             Some("change")
+        );
+    }
+
+    #[test]
+    fn update_host_garde_le_commentaire_qui_annonce_le_bloc_suivant() {
+        // Trouvé par l'audit du 7 septembre 2026 : comme `remove_host`,
+        // `update_host` avalait la ligne vide séparant le bloc réécrit du suivant
+        // (le bloc rendu se collait à `Host staging`) et déplaçait la note qui
+        // annonce staging. Le tampon de fin la garde devant son bloc.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "# Prod\nHost prod\n  HostName 1\n\n# Staging — accès via Jean, clé chez ops\nHost staging\n  HostName 2\n",
+        )
+        .unwrap();
+
+        let mut modifie = host("prod");
+        modifie.hostname = Some("9.9.9.9".into());
+        update_host("prod", &modifie).unwrap();
+
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            apres.contains("# Staging — accès via Jean, clé chez ops\nHost staging"),
+            "la note sur staging doit rester devant son bloc :\n{apres}"
+        );
+        // Le bloc réécrit ne se colle plus à staging : une ligne vide sépare
+        // encore les deux blocs.
+        assert!(
+            apres.contains("\n\n# Staging"),
+            "le séparateur entre les deux blocs a été avalé :\n{apres}"
+        );
+        assert_eq!(
+            parse_ssh_config().unwrap()[0].hostname.as_deref(),
+            Some("9.9.9.9")
         );
     }
 }
@@ -2081,7 +2479,11 @@ Host *
                 }
             }
         }
-        // Le parseur reçoit une `&str` : ce que `read_to_string` aurait rendu.
+        // Le parseur reçoit une `&str` (conversion lossy des octets mutés). À ne
+        // pas confondre avec `read_to_string`, qui n'est PAS lossy : il rend
+        // `Err(InvalidData)` sur un octet non UTF-8. Ce banc n'exerce donc que
+        // `parse_config_str`, pas le vrai comportement de lecture ; le refus
+        // d'un `config` non UTF-8 est couvert par les tests de `save_tests`.
         String::from_utf8_lossy(&octets).into_owned()
     }
 

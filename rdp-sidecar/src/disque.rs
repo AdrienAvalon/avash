@@ -332,8 +332,29 @@ impl Lecteur {
             ));
         }
 
+        // Trouvé par l'audit du 7 septembre 2026 : un fichier spécial (FIFO,
+        // socket, périphérique) dans le dossier partagé figeait tout le fil du
+        // lecteur. `metadata`/`stat` ne bloque pas et voit son type, mais
+        // `open(O_RDONLY)` sur une FIFO attend un écrivain (Steam pose
+        // `~/.steam/steam.pipe`) : l'explorateur qui l'ouvre pour son icône
+        // bloquait l'unique fil, sans réponse pour le reste de la session.
+        // Seuls fichier régulier et dossier (déjà traité plus haut) sont
+        // ouverts ; le reste est refusé avant tout `open`.
+        if existant.as_ref().is_some_and(|m| !m.is_file()) {
+            return Err(NtStatus::ACCESS_DENIED);
+        }
+
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(ecriture);
+        // Défense en profondeur (même audit) : O_NOFOLLOW ne suit jamais un
+        // lien en dernier composant (déjà refusé par `resoudre`) et O_NONBLOCK
+        // évite qu'une FIFO ayant échappé au filtre ci-dessus ne bloque le fil.
+        // Sur un fichier régulier ces drapeaux n'ont aucun effet sur la lecture.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+        }
         let information = match disposition {
             CreateDisposition::FILE_OPEN => {
                 if !existe {
@@ -599,9 +620,16 @@ impl Lecteur {
                 .filter_map(Result::ok)
                 .filter_map(|e| {
                     let nom = e.file_name().to_string_lossy().into_owned();
-                    // Un lien est décrit tel quel (sans le suivre) : lister
-                    // n'expose rien, l'ouverture, elle, le refusera.
+                    // `metadata` d'une entrée ne suit pas les liens.
                     let meta = e.metadata().ok()?;
+                    // Trouvé par l'audit du 7 septembre 2026 : seuls fichiers
+                    // réguliers et dossiers sont exposés, par cohérence avec
+                    // `preparer_offre` (fichiers.rs) et parce que le reste
+                    // (liens, FIFO, sockets, périphériques) est de toute façon
+                    // refusé à l'ouverture par `ouvrir`.
+                    if !meta.is_file() && !meta.is_dir() {
+                        return None;
+                    }
                     correspond(motif, &nom).then_some(Entree { nom, meta })
                 })
                 .collect();
@@ -750,7 +778,26 @@ impl Lecteur {
                     if let Ok(meta) = std::fs::metadata(&o.chemin) {
                         let mut droits = meta.permissions();
                         if droits.readonly() != lecture_seule {
-                            #[allow(clippy::permissions_set_readonly_false)]
+                            // Trouvé par l'audit du 7 septembre 2026 : sous Unix,
+                            // `set_readonly(false)` fait `mode |= 0o222`, ce qui
+                            // ouvre l'écriture au groupe et aux autres (le lint
+                            // `permissions_set_readonly_false`). Un `budget.ods`
+                            // partagé en 0444 devenait 0666 : tout autre compte
+                            // du poste pouvait le réécrire, alors que SECURITY.md
+                            // promet « ni plus ni moins » que les droits de
+                            // l'utilisateur. On ne touche donc qu'au bit du
+                            // propriétaire ; Windows garde `set_readonly`.
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt as _;
+                                let mode = droits.mode();
+                                droits.set_mode(if lecture_seule {
+                                    mode & !0o200
+                                } else {
+                                    mode | 0o200
+                                });
+                            }
+                            #[cfg(windows)]
                             droits.set_readonly(lecture_seule);
                             let _ = std::fs::set_permissions(&o.chemin, droits);
                         }
@@ -965,18 +1012,43 @@ fn attributs(m: &std::fs::Metadata, nom: &str) -> FileAttributes {
 /// Correspondance de motif DOS (`*`, `?`), sans tenir compte de la casse :
 /// c'est ainsi que le serveur Windows filtre une énumération.
 pub(crate) fn correspond(motif: &str, nom: &str) -> bool {
-    fn rec(m: &[char], n: &[char]) -> bool {
-        match (m.first(), n.first()) {
-            (None, None) => true,
-            (Some('*'), _) => rec(&m[1..], n) || (!n.is_empty() && rec(m, &n[1..])),
-            (Some('?'), Some(_)) => rec(&m[1..], &n[1..]),
-            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b) && rec(&m[1..], &n[1..]),
-            _ => false,
-        }
-    }
+    // Trouvé par l'audit du 7 septembre 2026 : l'ancienne récursion traitait
+    // `*` par `rec(&m[1..], n) || rec(m, &n[1..])` sans mémoïsation, soit un
+    // nombre d'appels en C(n+k, k) pour k étoiles et un nom de n caractères
+    // qui ne correspond pas. Le motif venant du serveur (`req.path`, sans
+    // borne sur le nombre d'étoiles), un `\********z` sur un nom un peu long
+    // figeait pour des heures le fil unique du lecteur, injoignable pour le
+    // reste de la session. Algorithme itératif type `fnmatch` (deux index,
+    // point de reprise sur la dernière `*`) : coût O(n·m), plus aucun
+    // retour arrière exponentiel, mêmes réponses qu'avant.
     let m: Vec<char> = motif.to_lowercase().chars().collect();
     let n: Vec<char> = nom.to_lowercase().chars().collect();
-    rec(&m, &n)
+    let (mut i, mut j) = (0, 0);
+    // Dernière `*` rencontrée et position dans le nom où reprendre après elle.
+    let (mut derniere_etoile, mut reprise) = (None, 0);
+    while j < n.len() {
+        if i < m.len() && (m[i] == '?' || m[i].eq_ignore_ascii_case(&n[j])) {
+            i += 1;
+            j += 1;
+        } else if i < m.len() && m[i] == '*' {
+            derniere_etoile = Some(i);
+            reprise = j;
+            i += 1;
+        } else if let Some(e) = derniere_etoile {
+            // Le littéral qui suivait la `*` a échoué : l'étoile absorbe un
+            // caractère de plus et on repart de juste après elle.
+            i = e + 1;
+            reprise += 1;
+            j = reprise;
+        } else {
+            return false;
+        }
+    }
+    // Le nom est épuisé : le motif ne peut plus contenir que des `*`.
+    while i < m.len() && m[i] == '*' {
+        i += 1;
+    }
+    i == m.len()
 }
 
 /// Numéro de série du volume : dérivé de la racine, stable d'une session à
@@ -1259,6 +1331,49 @@ mod tests {
             (NtStatus::SUCCESS, Information::FILE_OPENED.bits())
         );
         assert_eq!(fermer(&mut l, id), NtStatus::SUCCESS);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : retirer la lecture seule
+    /// (`FileBasicInformation` sans `FILE_ATTRIBUTE_READONLY`, ici via
+    /// `robocopy` recopiant un ARCHIVE seul) ne doit ouvrir l'écriture qu'au
+    /// propriétaire. `set_readonly(false)` faisait `mode |= 0o222` (le lint
+    /// `permissions_set_readonly_false`) : un `budget.ods` 0444 devenait 0666,
+    /// écrasable par tout compte local, à rebours de SECURITY.md (« ni plus ni
+    /// moins » que les droits de l'utilisateur). On exige 0644, pas 0666.
+    #[cfg(unix)]
+    #[test]
+    fn retirer_la_lecture_seule_n_ouvre_que_le_bit_proprietaire() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = bac("lecture-seule");
+        let chemin = d.join("budget.ods");
+        std::fs::write(&chemin, b"donnees").unwrap();
+        std::fs::set_permissions(&chemin, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let mut l = Lecteur::nouveau(&d).unwrap();
+        let (s, id, _) = ouvrir(
+            &mut l,
+            "budget.ods",
+            CreateDisposition::FILE_OPEN,
+            false,
+            false,
+        );
+        assert_eq!(s, NtStatus::SUCCESS);
+
+        // Le serveur pousse les attributs sans READONLY (ARCHIVE seul).
+        let meta = std::fs::metadata(&chemin).unwrap();
+        let mut b = basique(&meta, "budget.ods");
+        b.file_attributes = FileAttributes::FILE_ATTRIBUTE_ARCHIVE;
+        assert_eq!(
+            modifier(&mut l, id, FileInformationClass::Basic(b)),
+            NtStatus::SUCCESS
+        );
+
+        let mode = std::fs::metadata(&chemin).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o644,
+            "seul le propriétaire regagne l'écriture, pas le groupe ni les autres"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1565,6 +1680,73 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Trouvé par l'audit du 7 septembre 2026 : une FIFO (Steam pose
+    /// `~/.steam/steam.pipe` sur un poste de jeu) dans le dossier partagé
+    /// figeait tout le fil du lecteur, car `open(O_RDONLY)` sur une FIFO
+    /// attend un écrivain. On ouvre sur un fil à part avec un délai : une
+    /// régression qui rouvrirait la FIFO bloquerait ce fil et le test
+    /// échouerait au lieu de rendre `ACCESS_DENIED` sans se figer.
+    #[cfg(unix)]
+    #[test]
+    fn une_fifo_dans_le_dossier_partage_ne_bloque_pas_le_lecteur() {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::FileTypeExt as _;
+        let d = bac("fifo");
+        let tube = d.join("steam.pipe");
+        let nom = std::ffi::CString::new(tube.as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(nom.as_ptr(), 0o644) },
+            0,
+            "création de la FIFO"
+        );
+        assert!(
+            std::fs::symlink_metadata(&tube)
+                .unwrap()
+                .file_type()
+                .is_fifo(),
+            "c'est bien une FIFO"
+        );
+
+        // L'ouverture ne doit pas bloquer : on la lance sur un fil et on lui
+        // laisse cinq secondes. Sans le correctif, `open` attend un écrivain
+        // qui ne viendra jamais et `recv_timeout` expire.
+        let d_fil = d.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut l = Lecteur::nouveau(&d_fil).unwrap();
+            let r = ouvrir(
+                &mut l,
+                "\\steam.pipe",
+                CreateDisposition::FILE_OPEN,
+                false,
+                false,
+            );
+            let _ = tx.send(r);
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok((s, id, _)) => {
+                assert_eq!(s, NtStatus::ACCESS_DENIED, "une FIFO se refuse");
+                assert_eq!(id, 0, "aucun descripteur ouvert");
+            }
+            Err(_) => panic!("ouvrir a bloqué sur la FIFO : le fil du lecteur est figé"),
+        }
+
+        // Elle ne figure pas non plus dans l'énumération, comme dans une offre.
+        let mut l = Lecteur::nouveau(&d).unwrap();
+        std::fs::write(d.join("clair.txt"), b"ok").unwrap();
+        let (_, id, _) = ouvrir(&mut l, "\\", CreateDisposition::FILE_OPEN, true, false);
+        let mut noms = vec![enumerer(&mut l, id, "\\*", true).unwrap()];
+        while let Ok(n) = enumerer(&mut l, id, "\\*", false) {
+            noms.push(n);
+        }
+        assert!(
+            !noms.contains(&"steam.pipe".to_owned()),
+            "la FIFO n'est pas exposée : {noms:?}"
+        );
+        assert!(noms.contains(&"clair.txt".to_owned()), "le régulier l'est");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// Motifs DOS : `*` et `?`, casse ignorée.
     #[test]
     fn le_motif_dos_ignore_la_casse() {
@@ -1575,6 +1757,29 @@ mod tests {
         assert!(correspond("*", ".."));
         assert!(!correspond("a*", ".."));
         assert!(correspond("", ""));
+        // Plusieurs étoiles concordantes doivent toujours passer.
+        assert!(correspond("a**b", "axyzb"));
+        assert!(correspond("**", "n'importe"));
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un motif à plusieurs étoiles
+    /// suivi d'un littéral absent (`********z`) sur un nom un peu long faisait
+    /// exploser en C(n+k, k) l'ancienne récursion de `correspond`, figeant le
+    /// fil unique du lecteur pour des heures. On l'évalue sur un fil à part
+    /// avec un délai : sans le correctif itératif, il ne rend jamais et
+    /// `recv_timeout` expire ; avec, il rend `false` instantanément.
+    #[test]
+    fn un_motif_multi_etoiles_non_concordant_ne_fige_pas_le_lecteur() {
+        let nom = "a".repeat(120);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // Huit étoiles : C(128, 8) ≈ 1,4·10¹² appels dans l'ancien code.
+            let _ = tx.send(correspond("********z", &nom));
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(r) => assert!(!r, "le littéral z absent : aucune correspondance"),
+            Err(_) => panic!("`correspond` s'est figé : retour arrière exponentiel du motif"),
+        }
     }
 
     /// Les dates passent en heure Windows ; la taille allouée s'arrondit au bloc.

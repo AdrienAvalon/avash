@@ -12,8 +12,16 @@ pub struct KeyEntry {
     /// Ligne publique complete, telle qu'elle doit atterrir dans
     /// `authorized_keys` cote serveur.
     pub public_line: Option<String>,
-    /// Permissions du fichier prive, en octal (ex. "600").
-    pub mode: String,
+    /// Permissions du fichier prive, en octal (ex. "600"), ou `None` là où le
+    /// système n'a pas de bits de permission (Windows, cibles exotiques) : les
+    /// droits y passent par une ACL et il n'y a pas de « 600 » à afficher.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : rendre une chaîne sentinelle
+    /// « - » hors Unix faisait afficher au front « - ⚠ OpenSSH exige 600 » sur
+    /// chaque clé, y compris une clé qu'Avash venait de restreindre par
+    /// `icacls`. `None` (sérialisé `null`) laisse le front distinguer
+    /// « inconnu » de « incorrect ».
+    pub mode: Option<String>,
 }
 
 /// Repertoire `~/.ssh`, cree au besoin avec les droits qu'OpenSSH exige.
@@ -97,18 +105,24 @@ fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
 }
 
+// Sous Unix, `mode_of` renvoie toujours `Some` ; le `Some` reste nécessaire
+// pour que la signature colle à la variante non-Unix (qui rend `None`) et au
+// champ `KeyEntry.mode`.
 #[cfg(unix)]
-fn mode_of(path: &Path) -> String {
+#[allow(clippy::unnecessary_wraps)]
+fn mode_of(path: &Path) -> Option<String> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).map_or_else(
+    Some(std::fs::metadata(path).map_or_else(
         |_| "?".into(),
         |m| format!("{:o}", m.permissions().mode() & 0o777),
-    )
+    ))
 }
 
+/// Hors Unix, il n'y a pas de bits de permission à rendre : `None` plutôt
+/// qu'une sentinelle « - » que le front prenait pour des droits incorrects.
 #[cfg(not(unix))]
-fn mode_of(_path: &Path) -> String {
-    "-".into()
+fn mode_of(_path: &Path) -> Option<String> {
+    None
 }
 
 /// Liste les cles privees de `~/.ssh` (celles qui ont un `.pub` associe).
@@ -406,6 +420,29 @@ mod tests {
     }
     use crate::testutil::temp_home;
 
+    /// Le front (web/cles.ts) décide de l'avertissement « OpenSSH exige 600 »
+    /// sur la valeur JSON de `mode` : `"600"` = correct, toute autre chaîne =
+    /// avertissement, et `null` = pas d'avertissement (droits gérés hors bits
+    /// Unix). Ce test verrouille le contrat de sérialisation qui, hors Unix,
+    /// renvoyait la sentinelle « - » prise à tort pour des droits incorrects
+    /// (audit du 7 septembre 2026). Il tourne sur n'importe quel système.
+    #[test]
+    fn le_mode_absent_se_serialise_en_null_pas_en_sentinelle() {
+        let entree = |mode: Option<&str>| KeyEntry {
+            name: "id".into(),
+            path: "/x/id".into(),
+            public_line: None,
+            mode: mode.map(str::to_owned),
+        };
+        let sans = serde_json::to_value(entree(None)).unwrap();
+        assert!(
+            sans["mode"].is_null(),
+            "mode absent doit être null (et non « - »), sinon le front affiche « ⚠ » : {sans}"
+        );
+        let avec = serde_json::to_value(entree(Some("600"))).unwrap();
+        assert_eq!(avec["mode"], "600", "un mode Unix reste sa chaîne octale");
+    }
+
     #[test]
     fn generate_produit_une_paire_utilisable() {
         let _h = temp_home();
@@ -420,16 +457,17 @@ mod tests {
         // OpenSSH refuse de s'en servir autrement. Ce qu'on peut en vérifier
         // dépend du système.
         #[cfg(unix)]
-        assert_eq!(k.mode, "600", "droits de la clé privée");
+        assert_eq!(k.mode.as_deref(), Some("600"), "droits de la clé privée");
         #[cfg(windows)]
         {
-            // Windows n'a pas de bits de permission : `mode` est un marqueur,
-            // et la restriction passe par une liste de contrôle d'accès qu'on
-            // ne sait pas relire à bon compte. Ce qui est vérifiable, et qui
-            // suffit : `generate` ci-dessus a réussi, or il propage l'échec
-            // d'`icacls` — c'est précisément ce qui a révélé que la ligne de
-            // commande était fausse et que toute génération de clé échouait.
-            assert_eq!(k.mode, "-", "marqueur attendu hors Unix");
+            // Windows n'a pas de bits de permission : `mode` vaut donc `None`
+            // (et non une sentinelle « - » que le front prenait pour des droits
+            // incorrects, affichant « - ⚠ OpenSSH exige 600 » sur une clé qu'il
+            // venait pourtant de restreindre par `icacls`). La restriction passe
+            // par une ACL qu'on ne sait pas relire à bon compte ; ce qui est
+            // vérifiable, et qui suffit : `generate` ci-dessus a réussi, or il
+            // propage l'échec d'`icacls`.
+            assert!(k.mode.is_none(), "aucun mode Unix hors Unix : {:?}", k.mode);
         }
 
         let line = std::fs::read_to_string(&public).unwrap();

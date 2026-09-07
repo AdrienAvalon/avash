@@ -292,14 +292,19 @@ flatpak-builder --user --install --force-clean build-flatpak \
 flatpak run io.github.AdrienAvalon.avash
 ```
 
-Le linter signale trois droits qui demandent une exception, à justifier dans
+Le linter signale cinq droits qui demandent une exception, à justifier dans
 la PR de soumission (dépôt `flathub/flathub`, branche `new-pr`, le manifeste
 et les JSON à la racine) : `--socket=ssh-auth` (l'agent SSH du poste, avec ses
 clés, et prêté le temps d'une copie directe), `--filesystem=home`
 (`~/.ssh/config`, clés, `known_hosts`, transferts SFTP et fichiers RDP dans
-les deux sens) et `--own-name=dev.avash.app` (l'identifiant que Tauri
-enregistre sur D-Bus). Les mises à jour suivantes se font par PR sur le dépôt
-`flathub/io.github.AdrienAvalon.avash` que Flathub crée à l'acceptation.
+les deux sens), `--own-name=dev.avash.app` (l'identifiant que Tauri
+enregistre sur D-Bus), `--socket=pulseaudio` (le son du bureau distant, joué
+par la webview via WebKitGTK/GStreamer, couvre aussi PipeWire) et
+`--device=all` (les consoles série sur `/dev/ttyUSB*` et `/dev/ttyACM*` :
+aucune option `--device=` plus étroite ne cible les tty, permission large que
+le robot Flathub signale, à décrire avec soin). Les mises à jour suivantes se
+font par PR sur le dépôt `flathub/io.github.AdrienAvalon.avash` que Flathub
+crée à l'acceptation.
 
 **La soumission est un geste du mainteneur en personne.** Le modèle de PR de
 Flathub porte une liste à cocher que son robot exige complète (une première

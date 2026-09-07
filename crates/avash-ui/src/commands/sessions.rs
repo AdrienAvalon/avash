@@ -54,10 +54,13 @@ pub type OuvreurSftp = std::sync::Arc<
         + Sync,
 >;
 
-/// Exécute une commande sur la session d'un onglet ; rend sortie et code.
+/// Exécute une commande sur la session d'un onglet ; rend sortie et code. Le
+/// second argument est le drapeau d'annulation de la copie directe (voir
+/// `run_avec_agent`) : `None` quand la commande n'est pas interruptible.
 pub type Executeur = std::sync::Arc<
     dyn Fn(
             String,
+            Option<avash::sftp::Annulation>,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<(String, u32), String>> + Send>,
         > + Send
@@ -131,7 +134,12 @@ impl std::fmt::Debug for Target {
 impl Target {
     /// Resout un alias declare dans `~/.ssh/config`.
     pub(crate) fn from_alias(alias: &str) -> Result<Self, String> {
-        let host = find_host(alias)?;
+        // `resoudre_hote` (et non `find_host`) : la connexion doit appliquer les
+        // valeurs par défaut d'un bloc à motif (`Host *`), comme `ssh <alias>`.
+        // `find_host` reste brut pour le formulaire d'édition, qui ne doit pas
+        // matérialiser les valeurs héritées dans le bloc littéral.
+        let host =
+            avash::resoudre_hote(alias).ok_or_else(|| format!("Hôte introuvable : {alias}"))?;
         let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
         let port = host.port.unwrap_or(22);
         let user = host
@@ -232,13 +240,14 @@ fn resolve_jumps(
     let Some(spec) = proxy_jump else {
         return Vec::new();
     };
-    let hosts = parse_ssh_config().unwrap_or_default();
     avash::split_proxy_jump(spec)
         .into_iter()
         .map(|hop| {
-            // Un maillon sans user ni port explicite peut etre un alias.
+            // Un maillon sans user ni port explicite peut être un alias. On le
+            // résout comme la cible (`resoudre_hote`) pour qu'un bastion sans
+            // `User` propre hérite de celui du `Host *`, comme `ssh`.
             let alias = if hop.user.is_none() && hop.port.is_none() {
-                hosts.iter().find(|h| h.alias == hop.host)
+                avash::resoudre_hote(&hop.host)
             } else {
                 None
             };
@@ -377,12 +386,24 @@ pub(crate) fn is_superseded<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epo
 ///
 /// La session est tenue le temps de la sonde : une ouverture de panneau SFTP
 /// demandée pendant ces quelques centaines de millisecondes attend son tour.
+///
+/// Le délai est passé À `run_borne`, non posé par-dessus avec un `timeout`.
+/// Trouvé par l'audit du 7 septembre 2026 : un `timeout` externe bornait
+/// l'attente mais laissait le canal ouvert à l'échéance, et un serveur qui
+/// débite lentement continuait d'inonder la session longue de l'onglet. En
+/// bornant à l'intérieur, `run_borne` ferme le canal avant de rendre, ce qui
+/// coupe le flux ; le verrou de session reste pris DANS la fonction bornée, il
+/// est donc bien relâché à l'échéance.
 async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &SessionPartagee) {
-    let probe = tokio::time::timeout(std::time::Duration::from_secs(4), async {
-        session.lock().await.run(avash::osinfo::PROBE_COMMAND).await
-    })
-    .await;
-    if let Ok(Ok((out, _))) = probe {
+    let probe = session
+        .lock()
+        .await
+        .run_borne(
+            avash::osinfo::PROBE_COMMAND,
+            std::time::Duration::from_secs(4),
+        )
+        .await;
+    if let Ok((out, _)) = probe {
         if let Some(os) = avash::osinfo::parse_probe_output(&out) {
             let _ = app.emit(
                 "host-os",
@@ -405,12 +426,41 @@ pub(crate) fn clore_session<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epo
     if is_superseded(app, sid, epoch) {
         return;
     }
-    app.state::<SessionStore>()
+    let retire = app
+        .state::<SessionStore>()
         .inner
         .lock()
         .unwrap()
         .remove(&sid);
+    if let Some(h) = retire {
+        finaliser_enregistrement(app, sid, &h.enregistreur);
+    }
     let _ = app.emit("pty-closed", serde_json::json!({ "id": sid }));
+}
+
+/// Ferme proprement l'enregistrement d'un onglet qu'on quitte, et signale au
+/// front si le fichier est resté incomplet.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : fermer un onglet (fin de session
+/// ou `pty_close`) se contentait de retirer la session ; l'enregistreur était
+/// alors seulement *lâché*, et le `Drop` de son `BufWriter` avale l'erreur de
+/// vidage. Le front promet pourtant « fermer l'onglet ferme le fichier » : on
+/// appelle donc `arreter()` explicitement pour récupérer l'erreur éventuelle.
+pub(crate) fn finaliser_enregistrement<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    sid: u64,
+    enregistreur: &Enregistrement,
+) {
+    let pris = enregistreur.lock().unwrap().take();
+    if let Some(e) = pris {
+        let chemin = e.chemin().display().to_string();
+        if let Err(err) = e.arreter() {
+            let _ = app.emit(
+                "enregistrement-erreur",
+                serde_json::json!({ "id": sid, "chemin": chemin, "erreur": format!("{err:#}") }),
+            );
+        }
+    }
 }
 
 /// Enregistre la session, ou signale qu'on l'a annulée entre-temps.
@@ -492,12 +542,12 @@ fn ouvreur_sftp(session: &SessionPartagee) -> OuvreurSftp {
 /// autre). Le verrou de la session n'est tenu que pour ouvrir le canal.
 fn executeur(session: &SessionPartagee) -> Executeur {
     let session = session.clone();
-    std::sync::Arc::new(move |commande: String| {
+    std::sync::Arc::new(move |commande: String, annulation| {
         let session = session.clone();
         Box::pin(async move {
             let garde = session.lock().await;
             garde
-                .run_avec_agent(&commande)
+                .run_avec_agent(&commande, annulation.as_ref())
                 .await
                 .map_err(|e| format!("{e:#}"))
         })
@@ -512,8 +562,8 @@ fn executeur(session: &SessionPartagee) -> Executeur {
 /// et une écriture xterm. On les regroupe donc sur une courte fenêtre :
 /// le débit s'effondre en nombre de messages sans que la latence devienne
 /// perceptible (`COALESCE_MS` reste sous la durée d'une image à 60 Hz).
-pub(crate) async fn relayer_sortie(
-    app2: &AppHandle,
+pub(crate) async fn relayer_sortie<R: tauri::Runtime>(
+    app2: &AppHandle<R>,
     sid: u64,
     mut out_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     enregistreur: Enregistrement,
@@ -553,8 +603,29 @@ pub(crate) async fn relayer_sortie(
         }
         // L'enregistrement reçoit le texte tel qu'il arrive, avant le
         // regroupement : les temps du fichier sont ceux du serveur.
-        if let Some(e) = enregistreur.lock().unwrap().as_mut() {
-            let _ = e.sortie(&text);
+        //
+        // Trouvé par l'audit du 7 septembre 2026 : sur une écriture refusée
+        // (disque plein), on ne se contente plus de l'avaler — sinon le voyant
+        // « rec » restait allumé et « Enregistrement terminé » mentait. On
+        // retire l'enregistreur et on prévient le front, qui éteint le voyant.
+        let echec = {
+            let mut slot = enregistreur.lock().unwrap();
+            let mut echec = None;
+            if let Some(e) = slot.as_mut() {
+                if let Err(err) = e.sortie(&text) {
+                    echec = Some((e.chemin().display().to_string(), format!("{err:#}")));
+                }
+            }
+            if echec.is_some() {
+                *slot = None;
+            }
+            echec
+        };
+        if let Some((chemin, erreur)) = echec {
+            let _ = app2.emit(
+                "enregistrement-erreur",
+                serde_json::json!({ "id": sid, "chemin": chemin, "erreur": erreur }),
+            );
         }
         buffer.push_str(&text);
 
@@ -769,7 +840,8 @@ pub async fn pty_write(
 
 /// Redimensionne le PTY (resize fenêtre / onglet) — `window_change` SSH.
 #[tauri::command]
-pub async fn pty_resize(
+pub async fn pty_resize<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: tauri::State<'_, SessionStore>,
     id: u64,
     cols: u32,
@@ -782,8 +854,28 @@ pub async fn pty_resize(
     let resize = resize.ok_or_else(|| format!("Session {id} inconnue"))?;
     let _ = resize.send((cols, rows)).await;
     if let Some(e) = enregistreur_de(&state, id) {
-        if let Some(enr) = e.lock().unwrap().as_mut() {
-            let _ = enr.redimension(cols, rows);
+        // Même traitement que le pump : un redimensionnement écrit lui aussi
+        // dans l'enregistrement, une écriture refusée doit le condamner et être
+        // signalée, sinon `pty_resize` restait le seul à continuer d'écrire
+        // dans un enregistreur déjà mort. Trouvé par l'audit du 7 septembre 2026.
+        let echec = {
+            let mut slot = e.lock().unwrap();
+            let mut echec = None;
+            if let Some(enr) = slot.as_mut() {
+                if let Err(err) = enr.redimension(cols, rows) {
+                    echec = Some((enr.chemin().display().to_string(), format!("{err:#}")));
+                }
+            }
+            if echec.is_some() {
+                *slot = None;
+            }
+            echec
+        };
+        if let Some((chemin, erreur)) = echec {
+            let _ = app.emit(
+                "enregistrement-erreur",
+                serde_json::json!({ "id": id, "chemin": chemin, "erreur": erreur }),
+            );
         }
     }
     Ok(())

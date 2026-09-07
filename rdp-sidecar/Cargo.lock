@@ -1561,8 +1561,6 @@ dependencies = [
 [[package]]
 name = "ironrdp-svc"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24c36b82ab0f7fef2668fb7004008a0f3c100a3d9a7b18bd4495a71aba55b796"
 dependencies = [
  "bitflags 2.13.1",
  "ironrdp-core",

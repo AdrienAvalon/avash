@@ -68,6 +68,22 @@ fn main() {
             // SAFETY: idem, avant tout démarrage de fil ou de WebKit.
             unsafe { std::env::remove_var("WEBKIT_INSPECTOR_SERVER") };
         }
+        // Trouvé par l'audit du 7 septembre 2026 : la même WebKitGTK honore aussi
+        // WEBKIT_INSPECTOR_HTTP_SERVER=adresse:port, qui ouvre un serveur HTTP
+        // d'inspection distante (pilotable depuis n'importe quel navigateur, et
+        // rien n'impose une adresse de bouclage). Dans webkitInitialize elle est
+        // même testée AVANT WEBKIT_INSPECTOR_SERVER : ne retirer que cette
+        // dernière ne fermait donc rien quand les deux étaient héritées. On la
+        // retire, elle aussi. SANS l'exception WebDriver, contrairement à
+        // WEBKIT_INSPECTOR_SERVER : WebKitWebDriver ne pose jamais la variante
+        // HTTP (littéral absent de `strings /usr/bin/WebKitWebDriver`), donc la
+        // garder sous pilotage n'exposerait le port que pour rien.
+        if retirer_inspecteur_http_webkit(
+            std::env::var_os("WEBKIT_INSPECTOR_HTTP_SERVER").is_some(),
+        ) {
+            // SAFETY: idem, avant tout démarrage de fil ou de WebKit.
+            unsafe { std::env::remove_var("WEBKIT_INSPECTOR_HTTP_SERVER") };
+        }
     }
 
     // Windows : WebView2 compose par le GPU, dont la surface est virtualisée par
@@ -145,6 +161,19 @@ fn retirer_inspecteur_webkit(herite: bool, automatisation: bool) -> bool {
     herite && !automatisation
 }
 
+/// Faut-il retirer `WEBKIT_INSPECTOR_HTTP_SERVER` de l'environnement ? Oui dès
+/// qu'une valeur est héritée, SANS exception de pilotage : contrairement à
+/// `WEBKIT_INSPECTOR_SERVER`, `WebKitWebDriver` ne pose jamais cette variante
+/// HTTP (littéral absent de son binaire), donc la garder sous pilotage
+/// n'ouvrirait le serveur d'inspection HTTP que pour rien. Aucun drapeau
+/// `automatisation` ici, à dessein.
+///
+/// Pur : aucun accès à l'environnement, testable sur toute plateforme.
+#[cfg(any(target_os = "linux", test))]
+fn retirer_inspecteur_http_webkit(herite: bool) -> bool {
+    herite
+}
+
 /// Ce qu'il faut faire de `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`.
 #[cfg(any(target_os = "windows", test))]
 #[derive(Debug, PartialEq, Eq)]
@@ -189,7 +218,9 @@ fn action_webview2(herite: bool, distante: bool, automatisation: bool) -> Action
 
 #[cfg(test)]
 mod tests {
-    use super::{action_webview2, retirer_inspecteur_webkit, ActionWebview2};
+    use super::{
+        action_webview2, retirer_inspecteur_http_webkit, retirer_inspecteur_webkit, ActionWebview2,
+    };
 
     #[test]
     fn l_inspecteur_webkit_herite_est_retire_hors_pilotage() {
@@ -203,6 +234,17 @@ mod tests {
         // variable posée par WebKitWebDriver étant retirée avant WebKit.
         assert!(!retirer_inspecteur_webkit(true, true));
         assert!(!retirer_inspecteur_webkit(false, true));
+    }
+
+    #[test]
+    fn l_inspecteur_http_herite_est_retire_meme_sous_pilotage() {
+        // Trouvé par l'audit du 7 septembre 2026 : WEBKIT_INSPECTOR_HTTP_SERVER
+        // ouvre le même débogueur distant (en HTTP) et n'était pas retirée. Elle
+        // se retire dès qu'elle est héritée, y compris sous pilotage WebDriver :
+        // WebKitWebDriver ne pose jamais cette variante (littéral absent de son
+        // binaire), donc pas d'exception d'automatisation à lui accorder.
+        assert!(retirer_inspecteur_http_webkit(true));
+        assert!(!retirer_inspecteur_http_webkit(false));
     }
 
     #[test]

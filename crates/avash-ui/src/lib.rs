@@ -46,7 +46,7 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             commands::list_hosts,
-            commands::emballage_gere_ses_mises_a_jour,
+            commands::canal_de_mise_a_jour,
             commands::open_external,
             commands::keyboard_locks,
             commands::pty_open,

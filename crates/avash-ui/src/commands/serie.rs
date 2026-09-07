@@ -55,7 +55,7 @@ pub async fn serie_open(
             ouvrir_sftp: std::sync::Arc::new(|| {
                 Box::pin(async { Err("Pas de SFTP sur un port série.".to_owned()) })
             }),
-            executer: std::sync::Arc::new(|_| {
+            executer: std::sync::Arc::new(|_, _| {
                 Box::pin(async {
                     Err("Pas de commande à distance sur un port série.".to_owned())
                 })

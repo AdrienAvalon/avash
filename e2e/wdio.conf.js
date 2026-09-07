@@ -56,7 +56,7 @@ const APP = join(import.meta.dirname, "..", "target", "release", WINDOWS ? "avas
 // donne le répertoire de configuration interroge le shell et ignore les deux
 // autres. Sans cette variable, la suite écrirait dans les fichiers RÉELS de
 // l'utilisateur — config SSH et fichier de confiance RDP.
-const ENV_APP = {
+export const ENV_APP = {
   ...process.env,
   HOME: sandbox,
   AVASH_HOME: sandbox,
@@ -72,6 +72,18 @@ const ENV_APP = {
   // alors la langue avant le premier script (AVASH_LANGUE).
   AVASH_LANGUE: "fr",
   XDG_CONFIG_HOME: join(sandbox, ".config"),
+  // Trouvé par l'audit du 7 septembre 2026 : la webview range plusieurs
+  // réglages dans son stockage web (avash.langue, qui PRIME sur AVASH_LANGUE
+  // dans lireLangue ; avash.rdp.clipboard ; avash.rdp.son ; avash.sante ;
+  // thème ; largeurs de panneaux ; dossiers repliés ; cache des logos d'OS).
+  // Sous Linux, Tauri résout ce répertoire par BaseDirectory::LocalData, donc
+  // XDG_DATA_HOME sinon $HOME/.local/share. Sans redirection de ces trois
+  // variables dans le bac à sable, un poste où XDG_DATA_HOME est exporté ferait
+  // écrire la suite dans les données RÉELLES de l'utilisateur (même identifiant
+  // dev.avash.app que l'application installée).
+  XDG_DATA_HOME: join(sandbox, ".local", "share"),
+  XDG_CACHE_HOME: join(sandbox, ".cache"),
+  XDG_STATE_HOME: join(sandbox, ".local", "state"),
   // Surtout pas WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ici : l'application
   // retire toute valeur héritée, et n'en a pas besoin — le serveur embarqué
   // n'ouvre aucun port de débogage Chromium.
@@ -119,7 +131,7 @@ export const CLE_CLIENTE = join(sandbox, ".ssh", "test_client");
 
 export const HOTES_SEMES = LOCAL_SERVERS ? ["db-1", "test-ssh", "web-1"] : ["db-1", "web-1"];
 
-function seedSandbox() {
+export function seedSandbox() {
   const ssh = join(sandbox, ".ssh");
   mkdirSync(ssh, { recursive: true, mode: 0o700 });
   const lines = [
@@ -148,6 +160,16 @@ function seedSandbox() {
   // pour que chaque fichier de tests reparte du même point. Le dossier .ssh est
   // conservé : il porte la clé cliente du sshd, générée une seule fois.
   rmSync(join(sandbox, ".config", "avash"), { recursive: true, force: true });
+  // Trouvé par l'audit du 7 septembre 2026 : le stockage web de la webview ne
+  // vit PAS sous .config/avash mais sous les répertoires XDG de données, de
+  // cache et d'état (cf. ENV_APP). Ne pas les effacer laissait persister
+  // avash.sante d'un fichier à l'autre (voyants parasites, un VISUEL=1 local
+  // qui diffère des références), et un échec de langue.spec après « Switch to
+  // English » démarrait tous les fichiers suivants en anglais — avash.langue
+  // primant sur AVASH_LANGUE dans lireLangue — sans lien avec leur objet.
+  rmSync(join(sandbox, ".local", "share"), { recursive: true, force: true });
+  rmSync(join(sandbox, ".local", "state"), { recursive: true, force: true });
+  rmSync(join(sandbox, ".cache"), { recursive: true, force: true });
 }
 
 function startSshd() {
@@ -262,6 +284,16 @@ function copierCle(fichier) {
 // vingt-six. Rien ne le relançait. Avant chaque fichier, on vérifie qu'il
 // répond ; sinon on relance tauri-driver, qui relance le natif, sur un port
 // natif neuf au cas où l'ancien processus traînerait encore sur le sien.
+//
+// Trouvé par l'audit du 7 septembre 2026 : cette vérification vivait dans
+// `beforeSession`, hook qui tourne dans le PROCESSUS DE TRAVAIL, alors que la
+// poignée `tauriDriver` et le compteur `relances` sont posés par onPrepare dans
+// le LANCEUR. Dans le travailleur, `tauriDriver` valait undefined (le kill ne
+// tuait rien) et `relances` repartait de zéro à chaque fichier ; pire, le
+// tauri-driver relancé appartenait alors au travailleur, donc onComplete (dans
+// le lanceur) ne le tuait jamais et un pilote orphelin gardait le port 4444,
+// empoisonnant l'exécution suivante. La relance vit désormais dans le hook de
+// lanceur `onWorkerStart`, où la poignée existe et où `relances` persiste.
 const PORT_NATIF = 4445;
 let relances = 0;
 
@@ -282,11 +314,31 @@ async function pilotePret() {
   }
 }
 
+// Tue un tauri-driver et ATTEND sa sortie. tauri-driver ne libère le port 4444
+// qu'en s'arrêtant (sa boucle `accept` tourne tant qu'il vit) et ne tue son
+// natif que sur SIGTERM (server.rs) : relancer sans attendre ferait échouer le
+// nouveau pilote sur `TcpListener::bind(4444)` (« can not listen to address »),
+// qui sortirait en laissant son natif orphelin.
+function arreterTauriDriver(proc) {
+  if (!proc || proc.exitCode !== null) return Promise.resolve();
+  return new Promise((res) => {
+    const force = setTimeout(() => { try { proc.kill("SIGKILL"); } catch { /* déjà parti */ } }, 5000);
+    proc.once("exit", () => { clearTimeout(force); res(); });
+    proc.kill();
+  });
+}
+
 export async function relancerPiloteSiMort() {
-  if (await pilotePret()) return;
+  // Petite tolérance avant de conclure à la mort : onWorkerStart tourne tôt
+  // après onPrepare, et sur une machine chargée tauri-driver peut n'avoir pas
+  // encore ouvert 4444 — sans quoi on relancerait le pilote fraîchement lancé.
+  for (let i = 0; i < 10; i++) {
+    if (await pilotePret()) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
   relances += 1;
   console.warn(`e2e : le pilote WebDriver ne répond plus, relance de tauri-driver (${relances})`);
-  try { tauriDriver?.kill(); } catch { /* déjà mort */ }
+  await arreterTauriDriver(tauriDriver);
   lancerTauriDriver();
   for (let i = 0; i < 100; i++) {
     if (await pilotePret()) return;
@@ -325,7 +377,21 @@ export const config = {
       baselineFolder: join(import.meta.dirname, process.env.CI ? "visuel/reference" : ".tmp/visuel-local/reference"),
       screenshotPath: join(import.meta.dirname, ".tmp/visuel"),
       formatImageName: "{tag}",
-      autoSaveBaseline: true,
+      // Trouvé par l'audit du 7 septembre 2026 : `autoSaveBaseline: true` en dur
+      // rendait l'étape « régression visuelle » incapable de rougir en CI. Un
+      // tag ajouté ou renommé dans visuel.spec.js sans commiter son PNG voyait
+      // sa référence refabriquée à chaque run (exécuteur neuf) et checkScreen
+      // rendre 0 : vert, sans jamais rien comparer. En CI la référence absente
+      // lève désormais « Baseline image not found » et l'étape rougit ;
+      // VISUEL_INIT=1 rouvre l'auto-sauvegarde pour amorcer volontairement
+      // (workflow_dispatch, ou en local), et hors CI les références locales du
+      // dossier ignoré .tmp/visuel-local se créent toujours au premier passage.
+      autoSaveBaseline: !process.env.CI || !!process.env.VISUEL_INIT,
+      // Toujours écrire la capture réelle sur disque : sans cela, quand
+      // autoSaveBaseline est off et la référence manque, l'image réelle n'est
+      // pas sauvée et l'artefact e2e/.tmp/visuel ne fournit pas au contributeur
+      // le PNG à copier dans e2e/visuel/reference.
+      alwaysSaveActualImage: true,
       savePerInstance: false,
       blockOutStatusBar: false,
       blockOutToolBar: false,
@@ -355,14 +421,22 @@ export const config = {
     if (EMBARQUE) return;
     lancerTauriDriver();
   },
+  // Avant CHAQUE processus de travail, dans le LANCEUR : on s'assure que le
+  // pilote répond encore, sinon on le relance. Ce hook (contrairement à
+  // beforeSession) tourne dans @wdio/cli, là où vivent la poignée `tauriDriver`
+  // et le compteur `relances` — sans quoi la relance ne pouvait ni tuer l'ancien
+  // pilote ni persister d'un fichier à l'autre (cf. commentaire de relancer).
+  // Le chemin embarqué n'a pas de tauri-driver : rien à faire ici pour lui.
+  onWorkerStart: async () => {
+    if (EMBARQUE) return;
+    await relancerPiloteSiMort();
+  },
   // Avant CHAQUE fichier de spécifications : on remet le bac à sable dans son
   // état semé. L'application démarre ensuite et lit un état déterministe, quel
   // que soit ce qu'ont fait les fichiers précédents (spécification isolation).
-  // Et on s'assure que le pilote répond encore, sinon on le relance.
   beforeSession: async () => {
     seedSandbox();
     if (EMBARQUE) appEmbarquee = await lancerAppEmbarquee();
-    else await relancerPiloteSiMort();
   },
   afterSession: async () => {
     if (EMBARQUE) { await arreterAppEmbarquee(appEmbarquee); appEmbarquee = null; }

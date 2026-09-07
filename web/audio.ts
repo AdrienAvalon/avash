@@ -36,9 +36,11 @@ export function gainDepuisVolume(gauche: number, droit: number): number {
   return Math.max(0, Math.min(1, (gauche + droit) / 2 / 65535));
 }
 
-/** Combien de blocs peuvent attendre devant le curseur : au-delà, on rattrape
- *  le retard (un serveur qui pousse plus vite que le temps réel, ou un onglet
- *  resté caché) en repartant du présent. */
+/** Combien de blocs peuvent attendre devant le curseur. Au-delà, on ne repart
+ *  pas du présent : cela superposerait le bloc aux sources déjà programmées
+ *  (voir `jouer`). On jette le bloc en trop et le flux rattrape en sautant. Un
+ *  retard (onglet resté caché, temps écoulé), lui, se rattrape en repartant du
+ *  présent, car rien n'est alors en vol. */
 const AVANCE_MAX_S = 0.5;
 
 export class LecteurAudio {
@@ -71,15 +73,29 @@ export class LecteurAudio {
     if (!c) return;
     const canaux = pcm16VersFlottants(bloc.pcm, bloc.canaux);
     const trames = canaux[0].length;
+    const maintenant = c.ctx.currentTime;
+    // Un peu d'avance (50 ms) pour absorber la gigue. Deux cas de décrochage,
+    // à traiter séparément. Le curseur resté en arrière (onglet caché, temps
+    // écoulé) : rien n'est en vol, on repart du présent sans risque.
+    if (this.curseur < maintenant) {
+      this.curseur = maintenant + 0.05;
+    } else if (this.curseur > maintenant + AVANCE_MAX_S) {
+      // Trouvé par l'audit du 7 septembre 2026 : sur une rafale après une
+      // coupure réseau, le curseur ayant pris trop d'avance, on le remettait
+      // au présent, mais les sources déjà programmées jusqu'à +0,5 s
+      // continuaient de jouer et le bloc suivant démarrait par-dessus (une
+      // demi-seconde de son doublé et brouillé à chaque hoquet Wi-Fi). On jette
+      // désormais le bloc en trop, sans toucher au curseur ni programmer de
+      // source : le flux rattrape en sautant. Compté comme reçu (le décrochage
+      // reste visible au diagnostic) mais pas comme joué.
+      this.echantillons += trames;
+      return;
+    }
     const tampon = c.ctx.createBuffer(bloc.canaux, trames, bloc.cadence);
     canaux.forEach((d, i) => tampon.copyToChannel(d, i));
     const source = c.ctx.createBufferSource();
     source.buffer = tampon;
     source.connect(c.gain);
-    const maintenant = c.ctx.currentTime;
-    // Un peu d'avance pour absorber la gigue ; si le curseur a pris trop
-    // d'avance ou est resté en arrière, on repart du présent.
-    if (this.curseur < maintenant || this.curseur > maintenant + AVANCE_MAX_S) this.curseur = maintenant + 0.05;
     source.start(this.curseur);
     this.curseur += trames / bloc.cadence;
     this.blocs += 1;

@@ -272,7 +272,11 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
     // l'épinglage en retirant VeNCrypt de la liste. Trouvé par l'audit du
     // 7 septembre 2026.
     let cle_tls = format!("vnc:{}:{}", args.host, args.port);
-    let exige_tls = crate::empreintes::empreinte_memorisee(&cle_tls).is_some();
+    // Fichier de confiance illisible : on refuse plutôt que de croire à l'absence
+    // d'épinglage (qui rétrograderait vers du RFB clair). Voir `empreinte_memorisee`.
+    let exige_tls = crate::empreintes::empreinte_memorisee(&cle_tls)
+        .context("fichier de confiance illisible, connexion refusée")?
+        .is_some();
     let client = tokio::time::timeout(DELAI_CONNEXION, async move {
         VncConnector::new(crate::vnc_tls::MaybeTls::Clair(tcp))
             .set_tls_upgrader(monteur)

@@ -80,6 +80,10 @@ ironrdp-graphics = { path = "vendor/ironrdp-graphics" }
 # comportements indéfinis et détacher la file des événements du verrou du
 # client. Voir vendor/README.md.
 vnc-rs = { path = "vendor/vnc-rs" }
+# Porté pour borner le réassemblage des morceaux d'un canal statique
+# (dechunkify) : sans borne, un serveur hostile faisait grossir le tampon
+# jusqu'à l'OOM du sidecar. Voir vendor/README.md.
+ironrdp-svc = { path = "vendor/ironrdp-svc" }
 
 [target.'cfg(windows)'.dependencies]
 # Espace libre du volume partagé (redirection de lecteur).

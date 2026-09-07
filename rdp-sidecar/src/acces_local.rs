@@ -44,7 +44,6 @@ pub(crate) type PosteSplit = (
 /// neuf laisserait l'interface parler dans le vide, attachée à l'ancien.
 pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<()> {
     use anyhow::Context as _;
-    use futures_util::StreamExt as _;
     use tokio::io::AsyncWriteExt as _;
 
     if poste.is_some() {
@@ -62,18 +61,38 @@ pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<()> {
         .await?;
     out.flush().await?;
 
-    // On boucle sur les connexions au lieu d'en accepter une seule. Le port est
-    // ouvert avant même que l'interface n'en soit avertie : n'importe quel
-    // processus local — ou une page web, les WebSocket n'étant pas soumises à
-    // la politique d'origine pour *établir* la connexion — pouvait s'y
-    // présenter le premier. Un message quelconque faisait quitter le sidecar,
-    // détruisant une session RDP déjà authentifiée (TLS + NLA refaits) ; une
-    // connexion TCP laissée sans poignée de main WebSocket consommait la seule
-    // place d'`accept` et l'interface n'arrivait jamais à se connecter.
-    // Le jeton (64 bits) reste hors de portée : c'était un déni de service, pas
-    // un détournement. On rejette maintenant l'intrus et on attend le suivant,
-    // avec un délai de garde par tentative pour qu'un client muet ne bloque pas
-    // la file.
+    let (sink, stream) = attendre_client(&listener, &token).await;
+    *poste = Some(Poste {
+        _listener: listener,
+        sink,
+        stream,
+    });
+    Ok(())
+}
+
+/// Attend, sur une écoute déjà ouverte, le premier client qui présente le bon
+/// jeton **en binaire**, et rend son couple (émetteur, récepteur). Tout premier
+/// message qui n'est pas un binaire au bon jeton est rejeté et la file continue.
+///
+/// On boucle sur les connexions au lieu d'en accepter une seule. Le port est
+/// ouvert avant même que l'interface n'en soit avertie : n'importe quel
+/// processus local — ou une page web, les WebSocket n'étant pas soumises à la
+/// politique d'origine pour *établir* la connexion — pouvait s'y présenter le
+/// premier. Un message quelconque faisait quitter le sidecar, détruisant une
+/// session RDP déjà authentifiée (TLS + NLA refaits) ; une connexion TCP
+/// laissée sans poignée de main WebSocket consommait la seule place d'`accept`
+/// et l'interface n'arrivait jamais à se connecter. Le jeton (64 bits) reste
+/// hors de portée : c'était un déni de service, pas un détournement. On rejette
+/// maintenant l'intrus et on attend le suivant, avec un délai de garde par
+/// tentative pour qu'un client muet ne bloque pas la file.
+///
+/// Extraite d'`etablir_poste` (qui garde l'annonce « PORT JETON ») pour être
+/// éprouvée directement : trouvé par l'audit du 7 septembre 2026, le contrôle du
+/// jeton n'avait aucun test, si bien qu'élargir le motif à n'importe quel
+/// premier message aurait laissé entrer un intrus sans faire rougir la suite.
+pub(crate) async fn attendre_client(listener: &TcpListener, token: &str) -> PosteSplit {
+    use futures_util::StreamExt as _;
+
     const DELAI_POIGNEE: std::time::Duration = std::time::Duration::from_secs(10);
     // Chaque validation (poignée WebSocket + premier message) dans SA tâche,
     // et l'acceptation continue en parallèle : un client muet n'immobilise
@@ -82,14 +101,14 @@ pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<()> {
     // On retient le premier client qui présente le bon jeton, puis on cesse
     // d'accepter (les tâches encore en vol tombent avec le canal).
     let (tx, mut rx) = tokio::sync::mpsc::channel::<PosteSplit>(1);
-    let (sink, stream) = loop {
+    loop {
         tokio::select! {
             Some(pair) = rx.recv() => break pair,
             accepte = listener.accept() => {
                 let Ok((tcp, _)) = accepte else { continue };
                 tcp.set_nodelay(true).ok();
                 let tx = tx.clone();
-                let token = token.clone();
+                let token = token.to_owned();
                 tokio::spawn(async move {
                     // Contrôle d'origine (verifier_origine) : une page web réelle
                     // porte http(s)://<domaine> et se voit refusée ; la webview
@@ -104,7 +123,10 @@ pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<()> {
                         return; // poignée absente, trop lente, ou origine refusée
                     };
                     let (sink, mut stream) = ws.split();
-                    // Premier message = le jeton, comparé à temps constant.
+                    // Premier message = le jeton, en binaire, comparé à temps
+                    // constant. Un texte, une trame de contrôle ou un mauvais
+                    // jeton ne passent pas : le client est abandonné et la file
+                    // se poursuit.
                     if let Ok(Some(Ok(Message::Binary(t)))) =
                         tokio::time::timeout(DELAI_POIGNEE, stream.next()).await
                     {
@@ -115,13 +137,7 @@ pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<()> {
                 });
             }
         }
-    };
-    *poste = Some(Poste {
-        _listener: listener,
-        sink,
-        stream,
-    });
-    Ok(())
+    }
 }
 
 /// Compare deux jetons en temps constant : la durée ne dépend pas de la position
@@ -247,6 +263,98 @@ mod tests_acces_local {
         assert!(!origine_admise(Some("data:text/html,x")));
         // La webview native reste admise.
         assert!(origine_admise(Some("TAURI://localhost")));
+    }
+}
+
+#[cfg(test)]
+mod tests_attendre_client {
+    use super::attendre_client;
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
+
+    // WebSocket cliente vers l'écoute locale, sans en-tête Origin (le jeton fait
+    // foi). Le type complet est nommé une fois ici pour rester lisible ailleurs.
+    type ClientWs = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+    async fn se_connecter(port: u16) -> ClientWs {
+        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/"))
+            .await
+            .expect("poignée WebSocket cliente");
+        ws
+    }
+
+    // Trouvé par l'audit du 7 septembre 2026 : le contrôle du jeton du canal
+    // local (`etablir_poste` / `attendre_client`) n'avait aucun test. Sans lui,
+    // élargir le motif du premier message (accepter un texte, ou n'importe quelle
+    // trame sans comparer le jeton) serait resté vert en `cargo test` comme en
+    // E2E, alors que n'importe quel processus local aurait alors pris la session.
+    // Ce scénario verrouille « tout premier message qui n'est pas un binaire au
+    // bon jeton est rejeté, et la file continue jusqu'au vrai client ».
+    #[tokio::test]
+    async fn seul_le_client_au_bon_jeton_binaire_est_retenu() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let token = "0123456789abcdef".to_owned();
+
+        let jeton = token.clone();
+        let attente = tokio::spawn(async move { attendre_client(&listener, &jeton).await });
+
+        // Intrus 1 : bon format (binaire) mais mauvais jeton.
+        let mut mauvais_jeton = se_connecter(port).await;
+        mauvais_jeton
+            .send(Message::Binary(b"mauvais_jeton___".to_vec().into()))
+            .await
+            .unwrap();
+
+        // Intrus 2 : le bon jeton, mais présenté en texte et non en binaire.
+        let mut en_texte = se_connecter(port).await;
+        en_texte
+            .send(Message::Text(token.clone().into()))
+            .await
+            .unwrap();
+
+        // Intrus 3 : muet — poignée faite, aucun message. Il ne doit pas bloquer
+        // la file (il tombera de lui-même sur le délai de garde). On le garde en
+        // vie jusqu'à la fin du test pour que la connexion reste vraiment ouverte.
+        let _muet = se_connecter(port).await;
+
+        // Laisser le sidecar traiter et rejeter les trois : aucun n'est retenu.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            !attente.is_finished(),
+            "un intrus (mauvais jeton, jeton en texte, ou muet) a été retenu comme client"
+        );
+
+        // Client légitime : le bon jeton, en binaire.
+        let mut legitime = se_connecter(port).await;
+        legitime
+            .send(Message::Binary(token.clone().into_bytes().into()))
+            .await
+            .unwrap();
+
+        // `attendre_client` rend le couple de CE client, et de lui seul.
+        let (mut sink, mut stream) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), attente)
+                .await
+                .expect("attendre_client n'a pas rendu la main au client légitime")
+                .unwrap();
+
+        // Une trame échangée dans les deux sens prouve que le couple retenu est
+        // bien la connexion vivante du client légitime.
+        legitime
+            .send(Message::Binary(b"ping".to_vec().into()))
+            .await
+            .unwrap();
+        let recu = stream.next().await.unwrap().unwrap();
+        assert_eq!(recu, Message::Binary(b"ping".to_vec().into()));
+
+        sink.send(Message::Binary(b"pong".to_vec().into()))
+            .await
+            .unwrap();
+        let echo = legitime.next().await.unwrap().unwrap();
+        assert_eq!(echo, Message::Binary(b"pong".to_vec().into()));
     }
 }
 

@@ -5,8 +5,11 @@ use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::geometry::InclusiveRectangle;
 use ironrdp::session::image::DecodedImage;
 
-/// Nombre maximal de rectangles portés par une trame.
-const RECTS_MAX: usize = 8;
+/// Nombre maximal de rectangles portés par une trame. `pub(crate)` depuis
+/// l'audit du 7 septembre 2026 : `egfx::publier` s'en sert comme seuil au-delà
+/// duquel il ne publie que la boîte englobante, puisque c'est de toute façon en
+/// ce nombre de rectangles que cette fusion-ci ramène la zone sale.
+pub(crate) const RECTS_MAX: usize = 8;
 
 /// Nouvelle taille d'écran annoncée par le serveur : ne remplace l'image que si
 /// la taille change vraiment, et dit s'il faut l'annoncer à l'interface.
@@ -241,11 +244,43 @@ pub(crate) fn ajouter_rect(zone: &mut Vec<InclusiveRectangle>, r: &InclusiveRect
     }
 }
 
+/// Intersecte un rectangle avec les bornes de l'image, ou `None` s'il n'en
+/// touche rien.
+///
+/// Défense en profondeur de l'audit du 7 septembre 2026 : une surface EGFX
+/// mappée hors du bureau (`MapSurfaceToOutput` accepte une origine jusqu'à
+/// 65535, une surface va jusqu'à 8192×8192 quelle que soit la taille négociée)
+/// faisait entrer dans la zone sale un rectangle hors de l'image. Le découpage
+/// `data[start..start + w*4]` de `frame_msg`/`frames_msg` sortait alors du
+/// tampon à une ligne plus basse et tuait le sidecar (code 101) sur ordre d'un
+/// serveur hostile. Le test d'origine (`r.left >= iw`) est indispensable : se
+/// contenter de plafonner `right`/`bottom` laisserait passer un rectangle
+/// entièrement à droite ou en bas, dégénéré et toujours hors du tampon.
+fn clamp_a_l_image(r: &InclusiveRectangle, image: &DecodedImage) -> Option<InclusiveRectangle> {
+    let (iw, ih) = (image.width(), image.height());
+    if iw == 0 || ih == 0 || r.left >= iw || r.top >= ih || r.right < r.left || r.bottom < r.top {
+        return None;
+    }
+    Some(InclusiveRectangle {
+        left: r.left,
+        top: r.top,
+        right: r.right.min(iw - 1),
+        bottom: r.bottom.min(ih - 1),
+    })
+}
+
 /// Zone sale -> message binaire. Un seul rectangle garde la forme historique
 /// `[2]` ; plusieurs empruntent `[13]`, qui porte leur nombre. Une trame, un
 /// accusé de rendu : le cadencement reste exact.
 pub(crate) fn frames_msg(image: &DecodedImage, zone: &[InclusiveRectangle]) -> Vec<u8> {
-    if let [seul] = zone {
+    // Chaque rectangle est borné à l'image d'abord (voir `clamp_a_l_image`) :
+    // ceux qui n'en touchent rien sont jetés, si bien que tout appelant de
+    // `ajouter_rect` est couvert et non seulement le chemin EGFX.
+    let rects: Vec<InclusiveRectangle> = zone
+        .iter()
+        .filter_map(|r| clamp_a_l_image(r, image))
+        .collect();
+    if let [seul] = rects.as_slice() {
         return frame_msg(image, seul);
     }
     let iw = usize::from(image.width());
@@ -254,7 +289,7 @@ pub(crate) fn frames_msg(image: &DecodedImage, zone: &[InclusiveRectangle]) -> V
     // géométrie et w*h*4 de pixels. Sans elle, le Vec repartait de 1 octet et
     // doublait ~20 fois sur un message plein écran (plusieurs Mo), recopiant tout
     // le contenu déjà écrit à chaque fois — le frère `frame_msg` réservait pourtant.
-    let capacite = 2 + zone
+    let capacite = 2 + rects
         .iter()
         .map(|r| {
             let (w, h) = (
@@ -266,8 +301,8 @@ pub(crate) fn frames_msg(image: &DecodedImage, zone: &[InclusiveRectangle]) -> V
         .sum::<usize>();
     let mut m = Vec::with_capacity(capacite);
     m.push(13u8);
-    m.push(u8::try_from(zone.len()).unwrap_or(u8::MAX));
-    for r in zone {
+    m.push(u8::try_from(rects.len()).unwrap_or(u8::MAX));
+    for r in &rects {
         let (x, y) = (r.left, r.top);
         let (w, h) = (r.right - r.left + 1, r.bottom - r.top + 1);
         m.extend_from_slice(&x.to_le_bytes());
@@ -286,6 +321,11 @@ pub(crate) fn frame_msg(
     image: &DecodedImage,
     r: &ironrdp::pdu::geometry::InclusiveRectangle,
 ) -> Vec<u8> {
+    // Borné à l'image d'abord (voir `clamp_a_l_image`) : un rectangle hors du
+    // bureau donne une trame vide plutôt qu'un découpage hors tampon.
+    let Some(r) = clamp_a_l_image(r, image) else {
+        return vec![2, 0, 0, 0, 0, 0, 0, 0, 0];
+    };
     let iw = usize::from(image.width());
     let data = image.data();
     let (x, y) = (r.left, r.top);
@@ -466,6 +506,54 @@ mod tests_trames {
         assert_eq!(&m[second..second + 8], &[6, 0, 3, 0, 2, 0, 1, 0]);
         // (6,3) = indice 3*8+6 = 30.
         assert_eq!(&m[second + 8..second + 12], &[30, 0, 0xAA, 0xFF]);
+    }
+
+    /// Régression de l'audit du 7 septembre 2026 : une surface EGFX mappée hors
+    /// du bureau (`MapSurfaceToOutput` accepte jusqu'à 65535, une surface va
+    /// jusqu'à 8192×8192 quelle que soit la taille négociée) poussait dans la
+    /// zone sale un rectangle hors de l'image. `peindre_rgba` tronque bien, mais
+    /// le découpage `data[start..start + w*4]` de `frame_msg`/`frames_msg`
+    /// sortait du tampon à une ligne plus basse et tuait le sidecar (code 101)
+    /// sur ordre d'un serveur hostile. Chaque rectangle est désormais borné à
+    /// l'image avant le découpage.
+    #[test]
+    fn une_trame_egfx_hors_ecran_ne_fait_pas_paniquer_frame_msg() {
+        let image = image_numerotee(1280, 800);
+        // Entièrement hors du bureau 1280×800 : le scénario CreateSurface(2000×
+        // 2000) → MapSurfaceToOutput(0,0) → SolidFill (1500,700)-(1899,799).
+        let hors = r(1500, 700, 1899, 799);
+        // frame_msg (chemin d'un seul rectangle, [2]) : trame vide, pas de panique.
+        let m = frame_msg(&image, &hors);
+        assert_eq!(m[0], 2);
+        assert_eq!(
+            &m[1..9],
+            &[0, 0, 0, 0, 0, 0, 0, 0],
+            "un rectangle hors écran doit donner une trame vide"
+        );
+        assert_eq!(m.len(), 9);
+        // frames_msg (chemin [13]) : un rectangle valide et un rectangle hors
+        // écran ne laissent passer que le premier, sans panique.
+        let m = frames_msg(&image, &[r(0, 0, 1, 1), hors.clone()]);
+        assert_eq!(m, frame_msg(&image, &r(0, 0, 1, 1)));
+        // Deux rectangles hors écran : message [13] sans rectangle, jamais de panique.
+        let m = frames_msg(&image, &[hors.clone(), r(2000, 0, 2001, 1)]);
+        assert_eq!(m[0], 13);
+        assert_eq!(m[1], 0);
+    }
+
+    /// Variante partielle : un rectangle dont l'origine est dans le bureau mais
+    /// qui déborde à droite ou en bas est tronqué à l'image, pas refusé.
+    #[test]
+    fn une_trame_egfx_debordante_est_tronquee_a_l_image() {
+        let image = image_numerotee(1280, 800);
+        // 500 pixels de large depuis x=1000, sur la dernière ligne : la variante
+        // sans surface géante du même défaut.
+        let m = frame_msg(&image, &r(1000, 799, 1499, 799));
+        assert_eq!(m[0], 2);
+        // x=1000 (0x03E8), y=799 (0x031F), largeur ramenée à 1280-1000=280
+        // (0x0118), hauteur 1.
+        assert_eq!(&m[1..9], &[0xE8, 0x03, 0x1F, 0x03, 0x18, 0x01, 1, 0]);
+        assert_eq!(m.len(), 9 + 280 * 4);
     }
 
     #[test]

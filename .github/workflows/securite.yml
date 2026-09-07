@@ -85,7 +85,6 @@ jobs:
   fuzz:
     name: Fuzzing des parseurs (cargo-fuzz)
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,9 +96,37 @@ jobs:
           workspaces: fuzz
       - name: cargo-fuzz
         run: cargo install cargo-fuzz --locked
+      # Trouvé par l'audit du 7 septembre 2026 : le corpus enrichi par la
+      # couverture (`fuzz/corpus`) était jeté à la fin du job. Il est ignoré par
+      # git et `rust-cache` ne garde que `~/.cargo` et `target`, si bien que
+      # l'exploration repartait des seules graines (1 à 7 par cible) à chaque
+      # poussée et chaque lundi. On persiste le corpus entre exécutions : la clé
+      # porte `run_id` (donc toujours un nouvel enregistrement en fin de job) et
+      # `restore-keys` retrouve par préfixe le corpus du run précédent. Inutile
+      # sur PR, qui ne fait que compiler les cibles.
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        if: github.event_name != 'pull_request'
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ hashFiles('fuzz/seeds/**', 'fuzz/fuzz_targets/**') }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      # Trouvé par l'audit du 7 septembre 2026 : le job était sauté sur les PR
+      # (`if: github.event_name != 'pull_request'`) et `check.sh` ne compile pas
+      # le crate `fuzz` (hors espace de travail, nightly). Une PR qui renommait
+      # un parseur du cœur ou changeait une signature utilisée par une cible
+      # (p. ex. `avash::import::parse_reg_query`, `ClearCodecDecoder::decode`)
+      # passait verte partout, puis ne cassait le job `fuzz` qu'au premier push
+      # sur `main` après la fusion. Sur une PR on compile donc toutes les cibles
+      # sans fuzzer : la rupture d'API est vue avant la fusion, sans le coût ni
+      # le non-déterminisme d'une campagne.
+      - name: Compilation des cibles (PR)
+        if: github.event_name == 'pull_request'
+        run: cargo +nightly fuzz build
+        working-directory: fuzz
       # Sort en erreur au premier plantage ; l'entrée fautive est publiée pour
       # être rejouée en local (`cargo +nightly fuzz run <cible> <fichier>`).
       - name: Fuzz — 45 s par cible
+        if: github.event_name != 'pull_request'
         run: DUREE=45 fuzz/fuzz.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()

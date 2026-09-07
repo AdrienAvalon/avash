@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use bitvec::prelude::*;
 
-use super::{HISTORY_SIZE, TOKEN_TABLE, ZgfxError};
+use super::{ZgfxError, HISTORY_SIZE, TOKEN_TABLE};
 const MIN_MATCH_LENGTH: usize = 3;
 const MAX_MATCH_LENGTH: usize = 65535;
 /// Maximum back-reference distance (last token in MS-RDPEGFX table)
@@ -89,7 +89,8 @@ impl Compressor {
                     }
                 });
             }
-            self.match_table.retain(|_, positions| !positions.is_empty());
+            self.match_table
+                .retain(|_, positions| !positions.is_empty());
         }
 
         let base_pos = self.history.len();
@@ -101,7 +102,11 @@ impl Compressor {
 
         for i in (0..bytes.len().saturating_sub(MIN_MATCH_LENGTH - 1)).step_by(step_size) {
             let pos = base_pos + i;
-            let prefix = [self.history[pos], self.history[pos + 1], self.history[pos + 2]];
+            let prefix = [
+                self.history[pos],
+                self.history[pos + 1],
+                self.history[pos + 2],
+            ];
 
             let entry = self.match_table.entry(prefix).or_default();
 
@@ -124,7 +129,11 @@ impl Compressor {
             if base_pos >= offset && bytes.len() + offset > 2 {
                 let pos = base_pos - offset;
                 if pos + MIN_MATCH_LENGTH <= self.history.len() {
-                    let prefix = [self.history[pos], self.history[pos + 1], self.history[pos + 2]];
+                    let prefix = [
+                        self.history[pos],
+                        self.history[pos + 1],
+                        self.history[pos + 2],
+                    ];
                     let entry = self.match_table.entry(prefix).or_default();
                     if entry.last() != Some(&pos) {
                         if entry.len() >= MAX_POSITIONS_PER_PREFIX {
@@ -153,7 +162,8 @@ impl Compressor {
                 *positions = positions[keep_from..].to_vec();
             }
         }
-        self.match_table.retain(|_, positions| !positions.is_empty());
+        self.match_table
+            .retain(|_, positions| !positions.is_empty());
 
         if self.match_table.len() <= COMPACT_TARGET_ENTRIES {
             return;
@@ -290,7 +300,11 @@ impl Compressor {
         clippy::cast_possible_truncation,
         reason = "distance_value bounded by token table, value fits u32"
     )]
-    fn encode_match(writer: &mut BitWriter, distance: usize, length: usize) -> Result<(), ZgfxError> {
+    fn encode_match(
+        writer: &mut BitWriter,
+        distance: usize,
+        length: usize,
+    ) -> Result<(), ZgfxError> {
         let match_token = Self::find_match_token(distance);
 
         writer.write_bits_from_slice(match_token.prefix);
@@ -317,7 +331,8 @@ impl Compressor {
         if length == 3 {
             writer.write_bit(false);
         } else {
-            let length_token_size = usize::try_from(length.ilog2()).expect("ilog2 of usize fits usize") - 1;
+            let length_token_size =
+                usize::try_from(length.ilog2()).expect("ilog2 of usize fits usize") - 1;
             let base = 1 << (length_token_size + 1);
             let value = length - base;
 
@@ -449,7 +464,9 @@ mod tests {
         let compressed = compressor.compress(data).unwrap();
 
         let mut output = Vec::new();
-        decompressor.decompress_segment(&compressed, &mut output).unwrap();
+        decompressor
+            .decompress_segment(&compressed, &mut output)
+            .unwrap();
 
         assert_eq!(&output, data);
     }
@@ -465,7 +482,9 @@ mod tests {
         let compressed = compressor.compress(data).unwrap();
 
         let mut output = Vec::new();
-        decompressor.decompress_segment(&compressed, &mut output).unwrap();
+        decompressor
+            .decompress_segment(&compressed, &mut output)
+            .unwrap();
 
         assert_eq!(&output, data);
     }
@@ -486,7 +505,9 @@ mod tests {
         let compressed = compressor.compress(&data).unwrap();
 
         let mut output = Vec::new();
-        decompressor.decompress_segment(&compressed, &mut output).unwrap();
+        decompressor
+            .decompress_segment(&compressed, &mut output)
+            .unwrap();
 
         assert_eq!(output, data);
     }
@@ -509,12 +530,28 @@ mod tests {
         .collect();
 
         let mut compressor = Compressor::new();
-        let compressed = compressor.compress(&data).unwrap();
+        // On compresse les 100 000 octets pour éprouver la borne de la table de
+        // hachage (vérifiée plus bas) ; la sortie compressée elle-même ne sert
+        // plus au round-trip, borné à un segment conforme depuis l'audit.
+        compressor.compress(&data).unwrap();
+
+        // Depuis l'audit du 7 septembre 2026, `decompress_segment` refuse un
+        // segment dont la sortie dépasse OCTETS_MAX_SEGMENT (65 535 octets, comme
+        // FreeRDP) : un seul segment ZGFX ne peut donc décompresser 100 000
+        // octets d'un coup (sur le fil, un tel volume passe en multipart). La
+        // borne de la table de hachage s'éprouve toujours sur les 100 000 octets
+        // compressés ci-dessus ; la correction du round-trip se vérifie ici sur
+        // un bloc conforme, assez grand pour rester à haute entropie.
+        let bloc = &data[..60_000];
+        let mut compressor_bloc = Compressor::new();
+        let compressed_bloc = compressor_bloc.compress(bloc).unwrap();
 
         let mut decompressor = Decompressor::new();
         let mut output = Vec::new();
-        decompressor.decompress_segment(&compressed, &mut output).unwrap();
-        assert_eq!(output, data);
+        decompressor
+            .decompress_segment(&compressed_bloc, &mut output)
+            .unwrap();
+        assert_eq!(output, bloc);
 
         assert!(
             compressor.match_table.len() <= MAX_HASH_TABLE_ENTRIES,

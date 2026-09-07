@@ -9,7 +9,7 @@ describe("Navigation au clavier", () => {
     await $("#terminal-empty").click().catch(() => {});
   });
 
-  it("la palette se parcourt aux flèches et Entrée valide", async () => {
+  it("la palette se parcourt aux flèches et Entrée valide la commande surlignée", async () => {
     await browser.keys(["Control", "k"]);
     await $("#palette").waitForDisplayed({ timeout: 5000 });
     await browser.waitUntil(
@@ -23,12 +23,41 @@ describe("Navigation au clavier", () => {
       document.querySelector("#palette-results .item.hl")?.id,
     );
     expect(surligne).toBe("palette-item-1");
-    // Entrée doit être prise en compte (la palette se referme).
     await browser.keys("Escape");
     await browser.waitUntil(
       async () => !(await $("#palette").isDisplayed()),
       { timeout: 5000 },
     );
+
+    // Trouvé par l'audit du 7 septembre 2026 : ce scénario annonçait « Entrée
+    // valide » mais ne pressait que Échap, et vérifiait la seule fermeture ;
+    // la branche `Enter` du keydown de #palette-input (main.ts, `choisie.ouvrir()`)
+    // n'était couverte par aucun test, si bien qu'on pouvait l'ôter sans rien
+    // faire rougir. Sans serveur, on vise la commande « Switch to English » :
+    // la filtrer la remonte en tête (surlignée), Entrée la valide, l'interface
+    // passe en anglais.
+    const texte = (sel) => browser.execute((s) => document.querySelector(s)?.textContent?.trim() ?? null, sel);
+    await browser.keys(["Control", "k"]);
+    const input = await $("#palette-input");
+    await input.waitForDisplayed({ timeout: 5000 });
+    await input.setValue("Switch to English");
+    await $("#palette-results .item.hl").waitForExist({ timeout: 5000 });
+    await browser.keys("Enter");
+    await browser.waitUntil(async () => (await texte("#manual-btn")) === "Direct connection", {
+      timeout: 5000, timeoutMsg: "Entrée n'a pas validé la commande de langue surlignée",
+    });
+
+    // Revenir au français par la même voie : les autres scénarios affirment des
+    // textes français, et le choix se mémorise (localStorage) au-delà du test.
+    await browser.keys(["Control", "k"]);
+    const retour = await $("#palette-input");
+    await retour.waitForDisplayed({ timeout: 5000 });
+    await retour.setValue("Passer en français");
+    await $("#palette-results .item.hl").waitForExist({ timeout: 5000 });
+    await browser.keys("Enter");
+    await browser.waitUntil(async () => (await texte("#manual-btn")) === "Connexion directe", {
+      timeout: 5000, timeoutMsg: "le retour au français n'a pas pris",
+    });
   });
 
   it("Ctrl+K ne s'ouvre pas par-dessus une boîte de dialogue", async () => {

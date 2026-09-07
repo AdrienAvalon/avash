@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keysymDe, messageKeysym } from "./vnc-clavier";
+import { FiltreCtrlAltGrWindows, keysymDe, messageKeysym } from "./vnc-clavier";
 
 const ev = (key: string, code = "") => ({ key, code });
 
@@ -52,5 +52,75 @@ describe("keysym VNC d'un événement clavier", () => {
   it("le message [14] porte le keysym en petit-boutiste sur quatre octets", () => {
     expect(messageKeysym(0xff0d, true)).toEqual([14, 0x0d, 0xff, 0, 0, 1]);
     expect(messageKeysym(0x01000000 + 0x1f600, false)).toEqual([14, 0x00, 0xf6, 0x01, 0x01, 0]);
+  });
+});
+
+// Un banc d'essai qui capte ce que le filtre décide vraiment d'émettre et pilote
+// son minuteur à la main (pas d'horloge réelle dans les tests).
+function banc(actif = true) {
+  const emis: Array<{ key: string; enfonce: boolean }> = [];
+  let cb: (() => void) | null = null;
+  const filtre = new FiltreCtrlAltGrWindows(
+    actif,
+    (e, enfonce) => emis.push({ key: e.key, enfonce }),
+    (c) => { cb = c; return 1 as unknown as ReturnType<typeof setTimeout>; },
+    () => { cb = null; },
+  );
+  return { emis, filtre, minuteur: () => { const c = cb; cb = null; c?.(); } };
+}
+
+describe("filtre Ctrl+AltGr de Windows pour le clavier VNC", () => {
+  it("n'émet pas le Control synthétique qui précède AltGr (« @ » = AltGr+0)", () => {
+    // Séquence Windows/WebView2 exacte pour « @ » sur AZERTY. Le Control_L
+    // synthétique ne doit jamais partir, sinon le serveur voit Ctrl+@ (NUL).
+    const { emis, filtre } = banc();
+    filtre.traiter({ key: "Control", code: "ControlLeft" }, true);
+    filtre.traiter({ key: "AltGraph", code: "AltRight" }, true);
+    filtre.traiter({ key: "@", code: "Digit0" }, true);
+    filtre.traiter({ key: "@", code: "Digit0" }, false);
+    filtre.traiter({ key: "AltGraph", code: "AltRight" }, false);
+    filtre.traiter({ key: "Control", code: "ControlLeft" }, false); // keyup jumeau, avalé
+    expect(emis.some((m) => m.key === "Control")).toBe(false);
+    expect(emis).toEqual([
+      { key: "AltGraph", enfonce: true },
+      { key: "@", enfonce: true },
+      { key: "@", enfonce: false },
+      { key: "AltGraph", enfonce: false },
+    ]);
+  });
+
+  it("émet un Ctrl gauche tapé seul quand le minuteur se déclenche", () => {
+    // Aucun AltGraph ne suit : après le délai, le Ctrl retenu doit bien partir,
+    // puis son relâchement.
+    const { emis, filtre, minuteur } = banc();
+    filtre.traiter({ key: "Control", code: "ControlLeft" }, true);
+    expect(emis).toEqual([]); // encore retenu
+    minuteur();
+    filtre.traiter({ key: "Control", code: "ControlLeft" }, false);
+    expect(emis).toEqual([
+      { key: "Control", enfonce: true },
+      { key: "Control", enfonce: false },
+    ]);
+  });
+
+  it("émet le Ctrl gauche avant une frappe qui n'est pas AltGraph (Ctrl+C)", () => {
+    // Une vraie combinaison Ctrl+C : le Ctrl retenu doit précéder le « c ».
+    const { emis, filtre } = banc();
+    filtre.traiter({ key: "Control", code: "ControlLeft" }, true);
+    filtre.traiter({ key: "c", code: "KeyC" }, true);
+    expect(emis).toEqual([
+      { key: "Control", enfonce: true },
+      { key: "c", enfonce: true },
+    ]);
+  });
+
+  it("inactif (Linux ou RDP), tout passe tel quel sans retenir le Control", () => {
+    const { emis, filtre } = banc(false);
+    filtre.traiter({ key: "Control", code: "ControlLeft" }, true);
+    filtre.traiter({ key: "AltGraph", code: "AltRight" }, true);
+    expect(emis).toEqual([
+      { key: "Control", enfonce: true },
+      { key: "AltGraph", enfonce: true },
+    ]);
   });
 });

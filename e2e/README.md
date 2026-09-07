@@ -47,7 +47,14 @@ npx wdio run wdio.conf.js --spec specs/rdp.spec.js   # un seul fichier
 
 `wdio.conf.js` (`onPrepare`) crée un `HOME`/`XDG_CONFIG_HOME` temporaire et y **sème**
 une config SSH de test (hôtes `web-1` rangé dans `prod`, `db-1` à la racine) — aucun
-effet sur la vraie config. Il démarre aussi un **serveur RDP de test** local
+effet sur la vraie config. Le **stockage web** de la webview (langue, partage de
+presse-papiers et son RDP, santé, thème, largeurs de panneaux, dossiers repliés,
+cache des logos) ne vit pas sous `.config` mais sous les répertoires XDG de
+données, de cache et d'état ; `ENV_APP` les redirige donc aussi dans le bac à
+sable (`XDG_DATA_HOME`/`XDG_CACHE_HOME`/`XDG_STATE_HOME`) et `seedSandbox` les
+efface, si bien que `beforeSession` remet à zéro le stockage web **avec le
+reste** — un poste où `XDG_DATA_HOME` est exporté n'écrit jamais dans les
+données réelles de l'utilisateur. Il démarre aussi un **serveur RDP de test** local
 (`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`, et
 `vnc.spec.js` lance le **serveur VNC de test** (`test-vnc-server/`, port 35900,
 mot de passe `test`), qui sert une image connue et réagit aux entrées.

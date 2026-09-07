@@ -21,6 +21,59 @@ pub(crate) fn effective_user(user: Option<String>) -> String {
         .unwrap_or_else(avash::ssh::current_username)
 }
 
+/// Un alias autre que `alias_exclu` résout-il encore vers cet identifiant de
+/// trousseau ?
+///
+/// L'identifiant dérive de `user@hôte:port`, jamais de l'alias : deux alias
+/// vers le même serveur (motif courant, `web` et `web-via-bastion` avec un
+/// `ProxyJump`) partagent l'entrée du trousseau, ce qui est voulu. La
+/// résolution reproduit EXACTEMENT `Target::from_alias` (hostname sinon
+/// l'alias, port 22 par défaut, utilisateur courant faute de `User`) : la
+/// relire autrement retomberait sur le même décalage save/relit que corrige
+/// `effective_user`.
+/// Trouvé par l'audit du 7 septembre 2026 : supprimer ou déplacer un alias
+/// partagé effaçait le mot de passe de l'autre, redemandé « sans explication ».
+#[must_use]
+pub(crate) fn identifiant_encore_utilise(hotes: &[SshHost], alias_exclu: &str, id: &str) -> bool {
+    hotes.iter().filter(|h| h.alias != alias_exclu).any(|h| {
+        // On résout chaque alias comme `Target::from_alias` (blocs à motif
+        // compris) : depuis que `Host *` peut poser `User`, un alias sans `User`
+        // littéral partage l'entrée `adrien@…` héritée, pas `courant@…`. S'en
+        // tenir aux champs littéraux retomberait sur le décalage save/relit.
+        let resolu = avash::resoudre_hote(&h.alias).unwrap_or_else(|| h.clone());
+        let addr = resolu
+            .hostname
+            .clone()
+            .unwrap_or_else(|| resolu.alias.clone());
+        let port = resolu.port.unwrap_or(22);
+        let user = resolu
+            .user
+            .clone()
+            .unwrap_or_else(avash::ssh::current_username);
+        avash::secrets::account_id(&user, &addr, port) == id
+    })
+}
+
+/// Décide, quand l'identifiant de trousseau d'un hôte change, s'il faut copier
+/// le secret vers le nouvel identifiant et/ou oublier l'ancien.
+///
+/// `partage_ancien` : un autre alias résout-il encore vers l'ancien identifiant ?
+/// `nouveau_occupe` : un mot de passe est-il DÉJÀ mémorisé pour le nouveau ?
+///
+/// Le secret est indexé par `user@hôte:port`, jamais par alias : il appartient
+/// à la cible. Trouvé par l'audit du 7 septembre 2026 (scénario 2 du constat) :
+/// repointer `web` (10.0.0.1) vers 10.0.0.2 où `db` avait mémorisé son mot de
+/// passe l'écrasait, et `db` ne se connectait plus. On ne copie donc que si la
+/// cible est LIBRE (sinon on garde le secret de la cible, correct pour elle), et
+/// on n'oublie l'ancien que si on a effectivement copié ailleurs ET qu'aucun
+/// autre alias ne le partage (sinon on perdrait le secret d'un jumeau).
+#[must_use]
+pub(crate) fn plan_deplacement(partage_ancien: bool, nouveau_occupe: bool) -> (bool, bool) {
+    let copier = !nouveau_occupe;
+    let oublier = copier && !partage_ancien;
+    (copier, oublier)
+}
+
 #[tauri::command]
 pub fn password_save(
     addr: String,
@@ -89,7 +142,15 @@ pub fn host_delete(alias: String) -> Result<(), String> {
         .map(|t| avash::secrets::account_id(&t.user, &t.addr, t.port));
     avash::remove_host(&alias).map_err(|e| format!("{e:#}"))?;
     if let Some(id) = identifiant {
-        let _ = avash::secrets::forget(&id);
+        // Un autre alias peut résoudre vers le même identifiant de trousseau
+        // (deux alias vers user@hôte:port partagent l'entrée). On ne l'oublie
+        // que si plus aucun alias ne le réclame. Trouvé par l'audit du
+        // 7 septembre 2026 : supprimer `web-via-bastion` effaçait le mot de
+        // passe de `web`, redemandé sans explication à la connexion suivante.
+        let hotes = avash::parse_ssh_config().unwrap_or_default();
+        if !identifiant_encore_utilise(&hotes, &alias, &id) {
+            let _ = avash::secrets::forget(&id);
+        }
     }
     Ok(())
 }
@@ -152,15 +213,32 @@ pub fn host_update(
         {
             if nouveau != ancien {
                 if let Some(secret) = avash::secrets::load(&ancien) {
-                    // L'oubli n'a lieu qu'après une écriture réussie. Sinon —
-                    // trousseau verrouillé, D-Bus absent — la nouvelle entrée
-                    // n'existait pas, l'ancienne était quand même effacée, et
-                    // `host_update` renvoyait Ok : le mot de passe était perdu
-                    // sans un mot, pour un simple changement de port.
-                    avash::secrets::save(&nouveau, &secret).map_err(|e| {
-                        format!("Le mot de passe mémorisé n'a pas pu être déplacé : {e:#}")
-                    })?;
-                    let _ = avash::secrets::forget(&ancien);
+                    // La cible peut DÉJÀ porter un mot de passe : repointer un
+                    // hôte vers un serveur où un autre hôte a mémorisé le sien ne
+                    // doit pas l'écraser (le secret est indexé par user@hôte:port,
+                    // il appartient à la cible). Et l'ancien ne s'oublie que si
+                    // aucun autre alias ne le partage : deux alias vers le même
+                    // serveur le partagent, changer le port de l'un ne doit pas
+                    // l'effacer pour l'autre. Trouvé par l'audit du 7 septembre
+                    // 2026 (scénarios 1 et 2 du constat).
+                    let nouveau_occupe = avash::secrets::load(&nouveau).is_some();
+                    let hotes = avash::parse_ssh_config().unwrap_or_default();
+                    let partage_ancien =
+                        identifiant_encore_utilise(&hotes, host.alias.trim(), &ancien);
+                    let (copier, oublier) = plan_deplacement(partage_ancien, nouveau_occupe);
+                    if copier {
+                        // L'oubli n'a lieu qu'après une écriture réussie. Sinon —
+                        // trousseau verrouillé, D-Bus absent — la nouvelle entrée
+                        // n'existait pas, l'ancienne était quand même effacée, et
+                        // `host_update` renvoyait Ok : le mot de passe était perdu
+                        // sans un mot, pour un simple changement de port.
+                        avash::secrets::save(&nouveau, &secret).map_err(|e| {
+                            format!("Le mot de passe mémorisé n'a pas pu être déplacé : {e:#}")
+                        })?;
+                        if oublier {
+                            let _ = avash::secrets::forget(&ancien);
+                        }
+                    }
                 }
             }
         }

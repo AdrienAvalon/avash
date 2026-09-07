@@ -116,30 +116,63 @@ fn clé_reprise(
         return None;
     }
     if chemin.to_ascii_lowercase().ends_with(".ppk") {
-        if puttygen_disponible() {
-            remarques.push(format!(
-                "Clé PuTTY ({chemin}) : sera convertie au format OpenSSH avec puttygen à l'import."
-            ));
-        } else {
-            remarques.push(format!(
-                "Clé PuTTY non reprise ({chemin}) : OpenSSH ne lit pas le format .ppk ; installez puttygen pour la convertir à l'import."
-            ));
-        }
+        remarques.push(remarque_ppk(chemin, puttygen_disponible(), cfg!(windows)));
         *ppk = Some(chemin.to_string());
         return None;
     }
     Some(chemin.to_string())
 }
 
-/// `puttygen` est-il sur le chemin ? Il convertit une `.ppk` en clé OpenSSH.
+/// La remarque à porter pour une clé `.ppk`, selon qu'on saura la convertir et
+/// la plateforme. Isolée en fonction pure pour être vérifiable partout.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : sous Windows, `puttygen_disponible()`
+/// rend `false` sans sonder (voir plus bas), mais la clé reste convertible à la
+/// main depuis `PuTTYgen` ; réclamer « installez puttygen » n'a pas de sens (le MSI
+/// l'a posé, seulement en version graphique). On renvoie alors vers la
+/// conversion manuelle.
+fn remarque_ppk(chemin: &str, convertible: bool, sur_windows: bool) -> String {
+    if convertible {
+        format!("Clé PuTTY ({chemin}) : sera convertie au format OpenSSH avec puttygen à l'import.")
+    } else if sur_windows {
+        format!(
+            "Clé PuTTY non reprise ({chemin}) : OpenSSH ne lit pas le format .ppk ; convertissez-la avec PuTTYgen (Conversions → Export OpenSSH key) puis renseignez-la."
+        )
+    } else {
+        format!(
+            "Clé PuTTY non reprise ({chemin}) : OpenSSH ne lit pas le format .ppk ; installez puttygen pour la convertir à l'import."
+        )
+    }
+}
+
+/// `puttygen` est-il utilisable pour convertir une `.ppk` en clé `OpenSSH` ?
+///
+/// Trouvé par l'audit du 7 septembre 2026 : sous Windows, la distribution `PuTTY`
+/// (MSI) ne pose sur le PATH que `puttygen.exe`, sous-système graphique
+/// (`WinMain`). `puttygen --version` y ouvre une boîte de dialogue modale et
+/// `.status()` ne rend la main qu'au clic de l'utilisateur, soit une fenêtre
+/// bloquante par session `.ppk` au scan. On ne sonde donc pas et on rend `false`
+/// (l'interface renvoie alors vers la conversion manuelle de `PuTTYgen`). Sous
+/// Unix, on sonde `puttygen --version`, mais une seule fois par exécution
+/// (mémoïsé) : `clé_reprise` appelait la sonde une fois par session `.ppk`.
 #[must_use]
 pub fn puttygen_disponible() -> bool {
-    std::process::Command::new("puttygen")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    #[cfg(windows)]
+    {
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        static DISPO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *DISPO.get_or_init(|| {
+            std::process::Command::new("puttygen")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+    }
 }
 
 /// Convertit une clé `PuTTY` en clé privée OpenSSH, écrite en 0600 dans `dir`
@@ -158,19 +191,32 @@ pub fn convertir_ppk(ppk: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
     if dest.exists() {
         anyhow::bail!("{} existe déjà : la clé n'est pas écrasée", dest.display());
     }
-    let sortie = std::process::Command::new("puttygen")
-        .arg(ppk)
+    let mut cmd = std::process::Command::new("puttygen");
+    cmd.arg(ppk)
         .args(["-O", "private-openssh", "-o"])
         .arg(&dest)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .context("lancement de puttygen")?;
+        .stdin(std::process::Stdio::null());
+    // Ceinture Windows, comme le sidecar RDP (rdp.rs) : si ce chemin y était
+    // atteint, ne pas laisser `puttygen` ouvrir une fenêtre (audit du
+    // 7 septembre 2026).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let sortie = cmd.output().context("lancement de puttygen")?;
     if !sortie.status.success() {
         anyhow::bail!(
             "puttygen a refusé {} : {}",
             ppk.display(),
             String::from_utf8_lossy(&sortie.stderr).trim()
         );
+    }
+    // Bretelles : ne jamais rendre une clé « convertie » si le fichier n'a pas
+    // été écrit, quel que soit le code de sortie (audit du 7 septembre 2026).
+    if !dest.exists() {
+        anyhow::bail!("puttygen n'a produit aucune clé pour {}", ppk.display());
     }
     crate::restreindre_au_proprietaire(&dest);
     Ok(dest)
@@ -613,6 +659,47 @@ mod tests {
                 .any(|r| r.contains(".ppk") || r.contains("puttygen")),
             "{:?}",
             s.remarques
+        );
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : sous Windows, `puttygen.exe`
+    /// posé par le MSI est graphique (`WinMain`) ; le sonder ouvrirait une
+    /// fenêtre modale bloquante, donc `puttygen_disponible()` y rend `false`
+    /// sans sonder. La clé reste convertible à la main depuis `PuTTYgen` : la
+    /// remarque devait y renvoyer, pas réclamer une installation (le MSI a
+    /// déjà posé l'outil, seulement en version graphique). Fonction pure pour
+    /// être vérifiable sur toute plateforme.
+    #[test]
+    fn la_remarque_ppk_renvoie_a_puttygen_graphique_sous_windows() {
+        let w = remarque_ppk("C:\\a\\cle.ppk", false, true);
+        assert!(w.contains("PuTTYgen"), "{w}");
+        assert!(w.contains("Export OpenSSH"), "{w}");
+        assert!(
+            !w.contains("installez"),
+            "le message « installez puttygen » n'a pas de sens sous Windows : {w}"
+        );
+        let u = remarque_ppk("/a/cle.ppk", false, false);
+        assert!(
+            u.contains("installez puttygen"),
+            "hors Windows, la remarque garde le conseil d'installation : {u}"
+        );
+        let c = remarque_ppk("/a/cle.ppk", true, false);
+        assert!(
+            c.contains("sera convertie"),
+            "clé convertible : remarque de conversion, quelle que soit la plateforme : {c}"
+        );
+    }
+
+    /// Sous Windows, on ne sonde jamais `puttygen` (fenêtre modale bloquante,
+    /// une par session `.ppk` au scan) : `puttygen_disponible()` rend `false`
+    /// d'emblée. Ne s'exécute qu'à la compilation Windows, mais verrouille le
+    /// contrat contre une régression.
+    #[cfg(windows)]
+    #[test]
+    fn puttygen_n_est_jamais_sonde_sous_windows() {
+        assert!(
+            !puttygen_disponible(),
+            "sous Windows, la sonde graphique est proscrite : rendre false sans lancer puttygen"
         );
     }
 

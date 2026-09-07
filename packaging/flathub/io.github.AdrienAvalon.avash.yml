@@ -31,6 +31,15 @@ finish-args:
   - --socket=fallback-x11
   - --socket=wayland
   - --device=dri
+  # Le son du bureau distant (RDP) est joué par la webview, donc par
+  # WebKitGTK puis GStreamer (web/audio.ts, new AudioContext) : sans le
+  # serveur audio de l'hôte, la liste des sorties GStreamer est vide et la
+  # fonction est muette. pulseaudio couvre aussi PipeWire.
+  - --socket=pulseaudio
+  # Les consoles série (crates/avash/src/serie.rs, serialport sur
+  # /dev/ttyUSB*, /dev/ttyACM*) : ces nœuds ne sont exposés que par
+  # --device=all, il n'existe pas de --device= plus étroit pour les tty.
+  - --device=all
   # Le cœur du métier : joindre des serveurs SSH, RDP et VNC.
   - --share=network
   # L'agent SSH du poste : clés chargées, et prêt le temps d'une copie directe.

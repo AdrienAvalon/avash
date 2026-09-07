@@ -21,9 +21,24 @@ export const tunnels = {
   timer: null as number | null,
   /** Tunnels en cours de demarrage : evite le double clic. */
   busy: new Set<string>(),
+  /**
+   * Motif du dernier echec de demarrage, par id. Trouve par l'audit du
+   * 7 septembre 2026 : le coeur renvoie Err avant d'inscrire un statut quand la
+   * connexion ou Tunnel::open echoue, donc `status` ne liste rien et la ligne
+   * n'a pas de last_error a montrer ; on garde le motif ici pour l'afficher sur
+   * la ligne (.terr). Vide au succes, a l'arret et a la suppression.
+   */
+  erreurs: new Map<string, string>(),
 };
 
 const tunnelsModal = () => $("tunnels-modal");
+
+// Trouve par l'audit du 7 septembre 2026 : quand tunnel_defs/tunnel_status
+// echoue, l'erreur partait dans #t-error, invisible (dans la modale, voire
+// modale fermee quand le minuteur de fond tourne). On notifie desormais, mais
+// une seule fois par transition succes -> echec : sinon un coeur en panne
+// cracherait un bandeau a chaque tick (1,5 s modale ouverte, 5 s au repos).
+let refreshEnEchec = false;
 
 /** Recharge definitions + etats, puis redessine liste et badges. */
 async function tunnelsRefresh() {
@@ -34,9 +49,10 @@ async function tunnelsRefresh() {
     ]);
     tunnels.defs = defs;
     tunnels.status = new Map(status.map((s) => [s.id, s]));
+    refreshEnEchec = false;
   } catch (e) {
-    $("t-error").textContent = String(e);
-    $("t-error").hidden = false;
+    if (!refreshEnEchec) notifyErreur(t("tunnels-etat-indisponible", { e: String(e) }));
+    refreshEnEchec = true;
     return;
   }
   const before = tunnels.byHost;
@@ -50,7 +66,7 @@ async function tunnelsRefresh() {
   if (tunnelsModal().classList.contains("open")) renderTunnels();
 }
 
-function renderTunnels() {
+export function renderTunnels() {
   const list = $("tunnel-list");
   list.innerHTML = "";
   // L'hote d'origine en tete, le reste ensuite : on voit d'abord ce pour
@@ -82,7 +98,7 @@ function renderTunnels() {
       </div>
       <div class="tacts">
         <button class="tbtn" data-act="toggle"></button>
-        <button class="tbtn" data-act="edit" title="Modifier">${ic("pencil")}</button>
+        <button class="tbtn" data-act="edit" title="${t("snippets-modifier")}">${ic("pencil")}</button>
         <button class="tbtn danger" data-act="delete" title="${t("supprimer")}">${ic("trash")}</button>
       </div>`;
     row.querySelector(".tflag")!.textContent = tunnelFlag(d.kind);
@@ -98,9 +114,17 @@ function renderTunnels() {
     if (st?.last_error) {
       err.textContent = `⚠️ ${st.last_error}`;
       err.hidden = false;
+    } else if (tunnels.erreurs.has(d.id)) {
+      // Trouvé par l'audit du 7 septembre 2026 : un tunnel_start en échec ne
+      // crée aucune entrée de statut (le cœur renvoie Err avant d'insérer),
+      // donc st est absent et #t-error, dans le <details> refermé, reste
+      // invisible ; on montre le motif ici, sur la ligne (hors du <details>).
+      err.textContent = `⚠️ ${tunnels.erreurs.get(d.id)}`;
+      err.hidden = false;
     }
+    const busy = tunnels.busy.has(d.id);
     const toggle = row.querySelector('[data-act="toggle"]') as HTMLButtonElement;
-    if (tunnels.busy.has(d.id)) {
+    if (busy) {
       toggle.textContent = "…";
       toggle.disabled = true;
     } else if (alive) {
@@ -111,8 +135,17 @@ function renderTunnels() {
       toggle.className = "tbtn go labeled";
     }
     toggle.addEventListener("click", () => tunnelToggle(d));
-    row.querySelector('[data-act="edit"]')!.addEventListener("click", () => tunnelEdit(d));
-    row.querySelector('[data-act="delete"]')!.addEventListener("click", () => tunnelDelete(d));
+    // Trouvé par l'audit du 7 septembre 2026 : pendant le démarrage, seul le
+    // toggle était gelé ; « Supprimer » laissait un tunnel fantôme (la
+    // définition partait mais tunnel_start finissait par l'installer, sans
+    // ligne pour l'arrêter) et « Modifier » réécrivait une définition dont
+    // tunnel_start avait déjà pris l'ancienne copie. On gèle donc les trois.
+    const edit = row.querySelector('[data-act="edit"]') as HTMLButtonElement;
+    const del = row.querySelector('[data-act="delete"]') as HTMLButtonElement;
+    edit.disabled = busy;
+    del.disabled = busy;
+    edit.addEventListener("click", () => tunnelEdit(d));
+    del.addEventListener("click", () => tunnelDelete(d));
     list.appendChild(row);
   }
 }
@@ -122,6 +155,7 @@ async function tunnelToggle(d: TunnelDef) {
   if (st?.alive) {
     try {
       await invoke("tunnel_stop", { id: d.id });
+      tunnels.erreurs.delete(d.id);
     } catch (e) {
       notifyErreur(t("tunnels-arret-impossible", { e: String(e) }));
     }
@@ -156,6 +190,9 @@ async function tunnelStart(d: TunnelDef) {
     for (let essai = 0; essai < 3; essai++) {
       try {
         await invoke("tunnel_start", { id: d.id, password });
+        // Demarrage reussi : on efface un motif d'echec eventuellement colle a
+        // la ligne, sinon il resterait affiche sur un tunnel desormais vivant.
+        tunnels.erreurs.delete(d.id);
         if (password && rememberAsked && h) {
           await invoke("password_save", {
             addr: h.hostname ?? h.alias,
@@ -168,16 +205,28 @@ async function tunnelStart(d: TunnelDef) {
       } catch (e) {
         const msg = String(e);
         if (!isPasswordRequired(msg)) {
-          $("t-error").textContent = t("tunnels-demarrage-impossible", { e: msg });
-          $("t-error").hidden = false;
+          // Trouvé par l'audit du 7 septembre 2026 : l'échec partait dans
+          // #t-error, qui vit dans le <details> « Nouveau tunnel » refermé dès
+          // qu'une définition existe — donc jamais affiché. On garde le motif
+          // sur la ligne du tunnel (.terr, hors du <details>) et on double d'un
+          // bandeau pour que la cause ne puisse pas passer inaperçue.
+          tunnels.erreurs.set(d.id, t("tunnels-demarrage-impossible", { e: msg }));
+          notifyErreur(t("tunnels-demarrage-impossible", { e: msg }));
           return;
         }
+        // Trouvé par l'audit du 7 septembre 2026 : au 3e refus, la boucle
+        // redemandait un mot de passe qu'elle jetait ensuite sans rien tenter
+        // ni dire. On ne redemande donc que s'il reste un essai, et l'échec des
+        // trois est signalé comme pour un onglet (main.ts, « trois-tentatives »).
+        if (essai === 2) break;
         const rep = await askPassword(label, essai === 0 ? undefined : t("mdp-refuse-nouvelle-tentative"));
         if (!rep) return;
         password = rep.password;
         rememberAsked = rep.remember;
       }
     }
+    tunnels.erreurs.set(d.id, t("trois-tentatives"));
+    notifyErreur(t("trois-tentatives"));
   } finally {
     tunnels.busy.delete(d.id);
     await tunnelsRefresh();
@@ -190,6 +239,7 @@ async function tunnelDelete(d: TunnelDef) {
   if (!ok) return;
   try {
     await invoke("tunnel_def_delete", { id: d.id });
+    tunnels.erreurs.delete(d.id);
   } catch (e) {
     notifyErreur(t("suppression-impossible", { e: String(e) }));
   }
@@ -198,23 +248,30 @@ async function tunnelDelete(d: TunnelDef) {
 
 // ----- Formulaire -----
 
-const KIND_HINTS: Record<TunnelKind, { hint: string; bind: string; host: string }> = {
-  local: {
-    hint: t("tunnels-local-hint"),
-    bind: t("port-local-d-ecoute"),
-    host: t("destination-vue-du-serveur"),
-  },
-  remote: {
-    hint: t("tunnels-distant-hint"),
-    bind: t("tunnels-port-serveur"),
-    host: t("tunnels-destination-machine"),
-  },
-  dynamic: {
-    hint: t("tunnels-socks-hint"),
-    bind: t("tunnels-port-mandataire"),
-    host: "",
-  },
-};
+// Trouvé par l'audit du 7 septembre 2026 : une constante de module figeait ces
+// libellés dans la langue du chargement ; après une bascule en cours de session
+// (« Switch to English »), tunnelSyncKind réécrivait le formulaire avec les
+// chaînes de départ, écrasant ce qu'appliquerLangue venait de traduire. On les
+// (re)calcule donc à chaque appel, dans la langue courante.
+function kindHints(): Record<TunnelKind, { hint: string; bind: string; host: string }> {
+  return {
+    local: {
+      hint: t("tunnels-local-hint"),
+      bind: t("port-local-d-ecoute"),
+      host: t("destination-vue-du-serveur"),
+    },
+    remote: {
+      hint: t("tunnels-distant-hint"),
+      bind: t("tunnels-port-serveur"),
+      host: t("tunnels-destination-machine"),
+    },
+    dynamic: {
+      hint: t("tunnels-socks-hint"),
+      bind: t("tunnels-port-mandataire"),
+      host: "",
+    },
+  };
+}
 
 function tunnelKind(): TunnelKind {
   const checked = document.querySelector<HTMLInputElement>('input[name="tkind"]:checked');
@@ -222,7 +279,7 @@ function tunnelKind(): TunnelKind {
 }
 
 function tunnelSyncKind() {
-  const k = KIND_HINTS[tunnelKind()];
+  const k = kindHints()[tunnelKind()];
   $("t-kind-hint").textContent = k.hint;
   $("t-bind-label").textContent = k.bind;
   $("t-host-label").textContent = k.host;
@@ -234,7 +291,7 @@ function tunnelFormReset() {
   ($("tunnel-form") as HTMLFormElement).reset();
   ($("t-id") as HTMLInputElement).value = "";
   $("tunnel-form-title").textContent = t("nouveau-tunnel");
-  $("t-submit").textContent = "Enregistrer";
+  $("t-submit").textContent = t("enregistrer");
   $("t-reset").hidden = true;
   $("t-error").hidden = true;
   if (tunnels.focusAlias) ($("t-alias") as HTMLSelectElement).value = tunnels.focusAlias;
@@ -249,7 +306,7 @@ function tunnelEdit(d: TunnelDef) {
   ($("t-host") as HTMLInputElement).value = d.target_host;
   ($("t-port") as HTMLInputElement).value = d.target_port ? String(d.target_port) : "";
   ($("t-name") as HTMLInputElement).value = d.name;
-  $("tunnel-form-title").textContent = `Modifier « ${d.name || describeTunnel(d)} »`;
+  $("tunnel-form-title").textContent = t("snippets-modifier-titre", { nom: d.name || describeTunnel(d) });
   $("t-submit").textContent = t("enregistrer-les-modifications");
   $("t-reset").hidden = false;
   ($("tunnel-block") as HTMLDetailsElement).open = true;

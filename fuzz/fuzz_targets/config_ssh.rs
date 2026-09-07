@@ -12,6 +12,14 @@ fuzz_target!(|data: &[u8]| {
         assert!(!h.alias.is_empty(), "alias vide");
         assert!(!h.alias.contains(['\n', '\r']), "alias multiligne");
         assert_ne!(h.port, Some(0), "port nul accepté");
+        // La résolution des blocs à motif (`Host *`) ne doit ni paniquer ni
+        // hériter d'un port nul. Elle peut rendre `None` sur une config
+        // pathologique (`Host prod !prod` : la négation annule le bloc littéral),
+        // d'où le `if let` plutôt qu'un `expect`.
+        if let Some(resolu) = avash::resoudre_hote_dans(&contenu, &h.alias) {
+            assert_eq!(resolu.alias, h.alias, "alias perdu à la résolution");
+            assert_ne!(resolu.port, Some(0), "port nul hérité");
+        }
         if let Some(pj) = &h.proxy_jump {
             for hop in avash::split_proxy_jump(pj) {
                 assert_eq!(hop.host.trim(), hop.host, "rebond non rogné : {hop:?}");

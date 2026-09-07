@@ -81,7 +81,22 @@ export function surFocus(o: Onglet, precedent: Onglet | null): void {
 
 /** Un onglet se ferme : s'il tenait un volet, le partage s'arrête. */
 export function surFermeture(o: Onglet): void {
-  if (volets && (meme(volets.gauche, o) || meme(volets.droit, o))) volets = null;
+  if (volets && (meme(volets.gauche, o) || meme(volets.droit, o))) {
+    volets = null;
+    // Trouvé par l'audit du 7 septembre 2026 : on remettait `volets` à null
+    // sans réappliquer la vue. Les appelants (`closeRdp`, `closeSession`) ne
+    // rappellent `appliquerVue` que quand l'onglet fermé était l'actif (via
+    // `focusTab`) ; fermer le volet INACTIF laissait alors `#terminal` avec la
+    // classe `partage` et ses deux `.volet` — l'actif coincé à 50 % de largeur,
+    // le volet voisin vide, un bureau RDP non redimensionné — jusqu'au prochain
+    // changement d'onglet. On nettoie donc ici, ce qui couvre d'un coup tous les
+    // appelants (croix, Ctrl+W, incrustation « connexion fermée », repli sans
+    // NLA). L'ordre chez les appelants le permet : `surFermeture` précède le
+    // `dispose()`/`remove()` du conteneur, que `appliquerVue` rapatrie à la
+    // racine avant qu'il ne soit retiré ; la session encore présente dans
+    // `state.sessions`/`rdpSessions` est simplement passée en display:none.
+    appliquerVue();
+  }
 }
 
 /**
