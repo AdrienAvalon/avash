@@ -47,6 +47,43 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   qu'Avash connaît : toute autre (`ForwardAgent`, `LocalForward`,
   `IdentitiesOnly`, `Ciphers`, commentaires…) disparaissait en silence. Ces
   directives sont désormais conservées.
+- **L'avertissement de clé d'hôte changée revient à travers un rebond.** Les
+  échecs de connexion étaient aplatis par le `Display` d'un `anyhow::Error`, qui
+  ne montre que son contexte externe : dès qu'un `ProxyJump` était en jeu, le
+  contexte « Rebond hôte:port » enterrait les marqueurs que l'interface repère
+  pour proposer d'oublier une clé changée ou de saisir un mot de passe. La
+  chaîne d'erreur complète est désormais transmise.
+- **Un `cat` d'un fichier binaire ne fige plus l'onglet.** Le décodeur UTF-8 du
+  flux du terminal ne sautait qu'une séquence invalide par bloc et différait le
+  reste : sur un flot d'octets invalides, sa mémoire tampon grossissait sans
+  borne (coût quadratique) jusqu'à faire tomber l'onglet, et le texte suivant un
+  octet invalide n'apparaissait qu'au bloc d'après. Tout le bloc est maintenant
+  décodé d'un coup, les octets invalides rendus par le caractère de
+  remplacement.
+- **Une copie directe interrompue n'est plus annoncée réussie.** La copie d'un
+  fichier d'un hôte à un autre (scp) lisait le code de sortie de la commande
+  distante, mais celui-ci valait 0 par défaut : un canal fermé sans code (lien
+  coupé, processus tué) passait pour un succès. L'absence de code de sortie, ou
+  une interruption par signal, est désormais une erreur.
+- **Une clé dont le chemin contient une espace ne casse plus toute la
+  configuration.** Une valeur avec espace (`IdentityFile C:\Users\Jean
+  Dupont\…`, courant sous Windows) était écrite sans guillemets ; OpenSSH lisait
+  alors « extra arguments » et rejetait toute la configuration, rendant chaque
+  hôte inutilisable par `ssh`. Ces valeurs sont désormais guillemetées à
+  l'écriture et déguillemetées à la lecture ; une espace est refusée pour
+  `HostName`, `User` et `ProxyJump`, où rien de légitime n'en contient.
+- **Une clé chiffrée par phrase de passe ne bloque plus la connexion.** Le
+  chargement d'une `IdentityFile` chiffrée échouait avant même que l'agent SSH
+  ou le mot de passe ne soient essayés : l'onglet se fermait alors que `ssh`
+  (clé dans l'agent) fonctionnait. L'échec de chargement dégrade désormais vers
+  l'agent puis le mot de passe, comme le fait OpenSSH ; la raison n'apparaît que
+  dans l'erreur finale, si tout échoue.
+- **Une copie relais depuis une source illisible n'écrit plus un fichier vide.**
+  La copie d'un hôte à l'autre lisait la taille de la source par une opération
+  dont l'échec était ignoré (valeur nulle) : un lien symbolique cassé ou un
+  fichier disparu créait une cible vide annoncée « copiée », et une cible
+  existante était tronquée. La source est désormais lue et ouverte avant que la
+  cible ne soit créée ou modifiée.
 
 ## [0.9.2] - 2026-09-06
 

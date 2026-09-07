@@ -160,7 +160,12 @@ impl russh::server::Handler for TestSshSession {
         // close. Le code envoyait exit-status AVANT eof, ce qui masquait un
         // bug ou run() cassait sur Eof et renvoyait toujours 0.
         let _ = session.eof(channel_id);
-        let _ = session.exit_status_request(channel_id, code);
+        // Marqueur de test : simule une commande interrompue — canal fermé SANS
+        // exit-status (lien coupé, processus tué). Sert à vérifier que
+        // `run_avec_agent` ne prend pas ce silence pour un succès.
+        if !cmd.contains("SANS_STATUT") {
+            let _ = session.exit_status_request(channel_id, code);
+        }
         let _ = session.close(channel_id);
         let _ = channel;
         Ok(())
@@ -1842,6 +1847,67 @@ async fn une_invite_en_clair_n_est_pas_remplie_avec_le_mot_de_passe() {
     );
 }
 
+/// Trouvé par l'audit du 7 septembre 2026 : `authenticate` faisait `?` sur le
+/// chargement de la clé. Une clé chiffrée par phrase de passe (chargée dans
+/// l'agent, donc `ssh` fonctionne) faisait échouer la connexion AVANT même
+/// d'essayer l'agent ou le mot de passe. On utilise l'utilisateur « refuse »,
+/// qui rejette la clé publique : un éventuel agent SSH réel de la machine ne
+/// peut donc pas aboutir, et l'on éprouve bien le repli par mot de passe.
+#[tokio::test]
+async fn une_cle_chiffree_ne_bloque_pas_le_repli_mot_de_passe() {
+    let port = spawn_test_sshd().await;
+    std::sync::LazyLock::force(&HOME_POSE); // pose HOME
+    let cle = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
+    let chiffree = cle.encrypt(&mut rand::rng(), "phrase-de-passe").unwrap();
+    let pem = chiffree
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .unwrap();
+    let path = virtual_home().join(format!("id_chiffree-{}", std::process::id()));
+    std::fs::write(&path, pem.as_bytes()).unwrap();
+    // Garde-fou : la clé ne doit PAS se charger sans phrase, sinon le test ne
+    // prouverait rien.
+    assert!(
+        russh::keys::load_secret_key(&path, None).is_err(),
+        "la clé de test doit être chiffrée"
+    );
+
+    // Clé chiffrée + mot de passe accepté : la connexion aboutit par le mot de
+    // passe, au lieu d'échouer au chargement de la clé.
+    let auth = avash::ssh::ClientAuth {
+        user: "refuse".into(),
+        key_path: Some(path.clone()),
+        password: Some("le-bon".into()),
+    };
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("le mot de passe doit prendre le relais d'une clé chiffrée");
+    let (out, _) = session.run("echo ok").await.unwrap();
+    assert!(out.contains("CMD:echo ok"), "{out:?}");
+    session.disconnect().await.unwrap();
+
+    // Sans mot de passe : l'échec porte le marqueur (l'interface demandera un
+    // mot de passe) et nomme la clé inutilisable.
+    let auth_sans = avash::ssh::ClientAuth {
+        user: "refuse".into(),
+        key_path: Some(path.clone()),
+        password: None,
+    };
+    let err = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth_sans)
+        .await
+        .err()
+        .expect("sans mot de passe, la connexion doit échouer");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains(avash::ssh::PASSWORD_REQUIRED),
+        "le marqueur d'invite de mot de passe est attendu : {msg}"
+    );
+    assert!(
+        msg.contains("id_chiffree"),
+        "la clé inutilisable doit être nommée : {msg}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // ---------- ProxyJump ----------
 
 #[tokio::test]
@@ -1894,6 +1960,55 @@ async fn proxy_jump_a_deux_rebonds() {
     let (out, _) = session.run("echo deux-rebonds").await.unwrap();
     assert!(out.contains("CMD:echo deux-rebonds"), "{out:?}");
     session.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn un_rebond_a_cle_changee_garde_le_marqueur_sous_le_format_alterne() {
+    // Trouvé par l'audit du 7 septembre 2026 : `connect_via` enrobe l'échec d'un
+    // rebond d'un « Rebond hôte:port », ce qui enterre le marqueur
+    // `[AVASH_HOST_KEY_CHANGED]`. Le `Display` d'anyhow (`to_string()`, ce que
+    // faisait `etablir`) n'affiche que ce contexte externe et perd le marqueur ;
+    // l'interface, qui le repère par inclusion, ne proposait alors pas d'oublier
+    // la clé changée d'un rebond. `{e:#}` déroule toute la chaîne, marqueur
+    // compris.
+    let jump_port = spawn_test_sshd().await;
+    let _auth = test_auth(); // pose HOME
+                             // Fausse clé mémorisée pour le REBOND : sa clé d'hôte « a changé ».
+    let decoy = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
+    let known_hosts = avash::ssh::chemin_known_hosts().unwrap();
+    russh::keys::known_hosts::learn_known_hosts_path(
+        "127.0.0.1",
+        jump_port,
+        decoy.public_key(),
+        &known_hosts,
+    )
+    .unwrap();
+
+    let hop = avash::ssh::Hop {
+        addr: "127.0.0.1".into(),
+        port: jump_port,
+        auth: test_auth(),
+    };
+    let err = avash::ssh::AvashSession::connect_via(&[hop], "127.0.0.1", jump_port, &test_auth())
+        .await
+        .err()
+        .expect("une clé de rebond changée doit être refusée");
+
+    let _ = avash::ssh::forget_host_key_at("127.0.0.1", jump_port, &known_hosts);
+
+    let alterne = format!("{err:#}");
+    assert!(
+        alterne.contains("Rebond"),
+        "le contexte du rebond est attendu : {alterne}"
+    );
+    assert!(
+        alterne.contains(avash::ssh::HOST_KEY_CHANGED),
+        "le marqueur doit survivre au format alterné : {alterne}"
+    );
+    assert!(
+        !err.to_string().contains(avash::ssh::HOST_KEY_CHANGED),
+        "to_string() n'affiche que le contexte externe et perd le marqueur : {err}"
+    );
 }
 
 #[tokio::test]
@@ -2228,6 +2343,54 @@ async fn un_envoi_annule_reprend_sans_renvoyer_les_bandes_faites() {
     sftp.close().await.unwrap();
 }
 
+/// Trouvé par l'audit du 7 septembre 2026 : `relayer_vers` lisait la taille par
+/// `metadata(...).map_or(0, ...)`. Une source illisible (lien symbolique vers un
+/// fichier supprimé) donnait `total = 0`, la cible était alors créée vide et la
+/// copie annoncée « réussie » ; une cible préexistante était tronquée avant que
+/// l'échec ne survienne. Une source illisible doit échouer SANS créer ni
+/// tronquer la cible.
+#[tokio::test]
+async fn relayer_vers_echoue_sur_une_source_illisible_sans_toucher_la_cible() {
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+    // Cible préexistante non vide : elle ne doit être ni tronquée ni écrasée.
+    fs_poser("/fs/relaisko/garde.txt", b"contenu-precieux");
+
+    let issue = source
+        .relayer_vers(
+            "/fs/relaisko/absente.log",
+            &cible,
+            "/fs/relaisko/garde.txt",
+            None,
+            |_, _| {},
+        )
+        .await;
+    assert!(issue.is_err(), "une source illisible doit échouer");
+    assert_eq!(
+        fs_lire("/fs/relaisko/garde.txt").as_deref(),
+        Some(&b"contenu-precieux"[..]),
+        "la cible existante doit rester intacte"
+    );
+
+    // Vers une cible neuve : aucun fichier vide ne doit être créé.
+    let issue2 = source
+        .relayer_vers(
+            "/fs/relaisko/absente2.log",
+            &cible,
+            "/fs/relaisko/neuf.bin",
+            None,
+            |_, _| {},
+        )
+        .await;
+    assert!(issue2.is_err(), "une source illisible doit échouer");
+    assert!(
+        fs_lire("/fs/relaisko/neuf.bin").is_none(),
+        "aucune cible vide ne doit être créée"
+    );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
 /// Un dossier passe d'un serveur à un autre par le poste sans rien y écrire :
 /// deux serveurs, deux sessions, et les octets identiques à l'arrivée.
 #[tokio::test]
@@ -2352,6 +2515,31 @@ async fn les_deux_executions_rendent_toute_une_sortie_de_trois_kilo_octets() {
         out.len()
     );
     session.disconnect().await.unwrap();
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : `run_avec_agent` initialisait le
+/// code de sortie à 0 et ne le changeait que sur `ExitStatus`. Une copie
+/// directe (scp) interrompue — canal fermé sans statut — rendait donc 0 et se
+/// voyait « réussie ». Sans statut de sortie, la commande doit échouer.
+#[tokio::test]
+async fn run_avec_agent_echoue_quand_le_canal_ferme_sans_statut() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+    // Le serveur de test ferme le canal sans exit-status sur ce marqueur.
+    let err = session
+        .run_avec_agent("echo SANS_STATUT")
+        .await
+        .expect_err("une fermeture sans statut doit échouer");
+    assert!(
+        err.to_string().contains("sans code de sortie"),
+        "message inattendu : {err}"
+    );
+    // Une commande normale, elle, rend toujours son code.
+    let (_out, code) = session.run_avec_agent("echo ok ; exit 3").await.unwrap();
+    assert_eq!(code, 3);
 }
 
 /// Se déconnecter ferme la session, et `is_closed` le dit.

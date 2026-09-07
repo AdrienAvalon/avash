@@ -679,22 +679,39 @@ impl AvashSession {
         session: &mut russh::client::Handle<AvashAuth>,
         auth: &ClientAuth,
     ) -> Result<()> {
+        // Raison pour laquelle la clé n'a pas servi (chiffrée par phrase de
+        // passe, format non géré, droits) — gardée pour l'erreur finale, pas
+        // fatale en soi. Trouvé par l'audit du 7 septembre 2026 : un `?` sur le
+        // chargement coupait la connexion avant même d'essayer l'agent ou le
+        // mot de passe, alors que `ssh` (clé dans l'agent) fonctionnait.
+        let mut raison_cle: Option<String> = None;
         if let Some(key_path) = &auth.key_path {
-            let key = russh::keys::load_secret_key(key_path, None)
-                .with_context(|| format!("Chargement clé {}", key_path.display()))?;
-            // Pour une cle RSA, `None` demanderait le hash historique SHA-1
-            // (ssh-rsa), refuse par les serveurs OpenSSH recents. On presente
-            // donc rsa-sha2-256. Ignore pour les autres types (nos cles
-            // generees sont ed25519).
-            let hash = matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. })
-                .then_some(russh::keys::HashAlg::Sha256);
-            let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash);
-            if session
-                .authenticate_publickey(&auth.user, key)
-                .await?
-                .success()
-            {
-                return Ok(());
+            match russh::keys::load_secret_key(key_path, None) {
+                Ok(key) => {
+                    // Pour une cle RSA, `None` demanderait le hash historique
+                    // SHA-1 (ssh-rsa), refuse par les serveurs OpenSSH recents.
+                    // On presente donc rsa-sha2-256. Ignore pour les autres
+                    // types (nos cles generees sont ed25519).
+                    let hash = matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. })
+                        .then_some(russh::keys::HashAlg::Sha256);
+                    let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash);
+                    if session
+                        .authenticate_publickey(&auth.user, key)
+                        .await?
+                        .success()
+                    {
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    // La clé n'est pas utilisable ici : on passe à l'agent puis
+                    // au mot de passe, comme OpenSSH le fait pour une identité
+                    // qu'il ne peut pas charger (« no such identity »).
+                    raison_cle = Some(format!(
+                        "la clé {} n'a pas pu être utilisée : {e:#}",
+                        key_path.display()
+                    ));
+                }
             }
         }
         // Agent SSH : comme OpenSSH, on tente les cles chargees dans l'agent
@@ -732,18 +749,27 @@ impl AvashSession {
         }
         // Marqueur reconnu par l'interface : elle demande alors le mot de
         // passe et retente, plutot que d'afficher un echec sans recours.
+        // La raison de l'échec de la clé n'apparaît qu'ici, en fin de course,
+        // pour ne pas masquer un succès par l'agent ou le mot de passe.
+        let detail_cle = raison_cle
+            .as_deref()
+            .map(|r| format!(" ({r})"))
+            .unwrap_or_default();
         if auth.password.is_none() {
             return Err(anyhow!(
                 "{PASSWORD_REQUIRED} Aucune méthode d'authentification n'a abouti pour « {} ». \
-                 Un mot de passe est nécessaire.",
+                 Un mot de passe est nécessaire.{detail_cle}",
                 auth.user
             ));
         }
         if restantes.is_empty() {
-            return Err(anyhow!("Authentification échouée pour {}.", auth.user));
+            return Err(anyhow!(
+                "Authentification échouée pour {}.{detail_cle}",
+                auth.user
+            ));
         }
         Err(anyhow!(
-            "Authentification échouée pour {}. Le serveur propose encore : {}.",
+            "Authentification échouée pour {}. Le serveur propose encore : {}.{detail_cle}",
             auth.user,
             restantes.join(", ")
         ))
@@ -924,6 +950,7 @@ impl AvashSession {
         channel.exec(false, command).await?;
         let mut sortie = String::new();
         let mut exit_code = 0u32;
+        let mut statut_recu = false;
         let mut tronquee = false;
         while let Some(msg) = channel.wait().await {
             match msg {
@@ -935,13 +962,37 @@ impl AvashSession {
                     }
                     sortie.push_str(&String::from_utf8_lossy(data));
                 }
-                russh::ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status,
+                russh::ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = exit_status;
+                    statut_recu = true;
+                }
+                // Commande tuée par un signal : pas de code de sortie, mais un
+                // échec bien réel — surtout pour une copie directe (scp).
+                russh::ChannelMsg::ExitSignal {
+                    ref signal_name, ..
+                } => {
+                    return Err(anyhow!(
+                        "La commande distante a été interrompue par un signal ({signal_name:?})."
+                    ));
+                }
                 russh::ChannelMsg::Close => break,
                 _ => {}
             }
         }
         if tronquee {
             sortie.push_str("\n[sortie tronquée : plafond de 1 Mio atteint]\n");
+            return Ok((sortie, exit_code));
+        }
+        // Trouvé par l'audit du 7 septembre 2026 : `exit_code` valait 0 par
+        // défaut et n'était renseigné que par `ExitStatus`. Un canal fermé sans
+        // statut (lien coupé, processus disparu) rendait donc 0 — « réussi » —
+        // alors que la copie directe (scp), seul appelant, était interrompue en
+        // plein transfert. Sans statut de sortie, on ne conclut pas au succès.
+        if !statut_recu {
+            return Err(anyhow!(
+                "La commande distante s'est terminée sans code de sortie \
+                 (canal fermé prématurément) : issue inconnue."
+            ));
         }
         Ok((sortie, exit_code))
     }

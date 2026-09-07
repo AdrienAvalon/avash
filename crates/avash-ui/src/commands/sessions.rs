@@ -314,28 +314,43 @@ pub struct Utf8Stream {
 
 impl Utf8Stream {
     /// Consomme un bloc et rend le texte decodable maintenant.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : l'ancienne version ne sautait
+    /// qu'UNE séquence invalide par appel et différait tout le reste du bloc
+    /// dans `carry`. Sur un flux d'octets invalides (`cat` d'un binaire), `carry`
+    /// gonflait sans borne — copie O(n) à chaque bloc, donc O(n²) — et l'onglet
+    /// finissait par mourir ; le texte suivant un octet invalide n'apparaissait
+    /// qu'au bloc d'après. On parcourt désormais tout le tampon, on remplace
+    /// chaque séquence invalide par U+FFFD au fil de l'eau, et l'on ne conserve
+    /// dans `carry` qu'une éventuelle séquence multi-octets TRONQUÉE en fin de
+    /// bloc (au plus 3 octets), à recoller au bloc suivant.
     pub fn push(&mut self, chunk: &[u8]) -> String {
         self.carry.extend_from_slice(chunk);
-        match std::str::from_utf8(&self.carry) {
-            Ok(s) => {
-                let out = s.to_owned();
-                self.carry.clear();
-                out
+        let mut out = String::new();
+        let mut consumed = 0; // octets de `carry` déjà traités
+        loop {
+            let (valid, error_len) = match std::str::from_utf8(&self.carry[consumed..]) {
+                Ok(s) => {
+                    out.push_str(s);
+                    self.carry.clear();
+                    return out;
+                }
+                // `Utf8Error` ne retient pas le tampon : on en sort les indices,
+                // ce qui libère l'emprunt avant de muter `carry`.
+                Err(e) => (e.valid_up_to(), e.error_len()),
+            };
+            if let Ok(s) = std::str::from_utf8(&self.carry[consumed..consumed + valid]) {
+                out.push_str(s);
             }
-            Err(e) => {
-                let valid = e.valid_up_to();
-                // Sequence tronquee en fin de bloc : on la garde pour la suite.
-                // Sequence reellement invalide : on ne bloque pas le terminal.
-                let out = String::from_utf8_lossy(&self.carry[..valid]).into_owned();
-                let rest = if e.error_len().is_some() {
-                    // Octet invalide : on le saute pour ne pas coincer le flux.
-                    self.carry[valid + e.error_len().unwrap_or(1)..].to_vec()
-                } else {
-                    self.carry[valid..].to_vec()
-                };
-                self.carry = rest;
-                out
-            }
+            let Some(len) = error_len else {
+                // Séquence tronquée en toute fin : on ne garde qu'elle.
+                self.carry.drain(..consumed + valid);
+                return out;
+            };
+            // Octet(s) réellement invalide(s) au milieu du bloc : un U+FFFD, et
+            // on poursuit le décodage du reste dans le même appel.
+            out.push('\u{FFFD}');
+            consumed += valid + len;
         }
     }
 }
@@ -433,14 +448,22 @@ async fn etablir(
     cols: u32,
     rows: u32,
 ) -> Result<(AvashSession, avash::ssh::PtyChannel), String> {
+    // `{e:#}` et non `to_string()` : un `anyhow::Error` n'affiche par `Display`
+    // que son contexte externe. Or `connect_via` enrobe l'échec d'un rebond
+    // d'un « Rebond hôte:port », ce qui enterre les marqueurs
+    // `[AVASH_HOST_KEY_CHANGED]` / `[AVASH_PASSWORD_REQUIRED]` posés par la
+    // couche SSH — l'interface (qui les repère par inclusion) ne proposait alors
+    // ni d'oublier la clé changée ni de saisir un mot de passe dès qu'un rebond
+    // était en jeu. Le format alterné déroule toute la chaîne, marqueur compris.
+    // Trouvé par l'audit du 7 septembre 2026.
     let mut session =
         AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:#}"))?;
     let pty = session
         .open_pty(cols, rows, "xterm-256color")
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e:#}"))?;
     Ok((session, pty))
 }
 

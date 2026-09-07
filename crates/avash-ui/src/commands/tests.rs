@@ -355,6 +355,23 @@ fn utf8_ascii_passe_sans_latence() {
     let mut d = Utf8Stream::default();
     assert_eq!(d.push(b"ls -la\r\n"), "ls -la\r\n");
 }
+
+#[test]
+fn utf8_un_flot_d_octets_invalides_ne_gonfle_pas_le_carry() {
+    // Trouvé par l'audit du 7 septembre 2026 : sur un octet invalide, `push`
+    // ne sautait qu'une séquence et différait le reste du bloc dans `carry`,
+    // qui gonflait sans borne (un `cat` d'un binaire faisait du O(n²) et tuait
+    // l'onglet). Tout le bloc doit être consommé ; `carry` ne retient qu'une
+    // éventuelle séquence tronquée de fin (au plus 3 octets).
+    let mut d = Utf8Stream::default();
+    for _ in 0..1000 {
+        let _ = d.push(&[0x80u8; 512]); // octets de continuation, tous invalides
+        assert!(d.carry.len() <= 3, "carry non borné : {}", d.carry.len());
+    }
+    // Le texte qui suit un octet invalide sort dans le MÊME appel, pas au suivant.
+    let out = d.push(&[0xFF, b'O', b'K']);
+    assert!(out.ends_with("OK"), "{out:?}");
+}
 // ---------- Target::manual ----------
 
 #[test]

@@ -963,7 +963,26 @@ impl SftpHandle {
     ) -> Result<u64> {
         use russh_sftp::protocol::OpenFlags;
         use tokio::io::AsyncSeekExt as _;
-        let total = self.sftp.metadata(remote).await.map_or(0, |m| m.len());
+        // Trouvé par l'audit du 7 septembre 2026 : `metadata` échouant (lien
+        // symbolique cassé, fichier disparu) donnait `total = 0` ; la cible était
+        // alors créée vide et la copie annoncée réussie. Et une source lisible par
+        // `stat` mais pas par `open` (droits root) tronquait une cible existante
+        // avant d'échouer. On lit d'abord les attributs — erreur propagée — et
+        // l'on s'assure que la source S'OUVRE, AVANT de créer ou tronquer la cible.
+        let total = self
+            .sftp
+            .metadata(remote)
+            .await
+            .with_context(|| format!("Lecture des attributs de {remote}"))?
+            .len();
+        {
+            let sonde = self
+                .sftp
+                .open(remote)
+                .await
+                .with_context(|| format!("Ouverture distant {remote}"))?;
+            drop(sonde); // les bandes rouvrent leur propre descripteur
+        }
         cible
             .sftp
             .create(remote_cible)

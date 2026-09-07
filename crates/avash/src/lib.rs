@@ -150,6 +150,20 @@ fn glob_match(pattern: &str, name: &str) -> bool {
     inner(pattern.as_bytes(), name.as_bytes())
 }
 
+/// Retire une paire de guillemets doubles entourant une valeur de directive.
+///
+/// OpenSSH permet de guillemeter une valeur qui contient une espace
+/// (`IdentityFile "~/ma clé"`, ou un chemin Windows `C:\Users\Jean Dupont\…`).
+/// Trouvé par l'audit du 7 septembre 2026 : le parseur gardait les guillemets
+/// littéralement, rendant la clé (ou le `HostName`) introuvable. On les retire à
+/// la lecture ; l'écriture les remet quand c'est nécessaire.
+fn dequote(value: &str) -> &str {
+    let v = value.trim();
+    v.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(v)
+}
+
 pub fn parse_config_str(content: &str) -> Vec<SshHost> {
     let mut hosts: Vec<SshHost> = Vec::new();
     let mut current: Option<SshHost> = None;
@@ -218,14 +232,14 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
             _ => {
                 if let Some(h) = current.as_mut() {
                     match key.as_str() {
-                        "hostname" => h.hostname = Some(value),
-                        "user" => h.user = Some(value),
+                        "hostname" => h.hostname = Some(dequote(&value).to_string()),
+                        "user" => h.user = Some(dequote(&value).to_string()),
                         // OpenSSH refuse « Port 0 » (« Bad port ») : le lire
                         // comme un port menait à une connexion vouée à l'échec
                         // sur un message opaque. Trouvé par le fuzzing.
                         "port" => h.port = value.parse::<u16>().ok().filter(|p| *p != 0),
-                        "identityfile" => h.identity_file = Some(value),
-                        "proxyjump" => h.proxy_jump = Some(value),
+                        "identityfile" => h.identity_file = Some(dequote(&value).to_string()),
+                        "proxyjump" => h.proxy_jump = Some(dequote(&value).to_string()),
                         _ => {}
                     }
                 }
@@ -252,6 +266,53 @@ pub fn parse_config_str(content: &str) -> Vec<SshHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn une_cle_avec_espace_est_guillemetee_et_se_relit() {
+        // Trouvé par l'audit du 7 septembre 2026 : une valeur avec espace était
+        // écrite sans guillemets et faisait rejeter TOUTE la configuration par
+        // OpenSSH. Elle doit être guillemetée à l'écriture et déguillemetée à la
+        // lecture (round-trip).
+        let mut h = SshHost {
+            alias: "prod".into(),
+            hostname: Some("prod.exemple.com".into()),
+            ..Default::default()
+        };
+        h.identity_file = Some(r"C:\Users\Jean Dupont\.ssh\id".into());
+        let bloc = render_host_block(&h);
+        assert!(
+            bloc.contains(r#"IdentityFile "C:\Users\Jean Dupont\.ssh\id""#),
+            "clé avec espace non guillemetée :\n{bloc}"
+        );
+        let relu = &parse_config_str(&bloc)[0];
+        assert_eq!(
+            relu.identity_file.as_deref(),
+            Some(r"C:\Users\Jean Dupont\.ssh\id"),
+            "la clé doit se relire sans les guillemets"
+        );
+        // Une clé sans espace n'est pas guillemetée.
+        h.identity_file = Some("/home/u/.ssh/id".into());
+        assert!(render_host_block(&h).contains("IdentityFile /home/u/.ssh/id"));
+    }
+
+    #[test]
+    fn validate_host_refuse_l_espace_dans_hostname_user_proxyjump() {
+        let base = SshHost {
+            alias: "a".into(),
+            ..Default::default()
+        };
+        let avec = |f: fn(&mut SshHost)| {
+            let mut h = base.clone();
+            f(&mut h);
+            validate_host(&h)
+        };
+        assert!(avec(|h| h.hostname = Some("un hote".into())).is_err());
+        assert!(avec(|h| h.user = Some("jean dupont".into())).is_err());
+        assert!(avec(|h| h.proxy_jump = Some("a b".into())).is_err());
+        // Un guillemet est refusé partout ; l'espace dans IdentityFile passe.
+        assert!(avec(|h| h.hostname = Some("a\"b".into())).is_err());
+        assert!(avec(|h| h.identity_file = Some("/home/u/ma clé".into())).is_ok());
+    }
 
     #[test]
     fn developper_tilde_resout_dans_le_repertoire_personnel() {
@@ -761,7 +822,15 @@ pub fn render_host_block(host: &SshHost) -> String {
         .as_deref()
         .filter(|v| !v.trim().is_empty())
     {
-        let _ = writeln!(out, "    IdentityFile {}", v.trim());
+        let v = v.trim();
+        // Un chemin avec une espace (typique sous Windows : `C:\Users\Jean
+        // Dupont\…`) doit être guillemeté, sinon OpenSSH lit « extra arguments »
+        // et rejette TOUTE la configuration. Trouvé par l'audit du 7 sept. 2026.
+        if v.contains(char::is_whitespace) {
+            let _ = writeln!(out, "    IdentityFile \"{v}\"");
+        } else {
+            let _ = writeln!(out, "    IdentityFile {v}");
+        }
     }
     if let Some(v) = host.proxy_jump.as_deref().filter(|v| !v.trim().is_empty()) {
         let _ = writeln!(out, "    ProxyJump {}", v.trim());
@@ -1009,6 +1078,27 @@ fn validate_config_value(label: &str, value: &str) -> anyhow::Result<()> {
             "{label} contient un caractère interdit (saut de ligne)."
         ));
     }
+    // Un guillemet double casserait le round-trip : on s'en sert pour entourer
+    // une valeur à espace, et OpenSSH le traite comme délimiteur de citation.
+    if value.contains('"') {
+        return Err(anyhow::anyhow!(
+            "{label} ne doit pas contenir de guillemet double."
+        ));
+    }
+    Ok(())
+}
+
+/// Comme [`validate_config_value`], en refusant aussi l'espace : pour un champ
+/// où rien de légitime n'en contient (`HostName`, `User`, `ProxyJump`). Trouvé
+/// par l'audit du 7 septembre 2026 : une espace y était écrite telle quelle et
+/// faisait rejeter toute la configuration par OpenSSH.
+fn validate_config_value_sans_espace(label: &str, value: &str) -> anyhow::Result<()> {
+    validate_config_value(label, value)?;
+    if value.contains(char::is_whitespace) {
+        return Err(anyhow::anyhow!(
+            "{label} ne doit pas contenir d'espace : « {value} »"
+        ));
+    }
     Ok(())
 }
 
@@ -1016,16 +1106,19 @@ fn validate_config_value(label: &str, value: &str) -> anyhow::Result<()> {
 fn validate_host(host: &SshHost) -> anyhow::Result<()> {
     validate_alias(host.alias.trim())?;
     if let Some(v) = &host.hostname {
-        validate_config_value("HostName", v)?;
+        validate_config_value_sans_espace("HostName", v)?;
     }
     if let Some(v) = &host.user {
-        validate_config_value("User", v)?;
+        validate_config_value_sans_espace("User", v)?;
     }
     if let Some(v) = &host.identity_file {
+        // IdentityFile peut contenir une espace (chemin Windows) : on la
+        // guillemète à l'écriture. Seuls le saut de ligne et le guillemet sont
+        // refusés.
         validate_config_value("IdentityFile", v)?;
     }
     if let Some(v) = &host.proxy_jump {
-        validate_config_value("ProxyJump", v)?;
+        validate_config_value_sans_espace("ProxyJump", v)?;
     }
     for t in &host.tags {
         validate_config_value("Tags", t)?;
