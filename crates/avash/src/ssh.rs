@@ -98,6 +98,33 @@ fn marqueur_bloquant(hote: &str) -> Option<String> {
 /// **large** : on compare l'hôte à chaque nom de la liste séparée par des
 /// virgules, sans traiter les motifs ni les entrées condensées — dans le doute,
 /// mieux vaut refuser une connexion légitime que réapprendre une clé marquée.
+/// Extrait le nom d'hôte d'un motif de `known_hosts`, en retirant la forme
+/// `[hôte]:port` (celle qu'OpenSSH écrit pour un port non standard) et un
+/// éventuel `:port` nu.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : la forme crochetée `[hôte]:port`
+/// n'était pas reconnue — seule la comparaison brute et un `split(':')` naïf
+/// l'étaient —, si bien qu'une clé `@revoked` sur un port non standard passait
+/// pour ne viser aucun hôte connu, était réapprise et acceptée. Un IPv6 littéral
+/// nu (plusieurs `:`) n'est pas tronqué.
+fn hote_de_motif_known_hosts(motif: &str) -> &str {
+    let motif = motif.trim();
+    if let Some(reste) = motif.strip_prefix('[') {
+        if let Some((h, _)) = reste.split_once("]:") {
+            return h;
+        }
+        return reste.strip_suffix(']').unwrap_or(reste);
+    }
+    match motif.rsplit_once(':') {
+        Some((h, port))
+            if !h.contains(':') && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            h
+        }
+        _ => motif,
+    }
+}
+
 fn marqueur_bloquant_dans(contenu: &str, hote: &str) -> Option<String> {
     for ligne in contenu.lines() {
         let l = ligne.trim();
@@ -112,7 +139,7 @@ fn marqueur_bloquant_dans(contenu: &str, hote: &str) -> Option<String> {
         let Some(hotes) = mots.next() else { continue };
         if hotes
             .split(',')
-            .any(|h| h == hote || h.split(':').next() == Some(hote))
+            .any(|h| hote_de_motif_known_hosts(h) == hote)
         {
             return Some(marqueur.to_owned());
         }
@@ -1120,13 +1147,26 @@ pub fn forget_host_key_at(host: &str, port: u16, path: &Path) -> Result<usize> {
     }
     let content =
         std::fs::read_to_string(path).with_context(|| format!("Lecture de {}", path.display()))?;
-    // known_host_keys numerote les lignes a partir de 1.
+    // known_host_keys numérote à partir de 1, mais — trouvé par l'audit du
+    // 7 septembre 2026 — russh ne compte PAS les lignes de commentaire (`# …`) :
+    // son `continue` saute l'incrément. Un simple `enumerate()` sur les lignes
+    // physiques les compte, lui : dès qu'un commentaire précède les entrées, la
+    // numérotation se décale et l'on retirait la clé d'un AUTRE hôte (son TOFU
+    // repartait de zéro) au lieu de celle demandée. On reproduit donc ici la
+    // règle de comptage de russh : un commentaire n'a pas de numéro logique et
+    // se conserve ; toute autre ligne porte le numéro courant, puis l'incrémente.
     let to_drop: std::collections::HashSet<usize> = lines.into_iter().collect();
+    let mut numero = 1usize;
     let kept: Vec<&str> = content
         .lines()
-        .enumerate()
-        .filter(|(i, _)| !to_drop.contains(&(i + 1)))
-        .map(|(_, l)| l)
+        .filter(|l| {
+            if l.as_bytes().first() == Some(&b'#') {
+                return true; // commentaire : jamais numéroté, toujours conservé
+            }
+            let a_retirer = to_drop.contains(&numero);
+            numero += 1;
+            !a_retirer
+        })
         .collect();
     let mut out = kept.join("\n");
     if content.ends_with('\n') {
@@ -1197,14 +1237,37 @@ mod tests_marqueurs {
         }
     }
 
-    /// La forme `[hôte]:port` doit être reconnue comme visant l'hôte.
+    /// La forme crochetée `[hôte]:port` (port non standard, écrite par OpenSSH)
+    /// doit être reconnue comme visant l'hôte, tout comme la forme nue et la
+    /// forme `hôte:port` sans crochets. Trouvé par l'audit du 7 septembre 2026 :
+    /// seule la forme non crochetée l'était, la clé `@revoked` d'un serveur sur
+    /// un port non standard était donc réapprise.
     #[test]
     fn la_forme_avec_port_est_reconnue() {
-        let c = "@revoked srv.exemple.com:2222 ssh-ed25519 AAAA\n";
+        for c in [
+            "@revoked [srv.exemple.com]:2222 ssh-ed25519 AAAA\n",
+            "@revoked srv.exemple.com:2222 ssh-ed25519 AAAA\n",
+            "@revoked autre,[srv.exemple.com]:2222 ssh-ed25519 AAAA\n",
+        ] {
+            assert_eq!(
+                marqueur_bloquant_dans(c, "srv.exemple.com").as_deref(),
+                Some("@revoked"),
+                "{c:?}"
+            );
+        }
+    }
+
+    /// Un IPv6 littéral nu ne doit pas être tronqué à son premier `:` (sinon un
+    /// `@revoked` le visant ne serait jamais reconnu, ou le serait à tort pour
+    /// un autre hôte).
+    #[test]
+    fn un_ipv6_litteral_n_est_pas_tronque() {
+        let c = "@revoked 2001:db8::1 ssh-ed25519 AAAA\n";
         assert_eq!(
-            marqueur_bloquant_dans(c, "srv.exemple.com").as_deref(),
+            marqueur_bloquant_dans(c, "2001:db8::1").as_deref(),
             Some("@revoked")
         );
+        assert_eq!(marqueur_bloquant_dans(c, "2001"), None);
     }
 }
 

@@ -141,7 +141,7 @@ impl Target {
         // Mot de passe deja memorise ? Le trousseau evite de le redemander.
         // Une absence n'est pas une erreur : l'interface fera la saisie.
         let password = avash::secrets::load(&avash::secrets::account_id(&user, &addr, port));
-        let key_path = host.identity_file.as_ref().map(std::path::PathBuf::from);
+        let key_path = host.identity_file.as_deref().map(avash::developper_tilde);
         let jumps = resolve_jumps(host.proxy_jump.as_deref(), key_path.as_ref());
         Ok(Self {
             port,
@@ -173,7 +173,7 @@ impl Target {
         let key_path = key_path
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty())
-            .map(std::path::PathBuf::from);
+            .map(|k| avash::developper_tilde(&k));
         // Une cle inexistante donnerait une erreur d'authentification obscure ;
         // autant le dire tout de suite et nommer le chemin fautif.
         if let Some(k) = &key_path {
@@ -248,8 +248,8 @@ fn resolve_jumps(
                     h.port.unwrap_or(22),
                     h.user.clone().unwrap_or_else(avash::ssh::current_username),
                     h.identity_file
-                        .as_ref()
-                        .map(std::path::PathBuf::from)
+                        .as_deref()
+                        .map(avash::developper_tilde)
                         .or_else(|| fallback_key.cloned()),
                 ),
                 None => (

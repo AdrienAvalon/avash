@@ -7,6 +7,47 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Sécurité
+
+- **VNC sous TLS (VeNCrypt) : l'épinglage du certificat n'est plus
+  contournable.** Le vérificateur TLS acceptait n'importe quelle signature de
+  poignée de main (les deux `verify_tls*_signature` renvoyaient un accord sans
+  condition). Comme l'épinglage porte sur la clé publique du certificat, un
+  interposeur pouvait rejouer le certificat public légitime d'un serveur déjà
+  connu, sans en posséder la clé privée : la connexion aboutissait et le mot de
+  passe VNC partait chez lui. La signature est désormais vérifiée par le
+  fournisseur cryptographique de rustls ; seule la chaîne vers une autorité
+  reste volontairement non jugée, puisque c'est l'épinglage au premier contact
+  qui décide de la confiance. Le RDP, lui, était protégé par la liaison de canal
+  de CredSSP. Trouvé par l'audit du 7 septembre 2026.
+- **Une clé d'hôte SSH `@revoked` sur un port non standard est de nouveau
+  refusée.** La détection des marqueurs `@revoked` / `@cert-authority` de
+  `known_hosts` ne reconnaissait pas la forme `[hôte]:port` qu'écrit OpenSSH
+  pour un port non standard : la clé révoquée passait pour ne viser aucun hôte
+  connu, était réapprise et acceptée. La forme crochetée est désormais comprise,
+  sans tronquer un IPv6 littéral.
+- **Oublier une clé d'hôte ne touche plus à celle d'un autre hôte.** Quand un
+  commentaire précédait les entrées de `known_hosts`, la numérotation des lignes
+  se décalait (russh ne compte pas les lignes de commentaire) et « oublier »
+  retirait la clé d'un hôte voisin, dont la confiance au premier contact
+  repartait de zéro, en laissant la clé visée en place. Le comptage suit
+  désormais exactement celui de russh.
+
+### Corrigé
+
+- **Une clé privée notée `~/.ssh/…` fonctionne enfin.** Le `~` d'un
+  `IdentityFile` (la forme de la quasi-totalité des configurations écrites à la
+  main, et l'exemple même affiché dans le champ clé) n'était jamais développé :
+  le fichier de clé restait introuvable et l'hôte inconnectable, alors que `ssh`
+  s'y connectait. Le tilde est développé à la connexion (hôte enregistré, saisie
+  manuelle, rebond `ProxyJump`), sans être réécrit dans le fichier, qui garde
+  `~/` et reste lisible par `ssh`.
+- **Éditer un hôte ne perd plus ses directives.** Modifier un hôte depuis
+  l'interface réécrivait tout le bloc `Host` à partir des seules directives
+  qu'Avash connaît : toute autre (`ForwardAgent`, `LocalForward`,
+  `IdentitiesOnly`, `Ciphers`, commentaires…) disparaissait en silence. Ces
+  directives sont désormais conservées.
+
 ## [0.9.2] - 2026-09-06
 
 - **Un fichier offert au bureau distant juste après en avoir reçu un n'échoue

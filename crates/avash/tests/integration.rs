@@ -1941,6 +1941,56 @@ async fn forget_host_key_retire_la_cle_apprise() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// Trouvé par l'audit du 7 septembre 2026 : un commentaire en tête du fichier
+/// décalait la numérotation. russh ne compte pas les lignes `# …` (son
+/// `continue` saute l'incrément), mais l'oubli les comptait via `enumerate()` :
+/// oublier `hôteB` retirait en réalité la clé de `hôteA`, dont le TOFU repartait
+/// alors de zéro, et laissait celle de `hôteB` en place.
+#[tokio::test]
+async fn forget_host_key_ne_touche_pas_a_un_autre_hote_apres_un_commentaire() {
+    let path = std::env::temp_dir().join(format!(
+        "avash-kh-cmt-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let cle_a =
+        russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
+    let cle_b =
+        russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
+    // Un commentaire, puis deux hôtes distincts. La forme d'une entrée
+    // known_hosts est « hôte type base64 » : c'est ce qu'écrit `to_openssh`.
+    let ligne = |hote: &str, k: &russh::keys::PrivateKey| {
+        format!("{hote} {}\n", k.public_key().to_openssh().unwrap())
+    };
+    let contenu = format!(
+        "# mes serveurs\n{}{}",
+        ligne("hoteA", &cle_a),
+        ligne("hoteB", &cle_b)
+    );
+    std::fs::write(&path, &contenu).unwrap();
+
+    let retirees = avash::ssh::forget_host_key_at("hoteB", 22, &path).unwrap();
+    assert_eq!(retirees, 1, "une seule clé retirée");
+    let reste = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        reste.contains("hoteA "),
+        "la clé de hoteA doit rester :\n{reste}"
+    );
+    assert!(
+        !reste.contains("hoteB "),
+        "la clé de hoteB doit partir :\n{reste}"
+    );
+    assert!(
+        reste.contains("# mes serveurs"),
+        "le commentaire doit rester"
+    );
+    // hoteA reste effectivement reconnu par russh après l'opération.
+    let a = russh::keys::known_hosts::known_host_keys_path("hoteA", 22, &path).unwrap();
+    assert_eq!(a.len(), 1, "hoteA toujours connu");
+    let _ = std::fs::remove_file(&path);
+}
+
 // ---------- Transferts : dossiers, reprise, bandes montantes, annulation, relais ----------
 
 /// Un dossier temporaire à ce test, vide.

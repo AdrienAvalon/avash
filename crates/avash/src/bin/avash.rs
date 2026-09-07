@@ -75,7 +75,7 @@ async fn cmd_run(host: avash::SshHost, command: String) -> anyhow::Result<()> {
             .user
             .clone()
             .unwrap_or_else(avash::ssh::current_username),
-        key_path: host.identity_file.as_ref().map(std::path::PathBuf::from),
+        key_path: host.identity_file.as_deref().map(avash::developper_tilde),
         password: None,
     };
     let mut session =

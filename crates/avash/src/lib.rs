@@ -254,6 +254,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn developper_tilde_resout_dans_le_repertoire_personnel() {
+        // Trouvé par l'audit du 7 septembre 2026 : la forme `~/…` d'IdentityFile
+        // n'était jamais développée. `~` seul et `~/x` visent le HOME ; un chemin
+        // absolu ou relatif sans tilde reste inchangé.
+        let g = crate::testutil::temp_home();
+        assert_eq!(developper_tilde("~/.ssh/k"), g.dir().join(".ssh").join("k"));
+        assert_eq!(developper_tilde("~"), g.dir().to_path_buf());
+        assert_eq!(developper_tilde("/tmp/k"), PathBuf::from("/tmp/k"));
+        assert_eq!(developper_tilde("k"), PathBuf::from("k"));
+        // Un tilde qui n'est pas en tête n'est pas un raccourci de HOME.
+        assert_eq!(developper_tilde("/a/~/b"), PathBuf::from("/a/~/b"));
+    }
+
+    #[test]
     fn tags_lus_et_reecrits() {
         let cfg = "Host prod\n  HostName 10.0.0.1\n  #Tags: prod, web\n";
         let h = &parse_config_str(cfg)[0];
@@ -543,6 +557,18 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
     let mut out = String::with_capacity(content.len());
     let mut skipping = false;
     let mut replaced = false;
+    // Directives du bloc cible qu'Avash ne régénère pas : on les reconduit après
+    // le bloc réécrit, au lieu de les perdre.
+    let mut preserves: Vec<&str> = Vec::new();
+    // Émet le bloc cible (régénéré) suivi de ses directives préservées.
+    let emettre = |out: &mut String, preserves: &mut Vec<&str>| {
+        out.push_str(render_host_block(host).trim_end());
+        out.push('\n');
+        for l in preserves.drain(..) {
+            out.push_str(l);
+            out.push('\n');
+        }
+    };
     for line in content.lines() {
         let trimmed = line.trim_start();
         let (key, value) = trimmed
@@ -551,23 +577,33 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
         let key_lower = key.to_lowercase();
 
         if key_lower == "host" {
-            let is_target = value.split_whitespace().eq(std::iter::once(old_alias));
-            if is_target {
-                // Bloc cible : on ecrit le nouveau contenu a sa place.
+            // Un nouveau bloc met fin au bloc cible : on l'émet d'abord.
+            if skipping {
+                emettre(&mut out, &mut preserves);
+                skipping = false;
+            }
+            if value.split_whitespace().eq(std::iter::once(old_alias)) {
                 skipping = true;
                 replaced = true;
-                out.push_str(render_host_block(host).trim_end());
-                out.push('\n');
                 continue;
             }
-            skipping = false;
-        } else if key_lower == "match" {
+        } else if key_lower == "match" && skipping {
+            emettre(&mut out, &mut preserves);
             skipping = false;
         }
-        if !skipping {
-            out.push_str(line);
-            out.push('\n');
+        if skipping {
+            // Ligne interne au bloc cible : préservée si Avash ne la régénère pas.
+            if !directive_regeneree(line) {
+                preserves.push(line);
+            }
+            continue;
         }
+        out.push_str(line);
+        out.push('\n');
+    }
+    // Bloc cible en fin de fichier : rien après lui ne l'a émis.
+    if skipping {
+        emettre(&mut out, &mut preserves);
     }
 
     if !replaced {
@@ -589,6 +625,41 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
 }
 
 /// Rend un bloc `Host` au format OpenSSH.
+/// Vrai si la ligne est un commentaire `#Tags:` d'Avash.
+fn is_tags_comment(line: &str) -> bool {
+    line.trim_start().strip_prefix('#').is_some_and(|r| {
+        let r = r.trim_start();
+        r.strip_prefix("Tags:")
+            .or_else(|| r.strip_prefix("tags:"))
+            .is_some()
+    })
+}
+
+/// Une ligne du bloc `Host` que `render_host_block` régénère déjà, et qu'il ne
+/// faut donc pas reconduire telle quelle lors d'un `update_host` — sinon on
+/// dupliquerait la directive. Tout le reste (directives qu'Avash ne gère pas :
+/// `ForwardAgent`, `LocalForward`, `IdentitiesOnly`, `Ciphers`… et les
+/// commentaires libres) est au contraire à préserver.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `update_host` réécrivait le bloc
+/// depuis `render_host_block`, qui ne connaît qu'un jeu fixe de directives —
+/// toute autre directive du bloc disparaissait en silence dès qu'on éditait
+/// l'hôte depuis l'interface.
+fn directive_regeneree(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.is_empty() {
+        return true; // les lignes vides internes au bloc sont régénérées
+    }
+    if is_folder_comment(line) || is_tags_comment(line) {
+        return true;
+    }
+    let mot = t.split_once(char::is_whitespace).map_or(t, |(k, _)| k);
+    matches!(
+        mot.to_ascii_lowercase().as_str(),
+        "hostname" | "user" | "port" | "identityfile" | "proxyjump"
+    )
+}
+
 /// Vrai si la ligne est un commentaire `#Folder:` d'Avash.
 fn is_folder_comment(line: &str) -> bool {
     line.trim_start().strip_prefix('#').is_some_and(|r| {
@@ -709,6 +780,33 @@ pub fn render_host_block(host: &SshHost) -> String {
         let _ = writeln!(out, "    #Folder: {folder}");
     }
     out
+}
+
+/// Développe un chemin commençant par `~/` (ou valant `~`) en chemin absolu
+/// dans le répertoire personnel, comme le fait OpenSSH pour `IdentityFile`.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `~/.ssh/id_ed25519`, la forme de la
+/// quasi-totalité des configs écrites à la main (et le libellé même du champ clé
+/// de l'interface), restait littéral et le fichier de clé était introuvable —
+/// l'hôte devenait inconnectable alors que `ssh` s'y connectait. On développe à
+/// la RÉSOLUTION, jamais au parseur ni à l'écriture, pour que le fichier
+/// conserve `~/` et reste lisible par `ssh`. Un chemin sans tilde de tête est
+/// rendu inchangé. Le séparateur Windows `~\` est traité comme `~/`.
+#[must_use]
+pub fn developper_tilde(chemin: &str) -> PathBuf {
+    if chemin == "~" {
+        if let Some(home) = repertoire_personnel() {
+            return home;
+        }
+    } else if let Some(rest) = chemin
+        .strip_prefix("~/")
+        .or_else(|| chemin.strip_prefix("~\\"))
+    {
+        if let Some(home) = repertoire_personnel() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(chemin)
 }
 
 /// Répertoire personnel de l'utilisateur, avec un point d'entrée unique.
@@ -1688,6 +1786,52 @@ Host autre
         let p = hosts.iter().find(|h| h.alias == "prod").unwrap();
         assert_eq!(p.hostname.as_deref(), Some("9.9.9.9"));
         assert_eq!(p.user.as_deref(), Some("nouveau"));
+    }
+
+    #[test]
+    fn update_host_preserve_les_directives_non_gerees() {
+        // Trouvé par l'audit du 7 septembre 2026 : éditer un hôte depuis
+        // l'interface réécrivait le bloc et perdait en silence toute directive
+        // qu'Avash ne gère pas (ForwardAgent, LocalForward, IdentitiesOnly…).
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "Host prod\n  HostName 2.2.2.2\n  User old\n  ForwardAgent yes\n  \
+             LocalForward 8080 127.0.0.1:80\n  IdentitiesOnly yes\n  # note perso\n\nHost autre\n  HostName 3.3.3.3\n",
+        )
+        .unwrap();
+
+        let mut modifie = host("prod");
+        modifie.hostname = Some("9.9.9.9".into());
+        modifie.user = Some("nouveau".into());
+        update_host("prod", &modifie).unwrap();
+
+        let texte = std::fs::read_to_string(&path).unwrap();
+        for attendu in [
+            "ForwardAgent yes",
+            "LocalForward 8080 127.0.0.1:80",
+            "IdentitiesOnly yes",
+            "# note perso",
+            "HostName 9.9.9.9",
+            "User nouveau",
+        ] {
+            assert!(texte.contains(attendu), "« {attendu} » perdu :\n{texte}");
+        }
+        // L'ancienne valeur régénérée ne subsiste pas en double.
+        assert!(
+            !texte.contains("2.2.2.2"),
+            "ancienne HostName restée :\n{texte}"
+        );
+        assert!(!texte.contains("User old"), "ancien User resté :\n{texte}");
+        // L'hôte voisin et l'ordre sont intacts.
+        let noms: Vec<_> = parse_ssh_config()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.alias)
+            .collect();
+        assert_eq!(noms, vec!["prod", "autre"]);
     }
 
     #[test]

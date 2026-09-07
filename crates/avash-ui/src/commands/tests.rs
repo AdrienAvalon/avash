@@ -202,6 +202,37 @@ fn target_depuis_alias_reprend_user_port_et_cle() {
     assert_eq!(t.label, "prod");
 }
 
+#[test]
+fn une_cle_en_tilde_est_resolue_dans_le_repertoire_personnel() {
+    // Trouvé par l'audit du 7 septembre 2026 : `IdentityFile ~/.ssh/k` restait
+    // littéral, la clé était introuvable et l'hôte inconnectable. Le tilde doit
+    // être développé à la résolution, dans le répertoire personnel (ici le bac
+    // à sable via AVASH_HOME).
+    // `with_ssh_config` prend un verrou global non réentrant : chaque garde
+    // doit être relâché avant d'en reprendre un (sinon interblocage). D'où les
+    // deux blocs distincts.
+    {
+        let g = with_ssh_config("Host prod\n  HostName 10.0.0.1\n  IdentityFile ~/.ssh/k\n");
+        let attendu = g.dir.join(".ssh").join("k");
+        let t = Target::from_alias("prod").unwrap();
+        assert_eq!(t.key_path.as_deref(), Some(attendu.as_path()));
+    }
+    // Un rebond qui reprend une clé en `~/` du bastion doit aussi la développer.
+    {
+        let g2 = with_ssh_config(
+            "Host bastion\n  HostName 10.0.0.9\n  IdentityFile ~/.ssh/b\n\
+             Host cible\n  HostName 10.0.0.2\n  ProxyJump bastion\n",
+        );
+        let attendu2 = g2.dir.join(".ssh").join("b");
+        let t2 = Target::from_alias("cible").unwrap();
+        assert_eq!(t2.jumps.len(), 1);
+        assert_eq!(
+            t2.jumps[0].auth.key_path.as_deref(),
+            Some(attendu2.as_path())
+        );
+    }
+}
+
 // ---------- resolve_jumps ----------
 
 /// Un maillon nu est un alias de `~/.ssh/config` : on reprend son adresse,

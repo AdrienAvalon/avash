@@ -4,9 +4,11 @@
 //! Le client VNC porté sait négocier VeNCrypt (sous-types X.509) mais ne monte
 //! pas TLS lui-même : il rend le flux à un « monteur » que ce module fournit.
 //! Le flux est un `MaybeTls`, en clair jusqu'à l'accord, chiffré ensuite, du
-//! même type avant et après pour que le client n'en sache rien. Le certificat
-//! n'est pas vérifié par une autorité (rustls acceptant tout, comme pour le
-//! RDP) mais épinglé : sa clé publique est mémorisée au premier contact sous
+//! même type avant et après pour que le client n'en sache rien. La CHAÎNE du
+//! certificat n'est pas jugée par une autorité (comme pour le RDP), mais la
+//! signature de la poignée de main l'est — sans quoi l'épinglage serait
+//! contournable — et le certificat est épinglé : sa clé publique est mémorisée
+//! au premier contact sous
 //! `vnc:<hôte>:<port>` dans le fichier des empreintes, et un changement refuse
 //! la connexion avant que le mot de passe ne parte.
 
@@ -92,7 +94,9 @@ async fn monter(
     use anyhow::Context as _;
     let mut config = rustls::client::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(std::sync::Arc::new(AccepteTout))
+        .with_custom_certificate_verifier(
+            std::sync::Arc::new(VerifieSignatureSansChaine::nouveau()),
+        )
         .with_no_client_auth();
     config.resumption = rustls::client::Resumption::disabled();
     // Le nom du serveur ne sert qu'au SNI : une adresse IP passe aussi.
@@ -130,12 +134,30 @@ async fn monter(
     Ok(flux)
 }
 
-/// rustls ne juge pas le certificat : c'est l'épinglage ci-dessus qui décide,
-/// avant que quoi que ce soit d'autre ne parte.
+/// On ne fait pas juger la CHAÎNE du certificat par une autorité — la confiance
+/// vient de l'épinglage TOFU fait après la poignée de main. Mais la SIGNATURE de
+/// `CertificateVerify` doit être vérifiée pour de vrai : elle seule prouve que le
+/// pair possède la clé privée du certificat qu'il présente. Sans elle, l'épinglage
+/// (fait sur la clé PUBLIQUE) est contournable — un interposeur rejoue le
+/// certificat public légitime d'un serveur déjà connu, sans en avoir la clé
+/// privée, la poignée de main aboutit, et le mot de passe VNC part chez lui.
+/// Trouvé par l'audit du 7 septembre 2026 : les deux `verify_tls*_signature`
+/// renvoyaient `Ok` sans condition (le VNC, contrairement au RDP sous CredSSP,
+/// n'a aucune liaison de canal qui rattraperait la signature non vérifiée).
 #[derive(Debug)]
-struct AccepteTout;
+struct VerifieSignatureSansChaine {
+    algos: rustls::crypto::WebPkiSupportedAlgorithms,
+}
 
-impl rustls::client::danger::ServerCertVerifier for AccepteTout {
+impl VerifieSignatureSansChaine {
+    fn nouveau() -> Self {
+        Self {
+            algos: rustls::crypto::aws_lc_rs::default_provider().signature_verification_algorithms,
+        }
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for VerifieSignatureSansChaine {
     fn verify_server_cert(
         &self,
         _: &rustls::pki_types::CertificateDer<'_>,
@@ -144,28 +166,28 @@ impl rustls::client::danger::ServerCertVerifier for AccepteTout {
         _: &[u8],
         _: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        // La chaîne n'est pas jugée ici : c'est l'épinglage sur la clé publique
+        // (juger_certificat, après la poignée de main) qui décide de la confiance.
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
     fn verify_tls12_signature(
         &self,
-        _: &[u8],
-        _: &rustls::pki_types::CertificateDer<'_>,
-        _: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algos)
     }
     fn verify_tls13_signature(
         &self,
-        _: &[u8],
-        _: &rustls::pki_types::CertificateDer<'_>,
-        _: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algos)
     }
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::aws_lc_rs::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
+        self.algos.supported_schemes()
     }
 }
 
@@ -349,5 +371,49 @@ mod tests {
     fn la_cle_d_epinglage_distingue_le_vnc() {
         assert_eq!(format!("vnc:{}:{}", "h", 5901), "vnc:h:5901");
         assert_ne!(format!("vnc:{}:{}", "h", 3389), format!("{}:{}", "h", 3389));
+    }
+
+    /// Certificat RSA-2048 auto-signé jetable (DER), généré une fois par
+    /// openssl. Sert à prouver que le vérificateur rejette une signature qui ne
+    /// correspond pas à sa clé publique.
+    const CERT_TEST_DER: &[u8] = include_bytes!("vnc_tls_cert_test.der");
+
+    /// Trouvé par l'audit du 7 septembre 2026 : le vérificateur renvoyait `Ok`
+    /// sans regarder la signature de `CertificateVerify`. L'épinglage se fait
+    /// sur la clé publique du certificat ; si la signature n'est pas vérifiée,
+    /// un interposeur rejoue le certificat public d'un serveur déjà connu, sans
+    /// en posséder la clé privée, et la connexion aboutit. Ici on présente le
+    /// certificat de test avec une signature bidon : elle DOIT être rejetée.
+    /// Contrôle négatif : avec l'ancien corps (`Ok(...)` inconditionnel), les
+    /// deux `assert!(...is_err())` échouaient.
+    #[test]
+    fn une_signature_de_poignee_de_main_invalide_est_rejetee() {
+        use rustls::client::danger::ServerCertVerifier as _;
+        use rustls::internal::msgs::codec::{Codec as _, Reader};
+        let verif = VerifieSignatureSansChaine::nouveau();
+        let cert = rustls::pki_types::CertificateDer::from(CERT_TEST_DER);
+        // Signature RSA-PSS-SHA256 de 256 octets nuls : structurellement
+        // plausible, cryptographiquement fausse pour ce certificat. Construite
+        // par sa forme filaire (schéma u16 = 0x0804, longueur u16 = 256, puis
+        // la signature), le constructeur direct étant privé à rustls.
+        let mut filaire = vec![0x08u8, 0x04, 0x01, 0x00];
+        filaire.extend(std::iter::repeat_n(0u8, 256));
+        let bidon =
+            rustls::DigitallySignedStruct::read(&mut Reader::init(&filaire)).expect("DSS filaire");
+        assert!(
+            verif
+                .verify_tls13_signature(b"transcript", &cert, &bidon)
+                .is_err(),
+            "une signature TLS 1.3 invalide doit être refusée"
+        );
+        assert!(
+            verif
+                .verify_tls12_signature(b"transcript", &cert, &bidon)
+                .is_err(),
+            "une signature TLS 1.2 invalide doit être refusée"
+        );
+        // Et le vérificateur annonce bien des schémas (sinon rustls n'appelle
+        // jamais verify_tls*_signature, et la vérification serait morte).
+        assert!(!verif.supported_verify_schemes().is_empty());
     }
 }
