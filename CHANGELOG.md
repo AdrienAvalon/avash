@@ -85,6 +85,60 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   existante était tronquée. La source est désormais lue et ouverte avant que la
   cible ne soit créée ou modifiée.
 
+- **Redirection de lecteur RDP : plus d'évasion hors du dossier partagé.** Un
+  chemin du serveur dont le dernier composant portait un préfixe de disque
+  (`\C:`, `\D:`) ou un flux ADS échappait à la racine partagée sous Windows
+  (`PathBuf::push` d'un préfixe sans racine repart du répertoire courant) :
+  lecture, écrasement et suppression de fichiers hors du partage. Chaque
+  composant est désormais validé (ni `.`, `..`, deux-points, octet nul) avec un
+  contrôle de confinement en plus.
+- **Réception de fichiers par le presse-papiers RDP : plus d'écriture hors du
+  dossier.** Un nom annoncé « C:evil.exe » ou un composant « D: » échappait de
+  la même façon au dossier de réception ; et le fichier de travail `.part`
+  tronquait un fichier existant du poste (un téléchargement Firefox en cours de
+  même nom). Les noms sont confinés et le fichier de travail ne peut plus
+  écraser un fichier présent.
+- **Canal graphique RDP : un serveur ne peut plus faire allouer 17 Gio.** Un
+  `RDPGFX_RESET_GRAPHICS` annonçant une taille absurde (65535×65535) contournait
+  le plafond 8192×8192 appliqué ailleurs et tuait le processus de bureau (déni
+  de service pilotable par le serveur). Cette taille passe désormais par le même
+  garde-fou.
+- **VNC : le presse-papiers du poste ne part plus au serveur sans geste.** Le
+  presse-papiers local (souvent un mot de passe fraîchement copié) était poussé
+  au serveur VNC dès la connexion et à chaque focus, en clair en RFB classique.
+  L'envoi suit désormais un geste de collage, comme en RDP.
+- **VNC : plus de repli silencieux en clair pour un serveur connu sous TLS.** Un
+  serveur déjà épinglé sous VeNCrypt pouvait retomber en RFB clair si un
+  interposeur retirait le type de sécurité 19 de la liste annoncée : le client
+  livrait alors sa réponse au défi puis toute la session en clair, sans consulter
+  l'empreinte. La connexion est refusée avant tout envoi (modèle HSTS).
+- **VNC : un type de sécurité inconnu ne fait plus échouer la connexion.** Un
+  serveur annonçant, à côté d'un type connu (VncAuth), un type hors de
+  l'énumération du client (partage d'écran macOS ARD, UltraVNC MS-Logon)
+  faisait tout échouer, alors que le protocole veut qu'on ignore l'inconnu.
+- **VNC : le bureau ne reste plus figé après une mise à jour sans pixels.** Une
+  FramebufferUpdate sans rectangle (changement de résolution d'un invité
+  QEMU/Xvnc) laissait le client ne plus jamais redemander d'image.
+- **Bureau RDP : une connexion refusée n'entraîne plus de seconde tentative.**
+  Sous la politique « Observer », un refus (mot de passe faux, délai NLA,
+  certificat changé) était pris pour un serveur ne dessinant que par le canal
+  graphique, déclenchant une seconde authentification avec le même mot de passe
+  (double 4625 côté serveur) et une inscription parasite de l'hôte.
+- **Son du bureau RDP : le bon format audio est joué.** Le format d'un bloc
+  d'onde était résolu contre notre liste fixe alors que l'indice du serveur vise
+  la liste envoyée par le client, dont l'ordre varie d'un lancement à l'autre.
+- **Snippet « insérer sans valider » : plus rien ne s'exécute avant relecture.**
+  Un snippet multi-lignes envoyait chaque saut de ligne comme une Entrée et
+  exécutait toutes les commandes sauf la dernière (un `stop / rm -rf / start`
+  lançait `stop` et `rm`). L'insertion passe désormais par le collage entre
+  crochets, que le shell distant n'exécute qu'à la validation de l'utilisateur.
+- **Mise à jour intégrée : plus de fausse proposition sur les paquets Linux.**
+  Sur deb, rpm, AUR et Flathub, la vérification proposait une mise à jour puis
+  échouait après avoir téléchargé l'AppImage (le manifeste ne servait que cette
+  cible). Le workflow publie désormais les cibles deb et rpm signées, et
+  l'application renvoie au gestionnaire de paquets là où l'installation intégrée
+  est impossible.
+
 ## [0.9.2] - 2026-09-06
 
 - **Un fichier offert au bureau distant juste après en avoir reçu un n'échoue

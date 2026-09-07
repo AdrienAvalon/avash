@@ -71,9 +71,31 @@ impl SecurityType {
                     reader.read_to_string(&mut err_msg).await?;
                     return Err(VncError::General(err_msg));
                 }
+                // Le protocole veut que le client ignore les types de sécurité
+                // qu'il ne connaît pas et en choisisse un qu'il parle. Un
+                // `try_into()?` dans la boucle faisait au contraire tomber toute
+                // la poignée de main au premier octet hors énumération — or le
+                // partage d'écran macOS (ARD 30, 33, 35, 36), UltraVNC MS-Logon
+                // (113) et RealVNC (129, 130) en annoncent à côté de VncAuth.
+                // On lit donc toujours les `num` octets (garder le flux aligné)
+                // et on n'écarte que les inconnus, sans échouer tant qu'un type
+                // connu reste. Trouvé par l'audit du 7 septembre 2026.
                 let mut sec_types = vec![];
+                let mut inconnus = vec![];
                 for _ in 0..num {
-                    sec_types.push(reader.read_u8().await?.try_into()?);
+                    let brut = reader.read_u8().await?;
+                    match SecurityType::try_from(brut) {
+                        Ok(t) => sec_types.push(t),
+                        Err(_) => inconnus.push(brut),
+                    }
+                }
+                if !inconnus.is_empty() {
+                    tracing::debug!("types de sécurité inconnus ignorés : {inconnus:?}");
+                }
+                if sec_types.is_empty() {
+                    return Err(VncError::General(format!(
+                        "le serveur n'offre que des types de sécurité inconnus : {inconnus:?}"
+                    )));
                 }
                 tracing::trace!("Server supported security type: {:?}", sec_types);
                 Ok(sec_types)

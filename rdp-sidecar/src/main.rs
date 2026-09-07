@@ -36,7 +36,7 @@
 
 use crate::acces_local::Poste;
 use crate::args::parse_args;
-use crate::connexion::TOURS_MAX;
+use crate::connexion::{FermeeApresAuthentification, TOURS_MAX};
 use crate::empreintes::chemin_canal_graphique;
 use crate::session::{executer, Suite};
 use anyhow::Result;
@@ -79,6 +79,28 @@ fn ecrire_le_profil_en_continu() {
         // est instrumenté ; sans argument ni état partagé avec nous.
         let _ = unsafe { __llvm_profile_write_file() };
     });
+}
+
+/// Faut-il reprendre la connexion en accordant le canal graphique ?
+///
+/// Trouvé par l'audit du 7 septembre 2026 : la boucle reprenait sur `Err(_)`,
+/// donc pour TOUT échec (mot de passe refusé, délai NLA, certificat changé,
+/// TCP refusé), rejouant une seconde connexion et écrivant l'hôte dans
+/// `rdp_canal_graphique`. La reprise n'est légitime que si aucune image n'a
+/// été dessinée alors qu'on refusait le canal graphique (`Observer`), ET que
+/// la session s'est réellement terminée sans dessin : soit `Suite::Fini`, soit
+/// une fermeture par le serveur APRÈS authentification
+/// (`FermeeApresAuthentification`, le cas GNOME Remote Desktop). Un échec
+/// pré-session ne doit ni mémoriser ni relancer.
+fn faut_il_reprendre(issue: &Result<Suite>, graphique: egfx::Politique, dessine: bool) -> bool {
+    if graphique != egfx::Politique::Observer || dessine {
+        return false;
+    }
+    match issue {
+        Ok(Suite::Fini) => true,
+        Err(e) => e.downcast_ref::<FermeeApresAuthentification>().is_some(),
+        Ok(_) => false,
+    }
 }
 
 #[tokio::main]
@@ -203,14 +225,14 @@ async fn main() -> Result<()> {
         // pouvant s'ouvrir, il raccroche aussitôt. Reprendre est la seule
         // réponse juste — et la seule qui n'exige pas de deviner à l'avance à
         // quelle famille de serveur on parle.
-        let issue = match issue {
-            Ok(Suite::Fini) | Err(_)
-                if graphique == egfx::Politique::Observer
-                    && !dessine.load(std::sync::atomic::Ordering::Relaxed) =>
-            {
-                Ok(Suite::ReprendreAvecGraphique)
-            }
-            autre => autre,
+        let issue = if faut_il_reprendre(
+            &issue,
+            graphique,
+            dessine.load(std::sync::atomic::Ordering::Relaxed),
+        ) {
+            Ok(Suite::ReprendreAvecGraphique)
+        } else {
+            issue
         };
         match issue? {
             Suite::ReprendreAvecGraphique => {
@@ -241,4 +263,78 @@ async fn main() -> Result<()> {
     anyhow::bail!(
         "Le serveur nous redirige sans fin : {TOURS_MAX} tours n'ont pas suffi à ouvrir une session."
     )
+}
+
+#[cfg(test)]
+mod tests_reprise {
+    use super::{faut_il_reprendre, FermeeApresAuthentification};
+    use crate::egfx::Politique;
+    use crate::session::Suite;
+    use anyhow::Result;
+
+    // Cas confirmés par l'audit du 7 septembre 2026 : la décision de reprendre
+    // avec le canal graphique ne doit dépendre QUE d'une session réellement
+    // ouverte puis fermée sans dessin, jamais d'un échec pré-session.
+
+    /// Un mot de passe refusé (CredSSP STATUS_LOGON_FAILURE) est un échec
+    /// pré-session : ne ni mémoriser ni relancer, sinon deux tentatives d'auth
+    /// avec le même mot de passe faux (double 4625 côté serveur).
+    #[test]
+    fn un_mot_de_passe_faux_ne_declenche_pas_de_reprise() {
+        let issue: Result<Suite> = Err(anyhow::anyhow!("CredSSP … STATUS_LOGON_FAILURE"));
+        assert!(!faut_il_reprendre(&issue, Politique::Observer, false));
+    }
+
+    /// Un délai NLA dépassé n'a jamais ouvert de session : pas de reprise.
+    #[test]
+    fn un_timeout_nla_ne_declenche_pas_de_reprise() {
+        let issue: Result<Suite> = Err(anyhow::anyhow!(
+            "[AVASH_RDP_SANS_NLA] L'authentification réseau (NLA) n'a pas abouti"
+        ));
+        assert!(!faut_il_reprendre(&issue, Politique::Observer, false));
+    }
+
+    /// Un certificat changé (TOFU) fait échouer AVANT tout envoi
+    /// d'identifiants : pas de reprise, pas d'écriture dans rdp_canal_graphique.
+    #[test]
+    fn un_certificat_change_ne_declenche_pas_de_reprise() {
+        let issue: Result<Suite> = Err(anyhow::anyhow!("Le certificat de srv:3389 a changé."));
+        assert!(!faut_il_reprendre(&issue, Politique::Observer, false));
+    }
+
+    /// Contrôle positif : un serveur qui n'a que le canal graphique et
+    /// raccroche juste après l'authentification (GNOME Remote Desktop) doit,
+    /// lui, reprendre.
+    #[test]
+    fn serveur_egfx_only_qui_raccroche_reprend() {
+        let issue: Result<Suite> = Err(anyhow::Error::new(FermeeApresAuthentification(
+            "session fermée après auth".to_owned(),
+        )));
+        assert!(faut_il_reprendre(&issue, Politique::Observer, false));
+    }
+
+    /// Une fin de session sans dessin, sous Observer, reste le cas légitime.
+    #[test]
+    fn une_session_finie_sans_dessin_reprend() {
+        let issue: Result<Suite> = Ok(Suite::Fini);
+        assert!(faut_il_reprendre(&issue, Politique::Observer, false));
+    }
+
+    /// Mais si quelque chose a été dessiné, le serveur sait dessiner par le
+    /// chemin classique : aucune reprise, même sur une fin sans plus.
+    #[test]
+    fn une_session_qui_a_dessine_ne_reprend_pas() {
+        let issue: Result<Suite> = Ok(Suite::Fini);
+        assert!(!faut_il_reprendre(&issue, Politique::Observer, true));
+    }
+
+    /// Et sous une politique autre qu'Observer (le canal est déjà accordé),
+    /// il n'y a rien à reprendre, même sur le marqueur d'après-auth.
+    #[test]
+    fn hors_observer_aucune_reprise() {
+        let issue: Result<Suite> = Err(anyhow::Error::new(FermeeApresAuthentification(
+            "session fermée après auth".to_owned(),
+        )));
+        assert!(!faut_il_reprendre(&issue, Politique::Accepter, false));
+    }
 }

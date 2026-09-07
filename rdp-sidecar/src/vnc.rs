@@ -10,9 +10,15 @@
 //! redimensionnement à la demande n'existe pas (le serveur décide de sa
 //! taille ; l'interface adapte le canvas).
 //!
-//! Aucune empreinte à épingler : le RFB classique ne chiffre rien et ne
-//! présente rien à vérifier. `SECURITY.md` le dit, et recommande un tunnel
-//! SSH pour tout ce qui sort du réseau local.
+//! Le RFB classique ne chiffre rien et ne présente rien à vérifier ;
+//! `SECURITY.md` recommande un tunnel SSH pour tout ce qui sort du réseau
+//! local. En revanche, dès qu'une session VeNCrypt a réussi sur un serveur, sa
+//! clé publique est épinglée (`vnc:<hôte>:<port>`, voir `vnc_tls`) : les
+//! connexions suivantes exigent alors TLS et refusent toute rétrogradation vers
+//! le RFB en clair (modèle HSTS), sinon un interposeur retirant VeNCrypt de la
+//! liste (échangée en clair) ferait fuiter la réponse DES puis la session
+//! entière. Il n'y a donc « aucune empreinte à épingler » que tant qu'aucune
+//! session VeNCrypt n'a eu lieu.
 
 use crate::acces_local::{etablir_poste, Poste};
 use crate::args::{taille_sure, Args};
@@ -188,10 +194,56 @@ fn message(e: vnc::VncError) -> anyhow::Error {
              (TLS anonyme, RSA-AES). Autorise VeNCrypt avec certificat (X.509) ou \
              l'authentification VNC classique, ou passe par un tunnel SSH."
         ),
+        // Le serveur n'annonce que des types de sécurité hors de ce que le
+        // client parle (ARD macOS, MS-Logon UltraVNC, RealVNC…) : on nomme ce
+        // qui est accepté. Trouvé par l'audit du 7 septembre 2026.
+        vnc::VncError::General(m) if m.contains("types de sécurité inconnus") => anyhow::anyhow!(
+            "{m}. Ce client accepte : sans authentification, l'authentification VNC classique, \
+             ou VeNCrypt avec certificat (X.509)."
+        ),
+        // Le serveur a choisi (RFB 3.3) ou n'offre qu'un type de sécurité que
+        // ce client ne parle pas : phrase française plutôt que le « Unknown VNC
+        // security type » de la bibliothèque. Trouvé par l'audit du 7 sept. 2026.
+        vnc::VncError::InvalidSecurityTyep(t) => anyhow::anyhow!(
+            "Le serveur impose un type de sécurité VNC que ce client ne parle pas ({t}). \
+             Types acceptés : sans authentification, authentification VNC classique, \
+             ou VeNCrypt avec certificat (X.509)."
+        ),
         // Nos propres messages (VeNCrypt, certificat épinglé) : tels quels,
         // sans le « VNC Error with message » que la bibliothèque colle devant.
         vnc::VncError::General(m) => anyhow::anyhow!("{m}"),
         autre => anyhow::anyhow!("{autre}"),
+    }
+}
+
+/// Ce que le presse-papiers du poste doit envoyer au serveur VNC pour un message
+/// de l'interface. En RFB, à la différence du RDP, il n'y a pas de phase de
+/// demande : un `ClientCutText` part réellement sur le fil dès qu'on l'émet.
+/// L'annonce `[8]` (que l'interface pousse à l'ouverture, au focus et au
+/// changement d'onglet) ne fait donc que mémoriser le texte du poste ; il ne part
+/// au serveur que sur un collage explicite `[22]` (Ctrl+V / Maj+Inser), et
+/// seulement si le partage est actif. Renvoie le texte à émettre en `CopyText`,
+/// ou `None`. Trouvé par l'audit du 7 septembre 2026 : le chemin VNC envoyait
+/// aussitôt, sur `[8]`, le presse-papiers du poste — souvent un mot de passe
+/// fraîchement copié — au serveur, sans le moindre geste de collage, dès la
+/// connexion et à chaque focus (fuite du contenu vers l'opérateur du serveur, en
+/// clair en RFB classique).
+fn presse_papiers_vers_serveur(
+    memoire: &mut Option<String>,
+    b: &[u8],
+    partage: bool,
+) -> Option<String> {
+    match b.first().copied() {
+        // [8] ANNONCE : mémoriser sans rien envoyer.
+        Some(8) => {
+            if let Ok(t) = std::str::from_utf8(&b[1..]) {
+                *memoire = Some(t.to_owned());
+            }
+            None
+        }
+        // [22] COLLER : le seul moment où le presse-papiers du poste part.
+        Some(22) if partage => memoire.clone(),
+        _ => None,
     }
 }
 
@@ -214,9 +266,17 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
     // certificat est épinglé (vnc_tls) ; sinon, l'authentification VNC
     // classique, en clair, comme avant.
     let monteur = crate::vnc_tls::monteur(&args.host, args.port);
+    // Modèle HSTS : si une session VeNCrypt a déjà épinglé ce serveur (une ligne
+    // `vnc:<hôte>:<port>` existe), on exige TLS et l'on refuse toute
+    // rétrogradation en RFB clair — un interposeur ne peut pas contourner
+    // l'épinglage en retirant VeNCrypt de la liste. Trouvé par l'audit du
+    // 7 septembre 2026.
+    let cle_tls = format!("vnc:{}:{}", args.host, args.port);
+    let exige_tls = crate::empreintes::empreinte_memorisee(&cle_tls).is_some();
     let client = tokio::time::timeout(DELAI_CONNEXION, async move {
         VncConnector::new(crate::vnc_tls::MaybeTls::Clair(tcp))
             .set_tls_upgrader(monteur)
+            .exiger_tls(exige_tls.then_some(cle_tls))
             .set_auth_method(async move { Ok(pass) })
             // L'ordre est une préférence annoncée au serveur : ZRLE d'abord
             // (sans perte, compact), CopyRect pour les déplacements, Raw parce
@@ -270,6 +330,9 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
 
     let mut pointeur = Pointeur::default();
     let mut partage_clip = true;
+    // Le presse-papiers du poste mémorisé : l'annonce [8] le remplit, le collage
+    // explicite [22] le pousse au serveur (voir presse_papiers_vers_serveur).
+    let mut memoire_clip: Option<String> = None;
     let mut dirty: Vec<InclusiveRectangle> = Vec::new();
     let mut awaiting_ack = false;
     let mut en_pause = false;
@@ -350,11 +413,9 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&12) && b.len() >= 2 => {
                         partage_clip = b[1] != 0;
                     }
-                    Some(Ok(Message::Binary(b))) if b.first() == Some(&8) => {
-                        if partage_clip {
-                            if let Ok(text) = std::str::from_utf8(&b[1..]) {
-                                client.input(X11Event::CopyText(text.to_owned())).await.map_err(message)?;
-                            }
+                    Some(Ok(Message::Binary(b))) if b.first() == Some(&8) || b.first() == Some(&22) => {
+                        if let Some(texte) = presse_papiers_vers_serveur(&mut memoire_clip, &b, partage_clip) {
+                            client.input(X11Event::CopyText(texte)).await.map_err(message)?;
                         }
                     }
                     Some(Ok(Message::Binary(b))) => {
@@ -388,6 +449,7 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
                     lot.push(e);
                 }
                 let mut image_recue = false;
+                let mut fin_de_maj = false;
                 for e in lot {
                     match e {
                         VncEvent::SetResolution(s) => {
@@ -424,6 +486,7 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
                                 sink.send(Message::Binary(m.into())).await.context("envoi presse-papiers")?;
                             }
                         }
+                        VncEvent::UpdateDone => fin_de_maj = true,
                         VncEvent::Error(m) => anyhow::bail!("{m}"),
                         // Curseur et JPEG ne sont pas demandés ; cloche,
                         // format de pixel : sans effet.
@@ -431,8 +494,15 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
                     }
                 }
                 if image_recue {
-                    demande_en_vol = false;
                     flush_dirty!();
+                }
+                // La fin d'une mise à jour, même sans un seul pixel (changement
+                // de résolution : DesktopSize seul, ou lot à zéro rectangle),
+                // honore la demande en vol : on peut redemander. Sans ça une
+                // telle mise à jour laissait `demande_en_vol` à `true` pour
+                // toujours et figeait le bureau (audit du 7 septembre 2026).
+                if fin_de_maj {
+                    demande_en_vol = false;
                     demander_la_suite!();
                 }
             }
@@ -638,5 +708,46 @@ mod tests_copie {
         assert!(!copier(&mut i, r(0, 0, 0, 2), r(0, 0, 0, 2)));
         assert!(!copier(&mut i, r(0, 0, 5, 1), r(0, 0, 5, 1)));
         assert_eq!(pixel(&i, 3, 3), 15);
+    }
+}
+
+#[cfg(test)]
+mod tests_presse_papiers {
+    use super::presse_papiers_vers_serveur;
+
+    /// Régression trouvée par l'audit du 7 septembre 2026 : sur l'annonce [8]
+    /// (poussée par l'interface à l'ouverture, au focus et au changement
+    /// d'onglet), le chemin VNC envoyait aussitôt le presse-papiers du poste au
+    /// serveur (`ClientCutText`) — fuite du contenu, souvent un mot de passe
+    /// fraîchement copié, sans aucun geste de collage. En RFB il n'y a pas de
+    /// phase de demande comme en RDP : le texte part vraiment sur le fil.
+    /// L'annonce ne fait plus que mémoriser ; le texte ne part qu'au collage
+    /// explicite [22], et seulement si le partage est actif.
+    #[test]
+    fn le_presse_papiers_ne_part_qu_au_collage_explicite() {
+        let mut memoire = None;
+        let mut annonce = vec![8u8];
+        annonce.extend_from_slice("hunter2".as_bytes());
+        // L'annonce mémorise mais n'envoie rien au serveur.
+        assert_eq!(
+            presse_papiers_vers_serveur(&mut memoire, &annonce, true),
+            None
+        );
+        assert_eq!(memoire.as_deref(), Some("hunter2"));
+        // Répétée (chaque focus, chaque bascule d'onglet), elle ne fuit rien.
+        assert_eq!(
+            presse_papiers_vers_serveur(&mut memoire, &annonce, true),
+            None
+        );
+        // Le collage explicite [22] pousse enfin le texte mémorisé.
+        assert_eq!(
+            presse_papiers_vers_serveur(&mut memoire, &[22], true),
+            Some("hunter2".to_owned())
+        );
+        // Partage coupé (Ctrl+K) : même un collage ne pousse rien.
+        assert_eq!(
+            presse_papiers_vers_serveur(&mut memoire, &[22], false),
+            None
+        );
     }
 }

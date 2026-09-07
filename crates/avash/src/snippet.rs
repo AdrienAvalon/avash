@@ -96,15 +96,32 @@ pub fn render<S: std::hash::BuildHasher>(
     out
 }
 
-/// Prepare le texte a injecter dans un terminal.
+/// Prepare le texte a injecter dans un terminal. Un terminal attend `\r`
+/// (Entree), pas `\n` : chaque saut de ligne est converti.
 ///
-/// Un terminal attend `\r` (Entree), pas `\n` : chaque saut de ligne d'un
-/// snippet multi-lignes doit valider sa commande. Si `run`, une Entree finale
-/// execute la derniere ligne ; sinon le texte est insere tel quel pour que
-/// l'utilisateur relise avant de valider.
+/// Deux modes selon `run` :
+/// - `run` (executer) : une Entree finale valide la derniere ligne, et chaque
+///   saut intermediaire execute sa commande. C'est voulu.
+/// - insertion (`!run`) : l'utilisateur veut relire avant de valider. Convertir
+///   les sauts en `\r` sans les proteger revient a valider toutes les lignes
+///   sauf la derniere (trouve par l'audit du 7 septembre 2026 : un snippet de
+///   trois lignes, case « Exécuter » decochee, executait aussitot les deux
+///   premieres commandes sur toutes les sessions cibles). D'ou `crochets` :
+///   entourer le texte du « bracketed paste » (`ESC[200~ … ESC[201~`), que le
+///   shell distant traite comme du texte colle sans l'executer quand il a
+///   active DECSET 2004. Le front ne demande les crochets que si le distant les
+///   gere ; sinon il avertit avant d'inserer sans protection.
+///
+/// `crochets` et `run` sont independants : avec les deux, l'Entree finale vient
+/// APRES `ESC[201~`, jamais dedans.
 #[must_use]
-pub fn terminal_payload(text: &str, run: bool) -> String {
-    let mut out = text.replace("\r\n", "\n").replace('\n', "\r");
+pub fn terminal_payload(text: &str, run: bool, crochets: bool) -> String {
+    let conv = text.replace("\r\n", "\n").replace('\n', "\r");
+    let mut out = if crochets {
+        format!("\x1b[200~{conv}\x1b[201~")
+    } else {
+        conv
+    };
     if run && !out.ends_with('\r') {
         out.push('\r');
     }
@@ -210,12 +227,53 @@ mod tests {
     }
 
     #[test]
-    fn terminal_payload_convertit_les_sauts_de_ligne() {
-        assert_eq!(terminal_payload("a\nb", true), "a\rb\r");
-        assert_eq!(terminal_payload("a\r\nb", false), "a\rb");
-        assert_eq!(terminal_payload("x", true), "x\r");
-        assert_eq!(terminal_payload("x\r", true), "x\r", "pas de double Entree");
-        assert_eq!(terminal_payload("x", false), "x", "insertion sans executer");
+    fn terminal_payload_run_execute_ligne_a_ligne() {
+        // `run` (executer) : chaque saut valide sa commande, Entree finale.
+        assert_eq!(terminal_payload("a\nb", true, false), "a\rb\r");
+        assert_eq!(terminal_payload("x", true, false), "x\r");
+        assert_eq!(
+            terminal_payload("x\r", true, false),
+            "x\r",
+            "pas de double Entree"
+        );
+    }
+
+    #[test]
+    fn l_insertion_multi_lignes_ne_valide_aucune_ligne() {
+        // Trouve par l'audit du 7 septembre 2026 : en insertion (`run == false`),
+        // convertir les sauts en `\r` validait toutes les lignes sauf la derniere
+        // (un snippet « stop / rm -rf / start » executait stop et rm sur toutes
+        // les cibles, seul start attendait). Le bracketed paste fait tout inserer
+        // sans rien executer.
+        assert_eq!(
+            terminal_payload("a\nb", false, true),
+            "\x1b[200~a\rb\x1b[201~"
+        );
+        assert_eq!(
+            terminal_payload("a\r\nb", false, true),
+            "\x1b[200~a\rb\x1b[201~",
+            "les CRLF Windows deviennent un seul \\r, toujours entre crochets"
+        );
+        // Aucun `\r` ne sort des crochets : rien ne peut s'executer tout seul.
+        assert!(!terminal_payload("stop\nrm -rf x\nstart", false, true).ends_with('\r'));
+    }
+
+    #[test]
+    fn insertion_entre_crochets_avec_run_met_l_entree_apres_le_marqueur() {
+        // Valider apres un collage : l'Entree vient APRES `ESC[201~`, jamais
+        // dedans (sinon elle validerait au milieu du texte colle).
+        assert_eq!(
+            terminal_payload("a\nb", true, true),
+            "\x1b[200~a\rb\x1b[201~\r"
+        );
+    }
+
+    #[test]
+    fn insertion_sans_crochets_reste_le_texte_converti() {
+        // Distant sans DECSET 2004 : le front n'active pas les crochets (et
+        // avertit) ; le comportement d'insertion brut, non protege, est conserve.
+        assert_eq!(terminal_payload("x", false, false), "x");
+        assert_eq!(terminal_payload("a\nb", false, false), "a\rb");
     }
 
     #[test]

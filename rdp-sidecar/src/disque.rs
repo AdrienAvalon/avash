@@ -43,7 +43,7 @@ use ironrdp::rdpdr::pdu::RdpdrPdu;
 use ironrdp::svc::SvcMessage;
 use std::collections::HashMap;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Identifiant du lecteur annoncé au serveur, et son nom sur le bureau distant.
 pub(crate) const LECTEUR_ID: u32 = 1;
@@ -211,6 +211,9 @@ impl Lecteur {
 
     /// Ramène un chemin du serveur (`\dossier\fichier`) sous la racine.
     ///
+    /// Chaque composant est validé par [`composant_normal`] : ni `.`, ni `..`,
+    /// ni deux-points (préfixe de disque ou flux ADS), ni octet nul.
+    ///
     /// Le parent est résolu par le système (liens compris) et doit rester sous
     /// la racine ; le dernier composant, lui, n'est pas suivi s'il est un lien :
     /// un lien vers `/etc/shadow` déposé dans le dossier partagé ne donne rien.
@@ -219,10 +222,7 @@ impl Lecteur {
             .split(['\\', '/'])
             .filter(|c| !c.is_empty())
             .collect();
-        if composants
-            .iter()
-            .any(|c| *c == "." || *c == ".." || c.contains('\0'))
-        {
+        if composants.iter().any(|c| !composant_normal(c)) {
             return Err(NtStatus::from(STATUS_OBJECT_NAME_INVALID));
         }
         let Some((dernier, parents)) = composants.split_last() else {
@@ -236,6 +236,13 @@ impl Lecteur {
             return Err(NtStatus::ACCESS_DENIED);
         }
         let chemin = parent.join(dernier);
+        // Défense en profondeur : le `join` ne doit jamais faire sortir de
+        // `parent` ni de la racine. `composant_normal` l'assure déjà, mais on le
+        // revérifie ici puisque c'est le point où un composant piégé (préfixe de
+        // disque « C: » sous Windows) sortirait de la racine partagée.
+        if chemin.parent() != Some(parent.as_path()) || !chemin.starts_with(&self.racine) {
+            return Err(NtStatus::ACCESS_DENIED);
+        }
         if std::fs::symlink_metadata(&chemin).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(NtStatus::ACCESS_DENIED);
         }
@@ -832,6 +839,27 @@ impl Lecteur {
 }
 
 /// Traduit une erreur du poste en statut NT, comme FreeRDP (drive_file.c).
+/// Un composant de chemin acceptable : exactement un [`Component::Normal`],
+/// sans deux-points ni octet nul.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : sous Windows, `PathBuf::push` d'un
+/// composant porteur d'un préfixe de disque sans racine (« C: », « C:nom »,
+/// « D: ») REMPLACE le chemin au lieu de l'étendre (« if path has a prefix but
+/// no root, it replaces self »), si bien qu'un dernier composant « C: »
+/// échappait à la racine partagée vers le cwd du sidecar. Les deux-points
+/// couvrent le préfixe de disque et les flux ADS (« nom:flux »). `.` et `..`
+/// ne sont pas des `Normal` et sont donc refusés d'office.
+fn composant_normal(c: &str) -> bool {
+    if c.contains(':') || c.contains('\0') {
+        return false;
+    }
+    let mut composants = Path::new(c).components();
+    matches!(
+        (composants.next(), composants.next()),
+        (Some(Component::Normal(_)), None)
+    )
+}
+
 fn statut_io(e: std::io::Error) -> NtStatus {
     use std::io::ErrorKind as K;
     match e.kind() {
@@ -1188,6 +1216,9 @@ mod tests {
             "\\..\\dedans.txt",
             "\\a\\..\\..\\etc\\passwd",
             "\\.\\dedans.txt",
+            "\\C:",
+            "\\C:.gitconfig",
+            "\\D:",
         ] {
             let (s, id, _) = ouvrir(&mut l, mauvais, CreateDisposition::FILE_OPEN, false, false);
             assert_ne!(s, NtStatus::SUCCESS, "{mauvais}");
@@ -1228,6 +1259,31 @@ mod tests {
             (NtStatus::SUCCESS, Information::FILE_OPENED.bits())
         );
         assert_eq!(fermer(&mut l, id), NtStatus::SUCCESS);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un dernier composant porteur
+    /// d'un préfixe de disque (« C: », « C:nom », « D: ») ou d'un flux ADS
+    /// (« nom:flux ») échappait à la racine, parce que sous Windows
+    /// `PathBuf::push` d'un préfixe sans racine REMPLACE le chemin (cible : le
+    /// cwd du sidecar). On teste `resoudre` directement : sous Linux le `join`
+    /// n'a pas cette sémantique, mais la garde de validation, elle, doit
+    /// refuser ces composants sur toute plateforme. Avant le correctif,
+    /// `resoudre` rendait un `Ok` pour ces entrées (parent = racine, existante).
+    #[test]
+    fn un_prefixe_de_disque_ou_un_flux_ads_est_refuse() {
+        let d = bac("prefixe-disque");
+        let l = Lecteur::nouveau(&d).unwrap();
+        for mauvais in [
+            "\\C:",
+            "\\C:..",
+            "\\C:nom",
+            "\\D:",
+            "\\C:.gitconfig",
+            "\\fichier:flux",
+        ] {
+            assert!(l.resoudre(mauvais).is_err(), "{mauvais} doit être refusé");
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 

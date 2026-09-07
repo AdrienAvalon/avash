@@ -7,9 +7,12 @@
 //! fichier en morceaux demandés à la suite, écrire chaque réponse à sa
 //! position, promouvoir le fichier une fois complet, et de l'autre côté
 //! parcourir les dossiers offerts et servir les octets demandés. Tout ce qui
-//! vient du distant reste une entrée non fiable : les chemins sont déjà
-//! assainis par IronRDP (ni absolu, ni `..`), les tailles annoncées ne servent
-//! qu'à l'affichage et à borner les requêtes, jamais à allouer.
+//! vient du distant reste une entrée non fiable : IronRDP retire `..` et les
+//! préfixes absolus en tête, mais laisse passer un nom sans séparateur portant
+//! une lettre de lecteur (« C:evil.exe ») ou un nom de périphérique réservé, si
+//! bien qu'on revalide chaque composant nous-mêmes (voir [`composant_sur`]) ;
+//! les tailles annoncées ne servent qu'à l'affichage et à borner les requêtes,
+//! jamais à allouer.
 
 use anyhow::{Context, Result};
 use ironrdp::cliprdr::pdu::{
@@ -17,7 +20,7 @@ use ironrdp::cliprdr::pdu::{
     FileDescriptor,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 /// Taille d'un morceau demandé au distant. Un mégaoctet : assez pour que la
@@ -91,21 +94,57 @@ pub(crate) fn dossier_par_defaut() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Un composant de nom sûr : un unique [`Component::Normal`], sans deux-points
+/// (préfixe de disque « C: » ou flux ADS sous Windows), sans séparateur ni
+/// octet nul, et qui n'est pas un nom de périphérique réservé Windows (CON,
+/// NUL, LPT1…, que `sanitize_file_path` ne filtre pas).
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `sanitize_file_path` d'IronRDP rend
+/// « C:evil.exe » tel quel (aucun séparateur, chemin de sortie inchangé) et ne
+/// retire une lettre de lecteur qu'en tête de chemin ; sous Windows
+/// `PathBuf::push("C:evil.exe")` remplace le chemin construit par un chemin
+/// relatif au disque courant (donc au cwd du sidecar), hors du dossier de
+/// réception. On valide donc chaque composant nous-mêmes.
+fn composant_sur(c: &str) -> bool {
+    if c.contains([':', '/', '\\', '\0']) || ironrdp::cliprdr::is_windows_device_name(c) {
+        return false;
+    }
+    let mut composants = Path::new(c).components();
+    matches!(
+        (composants.next(), composants.next()),
+        (Some(Component::Normal(_)), None)
+    )
+}
+
 /// Chemin local d'un fichier reçu : sous `dossier`, avec son chemin relatif.
 /// Un nom qui existe déjà prend un suffixe « (2) », « (3) »… plutôt que
 /// d'écraser : le poste garde ce qu'il avait.
-fn chemin_local(dossier: &Path, d: &FileDescriptor) -> PathBuf {
+///
+/// Chaque composant (parties du chemin relatif et nom) doit être sûr
+/// ([`composant_sur`]) ; sinon `None`, et l'appelant écarte le fichier avec une
+/// entrée dans `erreurs` plutôt que d'écrire hors du dossier.
+fn chemin_local(dossier: &Path, d: &FileDescriptor) -> Option<PathBuf> {
     let mut p = dossier.to_path_buf();
     if let Some(rel) = d.relative_path.as_deref().filter(|r| !r.is_empty()) {
+        // Découpe sur `/` et `\` : IronRDP joint avec `\`, mais un composant
+        // piégé pourrait porter l'autre séparateur (défense en profondeur).
         for c in rel
-            .split('\\')
+            .split(['\\', '/'])
             .filter(|c| !c.is_empty() && *c != "." && *c != "..")
         {
+            if !composant_sur(c) {
+                return None;
+            }
             p.push(c);
         }
     }
+    if !composant_sur(&d.name) {
+        return None;
+    }
     p.push(&d.name);
-    p
+    // Défense en profondeur : après le join, la cible reste sous le dossier de
+    // réception (les composants validés le garantissent déjà).
+    p.starts_with(dossier).then_some(p)
 }
 
 fn sans_collision(p: &Path) -> PathBuf {
@@ -127,6 +166,36 @@ fn sans_collision(p: &Path) -> PathBuf {
         }
     }
     p.to_path_buf()
+}
+
+/// Ouvre un fichier de travail neuf sans jamais tronquer un fichier existant :
+/// `create_new` sur `base`, puis sur des noms dérivés « (2) », « (3) »… tant
+/// qu'un fichier occupe le nom. Rend le chemin retenu et le fichier ouvert.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : voir l'appelant. `create_new` ferme
+/// aussi la course entre le test d'existence et l'ouverture.
+async fn ouvrir_travail(base: &Path) -> std::io::Result<(PathBuf, tokio::fs::File)> {
+    let tige = base
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut chemin = base.to_path_buf();
+    let mut n = 2u32;
+    loop {
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&chemin)
+            .await
+        {
+            Ok(f) => return Ok((chemin, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 10_000 => {
+                chemin = base.with_file_name(format!("{tige} ({n}).part"));
+                n += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// Un fichier en cours de réception.
@@ -229,7 +298,14 @@ impl Reception {
             let index = self.prochain;
             self.prochain += 1;
             let d = self.fichiers[index].clone();
-            let cible = chemin_local(&self.dossier, &d);
+            let Some(cible) = chemin_local(&self.dossier, &d) else {
+                // Nom refusé (préfixe de disque, séparateur, périphérique
+                // réservé) : on n'écrit rien et on signale le fichier.
+                self.erreurs
+                    .push(format!("{} : nom de fichier refusé", chemin_relatif(&d)));
+                self.termines += 1;
+                continue;
+            };
             if est_dossier(&d) {
                 if let Err(e) = tokio::fs::create_dir_all(&cible).await {
                     self.erreurs.push(format!("{} : {e}", chemin_relatif(&d)));
@@ -268,12 +344,21 @@ impl Reception {
                 .with_context(|| format!("création de {}", cible.display()))?;
             return Ok(None);
         }
-        let mut partiel = cible.as_os_str().to_owned();
-        partiel.push(".part");
-        let partiel = PathBuf::from(partiel);
-        let fichier = tokio::fs::File::create(&partiel)
+        let mut base = cible.as_os_str().to_owned();
+        base.push(".part");
+        let base = PathBuf::from(base);
+        // Fichier de travail : on n'utilise pas `File::create`, qui tronque un
+        // fichier existant. Trouvé par l'audit du 7 septembre 2026 : le nom de
+        // la cible vient du serveur et le dossier par défaut est celui des
+        // téléchargements, où Firefox écrit son téléchargement en cours sous
+        // exactement « <nom>.part » et ne le renomme qu'à la fin ; une
+        // coïncidence de nom aurait tronqué ce téléchargement en silence (perte
+        // de données, promesse « sans écraser » de SECURITY.md). On ouvre en
+        // `create_new` (jamais de troncature) et, si le « .part » est déjà pris,
+        // on se replie sur un nom de travail dérivé.
+        let (partiel, fichier) = ouvrir_travail(&base)
             .await
-            .with_context(|| format!("création de {}", partiel.display()))?;
+            .with_context(|| format!("création de {}", base.display()))?;
         self.en_cours = Some(EnCours {
             index,
             partiel,
@@ -681,6 +766,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Un « .part » préexistant du poste n'est ni tronqué ni promu quand le
+    /// serveur copie un fichier de même nom. Trouvé par l'audit du 7 septembre
+    /// 2026 : dans le dossier des téléchargements, Firefox écrit son
+    /// téléchargement en cours sous exactement « <nom>.part » et ne le renomme
+    /// qu'à la fin ; l'ancien `File::create` du fichier de travail le tronquait
+    /// (perte de données silencieuse). La réception se replie sur un nom de
+    /// travail dérivé et laisse le `.part` de Firefox intact.
+    #[tokio::test]
+    async fn un_part_preexistant_n_est_ni_tronque_ni_promu() {
+        let d = temp("part-preexistant");
+        // Téléchargement Firefox en cours : « installateur.iso.part » plein,
+        // « installateur.iso » pas encore là.
+        std::fs::write(
+            d.join("installateur.iso.part"),
+            b"telechargement firefox en cours",
+        )
+        .unwrap();
+        let mut r = Reception::nouvelle(d.clone(), vec![fichier("installateur.iso", 4)], None, 1);
+        jouer(&mut r, &[b"avsh".to_vec()]).await;
+        assert!(r.terminee() && r.erreurs().is_empty(), "{:?}", r.erreurs());
+        // Le .part de Firefox est intact (ni tronqué, ni renommé/promu).
+        assert_eq!(
+            std::fs::read(d.join("installateur.iso.part")).unwrap(),
+            b"telechargement firefox en cours"
+        );
+        // Le fichier reçu a bien atterri sous le nom cible (aucune collision
+        // sur la cible finale, seul le « .part » était pris).
+        assert_eq!(std::fs::read(d.join("installateur.iso")).unwrap(), b"avsh");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// Un refus du distant sur un fichier ne perd pas les autres, et ne laisse
     /// pas de `.part`.
     #[tokio::test]
@@ -712,20 +828,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Les chemins viennent d'IronRDP déjà assainis ; on ne remonte jamais
-    /// au-dessus du dossier de réception, même si un composant l'essayait.
+    /// Un chemin ordinaire reste sous le dossier de réception, `..` est ôté.
+    /// Mais un composant piégé qui échapperait au dossier sous Windows
+    /// (`PathBuf::push` d'un préfixe de disque remplace le chemin construit)
+    /// est refusé : `d.name` « C:evil.exe » que `sanitize_file_path` laisse
+    /// passer tel quel, un `relative_path` « a\\D:\\b » dont IronRDP ne retire
+    /// pas la lettre de lecteur en milieu de chemin, un nom de périphérique
+    /// réservé, un séparateur ou un octet nul glissés dans le nom. Trouvé par
+    /// l'audit du 7 septembre 2026.
     #[test]
     fn le_chemin_local_reste_sous_le_dossier() {
         let d = FileDescriptor::new("f.txt").with_relative_path("a\\..\\b");
         assert_eq!(
             chemin_local(std::path::Path::new("/r"), &d),
-            PathBuf::from("/r/a/b/f.txt")
+            Some(PathBuf::from("/r/a/b/f.txt"))
         );
         let plat = FileDescriptor::new("seul");
         assert_eq!(
             chemin_local(std::path::Path::new("/r"), &plat),
-            PathBuf::from("/r/seul")
+            Some(PathBuf::from("/r/seul"))
         );
+        // Cas d'évasion : chacun doit être refusé (aucun chemin rendu).
+        for d in [
+            FileDescriptor::new("C:evil.exe"),
+            FileDescriptor::new("f.txt").with_relative_path("a\\D:\\b"),
+            FileDescriptor::new("f.txt").with_relative_path("C:"),
+            FileDescriptor::new("a/b"),
+            FileDescriptor::new("NUL"),
+            FileDescriptor::new("lpt1.txt"),
+        ] {
+            assert_eq!(
+                chemin_local(std::path::Path::new("/r"), &d),
+                None,
+                "nom piégé accepté : {:?} / {:?}",
+                d.relative_path,
+                d.name
+            );
+        }
+    }
+
+    /// La réception écarte un fichier au nom piégé (préfixe de disque) sans
+    /// écrire hors du dossier, et le signale dans `erreurs`. Trouvé par l'audit
+    /// du 7 septembre 2026 : sous Windows le `.part` de « C:evil.exe » serait
+    /// créé relativement au cwd du sidecar, hors du dossier annoncé.
+    #[tokio::test]
+    async fn un_nom_a_prefixe_de_disque_est_refuse_et_signale() {
+        let d = temp("prefixe");
+        let mut r = Reception::nouvelle(
+            d.clone(),
+            vec![fichier("C:evil.exe", 4), fichier("bon.txt", 2)],
+            None,
+            1,
+        );
+        let reqs = r.demarrer().await;
+        // Le premier fichier est écarté ; c'est « bon.txt » qui démarre.
+        assert_eq!(reqs.len(), 1);
+        let fin = r.recevoir(reqs[0].stream_id, Some(b"ok")).await;
+        assert!(fin.is_empty() && r.terminee());
+        assert_eq!(r.erreurs().len(), 1);
+        assert!(r.erreurs()[0].contains("refusé"), "{:?}", r.erreurs());
+        assert!(!d.join("C:evil.exe.part").exists());
+        assert_eq!(std::fs::read(d.join("bon.txt")).unwrap(), b"ok");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -24,9 +24,10 @@ pub(crate) enum ClipReq {
     RequestPaste(ClipboardFormatId),
     /// Texte reçu du serveur → à pousser vers le presse-papiers du poste.
     RemoteText(String),
-    /// Le distant a copié des fichiers : leur liste (chemins déjà assainis par
-    /// IronRDP) et le verrou posé sur son presse-papiers, à porter dans les
-    /// requêtes de contenu.
+    /// Le distant a copié des fichiers : leur liste (chemins partiellement
+    /// assainis par IronRDP, revalidés composant par composant à la réception,
+    /// cf. `fichiers::composant_sur`) et le verrou posé sur son presse-papiers,
+    /// à porter dans les requêtes de contenu.
     FichiersDistants(Vec<FileDescriptor>, Option<u32>),
     /// Un morceau de fichier demandé au distant est arrivé (`None` : refus).
     ContenuRecu(u32, Option<Vec<u8>>),

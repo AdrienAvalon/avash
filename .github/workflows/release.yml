@@ -130,7 +130,9 @@ jobs:
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/appimage/*.AppImage.sig
             target/release/bundle/deb/*.deb
+            target/release/bundle/deb/*.deb.sig
             target/release/bundle/rpm/*.rpm
+            target/release/bundle/rpm/*.rpm.sig
             target/release/bundle/nsis/*.exe
             target/release/bundle/nsis/*.exe.sig
             target/release/bundle/dmg/*.dmg
@@ -157,6 +159,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           sig() { find artefacts -name "$1" -print -quit | xargs -r cat; }
+          present() { [ -n "$(find artefacts -name "$1" -print -quit)" ]; }
           # Sans signature, le manifeste serait vide et la mise à jour échouerait
           # sans rien dire. On préfère faire échouer la publication, visiblement.
           if [ -z "$(sig '*.AppImage.sig')" ] && [ -z "$(sig '*-setup.exe.sig')" ]; then
@@ -165,14 +168,44 @@ jobs:
                  "ne peut pas vérifier ce qu'elle télécharge."
             exit 1
           fi
-          python3 - "$version" "$base" "$(sig '*.AppImage.sig')" "$(sig '*-setup.exe.sig')" "$(sig '*.app.tar.gz.sig')" <<'PY' > latest.json
+          # Trouvé par l'audit du 7 septembre 2026 : tauri-cli signe aussi les
+          # paquets .deb et .rpm (createUpdaterArtifacts, bundle.rs sign_updaters).
+          # Le client d'une installation deb/rpm interroge linux-x86_64-deb /
+          # linux-x86_64-rpm ; sans ces entrées il se rabattait sur l'AppImage et
+          # échouait après l'avoir téléchargée (« invalid updater format »). On
+          # publie donc les cibles natives. Un paquet présent sans sa signature
+          # signale une clé absente : mieux vaut échouer que proposer une mise à
+          # jour deb/rpm impossible à vérifier.
+          for cible in deb rpm; do
+            if present "*.$cible" && [ -z "$(sig "*.$cible.sig")" ]; then
+              echo "::error::Un paquet .$cible est présent sans sa signature" \
+                   "(*.$cible.sig). tauri-cli devrait la produire quand" \
+                   "createUpdaterArtifacts est vrai et TAURI_SIGNING_PRIVATE_KEY" \
+                   "défini. Publication interrompue."
+              exit 1
+            fi
+          done
+          python3 - "$version" "$base" "$(sig '*.AppImage.sig')" "$(sig '*-setup.exe.sig')" "$(sig '*.app.tar.gz.sig')" "$(sig '*.deb.sig')" "$(sig '*.rpm.sig')" <<'PY' > latest.json
           import json, sys, datetime
-          version, base, sig_linux, sig_win, sig_mac = sys.argv[1:6]
+          version, base, sig_linux, sig_win, sig_mac, sig_deb, sig_rpm = sys.argv[1:8]
           plateformes = {}
           if sig_linux:
               plateformes["linux-x86_64"] = {
                   "signature": sig_linux,
                   "url": f"{base}/Avash_{version}_amd64.AppImage",
+              }
+          # Cibles natives du gestionnaire de paquets : le client deb/rpm les
+          # préfère au repli linux-x86_64 (dpkg -i / rpm -U remplacent proprement
+          # le paquet installé, là où l'AppImage désynchroniserait le gestionnaire).
+          if sig_deb:
+              plateformes["linux-x86_64-deb"] = {
+                  "signature": sig_deb,
+                  "url": f"{base}/Avash_{version}_amd64.deb",
+              }
+          if sig_rpm:
+              plateformes["linux-x86_64-rpm"] = {
+                  "signature": sig_rpm,
+                  "url": f"{base}/Avash-{version}-1.x86_64.rpm",
               }
           if sig_win:
               plateformes["windows-x86_64"] = {

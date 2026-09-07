@@ -1,5 +1,6 @@
 //! Trames vers l'interface : zone sale bornée, format binaire des rectangles.
 
+use crate::args::TAILLE_MAX;
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::geometry::InclusiveRectangle;
 use ironrdp::session::image::DecodedImage;
@@ -33,6 +34,14 @@ pub(crate) fn nouvelle_taille(
     hauteur: u16,
 ) -> bool {
     if (largeur, hauteur) == (image.width(), image.height()) {
+        return false;
+    }
+    // Ceinture-bretelles (audit du 7 septembre 2026) : le canal graphique EGFX
+    // annonçait sa taille sans passer par `taille_sure`, si bien qu'`etirer`
+    // pouvait allouer largeur×hauteur×4 (17 Gio pour 65535×65535) sur ordre du
+    // serveur. On refuse ici toute taille hors du plafond, image intacte, pour
+    // que tout appelant présent ou futur du chemin soit borné.
+    if largeur == 0 || hauteur == 0 || largeur > TAILLE_MAX || hauteur > TAILLE_MAX {
         return false;
     }
     *image = etirer(image, largeur, hauteur);
@@ -124,6 +133,39 @@ mod tests_nouvelle_taille {
         assert_eq!(px(3, 3), [4, 4, 4, 255]);
         assert_eq!(px(3, 0), [2, 2, 2, 255]);
         assert!(image.data().chunks(4).all(|p| p[3] == 255 && p[0] != 0));
+    }
+
+    #[test]
+    fn une_taille_hors_plafond_est_refusee_image_intacte() {
+        // Ceinture-bretelles de l'audit du 7 septembre 2026 : le canal graphique
+        // EGFX (ResetGraphics) appelait ce chemin sans passer par `taille_sure`,
+        // et `etirer` allouait largeur×hauteur×4 (17 Gio pour 65535×65535), tuant
+        // le sidecar sur ordre du serveur. La plage 8193..=65535 est le trou que
+        // le simple `u16::try_from` laissait passer. On refuse ici toute taille
+        // hors du plafond, image intacte, pour protéger tout appelant futur.
+        let mut image = image_2x2();
+        let avant = image.data().to_vec();
+        let mut dirty = vec![InclusiveRectangle {
+            left: 0,
+            top: 0,
+            right: 1,
+            bottom: 1,
+        }];
+        let mut attente = true;
+        for (l, h) in [(8193, 8193), (20000, 20000), (65535, 65535), (0, 5)] {
+            assert!(
+                !nouvelle_taille(&mut image, &mut dirty, &mut attente, l, h),
+                "{l}×{h} aurait dû être refusée"
+            );
+            assert_eq!(
+                image.data(),
+                &avant[..],
+                "l'image a été touchée par {l}×{h}"
+            );
+            assert_eq!((image.width(), image.height()), (2, 2));
+        }
+        assert_eq!(dirty.len(), 1, "la zone sale a été jetée");
+        assert!(attente);
     }
 
     #[test]

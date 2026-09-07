@@ -16,7 +16,7 @@
 // pour les scénarios de bout en bout : un serveur RDP de test et un sshd dédié
 // (non-root, clé, port 2223) auquel l'app se connecte réellement.
 import { spawn, execSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, copyFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, chmodSync, rmSync, copyFileSync, existsSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
@@ -177,6 +177,19 @@ function startSshd() {
   return spawn(sshdBin, ["-D", "-f", cfg, "-E", join(sshDir, "sshd.log")], { stdio: "ignore" });
 }
 
+// PowerShell non interactif, guillemets échappés pour `-Command`. Hoisté au
+// module : la restauration de fin de suite (restaurerSshdWindows) en a besoin
+// autant que la préparation.
+const powershell = (script) => execSync(`powershell -NoProfile -NonInteractive -Command "${script.replace(/"/g, '\\"')}"`, { stdio: "pipe" }).toString();
+
+// État de restauration du sshd SYSTÈME : renseigné par preparerSshdWindows,
+// consommé par restaurerSshdWindows dans onComplete. onPrepare et onComplete
+// tournent dans le même processus lanceur, donc ces variables de module font le
+// lien (les workers, eux, ne les partagent pas).
+let sshdWindowsARestaurer = false;
+let cheminAutorisees = null;
+let sauvegardeAutorisees = null; // .bak si le fichier préexistait ; null si créé par nous
+
 // Sous Windows, on ne lance pas un sshd à nous : l'authentification par clé
 // d'OpenSSH pour Windows passe par une ouverture de session S4U que seul le
 // compte SYSTEM peut faire, donc par le service « sshd » (OpenSSH Server,
@@ -185,18 +198,57 @@ function startSshd() {
 // par défaut lit pour les administrateurs (l'exécuteur en est un), avec les
 // droits qu'il exige (SYSTEM et Administrateurs seulement), puis le redémarre.
 // Le shell de connexion (bash de Git for Windows) est posé dans le registre
-// par la chaîne, avant. Rien à arrêter à la fin : la machine est jetable.
-function preparerSshdWindows(clePublique) {
+// par la chaîne, avant.
+export function preparerSshdWindows(clePublique) {
+  // Trouvé par l'audit du 7 septembre 2026 : ce chemin touche le sshd du
+  // SYSTÈME (port 22 réel), pas un serveur de test isolé. Rien ne l'exigeait en
+  // CI : un simple `npm test` dans un terminal élevé écrasait les clés d'admin
+  // de la machine et laissait la clé de test autorisée après la suite. On
+  // l'exige désormais explicitement, AVANT tout démarrage de service — ce qui
+  // change aussi l'échec cryptique « Start-Service » (terminal non élevé) en
+  // message clair.
+  if (!process.env.CI && !process.env.E2E_SSHD_SYSTEME) {
+    throw new Error("le sshd système n'est modifié qu'en CI ; poser E2E_SSHD_SYSTEME=1 en connaissance de cause, ou E2E_NO_RDP=1 pour sauter les serveurs locaux");
+  }
   const programData = process.env.ProgramData ?? "C:\\ProgramData";
   const autorisees = join(programData, "ssh", "administrators_authorized_keys");
-  const ps = (script) => execSync(`powershell -NoProfile -NonInteractive -Command "${script.replace(/"/g, '\\"')}"`, { stdio: "pipe" }).toString();
   // Un premier démarrage crée C:\ProgramData\ssh (clés d'hôte, sshd_config).
-  ps("Start-Service sshd");
-  if (!existsSync(autorisees)) writeFileSync(autorisees, "");
-  writeFileSync(autorisees, `${copierCle(clePublique)}\n`);
-  ps(`icacls '${autorisees}' /inheritance:r /grant 'SYSTEM:F' /grant 'Administrators:F' /grant 'BUILTIN\\Administrators:F'`);
-  ps("Restart-Service sshd");
+  powershell("Start-Service sshd");
+  // Sauvegarde AVANT toute écriture : le fichier peut porter plusieurs clés
+  // d'admin légitimes. On n'AJOUTE que la ligne de la clé de test ; onComplete
+  // restaure l'état d'origine (ou retire le fichier qu'on a créé).
+  cheminAutorisees = autorisees;
+  if (existsSync(autorisees)) {
+    sauvegardeAutorisees = `${autorisees}.avash-e2e.bak`;
+    copyFileSync(autorisees, sauvegardeAutorisees);
+    appendFileSync(autorisees, `${copierCle(clePublique)}\n`);
+  } else {
+    sauvegardeAutorisees = null;
+    writeFileSync(autorisees, `${copierCle(clePublique)}\n`);
+  }
+  sshdWindowsARestaurer = true;
+  powershell(`icacls '${autorisees}' /inheritance:r /grant 'SYSTEM:F' /grant 'Administrators:F' /grant 'BUILTIN\\Administrators:F'`);
+  powershell("Restart-Service sshd");
   return null;
+}
+
+// Rend au sshd SYSTÈME l'état d'avant la suite : restaure le fichier de clés
+// d'admin sauvegardé (ou retire celui qu'on a créé), réapplique ses ACL puis
+// redémarre le service. Sans quoi la clé de test resterait autorisée sur le
+// port 22 réel de la machine (constat de l'audit du 7 septembre 2026).
+function restaurerSshdWindows() {
+  if (!sshdWindowsARestaurer) return;
+  if (sauvegardeAutorisees && existsSync(sauvegardeAutorisees)) {
+    copyFileSync(sauvegardeAutorisees, cheminAutorisees);
+    rmSync(sauvegardeAutorisees, { force: true });
+  } else if (cheminAutorisees) {
+    rmSync(cheminAutorisees, { force: true });
+  }
+  if (cheminAutorisees && existsSync(cheminAutorisees)) {
+    powershell(`icacls '${cheminAutorisees}' /inheritance:r /grant 'SYSTEM:F' /grant 'Administrators:F' /grant 'BUILTIN\\Administrators:F'`);
+  }
+  powershell("Restart-Service sshd");
+  sshdWindowsARestaurer = false;
 }
 
 function copierCle(fichier) {
@@ -339,5 +391,9 @@ export const config = {
   onComplete: () => {
     if (tauriDriver) tauriDriver.kill();
     if (sshd) sshd.kill();
+    // Sous Windows, le sshd est le service SYSTÈME : on lui rend son fichier de
+    // clés d'admin d'avant la suite, sans quoi la clé de test resterait
+    // autorisée sur le port 22 réel de la machine.
+    if (WINDOWS) restaurerSshdWindows();
   },
 };

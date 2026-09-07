@@ -108,6 +108,16 @@ fi
 
 step "Front (avash-web)"
 run "garde"              "$ROOT" ./scripts/guard.sh
+# Le manifeste de mise à jour (latest.json du workflow Release) doit proposer les
+# cibles deb/rpm : sans elles, une installation par paquet se rabat sur l'AppImage
+# et échoue à l'installer. Contrôle guardé par PyYAML (pas une dépendance du dépôt).
+if python3 -c "import yaml" >/dev/null 2>&1; then
+  run "manifeste maj (deb/rpm)" "$ROOT" ./scripts/tests/manifeste-maj.sh
+fi
+# Sous Windows, le harnais e2e modifie le sshd du SYSTÈME (port 22) : ce chemin
+# doit refuser de s'exécuter hors CI, sans quoi un `npm test` en terminal élevé
+# écrase les clés d'admin de la machine et y laisse la clé de test.
+run "garde sshd windows (e2e)" "$ROOT" node --test scripts/tests/sshd-windows-garde.mjs
 run "lint"               "$WEB" npx eslint .
 # Le CSS vit dans index.html : stylelint le lit à travers postcss-html.
 run "lint css"           "$WEB" npx stylelint index.html

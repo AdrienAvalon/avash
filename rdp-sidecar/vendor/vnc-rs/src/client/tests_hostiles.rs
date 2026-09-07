@@ -66,6 +66,38 @@ fn connecteur(
         .unwrap()
 }
 
+/// Comme `connecteur`, mais le serveur est déjà connu sous TLS : une ligne
+/// `cle` (`vnc:<hôte>:<port>`) existe, donc TLS est exigé (modèle HSTS).
+fn connecteur_exigeant_tls(
+    flux: DuplexStream,
+    cle: &str,
+) -> crate::client::connector::VncState<
+    DuplexStream,
+    impl std::future::Future<Output = Result<String, crate::VncError>> + Send + Sync + 'static,
+> {
+    VncConnector::new(flux)
+        .set_auth_method(async { Ok("secret".to_owned()) })
+        .exiger_tls(Some(cle.to_owned()))
+        .add_encoding(VncEncoding::Raw)
+        .set_pixel_format(PixelFormat::rgba())
+        .build()
+        .unwrap()
+}
+
+/// Un serveur qui écrit `script`, puis lit tout ce que le client lui envoie
+/// jusqu'à la fermeture du flux, rendu par le `JoinHandle`. Sert à prouver ce
+/// que le client a — ou n'a pas — envoyé avant de renoncer.
+fn serveur_qui_ecoute(script: Vec<u8>) -> (DuplexStream, tokio::task::JoinHandle<Vec<u8>>) {
+    let (client, mut serveur) = duplex(1 << 16);
+    let handle = tokio::spawn(async move {
+        serveur.write_all(&script).await.unwrap();
+        let mut recu = Vec::new();
+        let _ = tokio::io::AsyncReadExt::read_to_end(&mut serveur, &mut recu).await;
+        recu
+    });
+    (client, handle)
+}
+
 /// `assert!(!security_types.is_empty())` à l'origine : un serveur qui
 /// n'annonce aucun type de sécurité après en avoir promis faisait tomber le
 /// client. (Le cas « zéro types » est déjà une erreur en lecture ; celui-ci
@@ -83,6 +115,51 @@ async fn un_serveur_sans_type_de_securite_donne_une_erreur() {
         panic!("un serveur sans type de sécurité a été accepté")
     };
     assert!(e.to_string().contains("nope"), "{e}");
+}
+
+/// Le protocole VNC veut que le client saute les types de sécurité qu'il ne
+/// connaît pas et en choisisse un qu'il parle. Un serveur macOS (ARD 30, 33,
+/// 35, 36) ou UltraVNC/RealVNC qui annonce de tels types À CÔTÉ de VncAuth
+/// faisait au contraire tomber toute la poignée de main (« Unknow VNC security
+/// type: 30 »). La connexion doit aboutir sur VncAuth. Trouvé par l'audit du
+/// 7 septembre 2026.
+#[tokio::test]
+async fn un_type_de_securite_inconnu_a_cote_de_vnc_auth_ne_bloque_pas() {
+    let mut s = VERSION.to_vec();
+    // Trois types : 30 et 33 hors énumération (ARD macOS), 2 = VncAuth.
+    s.extend_from_slice(&[3, 30, 33, 2]);
+    s.extend_from_slice(&[0x5a; 16]); // défi VncAuth
+    s.extend_from_slice(&0u32.to_be_bytes()); // AuthResult : ok
+    s.extend_from_slice(&4u16.to_be_bytes()); // largeur
+    s.extend_from_slice(&4u16.to_be_bytes()); // hauteur
+    s.extend_from_slice(&FORMAT);
+    s.extend_from_slice(&1u32.to_be_bytes());
+    s.push(b't');
+    let flux = serveur(&s).await;
+    let issue = connecteur(flux).try_start().await;
+    assert!(
+        issue.is_ok(),
+        "un type inconnu à côté de VncAuth doit laisser la connexion aboutir : {:?}",
+        issue.err()
+    );
+}
+
+/// Une liste qui ne contient QUE des types inconnus doit rendre une erreur
+/// explicite nommant les types reçus, jamais une panique ni l'opaque « Unknow
+/// VNC security type ». Trouvé par l'audit du 7 septembre 2026.
+#[tokio::test]
+async fn une_liste_de_types_tous_inconnus_donne_une_erreur_explicite() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[2, 30, 33]); // deux types, tous deux hors énumération
+    let flux = serveur(&s).await;
+    let Err(e) = connecteur(flux).try_start().await else {
+        panic!("une liste de types tous inconnus a été acceptée")
+    };
+    let msg = e.to_string();
+    assert!(
+        msg.contains("inconnus") && msg.contains("30") && msg.contains("33"),
+        "l'erreur doit nommer les types inconnus reçus : {msg}"
+    );
 }
 
 /// `AuthResult::from(u32)` transmutait la valeur du serveur vers une
@@ -165,7 +242,7 @@ async fn un_rectangle_hors_du_cadre_est_refuse_et_un_rectangle_dedans_passe() {
     let mut image_vue = false;
     loop {
         match evenements.recv().await {
-            Some(VncEvent::SetResolution(_)) => {}
+            Some(VncEvent::SetResolution(_) | VncEvent::UpdateDone) => {}
             Some(VncEvent::RawImage(rect, data)) => {
                 assert_eq!((rect.x, rect.y, rect.width, rect.height), (0, 0, 2, 2));
                 assert_eq!(data, vec![7; 16]);
@@ -195,4 +272,104 @@ async fn apres_take_events_le_client_ne_lit_plus_lui_meme() {
     let _file = client.take_events().await.expect("file des événements");
     assert!(client.poll_event().await.is_err());
     assert!(client.recv_event().await.is_err());
+}
+
+/// Une mise à jour sans le moindre pixel doit tout de même signaler sa fin,
+/// sinon le client — qui ne redemande qu'après une image — attendrait à jamais
+/// une image que le serveur attend, lui, qu'on redemande : bureau figé.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : à un changement de résolution,
+/// TigerVNC/x11vnc/QEMU envoient une `FramebufferUpdate` d'un seul
+/// pseudo-rectangle DesktopSize (aucun pixel), et certains serveurs une mise à
+/// jour à zéro rectangle. Ni l'une ni l'autre ne produisait de signal de fin,
+/// et le `test-vnc-server` ne change jamais de résolution, d'où l'angle mort.
+#[tokio::test]
+async fn chaque_mise_a_jour_signale_sa_fin_meme_sans_pixel() {
+    let mut s = script_sans_auth(4, 4);
+    // Mise à jour 1 : un seul pseudo-rectangle DesktopSize 8×8 (encodage -223),
+    // sans un octet de pixel — ce que le serveur envoie au changement de mode.
+    s.extend_from_slice(&[0, 0, 0, 1]); // type 0, padding, 1 rectangle
+    s.extend_from_slice(&[0, 0, 0, 0, 0, 8, 0, 8, 0xFF, 0xFF, 0xFF, 0x21]);
+    // Mise à jour 2 : zéro rectangle.
+    s.extend_from_slice(&[0, 0, 0, 0]); // type 0, padding, 0 rectangle
+    let flux = serveur(&s).await;
+    let client = connecteur(flux)
+        .try_start()
+        .await
+        .unwrap()
+        .finish()
+        .unwrap();
+    let mut evenements = client.take_events().await.expect("file des événements");
+    let mut fins = 0u32;
+    let mut redimension_vu = false;
+    // Chacune des deux mises à jour doit produire un `UpdateDone` ; sans lui, le
+    // `recv` resterait bloqué (le serveur ne parle plus, le client n'ose plus
+    // redemander) et le délai ci-dessous ferait tomber le test.
+    while fins < 2 {
+        match tokio::time::timeout(std::time::Duration::from_secs(3), evenements.recv()).await {
+            Ok(Some(VncEvent::UpdateDone)) => fins += 1,
+            Ok(Some(VncEvent::SetResolution(s))) => {
+                if s.width == 8 && s.height == 8 {
+                    redimension_vu = true;
+                }
+            }
+            Ok(Some(VncEvent::Error(m))) => panic!("erreur inattendue : {m}"),
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("le serveur a fermé avant les deux fins de mise à jour"),
+            Err(_) => panic!(
+                "aucun signal de fin de mise à jour : le bureau resterait figé après un \
+                 changement de résolution"
+            ),
+        }
+    }
+    assert!(
+        redimension_vu,
+        "le pseudo-rectangle DesktopSize n'a pas été rapporté comme redimensionnement"
+    );
+}
+
+/// Un serveur déjà connu sous TLS (une ligne `vnc:<hôte>:<port>` existe, donc
+/// l'appelant a posé `exiger_tls`) ne doit pas pouvoir retomber en RFB clair.
+/// Le script ci-dessous est celui d'une authentification VNC classique QUI
+/// RÉUSSIT : sans la garde, le client choisit VncAuth, répond au défi DES et se
+/// connecte en clair. La garde doit refuser AVANT tout envoi du choix de
+/// sécurité et de la réponse DES — le serveur ne doit avoir reçu que les douze
+/// octets de la version.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : un interposeur n'a pas à casser
+/// TLS ; il lui suffit de réécrire, en clair, la liste des types de sécurité
+/// pour en retirer VeNCrypt (type 19). Le client livrait alors sa réponse DES
+/// et toute la session en clair à qui se substituait au serveur, sans jamais
+/// consulter l'empreinte déjà épinglée.
+#[tokio::test]
+async fn le_serveur_deja_connu_en_tls_refuse_la_retrogradation() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 2]); // un seul type : VncAuth (pas de 19)
+    s.extend_from_slice(&[0x5a; 16]); // défi VncAuth
+    s.extend_from_slice(&0u32.to_be_bytes()); // AuthResult : ok
+    s.extend_from_slice(&4u16.to_be_bytes()); // largeur
+    s.extend_from_slice(&4u16.to_be_bytes()); // hauteur
+    s.extend_from_slice(&FORMAT);
+    s.extend_from_slice(&1u32.to_be_bytes());
+    s.push(b't');
+    let (flux, ecoute) = serveur_qui_ecoute(s);
+    let issue = connecteur_exigeant_tls(flux, "vnc:S:5900")
+        .try_start()
+        .await;
+    let Err(e) = issue else {
+        panic!("un serveur connu sous TLS a été accepté en RFB clair")
+    };
+    let msg = e.to_string();
+    assert!(
+        msg.contains("TLS") && msg.contains("vnc:S:5900") && msg.contains("rdp_known_hosts"),
+        "l'erreur doit nommer l'exigence de TLS et la ligne à retirer : {msg}"
+    );
+    // La preuve que rien n'a fui : le client n'a envoyé que sa version (12 o),
+    // ni l'octet de choix VncAuth, ni la réponse DES de 16 octets.
+    let recu = ecoute.await.unwrap();
+    assert_eq!(
+        recu.len(),
+        VERSION.len(),
+        "le client a envoyé plus que sa version : le mot de passe a pu fuir ({recu:?})"
+    );
 }

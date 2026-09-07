@@ -1,10 +1,10 @@
 //! Son du bureau distant (canal statique `rdpsnd`, MS-RDPEA), joué par la
 //! webview.
 //!
-//! Le processus n'ouvre aucun périphérique audio : il n'annonce au serveur que
-//! du PCM 16 bits (44,1 et 48 kHz, stéréo et mono), reçoit les blocs d'ondes
-//! et les passe tels quels à l'interface (message `[20]`), qui les joue par
-//! WebAudio. Pas de bibliothèque audio native à lier, donc rien à embarquer
+//! Le processus n'ouvre aucun périphérique audio : il n'annonce au serveur qu'un
+//! seul format, du PCM 16 bits 44,1 kHz stéréo (voir `formats`), reçoit les
+//! blocs d'ondes et les passe tels quels à l'interface (message `[20]`), qui les
+//! joue par WebAudio. Pas de bibliothèque audio native à lier, donc rien à embarquer
 //! dans l'AppImage ni à réclamer au bac à sable Flatpak ; et un codec (OPUS,
 //! AAC) refusé d'emblée reste un codec de moins à faire décoder à un serveur
 //! hostile. Le volume que le serveur demande passe aussi (message `[21]`).
@@ -30,8 +30,21 @@ pub(crate) enum Son {
     },
 }
 
-/// Ce que l'on sait consommer, dans l'ordre de préférence : le serveur choisit
-/// le premier format commun. Que du PCM : la webview le joue sans décodage.
+/// Ce que l'on sait consommer. Un SEUL format : PCM 16 bits 44,1 kHz stéréo,
+/// que Windows comme xrdp fournissent sans transcodage, et que la webview joue
+/// sans décodage (WebAudio rééchantillonne au besoin).
+///
+/// Trouvé par l'audit du 7 septembre 2026 : le `wFormatNo` d'un bloc d'onde
+/// indexe la liste que le CLIENT a envoyée dans Client Audio Formats
+/// (MS-RDPEA), pas notre `formats()`. Or IronRDP construit cette liste par
+/// intersection de deux `HashSet` (rdpsnd `client.rs`, `client_formats`), donc
+/// dans un ordre non déterministe d'un lancement à l'autre, et passe l'indice
+/// brut à `wave`. Dès que le serveur partageait au moins deux de nos quatre
+/// formats, l'indice pointait un autre format que celui joué (44,1 kHz lu à
+/// 48 kHz, soit +8,8 % trop aigu ; pire, mono lu en stéréo, haché à demi-vitesse),
+/// et le résultat changeait de session en session. En n'annonçant qu'un format,
+/// l'intersection tient au plus un élément, `wFormatNo` vaut toujours 0 et
+/// l'en-tête relayé est juste par construction.
 pub(crate) fn formats() -> Vec<AudioFormat> {
     fn pcm(hz: u32, canaux: u16) -> AudioFormat {
         let bloc = canaux * 2;
@@ -45,12 +58,7 @@ pub(crate) fn formats() -> Vec<AudioFormat> {
             data: None,
         }
     }
-    vec![
-        pcm(44_100, 2),
-        pcm(48_000, 2),
-        pcm(44_100, 1),
-        pcm(48_000, 1),
-    ]
+    vec![pcm(44_100, 2)]
 }
 
 /// Un bloc plus gros que ça n'est pas de l'audio (une seconde de PCM stéréo à
@@ -158,19 +166,25 @@ impl RdpsndClientHandler for SonBackend {
 mod tests {
     use super::*;
 
-    /// Que du PCM 16 bits, stéréo avant mono, 44,1 kHz avant 48 : ce que
-    /// Windows et xrdp savent tous deux fournir sans transcodage.
+    /// Un SEUL format annoncé, du PCM 16 bits 44,1 kHz stéréo, que Windows et
+    /// xrdp savent fournir sans transcodage.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : le `wFormatNo` d'un bloc d'onde
+    /// indexe la liste que le client a envoyée (intersection construite par
+    /// IronRDP dans un ordre non déterministe), pas `formats()`. Avec plusieurs
+    /// formats, l'indice pouvait pointer un autre format que celui joué. Un
+    /// unique format garantit `wFormatNo == 0` et un en-tête juste ; ce test
+    /// échouait avant le correctif (`len() == 4`).
     #[test]
-    fn les_formats_annonces_sont_du_pcm_seize_bits() {
+    fn un_seul_format_annonce_pour_que_l_indice_soit_toujours_zero() {
         let f = formats();
-        assert_eq!(f.len(), 4);
+        assert_eq!(f.len(), 1);
         assert!(f
             .iter()
             .all(|x| x.format == WaveFormat::PCM && x.bits_per_sample == 16));
         assert_eq!((f[0].n_samples_per_sec, f[0].n_channels), (44_100, 2));
         assert_eq!(f[0].n_block_align, 4);
         assert_eq!(f[0].n_avg_bytes_per_sec, 176_400);
-        assert_eq!((f[2].n_samples_per_sec, f[2].n_channels), (44_100, 1));
     }
 
     /// L'en-tête dit la cadence et les canaux du format négocié ; un format
@@ -178,13 +192,14 @@ mod tests {
     #[test]
     fn le_message_porte_cadence_canaux_et_pcm() {
         let f = formats();
-        let m = message_onde(&f, 1, 0x0102_0304, &[1, 2, 3, 4]).unwrap();
+        let m = message_onde(&f, 0, 0x0102_0304, &[1, 2, 3, 4]).unwrap();
         assert_eq!(m[0], 20);
-        assert_eq!(m[1], 1);
+        assert_eq!(m[1], 0);
         assert_eq!(u32::from_le_bytes([m[2], m[3], m[4], m[5]]), 0x0102_0304);
-        assert_eq!(u32::from_le_bytes([m[6], m[7], m[8], m[9]]), 48_000);
+        assert_eq!(u32::from_le_bytes([m[6], m[7], m[8], m[9]]), 44_100);
         assert_eq!((m[10], m[11]), (2, 16));
         assert_eq!(&m[12..], &[1, 2, 3, 4]);
+        assert!(message_onde(&f, 1, 0, &[1, 2]).is_none(), "format inconnu");
         assert!(message_onde(&f, 9, 0, &[1, 2]).is_none(), "format inconnu");
         assert!(message_onde(&f, 0, 0, &[]).is_none(), "bloc vide");
         assert!(
@@ -204,7 +219,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut b = SonBackend::new(tx);
         assert!(b.get_flags().contains(AudioFormatFlags::ALIVE));
-        assert_eq!(b.get_formats().len(), 4);
+        assert_eq!(b.get_formats().len(), 1);
         b.wave(0, 7, Cow::Borrowed(&[9, 9]));
         b.set_volume(VolumePdu {
             volume_left: 1,

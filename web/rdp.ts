@@ -273,9 +273,20 @@ export async function openRdp(cible: RdpTarget) {
       if (sc) send([4, ...le16(sc), enfonce ? 1 : 0]);
     }
   };
+  // Un collage local -> distant en VNC (Ctrl+V ou Maj+Inser). En RFB il n'y a
+  // pas de phase de demande comme en RDP : le presse-papiers du poste ne part au
+  // serveur que sur ce geste explicite. Le sidecar mémorise l'annonce [8] (le
+  // focus la pousse) et n'émet le ClientCutText que sur ce message [22].
+  const estCollageVnc = (e: KeyboardEvent): boolean =>
+    cible.vnc === true && ((e.ctrlKey && e.code === "KeyV") || (e.shiftKey && e.code === "Insert"));
   canvas.addEventListener("keydown", (e) => {
     if (e.code === "F11") { e.preventDefault(); return; } // géré globalement (plein écran)
     e.preventDefault();
+    // Émis AVANT la frappe : l'ordre FIFO du WebSocket garantit que le texte est
+    // posé côté serveur avant la touche qui le colle. Trouvé par l'audit du
+    // 7 septembre 2026 : sans geste explicite, le VNC envoyait le presse-papiers
+    // du poste au serveur dès la connexion et à chaque focus (fuite).
+    if (estCollageVnc(e)) send([22]);
     // Pas de resynchronisation ici : le navigateur ne sait pas lire ces verrous
     // sous WebKitGTK, et renvoyer sa valeur éteindrait le pavé numérique du
     // distant dès la première frappe. Verr.Num est de toute façon transmise

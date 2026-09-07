@@ -426,6 +426,12 @@ pub struct Egfx {
     zgfx: ironrdp::graphics::zgfx::Decompressor,
     /// Compte des PDU reçus, par identifiant.
     pub vus: std::collections::BTreeMap<u16, usize>,
+    /// Nombre d'appels au décodeur ClearCodec. Sert à prouver, en test, que la
+    /// garde « image hors de la surface » (wire_to_surface_1) rejette AVANT de
+    /// décoder : trouvé par l'audit du 7 septembre 2026, un test qui n'observait
+    /// que la file de trames ne distinguait pas « refusé avant décodage » d'un
+    /// « décodage échoué ».
+    pub decodages_clair: usize,
     /// `AVASH_RDP_JOURNAL_EGFX` posé : chaque commande est décrite sur stderr.
     /// C'est ainsi qu'on lit ce qu'un serveur a réellement demandé, en regard
     /// d'une bissection du magnétoscope (`--jusqu-a`).
@@ -598,10 +604,16 @@ impl Egfx {
                 // s'affiche tronqué dans un cadre qui ne lui correspond plus.
                 let l = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
                 let h = u32::from_le_bytes([c[4], c[5], c[6], c[7]]);
-                if let (Ok(l), Ok(h)) = (u16::try_from(l), u16::try_from(h)) {
-                    if l > 0 && h > 0 {
+                // Trouvé par l'audit du 7 septembre 2026 : ce chemin ne passait
+                // pas par `taille_sure`, seuls `try_from` et `> 0` filtraient. Un
+                // ResetGraphics 65535×65535 (ou 20000×20000) faisait `etirer`
+                // allouer largeur×hauteur×4 — 17 Gio — et tuait le sidecar. Même
+                // plafond et même journal que CreateSurface ci-dessus.
+                match (u16::try_from(l), u16::try_from(h)) {
+                    (Ok(l), Ok(h)) if l > 0 && h > 0 && l <= TAILLE_MAX && h <= TAILLE_MAX => {
                         self.file.lock().unwrap().taille = Some((l, h));
                     }
+                    _ => eprintln!("egfx : ResetGraphics refusé ({l}×{h})"),
                 }
                 // La scène repart de zéro : plus aucun palier en cours n'a de
                 // suite, quelle que soit la surface.
@@ -700,6 +712,7 @@ impl Egfx {
         }
         let rgba = match codec {
             CODEC_CLEARCODEC => {
+                self.decodages_clair += 1;
                 let clair = &mut self.clair;
                 let issue = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     clair.decode(donnees, zone.largeur, zone.hauteur)
@@ -1232,6 +1245,18 @@ mod tests {
         // Au-delà de 65535, try_from échoue : pas de panique, taille inchangée.
         e.traiter(&pdu(super::CMD_RESET_GRAPHICS, &[0, 0, 1, 0, 0, 0, 1, 0]));
         assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        // Trouvé par l'audit du 7 septembre 2026 : la plage 8193..=65535 passe
+        // `u16::try_from` mais dépasse le plafond 8192 que CreateSurface applique.
+        // Sans garde, `etirer` allouait largeur×hauteur×4 (17 Gio pour 65535²) sur
+        // simple ordre du serveur. 8193×8193 (0x2001 en u32 LE) doit être écarté.
+        e.traiter(&pdu(super::CMD_RESET_GRAPHICS, &[1, 32, 0, 0, 1, 32, 0, 0]));
+        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        // 20000×20000 (0x4E20) : encore 1,6 Gio et 400 M d'itérations, écarté aussi.
+        e.traiter(&pdu(
+            super::CMD_RESET_GRAPHICS,
+            &[0x20, 0x4E, 0, 0, 0x20, 0x4E, 0, 0],
+        ));
+        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
     }
 
     #[test]
@@ -1329,16 +1354,60 @@ mod tests {
 
     #[test]
     fn une_image_hors_de_la_surface_est_refusee_avant_decodage() {
-        // Surface de 64 × 64 ; le serveur y pose une image ClearCodec de
-        // 128 × 64. Elle est refusée avant toute allocation à sa taille, et
-        // une image qui tient est acceptée par le même chemin.
+        // Surface de 64 × 64. Trouvé par l'audit du 7 septembre 2026 : l'ancienne
+        // version posait une image ClearCodec de 128 × 64 avec quatre octets 0xFF
+        // et n'affirmait que `trames.is_empty()`. Or ces quatre octets ne sont pas
+        // un flux ClearCodec valide : le décodage échouait de toute façon, donc la
+        // file restait vide même la garde retirée, et le test ne pouvait pas
+        // échouer. On rend chaque cas discriminant.
         let (mut e, _canal, file) = super::Egfx::nouveau();
         e.traiter(&pdu(0x0009, &[1, 0, 64, 0, 64, 0, 0x21]));
-        let mut hors = vec![1, 0, 0x08, 0x00, 0x20];
+
+        // Une image NON COMPRESSÉE de 128 × 64 sur cette surface. Sans la garde,
+        // `donnees.len() >= l*h*4` tient et `surface.ecrire` la rognerait à 64 × 64
+        // en publiant une trame ; la garde la refuse et la file reste vide. Retirer
+        // la garde fait donc désormais échouer cette assertion.
+        let charge = 128 * 64 * 4u32;
+        let mut hors = vec![1, 0, 0x00, 0x00, 0x20];
         hors.extend_from_slice(&[0, 0, 0, 0, 128, 0, 64, 0]);
-        hors.extend_from_slice(&4u32.to_le_bytes());
-        hors.extend_from_slice(&[0xFF; 4]);
+        hors.extend_from_slice(&charge.to_le_bytes());
+        hors.extend(std::iter::repeat_n(0x7Fu8, charge as usize));
         e.traiter(&pdu(0x0001, &hors));
-        assert!(file.lock().unwrap().trames.is_empty());
+        assert!(
+            file.lock().unwrap().trames.is_empty(),
+            "une image plus large que la surface ne doit rien peindre"
+        );
+
+        // La même garde protège le décodeur ClearCodec, qui se dimensionne sur la
+        // taille annoncée par le serveur (SECURITY.md). On prouve qu'il n'est PAS
+        // appelé quand la zone déborde : le compteur reste à zéro. Sans la garde,
+        // la branche ClearCodec serait atteinte et le compteur passerait à un.
+        let mut clair = vec![1, 0, 0x08, 0x00, 0x20];
+        clair.extend_from_slice(&[0, 0, 0, 0, 128, 0, 64, 0]);
+        clair.extend_from_slice(&4u32.to_le_bytes());
+        clair.extend_from_slice(&[0xFF; 4]);
+        e.traiter(&pdu(0x0001, &clair));
+        assert_eq!(
+            e.decodages_clair, 0,
+            "le décodeur ClearCodec ne doit pas être appelé pour une image hors surface"
+        );
+
+        // « Une image qui tient est acceptée par le même chemin » : 32 × 32 en
+        // (0,0), non compressée, produit exactement une trame aux bonnes
+        // dimensions. C'est le cas positif que la doc promettait et que le test
+        // ne faisait jamais.
+        let charge = 32 * 32 * 4u32;
+        let mut dedans = vec![1, 0, 0x00, 0x00, 0x20];
+        dedans.extend_from_slice(&[0, 0, 0, 0, 32, 0, 32, 0]);
+        dedans.extend_from_slice(&charge.to_le_bytes());
+        dedans.extend(std::iter::repeat_n(0x7Fu8, charge as usize));
+        e.traiter(&pdu(0x0001, &dedans));
+        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        assert_eq!(trames.len(), 1, "une image qui tient est peinte");
+        assert_eq!(
+            (trames[0].largeur, trames[0].hauteur),
+            (32, 32),
+            "aux dimensions annoncées"
+        );
     }
 }

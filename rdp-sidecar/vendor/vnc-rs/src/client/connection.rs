@@ -541,6 +541,14 @@ where
                         }
                     }
                 }
+                // Fin de la mise à jour, quel que soit son contenu. Émis même à
+                // zéro rectangle ou quand le lot n'a porté qu'un pseudo-rectangle
+                // DesktopSize : c'est le seul moment où le client sait que sa
+                // demande en vol est honorée et qu'il peut en émettre une autre.
+                // Sans ça, une mise à jour sans pixel (changement de résolution
+                // d'un invité QEMU/Xvnc) le laissait attendre une image à jamais.
+                // Trouvé par l'audit du 7 septembre 2026.
+                output_func(VncEvent::UpdateDone).await?;
             }
             // SetColorMapEntries,
             ServerMsg::Bell => {

@@ -76,8 +76,15 @@ pub async fn snippet_send(
     session_ids: Vec<u64>,
     command: String,
     run: bool,
+    collage_entre_crochets: Option<bool>,
 ) -> Result<usize, String> {
-    let payload = avash::snippet::terminal_payload(&command, run).into_bytes();
+    // Insertion (`run == false`) : par defaut on entoure de « bracketed paste »
+    // pour ne pas valider les lignes intermediaires (audit du 7 septembre 2026 :
+    // un snippet multi-lignes, case « Exécuter » decochee, executait toutes les
+    // lignes sauf la derniere sur chaque cible). Le front peut passer `false`
+    // quand le distant ne gere pas DECSET 2004 — il avertit alors l'utilisateur.
+    let crochets = collage_entre_crochets.unwrap_or(!run);
+    let payload = avash::snippet::terminal_payload(&command, run, crochets).into_bytes();
     let senders: Vec<_> = {
         let store = state.inner.lock().unwrap();
         session_ids

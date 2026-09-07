@@ -81,6 +81,14 @@ pub enum VncEvent {
     /// According to [RFC6143](https://www.rfc-editor.org/rfc/rfc6143.html#section-7.6.4)
     ///
     Text(String),
+    /// Émis à la fin de chaque `FramebufferUpdate` du serveur, y compris quand
+    /// la mise à jour ne portait aucun pixel (zéro rectangle, ou un seul
+    /// pseudo-rectangle DesktopSize). Le client ne redemande qu'après une image,
+    /// donc sans ce signal une mise à jour sans pixel le laisserait attendre à
+    /// jamais une image que le serveur, lui, attend qu'on redemande : bureau
+    /// figé. Trouvé par l'audit du 7 septembre 2026 (changement de résolution
+    /// d'un invité QEMU/Xvnc).
+    UpdateDone,
     /// If any unexpected error happens in the async process routines
     /// This event will propagate the error to the current context
     Error(String),

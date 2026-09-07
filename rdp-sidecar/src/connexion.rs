@@ -104,6 +104,30 @@ fn build_config(
 /// anglais issu d'une dépendance : celui-ci ne changera pas sous nos pieds.
 pub const NLA_INDISPONIBLE: &str = "[AVASH_RDP_SANS_NLA]";
 
+/// Marqueur : le serveur a fermé la session APRÈS nous avoir authentifiés,
+/// avant qu'elle ne s'ouvre.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `main` reprenait « avec canal
+/// graphique » sur `Err(_)`, c'est-à-dire pour TOUT échec de `executer` — un
+/// mot de passe refusé, un délai NLA dépassé, un certificat TOFU changé, une
+/// connexion TCP refusée. Il rejouait alors une seconde connexion (doublant
+/// l'événement 4625 côté serveur avec le même mot de passe faux) et polluait
+/// `rdp_canal_graphique`. Seule la fermeture par le serveur APRÈS
+/// authentification, sans le moindre dessin, désigne un serveur qui n'a que
+/// le canal graphique (GNOME Remote Desktop raccroche ainsi) : ce marqueur
+/// distingue ce cas des échecs pré-session, pour que `faut_il_reprendre` ne
+/// reprenne que là. Il porte le message affiché à l'utilisateur.
+#[derive(Debug)]
+pub(crate) struct FermeeApresAuthentification(pub String);
+
+impl std::fmt::Display for FermeeApresAuthentification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FermeeApresAuthentification {}
+
 /// Le serveur a-t-il mis fin à la session après nous avoir authentifiés ?
 ///
 /// Deux formes pour un même événement, et c'est ce qui a trompé Adrien :
@@ -427,13 +451,16 @@ pub(crate) async fn connect(
             source = c.source();
         }
         if session_close_par_le_serveur(&texte) {
-            anyhow::anyhow!(
+            // Marqueur distinct : c'est le SEUL échec qui justifie de reprendre
+            // avec le canal graphique (voir `FermeeApresAuthentification`).
+            anyhow::Error::new(FermeeApresAuthentification(
                 "Le serveur a accepté vos identifiants puis a mis fin à la session \
                  avant de l'ouvrir. L'authentification n'est pas en cause : c'est \
                  côté serveur que la session ne démarre pas, et il ne dit pas \
                  pourquoi. Sur un hôte Linux, son journal le dira — \
                  /var/log/xrdp-sesman.log."
-            )
+                    .to_owned(),
+            ))
         } else {
             anyhow::Error::new(e).context("fin de la séquence de connexion")
         }

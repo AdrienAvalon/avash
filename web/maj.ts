@@ -2,9 +2,10 @@
 
 import { check as checkUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 import { $ } from "./etat";
 import { askConfirm } from "./dialogues";
-import { notifyErreur } from "./notifications";
+import { notify, notifyErreur } from "./notifications";
 import { t } from "./i18n";
 
 // ---------- Mise à jour ----------
@@ -17,6 +18,16 @@ async function checkForUpdates() {
   const prev = ver.textContent;
   ver.textContent = "…";
   try {
+    // Trouvé par l'audit du 7 septembre 2026 : sur Flatpak (/app en lecture
+    // seule) et sur un binaire Linux non estampillé par le bundler (AUR,
+    // Flathub), le greffon updater retombe sur l'AppImage et échoue à
+    // l'installation après ~100 Mo. Là, c'est le gestionnaire de paquets qui
+    // met à jour : on le dit au lieu d'appeler checkUpdate().
+    if (await invoke<boolean>("emballage_gere_ses_mises_a_jour").catch(() => false)) {
+      ver.textContent = prev;
+      notify(t("maj-gere-par-paquet"), "info");
+      return;
+    }
     const update = await checkUpdate();
     if (!update) {
       ver.textContent = t("maj-a-jour");

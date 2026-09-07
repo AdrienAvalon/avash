@@ -64,10 +64,33 @@ where
                     // VeNCrypt d'abord, quand l'appelant sait monter TLS : un
                     // serveur qui l'offre à côté de l'authentification VNC
                     // classique préfère qu'on chiffre (portage avash).
-                    if security_types.contains(&SecurityType::VeNCrypt)
+                    let prend_vencrypt = security_types.contains(&SecurityType::VeNCrypt)
                         && connector.tls_upgrader.is_some()
-                        && connector.rfb_version != VncVersion::RFB33
-                    {
+                        && connector.rfb_version != VncVersion::RFB33;
+
+                    // Modèle HSTS (portage avash) : un serveur déjà connu sous
+                    // TLS (une ligne `vnc:<hôte>:<port>` existe, l'appelant a
+                    // posé `exiger_tls`) ne doit jamais retomber en RFB clair.
+                    // Trouvé par l'audit du 7 septembre 2026 : un interposeur
+                    // n'a pas à casser TLS, il lui suffit de réécrire en clair
+                    // la liste des types de sécurité — retirer VeNCrypt (19),
+                    // ou forcer l'annonce RFB 3.3 — pour que le client livre sa
+                    // réponse DES puis toute la session en clair, sans jamais
+                    // consulter l'empreinte épinglée. On refuse AVANT tout envoi
+                    // du choix de sécurité et de la réponse au défi (sinon le
+                    // mot de passe fuit quand même). Le pivot est l'existence de
+                    // l'empreinte, pas la présence d'un chemin VeNCrypt annoncé.
+                    if let Some(cle) = &connector.cle_tls_exigee {
+                        if !prend_vencrypt {
+                            return Err(VncError::General(format!(
+                                "Ce serveur s'était présenté sous TLS (VeNCrypt) et ne l'offre \
+                                 plus : connexion refusée. Si le serveur a réellement été \
+                                 reconfiguré en clair, retirez la ligne {cle} de rdp_known_hosts."
+                            )));
+                        }
+                    }
+
+                    if prend_vencrypt {
                         return vencrypt(connector).await;
                     }
 
@@ -199,6 +222,7 @@ where
         pixel_format,
         encodings,
         tls_upgrader,
+        cle_tls_exigee: _,
     } = connector;
     SecurityType::write(&SecurityType::VeNCrypt, &mut stream).await?;
     // Version du serveur (majeur, mineur) ; on répond 0.2, la seule qui
@@ -291,6 +315,12 @@ where
     /// Monte TLS sur le flux au moment où VeNCrypt le demande (portage avash).
     /// Sans lui, le type de sécurité 19 n'est pas choisi.
     tls_upgrader: Option<TlsUpgrader<S>>,
+    /// Modèle HSTS (portage avash) : quand une session VeNCrypt a déjà épinglé
+    /// ce serveur, l'appelant pose ici la clé `vnc:<hôte>:<port>`. TLS devient
+    /// alors exigé et toute rétrogradation vers le RFB en clair est refusée
+    /// avant qu'un mot de passe ne parte. `None` = aucune exigence (premier
+    /// contact ou serveur jamais vu sous TLS).
+    cle_tls_exigee: Option<String>,
 }
 
 /// Ce qui transforme le flux en clair en flux chiffré, à l'instant que VeNCrypt
@@ -350,6 +380,7 @@ where
             pixel_format: None,
             encodings: Vec::new(),
             tls_upgrader: None,
+            cle_tls_exigee: None,
         }
     }
 
@@ -358,6 +389,16 @@ where
     /// X.509, et c'est lui qui juge le certificat (portage avash).
     pub fn set_tls_upgrader(mut self, upgrader: TlsUpgrader<S>) -> Self {
         self.tls_upgrader = Some(upgrader);
+        self
+    }
+
+    /// Exige TLS (VeNCrypt) pour un serveur déjà connu sous TLS (modèle HSTS,
+    /// portage avash). `cle` est la ligne `vnc:<hôte>:<port>` du fichier de
+    /// confiance : `Some` refuse toute session qui ne passe pas par VeNCrypt,
+    /// `None` n'exige rien. Nommer la clé permet à l'erreur de dire quelle
+    /// ligne retirer si la reconfiguration en clair est légitime.
+    pub fn exiger_tls(mut self, cle: Option<String>) -> Self {
+        self.cle_tls_exigee = cle;
         self
     }
 
