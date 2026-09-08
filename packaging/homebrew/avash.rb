@@ -3,8 +3,8 @@
 # SHA256SUMS de la release GitHub. `livecheck` suit les releases pour
 # `brew bump-cask-pr`.
 cask "avash" do
-  version "0.9.2"
-  sha256 "be311bcb97e8c471f496aaf4e600ed0f90fe59f42cec8ebc26cb317de190935c"
+  version "0.10.1"
+  sha256 "9e6c63553b09a3fe3cb524a9b4025a7434ad284ea2f5294ac55ad7927133be34"
 
   url "https://github.com/AdrienAvalon/avash/releases/download/v#{version}/Avash_#{version}_aarch64.dmg",
       verified: "github.com/AdrienAvalon/avash/"

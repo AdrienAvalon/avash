@@ -1874,19 +1874,6 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/ironrdp-svc/ironrdp-svc-0.8.0.crate",
-        "sha256": "24c36b82ab0f7fef2668fb7004008a0f3c100a3d9a7b18bd4495a71aba55b796",
-        "dest": "cargo/vendor/ironrdp-svc-0.8.0"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"24c36b82ab0f7fef2668fb7004008a0f3c100a3d9a7b18bd4495a71aba55b796\", \"files\": {}}",
-        "dest": "cargo/vendor/ironrdp-svc-0.8.0",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/ironrdp-tls/ironrdp-tls-0.2.2.crate",
         "sha256": "ea5f0bb732e33159834f06a687f5415dae1a82c71c123c1c3a3689d41ed47645",
         "dest": "cargo/vendor/ironrdp-tls-0.2.2"
