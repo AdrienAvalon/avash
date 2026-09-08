@@ -46,6 +46,10 @@ const AVANCE_MAX_S = 0.5;
 export class LecteurAudio {
   private ctx: AudioContext | null = null;
   private gain: GainNode | null = null;
+  /** Dernier volume demandé par le serveur, borné. Mémorisé même quand le gain
+   *  n'existe pas encore (créé au premier bloc) pour l'appliquer à l'ouverture
+   *  du contexte, et conservé par `fermer()` pour survivre à une réouverture. */
+  private gainVoulu = 1;
   private curseur = 0;
   /** Blocs joués et échantillons reçus, pour le diagnostic et les tests. */
   blocs = 0;
@@ -56,6 +60,10 @@ export class LecteurAudio {
       try {
         this.ctx = new AudioContext({ sampleRate: cadence });
         this.gain = this.ctx.createGain();
+        // Trouvé par l'audit du 7 septembre 2026 : un serveur Windows envoie
+        // SNDC_VOLUME ([21]) avant la première onde ; sans ceci, le gain neuf
+        // repartait à 1 et le son jouait à 100 % malgré la consigne serveur.
+        this.gain.gain.value = this.gainVoulu;
         this.gain.connect(this.ctx.destination);
       } catch {
         return null; // pas d'audio sur cette machine : on ne bloque rien
@@ -104,7 +112,10 @@ export class LecteurAudio {
 
   /** Volume demandé par le serveur (message [21]). */
   volume(gauche: number, droit: number): void {
-    if (this.gain) this.gain.gain.value = gainDepuisVolume(gauche, droit);
+    // On borne au stockage : la consigne est retenue même sans gain (reçue
+    // avant le premier bloc) pour être posée à l'ouverture du contexte.
+    this.gainVoulu = gainDepuisVolume(gauche, droit);
+    if (this.gain) this.gain.gain.value = this.gainVoulu;
   }
 
   fermer(): void {

@@ -24,6 +24,12 @@ fuzz_target!(|data: &[u8]| {
             for hop in avash::split_proxy_jump(pj) {
                 assert_eq!(hop.host.trim(), hop.host, "rebond non rogné : {hop:?}");
                 assert_ne!(hop.port, Some(0), "port de rebond nul");
+                // Un bastion IPv6 littéral s'écrit `[2001:db8::1]:2222` ; les
+                // crochets doivent être retirés (russh ne sait pas les lire).
+                assert!(
+                    !hop.host.starts_with('['),
+                    "crochet IPv6 gardé dans l'hôte : {hop:?}"
+                );
             }
         }
         // Ce que le parseur rend doit pouvoir être réécrit puis relu : un bloc

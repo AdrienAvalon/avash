@@ -120,7 +120,13 @@ fn build_config(
         pointer_software_rendering: true,
         multitransport_flags: None,
         performance_flags: PerformanceFlags::default(),
-        desktop_scale_factor: 0,
+        // Échelle DPI annoncée au serveur (`desktopScaleFactor`, MS-RDPBCGR).
+        // L'interface la calcule depuis `devicePixelRatio` et la passe par
+        // `--scale` : sur un écran à 200 %, on négocie la définition en pixels
+        // physiques ET on annonce 200, sinon le serveur rendrait son interface à
+        // 100 % — texte net mais deux fois trop petit. Ajouté par l'audit du
+        // 7 septembre 2026 (HiDPI) ; 0 quand l'écran est standard.
+        desktop_scale_factor: a.desktop_scale_factor,
         hardware_id: None,
         license_cache: None,
         timezone_info: TimezoneInfo::default(),
@@ -129,7 +135,6 @@ fn build_config(
     }
 }
 
-/// Rectangle mis à jour -> message FRAME binaire [2][x][y][w][h][RGBA].
 /// Marqueur reconnu par l'interface : le serveur ne sait pas faire de NLA.
 ///
 /// Elle propose alors de se connecter quand même, en expliquant ce que cela
@@ -151,7 +156,7 @@ pub const NLA_INDISPONIBLE: &str = "[AVASH_RDP_SANS_NLA]";
 /// distingue ce cas des échecs pré-session, pour que `faut_il_reprendre` ne
 /// reprenne que là. Il porte le message affiché à l'utilisateur.
 #[derive(Debug)]
-pub(crate) struct FermeeApresAuthentification(pub String);
+pub struct FermeeApresAuthentification(pub String);
 
 impl std::fmt::Display for FermeeApresAuthentification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -584,7 +589,7 @@ pub(crate) async fn connect(
 /// avec le canal graphique, redirection de nouveau. La marge est là pour ne pas
 /// transformer un serveur inhabituel en échec ; la borne, pour qu'un serveur qui
 /// redirige en rond ne nous y entraîne pas.
-pub(crate) const TOURS_MAX: usize = 6;
+pub const TOURS_MAX: usize = 6;
 
 #[cfg(test)]
 mod tests_negociation {
@@ -767,10 +772,13 @@ mod tests_rdstls {
     fn le_message_decharge_l_utilisateur() {
         // Ces identifiants sont engendrés par le serveur : accuser une faute de
         // frappe enverrait chercher au mauvais endroit.
-        assert!(
-            verdict_rdstls(0x0000_052e).contains("pas une \u{fffd}rreur de saisie")
-                || verdict_rdstls(0x0000_052e).contains("erreur de saisie")
-        );
+        // Trouvé par l'audit du 7 septembre 2026 : l'assertion contenait un
+        // U+FFFD (« pas une �rreur »), résidu d'un ré-encodage abîmé, qui ne
+        // pouvait jamais correspondre ; l'alternative de repli « erreur de
+        // saisie » restait vraie même pour un message qui accuse l'utilisateur.
+        // On exige désormais la négation entière.
+        let m = verdict_rdstls(0x0000_052e);
+        assert!(m.contains("pas une erreur de saisie"), "{m}");
     }
 }
 

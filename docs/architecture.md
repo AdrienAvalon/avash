@@ -1,6 +1,6 @@
 # Architecture technique d'Avash
 
-Avash est un gestionnaire de connexions SSH et RDP construit avec **Tauri 2**
+Avash est un gestionnaire de connexions SSH, RDP, VNC et port série construit avec **Tauri 2**
 (coquille native Rust) et un front **TypeScript**. Ce document décrit
 l'organisation du code et les choix techniques notables.
 
@@ -129,7 +129,7 @@ Le front vit dans `web/` (paquet `avash-web`, `type: module`) :
 - **`index.html`**, `icons.ts` — interface et icônes.
 
 Le terminal repose sur **xterm.js** et ses add-ons (`fit`, `search`,
-`web-links`, `webgl`). Le front est bâti par **Vite 8** et vérifié par ESLint
+`serialize` pour l'export asciicast, `web-links`, `webgl`). Le front est bâti par **Vite 8** et vérifié par ESLint
 typé et `tsc`. Le binaire release embarque `web/dist` : après toute
 modification du front, il faut recompiler `avash-ui`.
 
@@ -379,8 +379,9 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 - **Build release optimisé** : `opt-level = 3`, LTO, `codegen-units = 1`,
   `strip` (workspace et sidecar). Le chemin chaud du sidecar est le décodage
   graphique, d'où le LTO complet.
-- **Distribution** : un artefact autonome par système (AppImage sous Linux,
-  installeur NSIS sous Windows). Voir `RELEASE.md`.
+- **Distribution** : AppImage, `.deb` et `.rpm` sous Linux ; installeur NSIS et
+  archive portable sous Windows ; image disque (`.dmg`) sous macOS. Voir
+  `RELEASE.md`.
 
 ## Références de fichiers
 

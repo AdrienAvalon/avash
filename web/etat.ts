@@ -46,6 +46,19 @@ export type Session = {
   serie?: boolean;
 };
 
+/**
+ * Onglets pouvant recevoir une copie SFTP « vers un autre hôte » : toute
+ * session vivante dotée d'un système de fichiers, sauf `s` elle-même.
+ * Trouvé par l'audit du 7 septembre 2026 : le select de copie ne filtrait que
+ * `x !== s`, si bien qu'un port série (`serie`, sans SFTP) ou un onglet mort
+ * (`closed`, resté dans le magasin jusqu'à sa fermeture explicite) figurait
+ * comme cible ; la copie n'échouait qu'après lancement, dans la ligne de
+ * transfert (« Pas de SFTP sur un port série. », « Session N inconnue »).
+ */
+export function ciblesDeCopie(s: Session, sessions: Map<number, Session>): Session[] {
+  return [...sessions.values()].filter((x) => x !== s && !x.serie && !x.closed);
+}
+
 /** Bureau RDP enregistré (`~/.config/avash/rdp.yaml`). */
 export type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string; sans_nla?: boolean; protocole?: "rdp" | "vnc"; partage?: string };
 

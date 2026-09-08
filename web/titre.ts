@@ -3,6 +3,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ic } from "./icons";
 import { $, state } from "./etat";
+import { rdpSessions } from "./rdp";
 
 // ---------- Barre de titre custom (decorations: false) ----------
 
@@ -60,8 +61,23 @@ export async function setupWindowControls() {
   }
 }
 
-/** Reflète la session active dans la barre de titre (utile + évite le doublon). */
+/** Reflète l'onglet actif dans la barre de titre (utile + évite le doublon).
+ *
+ *  Trouvé par l'audit du 7 septembre 2026 : le titre ne lisait que
+ *  `state.sessions`, si bien qu'un onglet RDP actif affichait « Avash » au lieu
+ *  du nom du bureau. On nomme désormais aussi un bureau RDP, en reprenant le
+ *  libellé déjà posé sur son onglet (source unique, cohérent avec la barre
+ *  latérale). `state.active` reste la source du titre — en vue partagée deux
+ *  onglets sont affichés mais un seul a le clavier. */
 export function setTitlebar() {
-  const s = state.active === null ? null : state.sessions.get(state.active);
-  $("tb-name").textContent = s && !s.closed ? `${s.alias} — Avash` : "Avash";
+  $("tb-name").textContent = nomOngletActif() ?? "Avash";
+}
+
+function nomOngletActif(): string | null {
+  if (state.active === null) return null;
+  const s = state.sessions.get(state.active);
+  if (s) return s.closed ? null : `${s.alias} — Avash`;
+  const r = rdpSessions.get(state.active);
+  const nom = r?.tab.querySelector<HTMLElement>(".label")?.textContent;
+  return nom ? `${nom} — Avash` : null;
 }

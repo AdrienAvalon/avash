@@ -35,7 +35,9 @@ function monterSession(id: number): void {
 }
 
 beforeEach(() => {
-  document.body.innerHTML = `<div id="terminal"></div><div id="terminal-empty"></div>`;
+  // `appliquerVue` repeint aussi la barre de titre intégrée (audit du 7 sept.
+  // 2026) : le nœud doit exister, sinon `setTitlebar` lève sur un DOM partiel.
+  document.body.innerHTML = `<div id="terminal"></div><div id="terminal-empty"></div><span id="tb-name">Avash</span>`;
   state.sessions.clear();
   state.active = 1;
   monterSession(1);

@@ -321,6 +321,26 @@ describe("snippetPreview", () => {
   });
 });
 
+import { resultatEnvoi } from "./filters";
+
+describe("resultatEnvoi", () => {
+  // Trouvé par l'audit du 7 septembre 2026 : snippet_send ignore une session
+  // fermée entre-temps et rend le compte réellement atteint, mais le front
+  // faisait `void n`. Un envoi à 0 session passait pour réussi, et un envoi
+  // partiel (0 < n < total) laissait croire tout le parc traité.
+  it("zéro cible atteinte est une erreur, pas un succès", () => {
+    expect(resultatEnvoi(0, 2)).toEqual({ etat: "aucune" });
+    expect(resultatEnvoi(0, 1)).toEqual({ etat: "aucune" });
+  });
+  it("moins de cibles qu'espéré est un envoi partiel", () => {
+    expect(resultatEnvoi(1, 2)).toEqual({ etat: "partiel", n: 1, total: 2 });
+  });
+  it("toutes les cibles atteintes est un envoi complet", () => {
+    expect(resultatEnvoi(2, 2)).toEqual({ etat: "complet" });
+    expect(resultatEnvoi(1, 1)).toEqual({ etat: "complet" });
+  });
+});
+
 import { allTags } from "./filters";
 
 describe("tags", () => {
@@ -353,7 +373,7 @@ describe("sortSftpEntries", () => {
   });
 });
 
-import { buildFolderTree, folderNodeCount, ensureFolderNode, rdpScancode, le16, rdpMousePos , choisirVerrous } from "./filters";
+import { buildFolderTree, folderNodeCount, ensureFolderNode, rdpScancode, le16, rdpMousePos, tailleBureau, choisirVerrous } from "./filters";
 
 describe("buildFolderTree", () => {
   it("range les éléments à la racine et dans des dossiers imbriqués", () => {
@@ -450,6 +470,45 @@ describe("rdpMousePos", () => {
   it("borne au bureau (jamais hors [0, w-1] x [0, h-1])", () => {
     expect(rdpMousePos(-50, -50, rect, 800, 600)).toEqual([0, 0]);
     expect(rdpMousePos(9999, 9999, rect, 800, 600)).toEqual([799, 599]);
+  });
+
+  it("reste juste à résolution doublée (HiDPI) : rect CSS → pixels du bureau", () => {
+    // Trouvé par l'audit du 7 septembre 2026 : avec un bureau négocié en 1920
+    // pixels PHYSIQUES mais affiché dans un rect de 960 px CSS (écran à 200 %),
+    // le dernier pixel à droite (clientX = right − 1 = 959) doit bien tomber sur
+    // 1918 — le mappage reste exact, c'est pour cela que doubler la définition
+    // n'a pas besoin de toucher `rdpMousePos`.
+    const rectHi = { left: 0, top: 0, width: 960, height: 540 };
+    expect(rdpMousePos(959, 0, rectHi, 1920, 1080)[0]).toBe(1918);
+  });
+});
+
+describe("tailleBureau — résolution en pixels physiques (HiDPI)", () => {
+  it("double la définition à 200 % (le bureau était négocié en pixels CSS, flou)", () => {
+    // Cœur du défaut : sur un écran à 200 %, une zone de 960×540 px CSS doit être
+    // négociée en 1920×1080 physiques, sinon le bureau est rendu à moitié de la
+    // définition réelle puis étiré ×2 (flou).
+    expect(tailleBureau({ width: 960, height: 540 }, 2)).toEqual([1920, 1080]);
+  });
+
+  it("plafonne à 8192 même à fort DPR, largeur paire", () => {
+    // 4K à 200 % : 5000 px CSS × 2 = 10000 dépasserait 8192. Le facteur est borné
+    // par 8192 / plus grand côté (ici 1,6384), donc le grand côté sort pile à
+    // 8192, pair, et la hauteur reste sous la borne.
+    const [w, h] = tailleBureau({ width: 5000, height: 3000 }, 2);
+    expect(w).toBe(8192);
+    expect(w % 2).toBe(0);
+    expect(h).toBeLessThanOrEqual(8192);
+  });
+
+  it("DPR 1 : inchangé (écran standard), largeur ramenée au pair", () => {
+    expect(tailleBureau({ width: 1900, height: 1000 }, 1)).toEqual([1900, 1000]);
+    expect(tailleBureau({ width: 1283, height: 900 }, 1)).toEqual([1282, 900]);
+  });
+
+  it("borne basse 200 et DPR nul retombant sur 1", () => {
+    expect(tailleBureau({ width: 10, height: 10 }, 1)).toEqual([200, 200]);
+    expect(tailleBureau({ width: 1900, height: 1000 }, 0)).toEqual([1900, 1000]);
   });
 });
 

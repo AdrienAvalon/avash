@@ -71,12 +71,8 @@ pub(crate) fn repertoire_configuration() -> Option<std::path::PathBuf> {
     dirs::config_dir()
 }
 
-/// Sans répertoire de configuration, on **échoue** au lieu de retomber sur le
-/// répertoire courant : y semer un fichier de confiance le rendrait inopérant
-/// au prochain lancement depuis ailleurs — chaque serveur redeviendrait un
-/// premier contact, en silence.
 /// Où l'on note les serveurs qui n'ont que le canal graphique pour dessiner.
-pub(crate) fn chemin_canal_graphique() -> Option<std::path::PathBuf> {
+pub fn chemin_canal_graphique() -> Option<std::path::PathBuf> {
     Some(
         repertoire_configuration()?
             .join("avash")
@@ -84,6 +80,10 @@ pub(crate) fn chemin_canal_graphique() -> Option<std::path::PathBuf> {
     )
 }
 
+/// Sans répertoire de configuration, on **échoue** au lieu de retomber sur le
+/// répertoire courant : y semer un fichier de confiance le rendrait inopérant
+/// au prochain lancement depuis ailleurs — chaque serveur redeviendrait un
+/// premier contact, en silence.
 fn chemin_empreintes() -> anyhow::Result<std::path::PathBuf> {
     Ok(repertoire_configuration()
         .context("répertoire de configuration introuvable (HOME/XDG_CONFIG_HOME)")?
@@ -255,9 +255,9 @@ mod tests_fichier_empreintes {
         }
     }
 
-    /// Deux entrées pour le même hôte : c'est la première qui fait foi, et elle
-    /// doit être trouvée — sans quoi une ligne ajoutée en fin de fichier
-    /// masquerait l'empreinte d'origine.
+    /// `AVASH_HOME` détourne le fichier de confiance vers le bac à sable : sans
+    /// cela, la suite bout en bout sous Windows écrirait dans le
+    /// `rdp_known_hosts` réel de l'utilisateur, où `config_dir()` ignore `HOME`.
     #[test]
     fn avash_home_detourne_le_fichier_de_confiance() {
         // Sans cela, la suite bout en bout sous Windows écrirait dans le
@@ -282,6 +282,9 @@ mod tests_fichier_empreintes {
         assert!(sous_bac.ends_with("rdp_known_hosts"));
     }
 
+    /// Deux entrées pour le même hôte : c'est la première qui fait foi, et elle
+    /// doit être trouvée — sans quoi une ligne ajoutée en fin de fichier
+    /// masquerait l'empreinte d'origine.
     #[test]
     fn la_premiere_entree_fait_foi() {
         let contenu = "srv:3389 originale\nsrv:3389 ajoutee\n";

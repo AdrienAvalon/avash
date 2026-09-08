@@ -2,6 +2,8 @@
 // Vérifié sur l'application réelle — c'est le seul endroit où le focus se
 // comporte comme chez l'utilisateur.
 
+import { trouverLigne } from "./helpers.js";
+
 describe("Accessibilité des boîtes de dialogue", () => {
   it("la modale porte role=dialog et un titre accessible existant", async () => {
     await $("#manual-btn").click();
@@ -66,5 +68,51 @@ describe("Accessibilité des boîtes de dialogue", () => {
     });
     expect(etat).toEqual({ type: "radio", trouve: true, contour: "solid" });
     await browser.keys("Escape");
+  });
+});
+
+// Trouvé par l'audit du 7 septembre 2026 : renderTunnels vide #tunnel-list et
+// recrée chaque ligne toutes les 1,5 s (le minuteur de tunnelsOpen) ; un bouton
+// de ligne focalisé au clavier était détruit, le focus retombait sur <body> et
+// le piège de focus renvoyait le Tab suivant en haut de la modale. C'est le
+// seul endroit qui reproduit le vrai minuteur (l'application tourne pour de
+// bon). On crée une définition, on focalise un bouton de ligne, on laisse
+// passer plus d'un tick, et on exige que le focus soit resté sur ce bouton.
+describe("Accessibilité de la liste des tunnels", () => {
+  const findRow = () => trouverLigne("#tunnel-list .tunnel-row", ".tname", "Tunnel focus");
+
+  it("le focus survit au rafraîchissement de la liste des tunnels", async () => {
+    await $("#tunnels-btn").click();
+    await $("#tunnels-modal").waitForDisplayed({ timeout: 5000 });
+    await browser.execute(() => document.getElementById("tunnel-block").setAttribute("open", ""));
+    await $("#t-alias").selectByIndex(0); // un hôte semé (web-1/db-1)
+    await $("#t-bind").setValue("18082");
+    await $("#t-host").setValue("localhost");
+    await $("#t-port").setValue("5432");
+    await $("#t-name").setValue("Tunnel focus");
+    await $("#t-submit").click();
+    await browser.waitUntil(async () => (await findRow()) !== null, { timeout: 8000, timeoutMsg: "tunnel non listé" });
+
+    // Focaliser « Modifier » comme le ferait un utilisateur au clavier (sans
+    // cliquer : un clic ouvrirait la fiche d'édition et déplacerait le focus).
+    await browser.execute(() =>
+      document.querySelector('#tunnel-list .tunnel-row [data-act="edit"]')?.focus(),
+    );
+    // Plus long qu'un tick (1,5 s) : la liste est reconstruite au moins une fois.
+    await browser.pause(2000);
+    const etat = await browser.execute(() => {
+      const a = document.activeElement;
+      return { dansLaListe: !!a?.closest("#tunnel-list"), act: a?.dataset?.act };
+    });
+    expect(etat).toEqual({ dansLaListe: true, act: "edit" });
+
+    // Ménage : supprimer la définition et refermer, pour ne rien laisser au
+    // scénario suivant.
+    await (await findRow()).$('[data-act="delete"]').click();
+    await $("#confirm-modal").waitForDisplayed({ timeout: 5000 });
+    await $("#confirm-ok").click();
+    await browser.waitUntil(async () => (await findRow()) === null, { timeout: 8000, timeoutMsg: "tunnel pas supprimé" });
+    await $("#t-close").click();
+    await browser.waitUntil(async () => !(await $("#tunnels-modal").isDisplayed()), { timeout: 5000 });
   });
 });

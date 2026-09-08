@@ -95,10 +95,19 @@
       --card: #fff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
       --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
-      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #fff; --accent-hover: #5d4be0;
+      --accent: #6d5cf0; --accent-soft: #5847d8; --accent-ink: #fff; --accent-hover: #5d4be0;
       --accent-glow: rgb(109,92,240,.16); --accent-line: rgb(109,92,240,.42);
       --accent-tint: rgb(109,92,240,.10);
-      --ok: #1a9d5f; --warn: #b0791f; --err: #d6455a;
+
+      /* En clair, --accent-soft et ces trois jetons servent AUSSI d'encre de
+         petits textes (noms de dossiers SFTP, badge « rebond », pastille de tag
+         active, badge tunnel d'un hôte, statuts SFTP, boutons de tunnel…). En
+         teintes vives ils tombaient entre 2,6 et 3,8:1 sur les fonds clairs
+         #eef0f5/#fff (trouvé par l'audit du 7 septembre 2026 : des états que
+         l'audit axe n'ouvrait jamais — panneau SFTP, filtre par tag, hôte avec
+         rebond/tunnel). Assombris ici pour l'AA (4,5:1) ; ils restent lisibles
+         comme voyants, bordures et fonds. */
+      --ok: #146b40; --warn: #8a5d0f; --err: #c1303f;
 
       /* Sur fond clair, les teintes pâles sombres deviennent illisibles :
          on assombrit le texte des messages (~5,9 / ~5,5:1 AA). */
@@ -114,10 +123,19 @@
       --card: #fff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
       --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
-      --accent: #6d5cf0; --accent-soft: #7c6bf5; --accent-ink: #fff; --accent-hover: #5d4be0;
+      --accent: #6d5cf0; --accent-soft: #5847d8; --accent-ink: #fff; --accent-hover: #5d4be0;
       --accent-glow: rgb(109,92,240,.16); --accent-line: rgb(109,92,240,.42);
       --accent-tint: rgb(109,92,240,.10);
-      --ok: #1a9d5f; --warn: #b0791f; --err: #d6455a;
+
+      /* En clair, --accent-soft et ces trois jetons servent AUSSI d'encre de
+         petits textes (noms de dossiers SFTP, badge « rebond », pastille de tag
+         active, badge tunnel d'un hôte, statuts SFTP, boutons de tunnel…). En
+         teintes vives ils tombaient entre 2,6 et 3,8:1 sur les fonds clairs
+         #eef0f5/#fff (trouvé par l'audit du 7 septembre 2026 : des états que
+         l'audit axe n'ouvrait jamais — panneau SFTP, filtre par tag, hôte avec
+         rebond/tunnel). Assombris ici pour l'AA (4,5:1) ; ils restent lisibles
+         comme voyants, bordures et fonds. */
+      --ok: #146b40; --warn: #8a5d0f; --err: #c1303f;
 
       /* Sur fond clair, les teintes pâles sombres deviennent illisibles :
          on assombrit le texte des messages (~5,9 / ~5,5:1 AA). */
@@ -125,7 +143,21 @@
       --term-bg: #f6f7f9;
       --shadow-soft: 0 1px 2px rgb(24,28,45,.06), 0 6px 18px rgb(24,28,45,.08);
       --shadow-pop: 0 18px 50px rgb(24,28,45,.18), 0 0 0 1px rgb(24,28,45,.04) inset;
+
+      /* Thème forcé : color-scheme doit suivre data-theme, pas le système,
+         sinon les contrôles natifs (popups des select/datalist, bouton de
+         révélation du mot de passe) restent pilotés par prefers-color-scheme
+         (trouvé par l'audit du 7 septembre 2026 : système clair + Avash forcé
+         en sombre ouvrait la liste « Protocole » en blanc sur une modale
+         sombre, et l'inverse en noir sur blanc, sur WebView2 et WKWebView). */
+      color-scheme: light;
     }
+
+    /* Le sombre est le thème de base (:root), on ne le redéfinit ici que pour
+       imposer color-scheme quand il est forcé sous un système clair. */
+    :root[data-theme="dark"] { color-scheme: dark; }
+
+    /* Sans data-theme (mode système), on laisse le navigateur choisir. */
     html { color-scheme: light dark; }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -237,9 +269,13 @@
     .brand .mascot .mark { width: 27px; height: 27px; display: block; }
 
     .brand .ver {
-      margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .4px;
+      /* Devenu <button> pour être atteignable au clavier (audit du 7 septembre
+         2026) : font/border remettent l'apparence de la pastille par-dessus le
+         style bouton natif. font:inherit d'abord, puis font-size/weight le
+         redéfinissent (le raccourci écraserait sinon la taille voulue). */
+      margin-left: auto; font: inherit; font-size: 10px; font-weight: 600; letter-spacing: .4px;
       color: var(--accent-sur-teinte); background: var(--accent-tint);
-      padding: 2px 7px; border-radius: 20px; cursor: pointer;
+      padding: 2px 7px; border: none; border-radius: 20px; cursor: pointer;
     }
     .brand .ver:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 
@@ -391,7 +427,12 @@
     .host .jumptag {
       flex: none; font-size: 10px; color: var(--accent-soft);
       font-family: var(--mono); border: 1px solid var(--accent-soft);
-      border-radius: 6px; padding: 0 5px; opacity: .85;
+
+      /* Pas d'atténuation : en thème clair, opacity .85 diluait le badge sur la
+         barre latérale (#eef0f5) jusqu'à 4,2:1 même après avoir assombri
+         --accent-soft (trouvé par l'audit du 7 septembre 2026). Plein, il tient
+         l'AA (5,6:1) ; en sombre le changement est imperceptible. */
+      border-radius: 6px; padding: 0 5px;
     }
 
     .host .tun {
@@ -923,8 +964,12 @@
     /* La boîte est la div qui porte role="dialog" ; le formulaire ne doit pas
        créer de boîte intermédiaire, sinon la mise en page de .modal se casse.
        role="dialog" n'est pas admis sur un <form>, dont le rôle implicite est
-       « form » — signalé par axe-core. */
-    #manual-form { display: contents; }
+       « form » — signalé par axe-core (aria-allowed-role). Trouvé par l'audit
+       du 7 septembre 2026 : sept autres modales portaient encore ce rôle sur
+       leur <form> ; elles suivent désormais le même gabarit div/form que
+       #manual-modal, d'où cette liste. */
+    #manual-form, #sftp-copier-form, #pass-form, #send-form,
+    #ask-form, #edit-form, #rdp-edit-form, #move-form { display: contents; }
 
     .sftp-path {
       flex: 1; min-width: 0; height: 28px; padding: 0 9px; border-radius: 7px;
@@ -959,7 +1004,11 @@
 
     .sftp-transfert .nm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .sftp-transfert .det { grid-column: 1 / -1; color: var(--text-dim); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .sftp-transfert .barre { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--card-2, rgb(255 255 255 / 8%)); overflow: hidden; }
+
+    /* Trouvé par l'audit du 7 septembre 2026 : la piste se repliait sur un jeton
+       jamais défini, donc sur un blanc à 8 % invisible sur le panneau SFTP clair,
+       une piste absente à 0 % ou en attente. Teinte suivant le thème via --text. */
+    .sftp-transfert .barre { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--text) 12%, transparent); overflow: hidden; }
     .sftp-transfert .barre > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .1s linear; }
     .sftp-transfert.fini .barre > span { background: var(--ok); }
     .sftp-transfert.erreur { color: var(--err); }
@@ -978,7 +1027,12 @@
       position: absolute; inset: 8px; z-index: 5; display: none; flex-direction: column;
       align-items: center; justify-content: center; gap: 6px; border-radius: 12px;
       border: 2px dashed var(--accent-line); background: rgb(11,13,20,.82);
-      color: var(--accent-soft); font-size: 13px; font-weight: 600; pointer-events: none;
+
+      /* Le voile est toujours sombre (les deux thèmes), l'encre doit donc rester
+         claire : on ne suit pas --accent-soft, qui est assombri en thème clair
+         (encre de petits textes) et tomberait à 3,06:1 sur ce voile (trouvé par
+         l'audit du 7 septembre 2026). Teinte accent fixée, lisible sur sombre. */
+      color: #a89bfa; font-size: 13px; font-weight: 600; pointer-events: none;
     }
     .sftp-drop span { font-size: 26px; }
     .sftp-panel.dragging .sftp-drop { display: flex; }
@@ -1002,7 +1056,15 @@
     .ctx-menu.open { display: block; }
     .ctx-item { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text); }
     .ctx-item:hover { background: var(--accent); color: var(--accent-ink); }
-    .ctx-item:hover .ctx-key { color: rgb(20,16,31,.7); }
+
+    /* Au survol, le fond passe à --accent et le libellé à --accent-ink : le
+       raccourci doit suivre la même encre. L'ancienne valeur codée en dur
+       rgb(20,16,31,.7) (encre sombre) était pensée pour le sombre ; en thème
+       clair, --accent-ink est blanc et rgb(20,16,31,.7) tombait à 2,8:1 sur
+       l'accent (trouvé par l'audit du 7 septembre 2026). --accent-ink plein
+       tient l'AA dans les deux thèmes (clair 4,7:1, sombre 5,6:1) ; un blanc
+       translucide (75 %) resterait sous 4,5:1 en clair. */
+    .ctx-item:hover .ctx-key { color: var(--accent-ink); }
     .ctx-item.disabled { opacity: .4; pointer-events: none; }
     .ctx-key { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
     .ctx-sep { height: 1px; background: var(--border-soft); margin: 4px 6px; }
@@ -1028,7 +1090,7 @@
   <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
   <div class="resize-handles" id="resize-handles"></div>
   <div class="titlebar" data-tauri-drag-region>
-    <div class="tb-title" data-tauri-drag-region><svg class="tb-mascot"><use href="#avash-mark"/></svg><span id="tb-name" data-i18n="avash">Avash</span></div>
+    <div class="tb-title" data-tauri-drag-region><svg class="tb-mascot"><use href="#avash-mark"/></svg><span id="tb-name">Avash</span></div>
     <div class="tb-controls">
       <button class="tb-btn" id="win-min" title="Réduire" data-i18n-title="reduire" type="button" aria-label="Réduire" data-i18n-aria="reduire"></button>
       <button class="tb-btn" id="win-max" title="Agrandir" data-i18n-title="agrandir" type="button" aria-label="Agrandir" data-i18n-aria="agrandir"></button>
@@ -1038,7 +1100,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <span class="mascot"><svg class="mark"><use href="#avash-mark"/></svg></span> Avash <span class="ver" id="app-version" title="Vérifier les mises à jour" data-i18n-title="verifier-les-mises-a-jour">…</span>
+        <span class="mascot"><svg class="mark"><use href="#avash-mark"/></svg></span> Avash <button type="button" class="ver" id="app-version" title="Vérifier les mises à jour" data-i18n-title="verifier-les-mises-a-jour" aria-label="Vérifier les mises à jour" data-i18n-aria="verifier-les-mises-a-jour">…</button>
         <button id="theme-toggle" class="theme-toggle" type="button" title="Thème" data-i18n-title="theme" aria-label="Thème" data-i18n-aria="theme"></button>
       </div>
       <div class="search-wrap">
@@ -1056,7 +1118,7 @@
         <button id="snippets-btn" class="manual-btn" type="button" data-icon="zap" data-i18n="snippets">Snippets</button>
         <button id="import-btn" class="manual-btn" type="button" data-icon="download" data-i18n="importer-des-sessions">Importer des sessions</button>
       </div>
-      <div class="footer"><span data-i18n="ssh-config">~/.ssh/config</span><span id="footer-version" data-i18n="avash-2">avash</span></div>
+      <div class="footer"><span data-i18n="ssh-config">~/.ssh/config</span><span id="footer-version">avash</span></div>
       <div class="side-resize" id="side-resize"></div>
     </aside>
 
@@ -1086,11 +1148,11 @@
             <button class="btn-ghost" id="restaurer-non" type="button" data-i18n="restaurer-non">Ignorer</button>
           </div>
           <div class="shortcuts">
-            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>K</kbd> palette</span>
-            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>W</kbd> fermer l'onglet</span>
-            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd data-i18n="tab">Tab</kbd> onglet suivant</span>
-            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> aller à un onglet</span>
-            <span><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>B</kbd> panneau SFTP</span>
+            <span data-i18n="raccourci-palette"><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>K</kbd> palette</span>
+            <span data-i18n="fermer-l-onglet"><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>W</kbd> fermer l'onglet</span>
+            <span data-i18n="raccourci-onglet-suivant"><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd data-i18n="tab">Tab</kbd> onglet suivant</span>
+            <span data-i18n="raccourci-aller-onglet"><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> aller à un onglet</span>
+            <span data-i18n="raccourci-panneau-sftp"><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>B</kbd> panneau SFTP</span>
           </div>
         </div>
         <div id="terminal"></div>
@@ -1100,16 +1162,16 @@
           <button id="term-search-next" title="Suivant (Entrée)" data-i18n-title="suivant-entree" data-icon="arrowDown" aria-label="Suivant (Entrée)" data-i18n-aria="suivant-entree"></button>
           <button id="term-search-close" title="Fermer (Échap)" data-i18n-title="fermer-echap" data-icon="x" aria-label="Fermer (Échap)" data-i18n-aria="fermer-echap"></button>
         </div>
-        <div class="ctx-menu" id="term-context">
-          <div class="ctx-item" data-act="copy" data-i18n="copier">Copier<span class="ctx-key" data-i18n="ctrl-maj-c">Ctrl+Maj+C</span></div>
-          <div class="ctx-item" data-act="paste" data-i18n="coller">Coller<span class="ctx-key" data-i18n="ctrl-maj-v">Ctrl+Maj+V</span></div>
-          <div class="ctx-sep"></div>
-          <div class="ctx-item" data-act="search" data-i18n="rechercher">Rechercher<span class="ctx-key" data-i18n="ctrl-maj-f">Ctrl+Maj+F</span></div>
-          <div class="ctx-item" data-act="selectall" data-i18n="tout-selectionner">Tout sélectionner</div>
-          <div class="ctx-item" data-act="clear" data-i18n="effacer-l-ecran">Effacer l'écran</div>
-          <div class="ctx-sep"></div>
-          <div class="ctx-item" data-act="record" data-i18n="enregistrer-la-session">Enregistrer la session (asciinema)</div>
-          <div class="ctx-item" data-act="record-stop" data-i18n="arreter-l-enregistrement" hidden>Arrêter l'enregistrement</div>
+        <div class="ctx-menu" role="menu" id="term-context">
+          <div class="ctx-item" role="menuitem" data-act="copy" data-i18n="copier">Copier<span class="ctx-key" data-i18n="ctrl-maj-c">Ctrl+Maj+C</span></div>
+          <div class="ctx-item" role="menuitem" data-act="paste" data-i18n="coller">Coller<span class="ctx-key" data-i18n="ctrl-maj-v">Ctrl+Maj+V</span></div>
+          <div class="ctx-sep" role="separator"></div>
+          <div class="ctx-item" role="menuitem" data-act="search" data-i18n="rechercher">Rechercher<span class="ctx-key" data-i18n="ctrl-maj-f">Ctrl+Maj+F</span></div>
+          <div class="ctx-item" role="menuitem" data-act="selectall" data-i18n="tout-selectionner">Tout sélectionner</div>
+          <div class="ctx-item" role="menuitem" data-act="clear" data-i18n="effacer-l-ecran">Effacer l'écran</div>
+          <div class="ctx-sep" role="separator"></div>
+          <div class="ctx-item" role="menuitem" data-act="record" data-i18n="enregistrer-la-session">Enregistrer la session (asciinema)</div>
+          <div class="ctx-item" role="menuitem" data-act="record-stop" data-i18n="arreter-l-enregistrement" hidden>Arrêter l'enregistrement</div>
         </div>
         <aside class="sftp-panel" id="sftp-panel">
           <div class="sftp-resize" id="sftp-resize"></div>
@@ -1119,7 +1181,7 @@
             <button class="sftp-ib" id="sftp-refresh-btn" title="Rafraîchir" data-i18n-title="rafraichir" type="button" data-icon="refresh" aria-label="Rafraîchir" data-i18n-aria="rafraichir"></button>
           </div>
           <div class="sftp-list" id="sftp-list"></div>
-          <div class="sftp-drop" id="sftp-drop"><span>⬆︎</span>Déposer pour envoyer ici</div>
+          <div class="sftp-drop" id="sftp-drop" data-i18n="sftp-deposer"><span>⬆︎</span>Déposer pour envoyer ici</div>
           <div class="sftp-foot">
             <button class="btn-mini" id="sftp-up-btn" type="button" data-icon="upload" data-i18n="envoyer">Envoyer…</button>
             <button class="btn-mini" id="sftp-mkdir-btn" type="button" data-icon="plus" data-i18n="dossier-2">Dossier</button>
@@ -1128,7 +1190,8 @@
           <div class="sftp-status" id="sftp-status" data-i18n="glisse-des-fichiers-ici-ou-clique-sur-un-f">Glisse des fichiers ici, ou clique sur un fichier pour le télécharger.</div>
         </aside>
         <div class="modal-backdrop" id="sftp-copier-modal">
-          <form class="modal" id="sftp-copier-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="sftp-copier-title">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="sftp-copier-title">
+          <form id="sftp-copier-form" autocomplete="off">
             <h2 id="sftp-copier-title" data-i18n="sftp-copier-titre">Copier vers un autre hôte</h2>
             <p class="modal-hint" id="sftp-copier-quoi"></p>
             <label data-i18n="sftp-copier-cible">Hôte de destination (un onglet SSH ouvert)
@@ -1148,17 +1211,18 @@
               <button type="submit" class="btn-primary" id="sc-submit" data-i18n="sftp-copier-bouton">Copier</button>
             </div>
           </form>
+          </div>
         </div>
-        <div class="ctx-menu" id="sftp-context">
-          <div class="ctx-item" data-act="download" data-i18n="telecharger">Télécharger</div>
-          <div class="ctx-item" data-act="copy-to" data-i18n="sftp-copier-vers">Copier vers un autre hôte…</div>
-          <div class="ctx-item" data-act="cd" data-i18n="aller-ici-dans-le-terminal">Aller ici dans le terminal</div>
-          <div class="ctx-item" data-act="copy" data-i18n="copier-le-chemin">Copier le chemin</div>
-          <div class="ctx-sep"></div>
-          <div class="ctx-item" data-act="rename" data-i18n="renommer">Renommer…</div>
-          <div class="ctx-item" data-act="mkdir" data-i18n="nouveau-dossier">Nouveau dossier…</div>
-          <div class="ctx-sep"></div>
-          <div class="ctx-item danger" data-act="delete" data-i18n="supprimer">Supprimer</div>
+        <div class="ctx-menu" role="menu" id="sftp-context">
+          <div class="ctx-item" role="menuitem" data-act="download" data-i18n="telecharger">Télécharger</div>
+          <div class="ctx-item" role="menuitem" data-act="copy-to" data-i18n="sftp-copier-vers">Copier vers un autre hôte…</div>
+          <div class="ctx-item" role="menuitem" data-act="cd" data-i18n="aller-ici-dans-le-terminal">Aller ici dans le terminal</div>
+          <div class="ctx-item" role="menuitem" data-act="copy" data-i18n="copier-le-chemin">Copier le chemin</div>
+          <div class="ctx-sep" role="separator"></div>
+          <div class="ctx-item" role="menuitem" data-act="rename" data-i18n="renommer">Renommer…</div>
+          <div class="ctx-item" role="menuitem" data-act="mkdir" data-i18n="nouveau-dossier">Nouveau dossier…</div>
+          <div class="ctx-sep" role="separator"></div>
+          <div class="ctx-item danger" role="menuitem" data-act="delete" data-i18n="supprimer">Supprimer</div>
         </div>
       </div>
     </section>
@@ -1166,8 +1230,8 @@
 
   <div class="palette-backdrop" id="palette">
     <div class="palette">
-      <input id="palette-input" placeholder="Taper un nom d'hôte ou une commande…" data-i18n-placeholder="taper-un-nom-d-hote-ou-une-commande" autocomplete="off" />
-      <div class="results" id="palette-results"></div>
+      <input id="palette-input" role="combobox" aria-autocomplete="list" aria-controls="palette-results" aria-expanded="false" aria-label="Recherche d'hôtes et de commandes" data-i18n-aria="palette-champ-aria" placeholder="Taper un nom d'hôte ou une commande…" data-i18n-placeholder="taper-un-nom-d-hote-ou-une-commande" autocomplete="off" />
+      <div class="results" id="palette-results" role="listbox" aria-label="Résultats de la palette" data-i18n-aria="palette-liste-aria"></div>
     </div>
   </div>
 
@@ -1181,7 +1245,7 @@
 
         <div class="auth-switch" style="margin-bottom:2px">
           <label class="radio" data-i18n="ssh"><input type="radio" name="proto" value="ssh" checked /> SSH</label>
-          <label class="radio" data-i18n="rdp"><input type="radio" name="proto" value="rdp" /> RDP <code>bureau</code></label>
+          <label class="radio" data-i18n="rdp"><input type="radio" name="proto" value="rdp" /> RDP <code data-i18n="bureau-rdp">bureau</code></label>
           <label class="radio" data-i18n="vnc"><input type="radio" name="proto" value="vnc" /> VNC</label>
           <label class="radio" data-i18n="serie"><input type="radio" name="proto" value="serie" /> Série</label>
         </div>
@@ -1273,7 +1337,7 @@
     <div class="modal-backdrop" id="import-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
         <h2 id="import-modal-title" data-i18n="importer-des-sessions">Importer des sessions</h2>
-        <p class="modal-hint" data-i18n="depuis-putty-ou-mobaxterm-les-hotes-retenu">Depuis PuTTY ou MobaXterm. Les hôtes retenus sont écrits dans <code>~/.ssh/config</code> ; les mots de passe ne sont jamais repris.</p>
+        <p class="modal-hint" data-i18n="depuis-putty-ou-mobaxterm-les-hotes-retenu">Depuis PuTTY ou MobaXterm. Les hôtes retenus sont écrits dans <code>~/.ssh/config</code><span data-i18n="import-mdp-non-repris"> ; les mots de passe ne sont jamais repris.</span></p>
         <p class="modal-hint" id="import-consultes"></p>
 
         <div class="import-list" id="import-list" aria-live="polite"></div>
@@ -1291,7 +1355,7 @@
     <div class="modal-backdrop" id="keys-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="keys-modal-title">
         <h2 id="keys-modal-title" data-i18n="cles-ssh">Clés SSH</h2>
-        <p class="modal-hint" data-i18n="dans">Dans <code>~/.ssh</code>. Une clé évite de retaper son mot de passe.</p>
+        <p class="modal-hint" data-i18n="dans">Dans <code>~/.ssh</code><span data-i18n="cles-dans-fin">. Une clé évite de retaper son mot de passe.</span></p>
 
         <div class="key-list" id="key-list"></div>
 
@@ -1341,7 +1405,8 @@
     </div>
 
     <div class="modal-backdrop" id="pass-modal">
-      <form class="modal" id="pass-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="pass-modal-title">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pass-modal-title">
+      <form id="pass-form" autocomplete="off">
         <h2 id="pass-modal-title" data-i18n="mot-de-passe">Mot de passe</h2>
         <p class="modal-hint" id="pass-target">—</p>
         <label data-i18n="mot-de-passe">Mot de passe
@@ -1357,24 +1422,25 @@
           <button type="submit" class="btn-primary" id="pass-submit" data-i18n="se-connecter">Se connecter</button>
         </div>
       </form>
+      </div>
     </div>
 
-    <div class="ctx-menu" id="rdp-context">
-      <div class="ctx-item" data-act="connect" data-i18n="se-connecter">Se connecter</div>
-      <div class="ctx-item" data-act="edit" data-i18n="modifier">Modifier…</div>
-      <div class="ctx-item" data-act="move" data-i18n="deplacer-vers">Déplacer vers…</div>
-      <div class="ctx-item" data-act="forget" data-i18n="oublier-le-mot-de-passe">Oublier le mot de passe</div>
-      <div class="ctx-sep"></div>
-      <div class="ctx-item danger" data-act="delete" data-i18n="supprimer">Supprimer</div>
+    <div class="ctx-menu" role="menu" id="rdp-context">
+      <div class="ctx-item" role="menuitem" data-act="connect" data-i18n="se-connecter">Se connecter</div>
+      <div class="ctx-item" role="menuitem" data-act="edit" data-i18n="modifier">Modifier…</div>
+      <div class="ctx-item" role="menuitem" data-act="move" data-i18n="deplacer-vers">Déplacer vers…</div>
+      <div class="ctx-item" role="menuitem" data-act="forget" data-i18n="oublier-le-mot-de-passe">Oublier le mot de passe</div>
+      <div class="ctx-sep" role="separator"></div>
+      <div class="ctx-item danger" role="menuitem" data-act="delete" data-i18n="supprimer">Supprimer</div>
     </div>
-    <div class="ctx-menu" id="host-context">
-      <div class="ctx-item" data-act="connect" data-i18n="se-connecter">Se connecter</div>
-      <div class="ctx-item" data-act="edit" data-i18n="modifier">Modifier…</div>
-      <div class="ctx-item" data-act="move" data-i18n="deplacer-vers">Déplacer vers…</div>
-      <div class="ctx-item" data-act="tunnels" data-i18n="tunnels-2">Tunnels…</div>
-      <div class="ctx-item" data-act="forget" data-i18n="oublier-le-mot-de-passe">Oublier le mot de passe</div>
-      <div class="ctx-sep"></div>
-      <div class="ctx-item danger" data-act="delete" data-i18n="supprimer-l-hote">Supprimer l'hôte</div>
+    <div class="ctx-menu" role="menu" id="host-context">
+      <div class="ctx-item" role="menuitem" data-act="connect" data-i18n="se-connecter">Se connecter</div>
+      <div class="ctx-item" role="menuitem" data-act="edit" data-i18n="modifier">Modifier…</div>
+      <div class="ctx-item" role="menuitem" data-act="move" data-i18n="deplacer-vers">Déplacer vers…</div>
+      <div class="ctx-item" role="menuitem" data-act="tunnels" data-i18n="tunnels-2">Tunnels…</div>
+      <div class="ctx-item" role="menuitem" data-act="forget" data-i18n="oublier-le-mot-de-passe">Oublier le mot de passe</div>
+      <div class="ctx-sep" role="separator"></div>
+      <div class="ctx-item danger" role="menuitem" data-act="delete" data-i18n="supprimer-l-hote">Supprimer l'hôte</div>
     </div>
     <div class="modal-backdrop" id="tunnels-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="tunnels-modal-title">
@@ -1426,7 +1492,7 @@
     <div class="modal-backdrop" id="snippets-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="snippets-modal-title">
         <h2 id="snippets-modal-title" data-i18n="snippets">Snippets</h2>
-        <p class="modal-hint" data-i18n="des-commandes-pretes-a-envoyer-dans-le-ter">Des commandes prêtes à envoyer dans le terminal. Variables <code>{{nom}}</code> demandées à l'envoi ; envoi possible sur plusieurs sessions.</p>
+        <p class="modal-hint" data-i18n="des-commandes-pretes-a-envoyer-dans-le-ter">Des commandes prêtes à envoyer dans le terminal. Variables <code>{{nom}}</code><span data-i18n="snippets-hint-fin"> demandées à l'envoi ; envoi possible sur plusieurs sessions.</span></p>
         <div class="snippet-list" id="snippet-list"></div>
         <details class="key-block" id="snippet-block">
           <summary id="snippet-form-title" data-i18n="nouveau-snippet">Nouveau snippet</summary>
@@ -1435,7 +1501,7 @@
             <label data-i18n="nom">Nom
               <input id="sn-name" placeholder="Redémarrer nginx" data-i18n-placeholder="redemarrer-nginx" required />
             </label>
-            <label><span data-i18n="commande">Commande <span class="field-hint">— <code>{{variable}}</code> pour un champ demandé à l'envoi</span></span>
+            <label><span data-i18n="commande">Commande <span class="field-hint" data-i18n="commande-var-hint">— <code>{{variable}}</code> pour un champ demandé à l'envoi</span></span>
               <textarea id="sn-command" rows="3" spellcheck="false" placeholder="sudo systemctl restart {{service}}" data-i18n-placeholder="sudo-systemctl-restart-service"></textarea>
             </label>
             <p class="field-hint" id="sn-vars"></p>
@@ -1456,7 +1522,8 @@
       </div>
     </div>
     <div class="modal-backdrop" id="send-modal">
-      <form class="modal" id="send-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="send-title">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="send-title">
+      <form id="send-form" autocomplete="off">
         <h2 id="send-title" data-i18n="envoyer-2">Envoyer</h2>
         <pre class="send-preview" id="send-preview"></pre>
         <div id="send-vars"></div>
@@ -1474,9 +1541,11 @@
           <button type="submit" class="btn-primary" id="send-submit" data-i18n="envoyer-2">Envoyer</button>
         </div>
       </form>
+      </div>
     </div>
     <div class="modal-backdrop" id="ask-modal">
-      <form class="modal" id="ask-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="ask-title">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ask-title">
+      <form id="ask-form" autocomplete="off">
         <h2 id="ask-title">—</h2>
         <label><span id="ask-label" data-i18n="nom">Nom</span>
           <input id="ask-input" required spellcheck="false" />
@@ -1487,6 +1556,7 @@
           <button type="submit" class="btn-primary" id="ask-submit" data-i18n="ok">OK</button>
         </div>
       </form>
+      </div>
     </div>
     <div class="modal-backdrop" id="confirm-modal">
       <div class="modal" id="confirm-box" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -1499,7 +1569,8 @@
       </div>
     </div>
     <div class="modal-backdrop" id="edit-modal">
-      <form class="modal" id="edit-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
+      <form id="edit-form" autocomplete="off">
         <h2 id="edit-modal-title" data-i18n="modifier-l-hote">Modifier l'hôte</h2>
         <input type="hidden" id="e-old" />
         <label data-i18n="nom-alias">Nom (alias)
@@ -1517,7 +1588,7 @@
         <label><span data-i18n="chemin-de-la-cle-privee">Chemin de la clé privée <span class="field-hint" data-i18n="optionnel">(optionnel)</span></span>
           <input id="e-key" placeholder="~/.ssh/id_ed25519" />
         </label>
-        <label><span data-i18n="rebond-proxyjump">Rebond ProxyJump <span class="field-hint" data-i18n="optionnel-bastion-s-ex">(optionnel) — bastion(s), ex. <code>jump</code> ou <code>user@bastion:22</code></span></span>
+        <label><span data-i18n="rebond-proxyjump">Rebond ProxyJump <span class="field-hint" data-i18n="optionnel-bastion-s-ex">(optionnel) — bastion(s), ex. <code>jump</code><span data-i18n="ou"> ou </span><code>user@bastion:22</code></span></span>
           <input id="e-jump" placeholder="bastion, deploy@10.0.0.1:2222" data-i18n-placeholder="bastion-deploy-10-0-0-1-2222" />
         </label>
         <label><span data-i18n="tags">Tags <span class="field-hint" data-i18n="optionnel-separes-par-des-virgules">(optionnel) — séparés par des virgules</span></span>
@@ -1529,9 +1600,11 @@
           <button type="submit" class="btn-primary" id="e-submit" data-i18n="enregistrer">Enregistrer</button>
         </div>
       </form>
+      </div>
     </div>
     <div class="modal-backdrop" id="rdp-edit-modal">
-      <form class="modal" id="rdp-edit-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="rdp-edit-modal-title">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rdp-edit-modal-title">
+      <form id="rdp-edit-form" autocomplete="off">
         <h2 id="rdp-edit-modal-title" data-i18n="modifier-le-bureau-rdp">Modifier le bureau RDP</h2>
         <input type="hidden" id="re-id" />
         <label data-i18n="protocole">Protocole
@@ -1570,15 +1643,17 @@
           <button type="submit" class="btn-primary" id="re-submit" data-i18n="enregistrer">Enregistrer</button>
         </div>
       </form>
+      </div>
     </div>
-    <div class="ctx-menu" id="folder-context">
-      <div class="ctx-item" data-act="new" data-i18n="nouveau-sous-dossier">Nouveau sous-dossier…</div>
-      <div class="ctx-item" data-act="rename" data-i18n="renommer">Renommer…</div>
-      <div class="ctx-sep"></div>
-      <div class="ctx-item danger" data-act="delete" data-i18n="supprimer-le-dossier">Supprimer le dossier</div>
+    <div class="ctx-menu" role="menu" id="folder-context">
+      <div class="ctx-item" role="menuitem" data-act="new" data-i18n="nouveau-sous-dossier">Nouveau sous-dossier…</div>
+      <div class="ctx-item" role="menuitem" data-act="rename" data-i18n="renommer">Renommer…</div>
+      <div class="ctx-sep" role="separator"></div>
+      <div class="ctx-item danger" role="menuitem" data-act="delete" data-i18n="supprimer-le-dossier">Supprimer le dossier</div>
     </div>
     <div class="modal-backdrop" id="move-modal">
-      <form class="modal" id="move-form" autocomplete="off" role="dialog" aria-modal="true" aria-labelledby="move-modal-title">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="move-modal-title">
+      <form id="move-form" autocomplete="off">
         <h2 id="move-modal-title" data-i18n="deplacer-vers-un-dossier">Déplacer vers un dossier</h2>
         <div class="move-list" id="move-list"></div>
         <label><span data-i18n="nouveau-dossier-2">Nouveau dossier <span class="field-hint" data-i18n="ex">(ex. <code>prod/web</code>)</span></span>
@@ -1590,5 +1665,6 @@
           <button type="submit" class="btn-primary" id="move-submit" data-i18n="creer-et-deplacer">Créer et déplacer</button>
         </div>
       </form>
+      </div>
     </div></body>
 </html>

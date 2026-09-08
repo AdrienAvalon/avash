@@ -4,9 +4,9 @@ use crate::empreintes::repertoire_configuration;
 use anyhow::{Context, Result};
 use std::io::BufRead as _;
 
-pub(crate) struct Args {
-    pub(crate) host: String,
-    pub(crate) port: u16,
+pub struct Args {
+    pub host: String,
+    pub port: u16,
     pub(crate) user: String,
     pub(crate) pass: String,
     pub(crate) domain: Option<String>,
@@ -21,11 +21,18 @@ pub(crate) struct Args {
     pub(crate) plafond_enregistrement: u64,
     pub(crate) width: u16,
     pub(crate) height: u16,
+    /// `--scale` : échelle DPI annoncée au serveur (MS-RDPBCGR `desktopScaleFactor`,
+    /// 100..500), pour qu'il rende son interface plus grande quand on négocie une
+    /// définition en pixels PHYSIQUES sur un écran HiDPI. 0 = non renseigné (le
+    /// serveur rend à 100 %). Ajouté par l'audit du 7 septembre 2026 : sans lui,
+    /// doubler la définition à 200 % donnait un texte net mais deux fois plus
+    /// petit. Le serveur l'ignore de toute façon sous 512×384.
+    pub(crate) desktop_scale_factor: u32,
     pub(crate) shot: Option<String>,
     /// `--vnc` : le serveur parle RFB, pas RDP. L'utilisateur devient
     /// facultatif (l'authentification VNC classique n'a qu'un mot de passe) et
     /// le port par défaut est 5900.
-    pub(crate) vnc: bool,
+    pub vnc: bool,
     /// `--sans-son` : ne pas annoncer le canal audio (réglage de l'interface).
     pub(crate) sans_son: bool,
     /// `--lecteur <dossier>` : ce dossier du poste est servi au bureau distant
@@ -67,21 +74,29 @@ fn read_password(a: &Pa) -> Result<String> {
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
 
-pub(crate) fn parse_args() -> Result<Args> {
+pub fn parse_args() -> Result<Args> {
     let a = Pa(std::env::args().skip(1).collect());
     let pass = read_password(&a)?;
-    parse_args_de_pa(&a, pass)
+    parse_args_de_pa(&a, pass, disposition_detectee)
 }
 
 /// Variante testable : les arguments et le mot de passe sont fournis, plutôt
 /// que lus dans l'environnement et sur l'entrée standard.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : sans `--layout`, chaque appel de
+/// test partait sonder la disposition du poste (kxkbrc du répertoire de
+/// configuration, spawn `localectl`), ce qu'aucun de ces tests n'affirme. On
+/// injecte donc une disposition fixe (`us`) plutôt que la détection réelle.
 #[cfg(test)]
 pub(crate) fn parse_args_de(args: &[&str], pass: &str) -> Result<Args> {
     let pa = Pa(args.iter().map(|s| (*s).to_owned()).collect());
-    parse_args_de_pa(&pa, pass.to_owned())
+    parse_args_de_pa(&pa, pass.to_owned(), || 0x0000_0409)
 }
 
-fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
+/// `detecter` fournit la disposition clavier de repli quand `--layout` manque.
+/// En production c'est `disposition_detectee` (qui sonde le poste) ; les tests
+/// passent une valeur fixe pour rester déterministes et hors hôte.
+fn parse_args_de_pa(a: &Pa, pass: String, detecter: impl FnOnce() -> u32) -> Result<Args> {
     let vnc = a.drapeau("--vnc");
     Ok(Args {
         host: a.opt("--host").context("argument requis : --host")?,
@@ -105,7 +120,7 @@ fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
         layout: a
             .opt("--layout")
             .and_then(|v| analyser_disposition(&v))
-            .unwrap_or_else(disposition_detectee),
+            .unwrap_or_else(detecter),
         width: a
             .opt("--width")
             .and_then(|s| s.parse().ok())
@@ -114,6 +129,7 @@ fn parse_args_de_pa(a: &Pa, pass: String) -> Result<Args> {
             .opt("--height")
             .and_then(|s| s.parse().ok())
             .unwrap_or(800),
+        desktop_scale_factor: a.opt("--scale").and_then(|s| s.parse().ok()).unwrap_or(0),
         shot: a.opt("--shot"),
         enregistrer: a
             .opt("--enregistrer")
@@ -210,6 +226,48 @@ fn analyser_disposition(v: &str) -> Option<u32> {
     disposition_pour_code(v)
 }
 
+/// Traduit l'identifiant de source de saisie HIToolbox de macOS
+/// (« com.apple.keylayout.French ») en identifiant RDP de disposition.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : macOS n'a ni XKB, ni kxkbrc, ni
+/// localectl, si bien que la branche `cfg(unix)` de `disposition_detectee` n'y
+/// détectait jamais rien et rendait 0 — un Mac AZERTY sur xrdp gardait le
+/// défaut « a » → « q ». HIToolbox expose la disposition courante sous
+/// `AppleCurrentKeyboardLayoutInputSourceID` ; on ne garde que le dernier
+/// segment du nom (« French », « French-PC »…) et on le mappe vers un code
+/// XKB que `disposition_pour_code` sait traduire.
+///
+/// Compilée aussi sous `test` pour que le mapping soit vérifiable hors macOS.
+#[cfg(any(target_os = "macos", test))]
+fn disposition_macos_depuis_id(id: &str) -> Option<u32> {
+    let nom = id.rsplit('.').next()?.trim();
+    let code = match nom {
+        "French" | "French-PC" | "French-numerical" => "fr",
+        "Belgian" => "be",
+        "Canadian" | "Canadian-CSA" => "ca",
+        "SwissFrench" | "SwissGerman" => "ch",
+        "German" => "de",
+        "Austrian" => "at",
+        "US" | "USExtended" | "ABC" => "us",
+        "British" | "British-PC" => "gb",
+        "Spanish" | "Spanish-ISO" => "es",
+        "Italian" | "Italian-Pro" => "it",
+        "Portuguese" => "pt",
+        "Brazilian" => "br",
+        "Dutch" => "nl",
+        "Danish" => "dk",
+        "Norwegian" => "no",
+        "Swedish" | "Swedish-Pro" => "se",
+        "Finnish" => "fi",
+        "Polish" | "PolishPro" => "pl",
+        "Czech" | "Czech-QWERTY" => "cz",
+        "Russian" => "ru",
+        "Turkish" | "Turkish-QWERTY" | "Turkish-Standard" => "tr",
+        _ => return None,
+    };
+    disposition_pour_code(code)
+}
+
 /// Disposition du poste, ou 0 si on ne sait pas — mieux vaut le défaut du
 /// serveur qu'une disposition inventée.
 fn disposition_detectee() -> u32 {
@@ -218,6 +276,25 @@ fn disposition_detectee() -> u32 {
         .and_then(|v| analyser_disposition(&v))
     {
         return v;
+    }
+    // macOS : la disposition native vient de HIToolbox, que les sources unix
+    // ci-dessous ignorent. On l'interroge en premier pour qu'elle prime sur un
+    // éventuel XKB_DEFAULT_LAYOUT égaré.
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(v) = std::process::Command::new("defaults")
+            .args([
+                "read",
+                "com.apple.HIToolbox",
+                "AppleCurrentKeyboardLayoutInputSourceID",
+            ])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|t| disposition_macos_depuis_id(t.trim()))
+        {
+            return v;
+        }
     }
     #[cfg(unix)]
     {
@@ -291,6 +368,39 @@ pub(crate) fn taille_sure(w: u16, h: u16) -> anyhow::Result<(u16, u16)> {
 }
 
 #[cfg(test)]
+mod tests_detection_injectee {
+    use super::{parse_args_de_pa, Pa};
+
+    fn pa(args: &[&str]) -> Pa {
+        Pa(args.iter().map(|s| (*s).to_owned()).collect())
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : `parse_args_de` sondait la
+    /// disposition du poste (AVASH_RDP_LAYOUT, XKB_DEFAULT_LAYOUT, le fichier
+    /// `kxkbrc` du répertoire de configuration, puis un spawn de `localectl`)
+    /// à chaque appel sans `--layout`, alors qu'aucun de ces tests n'affirme
+    /// rien sur `layout` : travail inutile, dépendant de l'hôte, coûteux. La
+    /// détection est désormais un paramètre. Quand `--layout` est fourni, elle
+    /// ne doit pas être invoquée du tout.
+    #[test]
+    fn la_detection_n_est_pas_invoquee_quand_layout_est_donne() {
+        let a = pa(&["--host", "h", "-u", "x", "--layout", "de"]);
+        let args =
+            parse_args_de_pa(&a, "s".to_owned(), || panic!("détection appelée à tort")).unwrap();
+        assert_eq!(args.layout, 0x0000_0407);
+    }
+
+    /// Sans `--layout`, la disposition vient de la détection injectée, jamais
+    /// d'un sondage du poste : les tests restent déterministes et hors hôte.
+    #[test]
+    fn sans_layout_la_disposition_vient_de_la_detection_injectee() {
+        let a = pa(&["--host", "h", "-u", "x"]);
+        let args = parse_args_de_pa(&a, "s".to_owned(), || 0xABCD).unwrap();
+        assert_eq!(args.layout, 0xABCD);
+    }
+}
+
+#[cfg(test)]
 mod tests_vnc {
     use super::parse_args_de;
 
@@ -344,6 +454,29 @@ mod tests_taille {
 }
 
 #[cfg(test)]
+mod tests_echelle {
+    use super::parse_args_de;
+
+    /// HiDPI (audit du 7 septembre 2026) : quand l'interface négocie une
+    /// définition en pixels physiques sur un écran à 200 %, elle passe `--scale
+    /// 200` pour que le serveur rende son interface deux fois plus grande. Sans
+    /// cette annonce, le texte distant serait net mais deux fois plus petit.
+    #[test]
+    fn l_echelle_est_lue_depuis_scale() {
+        let a = parse_args_de(&["--host", "h", "-u", "x", "--scale", "200"], "s").unwrap();
+        assert_eq!(a.desktop_scale_factor, 200);
+    }
+
+    /// Sans `--scale`, on n'annonce rien (0) : le serveur rend à 100 %, comme
+    /// avant le correctif. C'est le comportement de repli pour un écran standard.
+    #[test]
+    fn sans_scale_l_echelle_vaut_zero() {
+        let a = parse_args_de(&["--host", "h", "-u", "x"], "s").unwrap();
+        assert_eq!(a.desktop_scale_factor, 0);
+    }
+}
+
+#[cfg(test)]
 mod tests_disposition {
     use super::{analyser_disposition, disposition_pour_code};
 
@@ -376,6 +509,60 @@ mod tests_disposition {
         assert_eq!(analyser_disposition("1036"), Some(1036));
         assert_eq!(analyser_disposition(" fr "), Some(0x0000_040C));
         assert_eq!(analyser_disposition("n'importe quoi"), None);
+    }
+}
+
+#[cfg(test)]
+mod tests_disposition_macos {
+    use super::disposition_macos_depuis_id;
+
+    /// Trouvé par l'audit du 7 septembre 2026 : sur macOS, `disposition_detectee`
+    /// ne connaissait que XKB_DEFAULT_LAYOUT, kxkbrc et localectl — trois sources
+    /// absentes du système (la branche `cfg(unix)` couvre pourtant le Mac) — et
+    /// rendait toujours 0, si bien qu'un Mac AZERTY sur xrdp gardait le défaut
+    /// « a » → « q » corrigé ailleurs. HIToolbox nomme la disposition
+    /// « com.apple.keylayout.French » ; on la traduit désormais.
+    #[test]
+    fn l_identifiant_hitoolbox_donne_le_bon_layout() {
+        assert_eq!(
+            disposition_macos_depuis_id("com.apple.keylayout.French"),
+            Some(0x0000_040C)
+        );
+        assert_eq!(
+            disposition_macos_depuis_id("com.apple.keylayout.French-PC"),
+            Some(0x0000_040C)
+        );
+        assert_eq!(
+            disposition_macos_depuis_id("com.apple.keylayout.German"),
+            Some(0x0000_0407)
+        );
+        assert_eq!(
+            disposition_macos_depuis_id("com.apple.keylayout.British"),
+            Some(0x0000_0809)
+        );
+        assert_eq!(
+            disposition_macos_depuis_id("com.apple.keylayout.US"),
+            Some(0x0000_0409)
+        );
+        assert_eq!(
+            disposition_macos_depuis_id("com.apple.keylayout.Belgian"),
+            Some(0x0000_080C)
+        );
+    }
+
+    #[test]
+    fn un_identifiant_inconnu_ou_vide_ne_donne_rien() {
+        // Une méthode de saisie (japonais via Kotoeri) n'est pas une disposition
+        // de touches ; mieux vaut le défaut du serveur qu'une valeur inventée.
+        assert_eq!(
+            disposition_macos_depuis_id("com.apple.inputmethod.Kotoeri.Japanese"),
+            None
+        );
+        assert_eq!(
+            disposition_macos_depuis_id("com.apple.keylayout.Klingon"),
+            None
+        );
+        assert_eq!(disposition_macos_depuis_id(""), None);
     }
 }
 

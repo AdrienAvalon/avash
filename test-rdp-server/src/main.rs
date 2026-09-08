@@ -273,6 +273,12 @@ pub const CLIP_TEXT: &str = "avash-cliprdr-test";
 /// de fichiers « sur le bureau distant ».
 pub const DECLENCHEUR_OFFRE: &str = "avash-offre-fichiers";
 
+/// Texte que le client copie pour que le serveur « recopie du texte » après
+/// avoir offert des fichiers : une nouvelle FormatList qui remplace la liste
+/// offerte. Le scénario vérifie alors que la pastille « N fichiers copiés »
+/// disparaît (défaut de l'audit du 7 septembre 2026 : elle restait).
+pub const DECLENCHEUR_CHANGE: &str = "avash-change-presse-papiers";
+
 /// Morceau demandé au client quand le serveur reçoit ses fichiers.
 const MORCEAU: u32 = 64 * 1024;
 
@@ -446,6 +452,13 @@ impl CliprdrBackend for ClipBackend {
                         .with_attributes(ClipboardFileAttributes::NORMAL),
                 ]));
             }
+        } else if texte == DECLENCHEUR_CHANGE {
+            // Après l'offre de fichiers, le bureau distant « recopie du texte » :
+            // une nouvelle annonce = une nouvelle FormatList côté client, qui
+            // doit invalider la liste offerte et faire disparaître la pastille.
+            self.send(ClipboardMessage::SendInitiateCopy(vec![
+                ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
+            ]));
         }
     }
     fn on_remote_file_list(&mut self, files: &[FileDescriptor], clip_data_id: Option<u32>) {

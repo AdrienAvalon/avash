@@ -16,9 +16,12 @@
 // pour les scénarios de bout en bout : un serveur RDP de test et un sshd dédié
 // (non-root, clé, port 2223) auquel l'app se connecte réellement.
 import { spawn, execSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, chmodSync, rmSync, copyFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, chmodSync, rmSync, copyFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
+// Attente d'un port, partagée avec les specs (une seule implémentation) : sert à
+// vérifier au démarrage que le sshd de test écoute vraiment (cf. onPrepare).
+import { waitForPort } from "./specs/helpers.js";
 
 let tauriDriver;
 let sshd;
@@ -27,6 +30,10 @@ let appEmbarquee;
 // processus de travail, forkés ensuite, retrouvent le MÊME chemin — sans quoi
 // chacun en créerait un différent et ne pourrait pas remettre à zéro celui que
 // l'application utilise réellement.
+// Un bac à sable fourni de l'extérieur (AVASH_E2E_SANDBOX posé avant le run)
+// appartient à l'appelant : onComplete ne le supprime pas. Celui qu'on crée
+// nous-mêmes, si.
+const SANDBOX_FOURNI = !!process.env.AVASH_E2E_SANDBOX;
 const sandbox = process.env.AVASH_E2E_SANDBOX ?? mkdtempSync(join(tmpdir(), "avash-e2e-"));
 const sshDir = join(sandbox, "sshtest");
 export const WINDOWS = process.platform === "win32";
@@ -411,14 +418,53 @@ export const config = {
   // native qui vient de démarrer sur une machine occupée — et c'est la valeur
   // qu'utilise toute attente écrite sans échéance explicite.
   waitforTimeout: 10000,
-  onPrepare: () => {
+  onPrepare: async () => {
     process.env.AVASH_E2E_SANDBOX = sandbox; // hérité par les workers
     seedSandbox(); // crée ~/.ssh + config (référence la clé cliente)
-    if (LOCAL_SERVERS) sshd = startSshd(); // génère cette clé dans ~/.ssh, démarre le sshd
+    if (LOCAL_SERVERS) {
+      sshd = startSshd(); // génère cette clé dans ~/.ssh, démarre le sshd
+      // Trouvé par l'audit du 8 septembre 2026 : startSshd spawnait sshd avec
+      // stdio ignoré et sans écouteur `exit`, et rien ici n'attendait le port ni
+      // le PID. Un sshd orphelin d'un run précédent (lanceur tué sans onComplete
+      // — SIGKILL, timeout CI local) tenant déjà le port 2223 faisait mourir
+      // NOTRE sshd neuf sur le bind, en silence ; l'ancien, configuré avec
+      // l'authorized_keys d'un AUTRE bac à sable, répondait à sa place et
+      // refusait la clé cliente toute neuve — toute la suite SSH échouait
+      // « jamais live » / « Permission denied » sans jamais nommer le port
+      // occupé. On capte la sortie du processus, on attend le port, puis on
+      // exige le fichier PID de notre sshd : sshd ne l'écrit qu'après un bind
+      // réussi, donc sa présence prouve que c'est bien le nôtre qui écoute, son
+      // absence trahit l'orphelin. (Sous Windows, startSshd pilote le service
+      // système et rend null : la garde ne vaut que pour le sshd dédié.)
+      if (sshd) {
+        let sortieSshd = null;
+        sshd.once("exit", (code) => { sortieSshd = code; });
+        // Le port peut ne jamais répondre (bind échoué, aucun orphelin) : on
+        // laisse le contrôle du PID ci-dessous lever avec le journal.
+        await waitForPort(SSH_PORT).catch(() => {});
+        if (!existsSync(join(sshDir, "sshd.pid"))) {
+          const chemLog = join(sshDir, "sshd.log");
+          const journal = existsSync(chemLog)
+            ? readFileSync(chemLog, "utf8").split("\n").slice(-10).join("\n")
+            : "(pas de sshd.log)";
+          throw new Error(
+            `le sshd de test n'a pas démarré (sortie ${sortieSshd}) ; port ${SSH_PORT} déjà occupé par un sshd orphelin d'un run précédent ?\n--- fin de sshd.log ---\n${journal}`,
+          );
+        }
+      }
+    }
     // Les serveurs RDP de test sont démarrés PAR CHAQUE spec RDP (serveur dédié,
     // cf. rdp.spec/rdp-reconnect.spec) : pas de serveur partagé à coupler.
     // Avec le serveur embarqué, c'est `beforeSession` qui lance l'application.
     if (EMBARQUE) return;
+    // Symétrique du sshd : si 4444 répond déjà, un tauri-driver orphelin d'un run
+    // précédent tient le port ; en spawner un neuf le ferait mourir sur
+    // bind(4444) et l'orphelin, lié à l'ENV_APP d'un ancien bac à sable (HOME
+    // supprimé), piloterait la suite à sa place. On lève plutôt que de servir
+    // l'orphelin en silence.
+    if (await pilotePret()) {
+      throw new Error("port 4444 déjà occupé : un tauri-driver orphelin d'un run précédent répond ; le tuer avant de relancer la suite");
+    }
     lancerTauriDriver();
   },
   // Avant CHAQUE processus de travail, dans le LANCEUR : on s'assure que le
@@ -469,5 +515,15 @@ export const config = {
     // clés d'admin d'avant la suite, sans quoi la clé de test resterait
     // autorisée sur le port 22 réel de la machine.
     if (WINDOWS) restaurerSshdWindows();
+    // Trouvé par l'audit du 7 septembre 2026 : onComplete tuait les serveurs
+    // mais laissait le bac à sable (clé privée cliente, clé d'hôte, sshd.log,
+    // config) dans /tmp. Sur un poste où /tmp est un tmpfs, chaque run en
+    // gardait un — la clé privée du sshd de test restait lisible en mémoire
+    // vive jusqu'au redémarrage, et les répertoires s'accumulaient. On le
+    // supprime, sauf E2E_GARDER_SANDBOX pour inspecter l'état après un échec,
+    // et sauf un bac fourni par l'appelant (qui en garde la propriété).
+    if (!process.env.E2E_GARDER_SANDBOX && !SANDBOX_FOURNI) {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
   },
 };

@@ -207,18 +207,25 @@ export function startVncServer(port, surLigne, options = {}) {
 
 // Attend que `port` soit prêt à recevoir l'app.
 //
-// Une seule connexion réussie ne suffit pas : elle prouve que le socket écoute,
-// pas que le serveur est *revenu* l'écouter. Le serveur de test traite ses
-// clients l'un après l'autre — notre sonde en est un — et l'app, elle, ne
-// réessaie pas si son handshake tombe dans l'intervalle. D'où des échecs
-// intermittents, uniquement en suite complète, où la machine est chargée.
+// Le serveur de test traite ses clients l'un après l'autre — notre sonde en est
+// un — et l'app, elle, ne réessaie pas si son handshake tombe dans l'intervalle.
+// D'où des échecs intermittents, uniquement en suite complète, où la machine est
+// chargée. On enchaîne donc DEUX connexions au lieu d'une : deux poignées de
+// main réelles, plus le délai de re-tentative tant que le socket n'écoute pas.
 //
-// On exige donc DEUX connexions successives : la seconde n'est tentée qu'après
-// fermeture de la première, ce qui vérifie que la boucle d'acceptation a bouclé.
-// C'est bien un état qu'on attend, pas une durée. Le délai plafond, lui, a été
-// vu dépassé une fois en suite complète (34 fichiers en parallèle, 05/09/2026 :
-// « port 33898 pas prêt à temps » dans le before all de rdp-reconnect, qui
-// passait seul) : il couvre le démarrage d'un serveur sur une machine chargée.
+// Attention : cela ne prouve PAS que la boucle d'acceptation a bouclé, ni que le
+// serveur soit *revenu* écouter (trouvé par l'audit du 8 septembre 2026 : cette
+// justification était fausse). L'événement `connect` d'un client TCP est émis
+// dès que le noyau a terminé la poignée de main, ce qu'il fait pour toute
+// connexion en file d'attente (backlog) SANS que le serveur ait appelé accept() ;
+// les deux sondes réussissent donc sur n'importe quel socket en écoute. Rendre la
+// sonde probante demanderait de lire les premiers octets du serveur (VNC émet
+// « RFB 003.008 » dès accept ; RDP exige un échange X.224) — non fait ici : les
+// deux connexions restent un simple délai supplémentaire. Le délai plafond, lui,
+// a été vu dépassé une fois en suite complète (34 fichiers en parallèle,
+// 05/09/2026 : « port 33898 pas prêt à temps » dans le before all de
+// rdp-reconnect, qui passait seul) : il couvre le démarrage d'un serveur sur une
+// machine chargée.
 import { connect } from "node:net";
 export function waitForPort(port, timeout = 15000) {
   const deadline = Date.now() + timeout;
@@ -232,7 +239,7 @@ export function waitForPort(port, timeout = 15000) {
     const essayer = async () => {
       try {
         await uneConnexion();
-        await uneConnexion(); // le serveur est revenu accepter
+        await uneConnexion(); // seconde poignée de main : simple délai, pas une preuve du retour à accept()
         resolve();
       } catch {
         if (Date.now() > deadline) reject(new Error(`port ${port} pas prêt à temps`));

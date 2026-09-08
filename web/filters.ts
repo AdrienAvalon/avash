@@ -310,6 +310,30 @@ export function renderSnippet(command: string, vars: Record<string, string>): st
   return command.replace(/\{\{\s*([^}]*?)\s*\}\}/g, (_, name) => vars[name.trim()] ?? "");
 }
 
+/** Verdict d'un envoi de snippet multi-cibles. */
+export type EnvoiResultat =
+  | { etat: "aucune" }
+  | { etat: "partiel"; n: number; total: number }
+  | { etat: "complet" };
+
+/**
+ * Décide de l'issue d'un envoi à partir du nombre de sessions réellement
+ * atteintes (`n`, rendu par `snippet_send`) et du nombre visé (`total`).
+ * Isolé du DOM et de l'i18n pour être testable seul.
+ *
+ * Trouvé par l'audit du 7 septembre 2026 : `snippet_send` ignore sans erreur une
+ * session fermée entre-temps (`store.get(id)` filtré) et rend le compte atteint,
+ * mais le front faisait `void n`. Un envoi à 0 session — toutes les cibles
+ * cochées fermées pendant la saisie des variables — passait pour réussi ; pire,
+ * un envoi partiel (0 < n < total : un serveur sur trois déconnecté) laissait
+ * croire tout le parc traité.
+ */
+export function resultatEnvoi(n: number, total: number): EnvoiResultat {
+  if (n <= 0) return { etat: "aucune" };
+  if (n < total) return { etat: "partiel", n, total };
+  return { etat: "complet" };
+}
+
 // ---------- Arborescence des hôtes (dossiers unifiés SSH + RDP) ----------
 
 /**
@@ -460,6 +484,38 @@ export function rdpMousePos(
   const x = Math.max(0, Math.min(w - 1, Math.round(((clientX - rect.left - offX) / dispW) * w)));
   const y = Math.max(0, Math.min(h - 1, Math.round(((clientY - rect.top - offY) / dispH) * h)));
   return [x, y];
+}
+
+/**
+ * Taille du bureau à négocier, en pixels PHYSIQUES, à partir d'un rectangle
+ * mesuré en pixels CSS. Rend `[largeur, hauteur]` bornée (largeur paire,
+ * 200..8192).
+ *
+ * Trouvé par l'audit du 7 septembre 2026 (HiDPI) : la définition demandée au
+ * serveur venait de `getBoundingClientRect()`, en pixels CSS, jamais multipliée
+ * par `devicePixelRatio`. Sur un portable 4K à 200 %, un bureau de 1920×1080
+ * physiques était négocié en 960×540 puis étiré ×2 par le CSS (`object-fit:
+ * contain`) : net côté serveur, flou à l'écran. On multiplie donc par le DPR.
+ *
+ * Le facteur est plafonné par `8192 / plus grand côté` : ainsi un 4K à 200 %
+ * (3840 px CSS de large) reste sous la borne 8192 au lieu de sortir à 7680 puis
+ * d'être coupé, et un écran plus grand encore ne dépasse jamais. Le bornage
+ * 200..8192 et la parité (largeur seule, comme le veut RDP) s'appliquent APRÈS
+ * la multiplication.
+ *
+ * Le DPR est un paramètre (défaut : celui de la fenêtre) pour rester testable
+ * sans toucher `window`. Un DPR nul ou absent retombe sur 1.
+ */
+export function tailleBureau(
+  rect: { width: number; height: number },
+  dpr: number = window.devicePixelRatio,
+): [number, number] {
+  const pair = (n: number) => n - (n % 2); // RDP : largeur paire
+  const maxCote = Math.max(rect.width, rect.height) || 1;
+  const facteur = Math.min(dpr > 0 ? dpr : 1, 8192 / maxCote);
+  const w = Math.max(200, Math.min(8192, pair(Math.round(rect.width * facteur))));
+  const h = Math.max(200, Math.min(8192, Math.round(rect.height * facteur)));
+  return [w, h];
 }
 
 /**

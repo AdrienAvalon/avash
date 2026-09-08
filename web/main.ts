@@ -24,7 +24,7 @@ import { notify, notifyErreur } from "./notifications";
 import { openFolderMenu } from "./dossiers";
 import { openTermSearch, setFontSize } from "./terminal-outils";
 import { setTitlebar, setupWindowControls } from "./titre";
-import { sftp, sftpOpenAt, sftpSyncButton } from "./sftp";
+import { sftp, sftpOpenAt, sftpSyncButton, sftpAppliquerVue } from "./sftp";
 import { tunnels } from "./tunnels";
 import "./import";
 // Modules à effet : ils branchent leurs écouteurs à l'import et n'exportent
@@ -182,7 +182,10 @@ function sshHostElement(h: Host): HTMLElement {
   if (h.alias === state.pickedAlias) el.classList.add("picked");
   // L'alias peut être tronqué et les tags ne tiennent pas dans la ligne : les
   // deux se retrouvent ici, où l'on va naturellement chercher le détail.
-  const detail = [h.alias, target, os?.pretty, h.tags.length > 0 ? `tags : ${h.tags.join(", ")}` : ""]
+  // Trouvé par l'audit du 7 septembre 2026 : le préfixe « tags : » de
+  // l'infobulle était écrit en dur en français ; en interface anglaise il
+  // apparaissait au milieu du reste traduit. On le tire de t("tags").
+  const detail = [h.alias, target, os?.pretty, h.tags.length > 0 ? `${t("tags").toLowerCase()} : ${h.tags.join(", ")}` : ""]
     .filter(Boolean)
     .join(" · ");
   el.title = `${detail} — ${gestesLigne()}`;
@@ -549,6 +552,9 @@ async function newSessionShell(label: string) {
     const mod = e.ctrlKey && e.shiftKey;
     if (mod && e.code === "KeyC") {
       const sel = term.getSelection();
+      // Copie de la selection du terminal : un rejet reste muet a dessein, le
+      // geste est repetable et sans consequence (contrairement a une cle
+      // publique collee dans authorized_keys), audit du 7 septembre 2026.
       if (sel) navigator.clipboard.writeText(sel).catch(() => {});
       return false;
     }
@@ -867,7 +873,10 @@ export function focusSession(id: number) {
   });
   for (const r of rdpSessions.values()) r.tab.classList.remove("active");
   const cur = state.sessions.get(id);
-  sftpSyncButton();
+  // `sftpAppliquerVue` (et non le seul `sftpSyncButton`) pose aussi la classe
+  // « open » du panneau : au retour d'un onglet RDP, qui l'avait masquee, elle
+  // la remet selon `sftp.open`. Trouve par l'audit du 7 septembre 2026.
+  sftpAppliquerVue();
   if (sftp.open && cur) void sftpOpenAt(cur, cur.sftpPath);
   renderHosts(); // met à jour le surlignage « sélectionné »
 }
@@ -897,11 +906,8 @@ export function closeSession(id: number) {
       $("terminal-empty").style.display = "flex";
       // Le panneau SFTP appartient a une session : sans session, il n'a plus
       // rien a montrer. On le ferme en meme temps que la derniere connexion.
-      if (sftp.open) {
-        sftp.open = false;
-        $("sftp-panel").classList.remove("open");
-      }
-      sftpSyncButton();
+      sftp.open = false;
+      sftpAppliquerVue();
       setTitlebar();
     } else {
       focusTab(suivant);
@@ -1001,10 +1007,19 @@ function paletteOpen() {
   paletteEl.classList.add("open");
   paletteInput.value = "";
   paletteIndex = 0;
+  // aria-expanded suit l'état réel de la liste : le combobox annonce « développé »
+  // tant que la palette est ouverte (trouvé par l'audit du 7 septembre 2026).
+  paletteInput.setAttribute("aria-expanded", "true");
   renderPalette();
   paletteInput.focus();
 }
-function paletteClose() { paletteEl.classList.remove("open"); }
+function paletteClose() {
+  paletteEl.classList.remove("open");
+  // À la fermeture, retirer aria-activedescendant : sinon l'input pointe encore
+  // vers une option retirée du DOM (aria-required-parent / descendant fantôme).
+  paletteInput.setAttribute("aria-expanded", "false");
+  paletteInput.removeAttribute("aria-activedescendant");
+}
 /** Une entrée de la palette : SSH ou bureau RDP, avec son action d'ouverture. */
 type EntreePalette = { nom: string; detail: string; icone: string; ouvrir: () => void };
 
@@ -1206,6 +1221,9 @@ function renderPalette() {
   ];
 
   if (paletteEntrees.length === 0) {
+    // Aucune option rendue : l'input ne doit plus désigner de descendant actif,
+    // sinon aria-activedescendant pointe dans le vide (audit du 7 septembre 2026).
+    paletteInput.removeAttribute("aria-activedescendant");
     res.innerHTML = `<div class="empty">${stripHtml(t("palette-aucun-hote", { q }))}</div>`;
     return;
   }

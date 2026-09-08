@@ -17,6 +17,7 @@ static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub struct HomeGuard {
     previous: Option<String>,
     previous_avash: Option<String>,
+    previous_trousseau: Option<String>,
     dir: std::path::PathBuf,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
@@ -39,6 +40,10 @@ impl Drop for HomeGuard {
             Some(h) => std::env::set_var("AVASH_HOME", h),
             None => std::env::remove_var("AVASH_HOME"),
         }
+        match &self.previous_trousseau {
+            Some(t) => std::env::set_var("AVASH_TROUSSEAU", t),
+            None => std::env::remove_var("AVASH_TROUSSEAU"),
+        }
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -59,11 +64,17 @@ pub fn temp_home() -> HomeGuard {
     std::fs::create_dir_all(&dir).unwrap();
     let previous = std::env::var("HOME").ok();
     let previous_avash = std::env::var("AVASH_HOME").ok();
+    // Isole aussi le trousseau : sans cela `secrets::load`/`sonder` tapent dans
+    // le vrai Secret Service du poste (keyring v1 sous Linux = D-Bus), ce que
+    // l'isolation de `~/.ssh` ne couvre pas. Voir `avash::secrets::en_memoire`.
+    let previous_trousseau = std::env::var("AVASH_TROUSSEAU").ok();
     std::env::set_var("HOME", &dir);
     std::env::set_var("AVASH_HOME", &dir);
+    std::env::set_var("AVASH_TROUSSEAU", "memoire");
     HomeGuard {
         previous,
         previous_avash,
+        previous_trousseau,
         dir,
         _lock: lock,
     }

@@ -70,11 +70,14 @@ ce qui n'est pas ici n'existe pas pour eux.
   Après un passage local, **reconstruire en release** : le script remplace
   `target/release/avash-ui` et le sidecar par leurs versions instrumentées.
 - Les compteurs de tests figurent dans `README.md` et `README.en.md` (badge et
-  section Qualité), `docs/qualite.md`, `docs/feuille-de-route.md` et le site
-  (`site/index.html`, `site/en/index.html`) : les mettre à jour quand ils
-  changent. Les badges « couverture » et « mutants » des README sont
-  statiques eux aussi : ils suivent le relevé du workflow qualité consigné
-  dans `docs/qualite.md`.
+  section Qualité), `docs/qualite.md`, `docs/feuille-de-route.md`, le site
+  (`site/index.html`, `site/en/index.html`), ainsi que `CONTRIBUTING.md` et
+  `e2e/README.md` pour le compteur de scénarios bout en bout : les mettre à jour
+  quand ils changent. Le décompte des scénarios est la somme des `it(` de
+  `e2e/specs/*.spec.js` (source de vérité, gardée par
+  `scripts/tests/compteur-scenarios-e2e.sh`). Les badges « couverture » et
+  « mutants » des README sont statiques eux aussi : ils suivent le relevé du
+  workflow qualité consigné dans `docs/qualite.md`.
 
 ## Sécurité et secrets
 
@@ -120,6 +123,7 @@ Les commentaires de code expliquent le **pourquoi** et l'histoire du cas
 
 ## Format des commits
 
-`type(portée): résumé en français` (fix, feat, test, ci, docs, build,
-refactor), corps qui raconte la cause et la décision. Signature
-`Co-Authored-By` de Claude quand Claude écrit. Détails dans `CONTRIBUTING.md`.
+`type(portée): résumé en français`, corps qui raconte la cause et la décision.
+Signature `Co-Authored-By` de Claude quand Claude écrit. Liste des types et
+détails dans `CONTRIBUTING.md` (source unique, pour éviter deux listes qui
+divergent).

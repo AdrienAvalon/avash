@@ -37,6 +37,11 @@ struct TestSshServer {
     connexions: Arc<std::sync::atomic::AtomicUsize>,
     /// Partagé avec chaque session ouverte, pour les tests de bornage du flux.
     inondation: EtatInondation,
+    /// Dernier nom d'utilisateur reçu par CETTE instance (auth par mot de passe
+    /// ou clavier). Porté par serveur — non plus par un global partagé — pour
+    /// qu'un test ne lise pas le nom posé par le serveur d'un test parallèle.
+    /// Trouvé par l'audit du 8 septembre 2026.
+    dernier_utilisateur: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl russh::server::Server for TestSshServer {
@@ -46,6 +51,7 @@ impl russh::server::Server for TestSshServer {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         TestSshSession {
             inondation: self.inondation.clone(),
+            dernier_utilisateur: self.dernier_utilisateur.clone(),
             ..Default::default()
         }
     }
@@ -59,6 +65,13 @@ struct TestSshSession {
     sftp_channels: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
     /// État d'inondation partagé avec le serveur (tests de bornage du flux).
     inondation: EtatInondation,
+    /// Utilisateur authentifié sur cette connexion, retenu pour `agent_request`
+    /// (qui ne reçoit pas le nom) : « sans-agent » simule `AllowAgentForwarding
+    /// no`. Audit du 7 septembre 2026.
+    user: Option<String>,
+    /// Handle partagé avec le serveur : dernier nom reçu, lisible par le test
+    /// qui a lancé CE serveur (voir `spawn_test_sshd_observe`).
+    dernier_utilisateur: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl russh::server::Handler for TestSshSession {
@@ -69,6 +82,7 @@ impl russh::server::Handler for TestSshSession {
         user: &str,
         _key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
+        self.user = Some(user.to_owned());
         // Les comptes « pam-* » refusent la clé : sans quoi le test
         // n'atteindrait jamais keyboard-interactive.
         if user.starts_with("pam-") {
@@ -118,7 +132,7 @@ impl russh::server::Handler for TestSshSession {
                 prompts: prompts.into(),
             });
         };
-        *DERNIER_UTILISATEUR.lock().unwrap() = Some(user.to_owned());
+        *self.dernier_utilisateur.lock().unwrap() = Some(user.to_owned());
         let attendu = b"le-bon".as_slice();
         let toutes_bonnes = r.all(|rep| rep == attendu);
         if toutes_bonnes {
@@ -129,6 +143,7 @@ impl russh::server::Handler for TestSshSession {
     }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        self.user = Some(user.to_owned());
         // Les comptes « pam-* » n'acceptent PAS le mot de passe simple : c'est
         // ce qui force le repli vers keyboard-interactive.
         if user.starts_with("pam-") {
@@ -137,7 +152,7 @@ impl russh::server::Handler for TestSshSession {
         // Consigné tel quel : c'est ce que le serveur voit réellement, et le
         // seul moyen de vérifier qu'un nom de domaine « DOMAINE\\utilisateur »
         // traverse la chaîne sans être abîmé.
-        *DERNIER_UTILISATEUR.lock().unwrap() = Some(user.to_owned());
+        *self.dernier_utilisateur.lock().unwrap() = Some(user.to_owned());
         // « refuse » n'accepte qu'un mot de passe précis : de quoi distinguer
         // « il en faut un » de « celui-ci est mauvais ».
         if user == "refuse" && password != "le-bon" {
@@ -294,6 +309,36 @@ impl russh::server::Handler for TestSshSession {
     ) -> Result<(), Self::Error> {
         let _ = session.channel_success(channel_id);
         Ok(())
+    }
+
+    /// Redirection d'agent (`auth-agent-req@openssh.com`).
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : `run_avec_agent` avalait le
+    /// refus du serveur. « sans-agent » simule un serveur durci
+    /// `AllowAgentForwarding no` ; tout autre compte l'accepte.
+    ///
+    /// ⚠️ russh 0.63 : le DÉFAUT de `agent_request` (rendre un `bool`) répond
+    /// par un message GLOBAL `REQUEST_SUCCESS`/`REQUEST_FAILURE`
+    /// (`server/session.rs`), JAMAIS par un `CHANNEL_SUCCESS`/`CHANNEL_FAILURE` —
+    /// le client ne le voit pas sur le
+    /// canal (il dépile `open_global_requests`, vide ici). Un simulacre qui se
+    /// contenterait de rendre `Ok(user != "sans-agent")` n'émettrait donc aucun
+    /// verdict de canal, et l'attente bornée de `run_avec_agent` filerait droit
+    /// au délai de garde dans les deux cas. On appelle donc explicitement
+    /// `channel_success`/`channel_failure` (ce que prescrit la doc de
+    /// `Handler::agent_request`) et on rend `Ok(true)` pour ne pas pousser en
+    /// plus un `REQUEST_FAILURE` global contradictoire.
+    async fn agent_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        if self.user.as_deref() == Some("sans-agent") {
+            let _ = session.channel_failure(channel);
+        } else {
+            let _ = session.channel_success(channel);
+        }
+        Ok(true)
     }
 
     async fn data(
@@ -1068,10 +1113,6 @@ impl russh_sftp::server::Handler for TestSftpSession {
 static GROS_FICHIER: std::sync::LazyLock<Vec<u8>> =
     std::sync::LazyLock::new(|| (0..400 * 1024u32).map(|i| (i % 251) as u8).collect());
 
-/// Dernier nom d'utilisateur reçu par le serveur de test, en authentification
-/// par mot de passe. Un seul serveur à la fois pour les tests qui s'en servent.
-static DERNIER_UTILISATEUR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
 // ---------- Harnais de test ----------
 
 /// Clé d'hôte UNIQUE pour tous les serveurs de test.
@@ -1110,6 +1151,26 @@ async fn spawn_test_sshd_compte() -> (u16, Arc<std::sync::atomic::AtomicUsize>) 
         let _ = server.run_on_socket(config, &listener).await;
     });
     (port, connexions)
+}
+
+/// Comme `spawn_test_sshd`, avec le handle « dernier utilisateur reçu » de CE
+/// serveur : un test qui l'observe ne lit plus le nom posé par un autre serveur
+/// de test tournant en parallèle.
+async fn spawn_test_sshd_observe() -> (u16, Arc<std::sync::Mutex<Option<String>>>) {
+    let config = Arc::new(russh::server::Config {
+        keys: vec![CLE_HOTE.clone()],
+        ..Default::default()
+    });
+    let mut server = TestSshServer::default();
+    let dernier = server.dernier_utilisateur.clone();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = server.run_on_socket(config, &listener).await;
+    });
+    (port, dernier)
 }
 
 /// Comme `spawn_test_sshd`, avec l'état d'inondation partagé de ce serveur,
@@ -1173,10 +1234,11 @@ fn temp_key_path() -> std::path::PathBuf {
 /// un fichier en cours d'écriture.
 #[test]
 fn la_cle_de_test_est_generee_une_fois_meme_en_parallele() {
-    let chemins: Vec<_> = (0..8)
-        .map(|_| std::thread::spawn(temp_key_path))
-        .map(|h| h.join().unwrap())
-        .collect();
+    // Lancer les huit fils AVANT d'en joindre aucun : un `.map(spawn).map(join)`
+    // paresseux joignait chaque fil avant de lancer le suivant, donc rien de
+    // parallèle. Trouvé par l'audit du 8 septembre 2026.
+    let fils: Vec<_> = (0..8).map(|_| std::thread::spawn(temp_key_path)).collect();
+    let chemins: Vec<_> = fils.into_iter().map(|h| h.join().unwrap()).collect();
     assert!(
         chemins.iter().all(|c| c == &chemins[0]),
         "chemins : {chemins:?}"
@@ -1520,10 +1582,20 @@ async fn changed_host_key_is_refused() {
         .err()
         .expect("une cle d'hote modifiee doit etre refusee");
 
-    // Le leurre ne doit pas survivre au test : le port sera réattribué à un
-    // autre serveur de test, qui porte la clé commune — il passerait alors pour
-    // une interception, dans un test qui n'a rien à voir.
-    let _ = avash::ssh::forget_host_key_at("127.0.0.1", port, &known_hosts);
+    // Trouvé par l'audit du 8 septembre 2026 : on nettoyait par
+    // `forget_host_key_at`, une réécriture complète du `known_hosts` PARTAGÉ qui
+    // court avec les `learn_known_hosts_path` (ajouts) des tests parallèles et
+    // pouvait en perdre. On APPREND plutôt la vraie clé du serveur pour ce port
+    // (un simple ajout) : `juger_cle_hote` accepte une clé parmi plusieurs, donc
+    // un futur serveur de test qui hérite du port est reconnu, et le leurre peut
+    // rester sans nuire.
+    russh::keys::known_hosts::learn_known_hosts_path(
+        "127.0.0.1",
+        port,
+        CLE_HOTE.public_key(),
+        &known_hosts,
+    )
+    .expect("apprentissage de la vraie clé");
 
     // Le message doit etre exploitable tel quel dans l'interface : un
     // "Unknown key" opaque ne dit pas a l'utilisateur ce qui se passe ni quoi
@@ -1922,6 +1994,52 @@ async fn un_telechargement_qui_echoue_ne_touche_pas_le_fichier_local() {
     sftp.close().await.unwrap();
 }
 
+/// Quand le renommage final échoue, l'erreur dit où est le fichier complet et
+/// le `.part` reste.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : le transfert termine par
+/// `rename(.part, cible)`. Sous Windows, ce remplacement échoue par violation de
+/// partage si la cible est ouverte ailleurs sans `FILE_SHARE_DELETE` (Acrobat,
+/// Excel, un aperçu de l'Explorateur) ou porte l'attribut lecture seule : le
+/// transfert est pourtant COMPLET (tout entier dans le `.part`), mais l'échec
+/// était annoncé sans un mot sur le `.part` laissé à côté, transfert à 100 %
+/// affiché en erreur. On force ici le même échec sous Unix — cible finale qui
+/// est un répertoire, `rename` d'un fichier dessus rend EISDIR — et l'on exige
+/// que l'erreur pointe le `.part` et que ce `.part` complet survive.
+#[tokio::test]
+async fn un_renommage_final_impossible_pointe_le_part_complet() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    // `/srv/fichier.txt` est petit : chemin séquentiel de `download_with`.
+    let local = std::env::temp_dir().join(format!("avash-verrou-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&local);
+    let _ = std::fs::remove_file(&local);
+    std::fs::create_dir(&local).unwrap();
+
+    let issue = sftp
+        .download_with("/srv/fichier.txt", &local, |_, _| {})
+        .await;
+
+    let e = issue.expect_err("le renommage vers un répertoire aurait dû échouer");
+    let msg = format!("{e:#}");
+    assert!(
+        msg.contains("le fichier complet est dans"),
+        "l'erreur ne dit pas où est le fichier complet : {msg}"
+    );
+    // Le `.part` porte le transfert complet et n'a pas été supprimé.
+    let partiel = std::path::PathBuf::from(format!("{}.part", local.display()));
+    assert_eq!(
+        std::fs::read(&partiel).unwrap(),
+        b"CONTENU-FICHIER-TEST",
+        "le .part complet doit rester à côté de la cible"
+    );
+
+    let _ = std::fs::remove_file(&partiel);
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
+
 /// Le téléchargement en bandes parallèles doit rendre EXACTEMENT le fichier.
 ///
 /// `File` de russh-sftp n'émet qu'une requête de lecture à la fois : le débit
@@ -2152,9 +2270,8 @@ async fn un_petit_fichier_qui_a_grossi_reste_un_succes() {
 /// sans que rien n'indique pourquoi.
 #[tokio::test]
 async fn un_compte_de_domaine_arrive_intact_au_serveur() {
-    let port = spawn_test_sshd().await;
+    let (port, dernier) = spawn_test_sshd_observe().await;
     let _home = virtual_home();
-    *DERNIER_UTILISATEUR.lock().unwrap() = None;
 
     let auth = avash::ssh::ClientAuth {
         user: "TEST\\Adrien".into(),
@@ -2166,7 +2283,7 @@ async fn un_compte_de_domaine_arrive_intact_au_serveur() {
         .expect("connexion");
 
     assert_eq!(
-        DERNIER_UTILISATEUR.lock().unwrap().as_deref(),
+        dernier.lock().unwrap().as_deref(),
         Some("TEST\\Adrien"),
         "le nom de domaine n'est pas arrivé intact"
     );
@@ -2919,10 +3036,27 @@ async fn un_dossier_se_relaie_d_un_serveur_a_l_autre() {
     fs_poser("/fs/relais/src/sous/y.txt", b"y");
     let source = sftp_de_test().await;
     let cible = sftp_de_test().await;
+    let temp = std::env::temp_dir();
     let mut dernier = avash::sftp::Avancement::default();
+    // Trouvé par l'audit du 8 septembre 2026 : on ne vérifiait l'absence de
+    // `.part` local qu'APRÈS le transfert — un relais qui passerait par le
+    // disque puis nettoierait resterait vert. On OBSERVE donc pendant le
+    // transfert : à chaque progression, aucun `*.part` du relais ne doit
+    // apparaître dans le répertoire temporaire (le fichier fait 300 Kio, donc
+    // plusieurs bandes et plusieurs rappels).
+    let mut vu_part_en_vol = false;
     let n = source
         .relayer_dir_vers("/fs/relais/src", &cible, "/fs/relais/dst", None, |a| {
             dernier = a;
+            if let Ok(entrees) = std::fs::read_dir(&temp) {
+                if entrees.flatten().any(|e| {
+                    let nom = e.file_name();
+                    let nom = nom.to_string_lossy();
+                    nom.contains("x.bin.part") || nom.contains("y.txt.part")
+                }) {
+                    vu_part_en_vol = true;
+                }
+            }
         })
         .await
         .unwrap();
@@ -2930,14 +3064,17 @@ async fn un_dossier_se_relaie_d_un_serveur_a_l_autre() {
     assert_eq!(fs_lire("/fs/relais/dst/x.bin").unwrap(), gros);
     assert_eq!(fs_lire("/fs/relais/dst/sous/y.txt").unwrap(), b"y");
     assert_eq!((dernier.termines, dernier.nombre), (2, 2));
-    // Rien sur le disque du poste : aucun .part n'a été créé pour ce relais.
-    let temp = std::env::temp_dir();
+    assert!(
+        !vu_part_en_vol,
+        "le relais a écrit un .part sur le disque du poste pendant le transfert"
+    );
+    // Et rien ne subsiste après coup non plus.
     assert!(
         !std::fs::read_dir(&temp)
             .unwrap()
             .flatten()
             .any(|e| e.file_name().to_string_lossy().contains("x.bin.part")),
-        "le relais a écrit sur le disque du poste"
+        "le relais a laissé un .part sur le disque du poste"
     );
     source.close().await.unwrap();
     cible.close().await.unwrap();
@@ -3131,6 +3268,56 @@ async fn run_avec_agent_echoue_quand_le_canal_ferme_sans_statut() {
         .await
         .unwrap();
     assert_eq!(code, 3);
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : `run_avec_agent` faisait
+/// `agent_forward(true)` sans consommer le verdict du serveur, et la boucle exec
+/// ignorait `ChannelMsg::Failure` (`_ => {}`). Contre un serveur durci
+/// `AllowAgentForwarding no` (`CHANNEL_FAILURE`), le refus était avalé :
+/// Avash
+/// lançait quand même `scp … autre:`, qui échouait « Permission denied » en
+/// accusant la clé, jamais le refus de redirection. Le verdict est désormais
+/// consommé AVANT `exec` : un refus rend une erreur qui nomme la vraie cause,
+/// une acceptation laisse la commande se dérouler normalement.
+///
+/// Le simulacre émet un vrai `CHANNEL_SUCCESS`/`CHANNEL_FAILURE` dans
+/// `agent_request`
+/// (« sans-agent » = refus) : le défaut de russh 0.63 répondrait par un message
+/// GLOBAL invisible du client, jamais par un verdict de canal (cf. le
+/// commentaire du handler).
+#[tokio::test]
+async fn run_avec_agent_signale_le_refus_de_redirection_d_agent() {
+    let port = spawn_test_sshd().await;
+    // Compte refusé pour la redirection : le serveur répond CHANNEL_FAILURE.
+    let auth_refuse = avash::ssh::ClientAuth {
+        user: "sans-agent".into(),
+        key_path: Some(temp_key_path()),
+        password: None,
+    };
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth_refuse)
+        .await
+        .expect("connexion");
+    let err = session
+        .run_avec_agent("true", None)
+        .await
+        .expect_err("un refus de redirection d'agent doit échouer");
+    assert!(
+        err.to_string().contains("refuse la redirection d'agent"),
+        "le message doit nommer le refus de redirection, pas la clé : {err}"
+    );
+
+    // Le chemin passant, lui, se déroule : le serveur accepte la redirection
+    // (CHANNEL_SUCCESS) et la commande rend sa sortie et son code.
+    let auth_ok = test_auth();
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth_ok)
+        .await
+        .expect("connexion");
+    let (out, code) = session
+        .run_avec_agent("echo ok ; exit 5", None)
+        .await
+        .expect("une redirection acceptée laisse la commande aboutir");
+    assert_eq!(code, 5);
+    assert!(out.contains("CMD:echo"), "sortie inattendue : {out}");
 }
 
 /// Se déconnecter ferme la session, et `is_closed` le dit.

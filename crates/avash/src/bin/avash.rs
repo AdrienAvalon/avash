@@ -1,5 +1,5 @@
 //! Avash CLI v0.1 — liste les hôtes de ~/.ssh/config.
-//! Usage : avash [list|connect ALIAS|run ALIAS CMD]
+//! Usage : avash [list|run ALIAS CMD]
 
 use avash::parse_ssh_config;
 
@@ -15,10 +15,18 @@ fn main() -> anyhow::Result<()> {
             let alias = args
                 .get(2)
                 .ok_or_else(|| anyhow::anyhow!("Usage : avash run ALIAS 'commande'"))?;
+            // Trouvé par l'audit du 7 septembre 2026 : `args.get(3..)` renvoie
+            // `Some(&[])` dès que `args[2]` existe, donc l'ancien
+            // `ok_or_else("Commande manquante")` était mort et `avash run prod`
+            // exécutait `""` sur le serveur (sortie vide, code 0). On refuse
+            // aussi une commande faite uniquement d'arguments vides ou d'espaces
+            // (`avash run prod ""`). Ce garde-fou passe avant toute résolution
+            // d'hôte : `avash run prod` échoue sans tentative réseau.
             let command = args
                 .get(3..)
+                .filter(|s| !s.iter().all(|a| a.trim().is_empty()))
                 .map(|s| s.join(" "))
-                .ok_or_else(|| anyhow::anyhow!("Commande manquante"))?;
+                .ok_or_else(|| anyhow::anyhow!("Usage : avash run ALIAS 'commande'"))?;
             // `resoudre_hote` : `avash run` doit appliquer les valeurs par
             // défaut d'un `Host *` (User, IdentityFile, Port), comme `ssh`.
             let host = avash::resoudre_hote(alias)

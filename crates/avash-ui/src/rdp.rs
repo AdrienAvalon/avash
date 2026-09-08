@@ -72,8 +72,8 @@ pub(crate) fn sidecar_path() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Lance le sidecar et renvoie le WebSocket (port + jeton) qu'il annonce.
 #[allow(clippy::too_many_arguments)]
+/// Lance le sidecar et renvoie le WebSocket (port + jeton) qu'il annonce.
 /// Ouvre un bureau distant.
 ///
 /// `password` est le mot de passe saisi à l'instant, s'il y en a un. Vide pour
@@ -97,6 +97,10 @@ pub async fn rdp_open(
     password: String,
     width: u16,
     height: u16,
+    // Échelle DPI (`devicePixelRatio` × 100) annoncée au serveur RDP quand la
+    // définition est négociée en pixels physiques (HiDPI). Transmise telle
+    // quelle au sidecar par `--scale`. Ajouté par l'audit du 7 septembre 2026.
+    desktop_scale_factor: u32,
     sans_nla: bool,
     vnc: bool,
     sans_son: bool,
@@ -149,6 +153,8 @@ pub async fn rdp_open(
         &width.to_string(),
         "--height",
         &height.to_string(),
+        "--scale",
+        &desktop_scale_factor.to_string(),
     ])
     // Le son du bureau distant se coupe dans la palette : le processus
     // n'annonce alors pas le canal, plutôt que de recevoir pour rien.
@@ -421,10 +427,6 @@ fn compte_encore_utilise(hosts: &[RdpHost], id_exclu: &str, compte: &str) -> boo
         .any(|h| h.compte_trousseau() == compte)
 }
 
-/// Cree (`id` absent) ou modifie une connexion RDP enregistree.
-///
-/// `protocole` : « rdp » (défaut) ou « vnc ».
-#[allow(clippy::too_many_arguments)]
 /// Les options du sidecar, dans l'ordre : chacune n'apparaît que demandée.
 fn drapeaux(sans_nla: bool, vnc: bool, sans_son: bool, partage: Option<&str>) -> Vec<String> {
     let mut v = Vec::new();
@@ -484,6 +486,9 @@ fn dossier_partage(partage: Option<String>) -> Result<Option<String>, String> {
     Ok(partage)
 }
 
+/// Cree (`id` absent) ou modifie une connexion RDP enregistree.
+///
+/// `protocole` : « rdp » (défaut) ou « vnc ».
 // Une commande Tauri reflète les champs de la fiche, un par argument.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -723,6 +728,7 @@ mod tests_ouverture {
             "p".into(),
             800,
             600,
+            100,
             false,
             false,
             false,
@@ -752,6 +758,7 @@ mod tests_ouverture {
                 "p".into(),
                 800,
                 600,
+                100,
                 false,
                 false,
                 false,
@@ -780,6 +787,7 @@ mod tests_ouverture {
             "p".into(),
             800,
             600,
+            100,
             false,
             true,
             false,
@@ -901,6 +909,44 @@ mod tests_compte_partage {
         assert!(
             !compte_encore_utilise(&[b], "a", &compte),
             "port 3390 distinct : compte différent"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_placement_attributs {
+    /// Trouvé par l'audit du 7 septembre 2026 : un attribut (`#[allow(...)]`,
+    /// `#[tauri::command]`…) glissé ENTRE deux lignes `///` sépare un bloc de
+    /// doc de son item. Rustdoc rattache alors ce premier `///` à l'item qui
+    /// suit : ici la doc de `rdp_host_save` (« Cree… / `protocole` : … ») s'était
+    /// collée à la fonction privée `drapeaux`, qui n'a ni création ni protocole,
+    /// et `rdp_host_save` se retrouvait sans doc. Vestige d'un déplacement de
+    /// code. La règle : l'attribut précède TOUS les `///` de l'item. Ce garde
+    /// relit le source et refuse le motif ; aucun test de comportement ne le voit.
+    #[test]
+    fn aucun_attribut_intercale_entre_deux_blocs_de_doc() {
+        let lignes: Vec<&str> = include_str!("rdp.rs").lines().collect();
+        let precedent_non_vide = |i: usize| (0..i).rev().find(|&j| !lignes[j].trim().is_empty());
+        let suivant_non_vide =
+            |i: usize| (i + 1..lignes.len()).find(|&j| !lignes[j].trim().is_empty());
+
+        let mut fautes = Vec::new();
+        for (i, ligne) in lignes.iter().enumerate() {
+            if !ligne.trim().starts_with("#[") {
+                continue;
+            }
+            let avant_est_doc =
+                precedent_non_vide(i).is_some_and(|j| lignes[j].trim().starts_with("///"));
+            let apres_est_doc =
+                suivant_non_vide(i).is_some_and(|j| lignes[j].trim().starts_with("///"));
+            if avant_est_doc && apres_est_doc {
+                fautes.push(i + 1); // ligne 1-indexée, comme un éditeur l'affiche
+            }
+        }
+        assert!(
+            fautes.is_empty(),
+            "attribut(s) intercalé(s) entre deux blocs `///`, ligne(s) {fautes:?} : \
+             l'attribut doit précéder tous les `///` de l'item"
         );
     }
 }

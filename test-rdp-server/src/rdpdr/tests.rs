@@ -1378,3 +1378,44 @@ fn un_client_sans_lecteur_laisse_le_scenario_inerte() {
     assert!(!serveur.termine());
     let _ = fs::remove_dir_all(&racine);
 }
+
+// Trouvé par l'audit du 8 septembre 2026 : test-rdp-server/Cargo.toml était le
+// seul manifeste du dépôt sans `publish = false` ni licence, alors qu'il embarque
+// du code AGPL du dépôt et une copie modifiée d'ironrdp-server. `cargo publish`
+// lancé par mégarde n'était pas refusé, et `cargo metadata` ne portait aucune
+// licence. Ce test lit le manifeste du paquet et exige les trois champs.
+#[test]
+fn le_manifeste_interdit_la_publication_et_porte_une_licence() {
+    let manifeste = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .expect("lecture de Cargo.toml");
+    // On ne regarde que la section [package] : le bloc [patch.crates-io] cite
+    // ironrdp-server (MIT OR Apache-2.0), dont la licence ne qualifie pas ce
+    // paquet-ci.
+    let package = manifeste
+        .strip_prefix("[package]")
+        .expect("le manifeste commence par [package]")
+        .split("\n[")
+        .next()
+        .expect("section [package]");
+    // On ne regarde que les lignes de directive (pas les commentaires) : le bloc
+    // de commentaire ci-dessus cite « publish = false », un simple `contains`
+    // passerait donc même sans la vraie clé.
+    let directives = || {
+        package
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| !l.starts_with('#'))
+    };
+    assert!(
+        directives().any(|l| l.starts_with("publish = false")),
+        "le manifeste doit déclarer publish = false : {package}"
+    );
+    assert!(
+        directives().any(|l| l.starts_with("license = \"AGPL-3.0-or-later\"")),
+        "le manifeste doit déclarer la licence AGPL du dépôt : {package}"
+    );
+    assert!(
+        directives().any(|l| l.starts_with("description = ")),
+        "le manifeste doit porter une description : {package}"
+    );
+}

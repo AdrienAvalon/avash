@@ -22,7 +22,13 @@ cask "avash" do
 
   app "Avash.app"
 
+  # Trouvé par l'audit du 7 septembre 2026 : les trois répertoires
+  # `dev.avash.app` ne couvrent que l'état de la webview Tauri. Le cœur range
+  # le sien (bureaux RDP, tunnels, snippets, empreintes TOFU, enregistrements)
+  # sous `config_dir()/avash`, soit `~/Library/Application Support/avash` sur
+  # macOS ; sans cette ligne, `brew uninstall --zap` le laissait sur le disque.
   zap trash: [
+    "~/Library/Application Support/avash",
     "~/Library/Application Support/dev.avash.app",
     "~/Library/Caches/dev.avash.app",
     "~/Library/WebKit/dev.avash.app",

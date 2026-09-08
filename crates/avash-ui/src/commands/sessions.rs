@@ -367,9 +367,14 @@ impl Utf8Stream {
 /// Cet id d'onglet porte-t-il desormais une session plus recente que `epoch` ?
 ///
 /// Le front renumerote ses onglets a chaque rechargement de fenetre : un id
-/// peut donc etre reattribue alors que l'ancienne session vit encore. Le pump
-/// evince s'en sert pour ne pas emettre un `pty-closed` qui fermerait le
-/// nouvel onglet.
+/// peut donc etre reattribue alors que l'ancienne session vit encore ; fermer
+/// alors l'ancienne fermerait le nouvel onglet.
+///
+/// `clore_session` fait desormais ce test SOUS le meme verrou que le retrait
+/// (l'audit du 7 septembre 2026 a montre qu'un test relache puis un retrait
+/// repris laissaient une session s'inserer entre les deux). Cette fonction ne
+/// sert plus qu'aux tests, qui verifient l'invariant d'eviction a part.
+#[cfg(test)]
 pub(crate) fn is_superseded<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epoch: u64) -> bool {
     use tauri::Manager as _;
     app.state::<SessionStore>()
@@ -421,21 +426,55 @@ async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &S
 ///
 /// Rien n'est fait si cet identifiant porte déjà une session plus récente : on
 /// fermerait le nouvel onglet.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : le test d'époque et le retrait se
+/// faisaient sous DEUX prises de verrou distinctes (`is_superseded` relâchait,
+/// `remove` reprenait). Entre les deux, `enregistrer_session` pouvait insérer
+/// une session plus récente sous le même id : `clore_session` la retirait alors
+/// à sa place et émettait `pty-closed` pour elle, coupant une session que le
+/// front croyait vivante (renumérotation après rechargement de la webview). Le
+/// test d'époque et le retrait tiennent désormais le même verrou.
 pub(crate) fn clore_session<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epoch: u64) {
     use tauri::Manager as _;
-    if is_superseded(app, sid, epoch) {
-        return;
-    }
-    let retire = app
-        .state::<SessionStore>()
-        .inner
-        .lock()
-        .unwrap()
-        .remove(&sid);
+    let store = app.state::<SessionStore>();
+    let retire = {
+        let mut inner = store.inner.lock().unwrap();
+        // Cet id porte-t-il déjà une session plus récente ? Si oui, on la laisse.
+        if inner.get(&sid).is_some_and(|h| h.epoch != epoch) {
+            return;
+        }
+        inner.remove(&sid)
+    };
+    // La poignée retirée est finalisée puis lâchée HORS du verrou (comme
+    // `enregistrer_session`) : son `Drop` ferme des canaux et pourrait
+    // retoucher le magasin. On n'annonce `pty-closed` que si l'on a réellement
+    // retiré quelque chose : sinon on fermerait un onglet qu'on n'a pas fermé.
     if let Some(h) = retire {
         finaliser_enregistrement(app, sid, &h.enregistreur);
+        let _ = app.emit("pty-closed", serde_json::json!({ "id": sid }));
     }
-    let _ = app.emit("pty-closed", serde_json::json!({ "id": sid }));
+}
+
+/// Ferme l'onglet une fois le pump terminé : retrait du magasin et `pty-closed`
+/// d'abord, envoi du paquet SSH `disconnect` ensuite.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : dans l'ordre inverse, une copie
+/// directe (scp) encore en cours retenait le verrou asynchrone de la session
+/// (voir `executeur`), et `disconnect().await` — donc le retrait et
+/// `pty-closed` — attendait la fin de la copie, potentiellement des minutes.
+/// Shell mort, l'onglet restait pourtant listé « connecté » par `open_sessions`,
+/// et chaque frappe rendait « channel closed » alors que le voyant disait
+/// « live ». `clore_session` ne touche que le verrou synchrone du magasin : le
+/// faire en premier ferme l'onglet tout de suite ; la copie va jusqu'à son
+/// terme, puis le `disconnect` part.
+pub(crate) async fn fermer_onglet_apres_pump<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    sid: u64,
+    epoch: u64,
+    deconnexion: impl std::future::Future<Output = ()>,
+) {
+    clore_session(app, sid, epoch);
+    deconnexion.await;
 }
 
 /// Ferme proprement l'enregistrement d'un onglet qu'on quitte, et signale au
@@ -519,8 +558,12 @@ async fn etablir(
 
 /// La session SSH d'un onglet, partagée entre le pump du terminal, qui la
 /// garde vivante et la ferme à la fin, et le panneau SFTP, qui y ouvre son
-/// canal. Un verrou asynchrone : on ne le tient que pour ouvrir un canal ou
-/// lancer la sonde d'OS, jamais pendant le relais des octets.
+/// canal. Un verrou asynchrone : le relais des octets ne le tient jamais.
+/// Ouvrir un canal ou lancer la sonde d'OS ne le tient qu'un instant ; une
+/// commande à agent redirigé (copie directe) le tient en revanche toute sa
+/// durée, ce qui sérialise ces commandes (voir `executeur`). La fermeture de
+/// l'onglet, elle, ne passe jamais par ce verrou (voir
+/// `fermer_onglet_apres_pump`).
 type SessionPartagee = std::sync::Arc<tokio::sync::Mutex<AvashSession>>;
 
 /// Le canal SFTP de l'onglet s'ouvrira sur cette session-là.
@@ -539,7 +582,17 @@ fn ouvreur_sftp(session: &SessionPartagee) -> OuvreurSftp {
 
 /// Exécute une commande sur la session de l'onglet, avec l'agent SSH du
 /// poste redirigé le temps de la commande (copie directe d'un hôte à un
-/// autre). Le verrou de la session n'est tenu que pour ouvrir le canal.
+/// autre).
+///
+/// Trouvé par l'audit du 7 septembre 2026 : le verrou de la session est tenu
+/// pendant TOUTE la commande, pas seulement le temps d'ouvrir le canal (le
+/// commentaire l'affirmait à tort). C'est voulu et load-bearing : `agent_redirige`
+/// est un booléen partagé que la garde de `run_avec_agent` remet à faux en
+/// sortant ; deux commandes concurrentes se couperaient l'agent l'une à l'autre.
+/// Tenir le verrou les sérialise donc. En contrepartie une copie de plusieurs
+/// minutes retient le verrou d'autant, ce qui ne doit PAS retarder la fermeture
+/// de l'onglet — d'où `fermer_onglet_apres_pump`, qui retire l'onglet et émet
+/// `pty-closed` sans passer par ce verrou.
 fn executeur(session: &SessionPartagee) -> Executeur {
     let session = session.clone();
     std::sync::Arc::new(move |commande: String, annulation| {
@@ -748,11 +801,15 @@ async fn open_on_target(
             probe_and_emit_os(&app2, sid, label_for_event, &session),
             relayer_sortie(&app2, sid, out_rx, enregistreur)
         );
-        // La session distante s'est terminee (exit, coupure, kill). On ne
-        // l'annonce que si cet id ne porte pas deja une session plus recente
-        // (voir `is_superseded`), sinon on fermerait le nouvel onglet.
-        let _ = session.lock().await.disconnect().await;
-        clore_session(&app2, sid, pump_epoch);
+        // La session distante s'est terminee (exit, coupure, kill). On retire
+        // l'onglet et on emet `pty-closed` AVANT d'envoyer le `disconnect` SSH,
+        // qui peut attendre une copie directe encore en cours (voir
+        // `fermer_onglet_apres_pump`). Le garde d'epoque de `clore_session` evite
+        // de fermer un onglet plus recent reattribue au meme id.
+        fermer_onglet_apres_pump(&app2, sid, pump_epoch, async move {
+            let _ = session.lock().await.disconnect().await;
+        })
+        .await;
     });
 
     Ok(label)

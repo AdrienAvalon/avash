@@ -343,6 +343,7 @@ version = "0.9.2"
 dependencies = [
  "avash",
  "open",
+ "pageant",
  "serde",
  "serde_json",
  "tauri",

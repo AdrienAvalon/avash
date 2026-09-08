@@ -68,6 +68,21 @@ async function tunnelsRefresh() {
 
 export function renderTunnels() {
   const list = $("tunnel-list");
+  // Trouvé par l'audit du 7 septembre 2026 : ce redessin (rappelé toutes les
+  // 1,5 s par le minuteur, et juste après un clic par tunnelStart /
+  // tunnelsRefresh) vide la liste et recrée chaque ligne. Le bouton focalisé au
+  // clavier était détruit, le focus retombait sur <body> et le piège de focus
+  // de la modale renvoyait le Tab suivant en haut — impossible d'atteindre une
+  // ligne basse sans se dépêcher. Le filet générique de dialogues.ts ne couvre
+  // pas ce cas (il ne mémorise que le focus HORS .modal-backdrop). On note donc
+  // la ligne (data-id) et l'action (data-act) du bouton focalisé pour le
+  // refocaliser après reconstruction.
+  const btnActif = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
+    "#tunnel-list .tunnel-row [data-act]",
+  );
+  const focalise = btnActif
+    ? { id: btnActif.closest<HTMLElement>("[data-id]")?.dataset.id, act: btnActif.dataset.act }
+    : null;
   list.innerHTML = "";
   // L'hote d'origine en tete, le reste ensuite : on voit d'abord ce pour
   // quoi on a ouvert la modale, sans perdre la vue d'ensemble.
@@ -88,6 +103,7 @@ export function renderTunnels() {
     const running = !!st;
     const alive = !!st?.alive;
     const row = document.createElement("div");
+    row.dataset.id = d.id; // repère de la ligne pour refocaliser après un redessin
     row.className = "tunnel-row" + (running ? (alive ? " alive" : " dead") : "");
     row.innerHTML = `<span class="tdot"></span>
       <div class="tmain">
@@ -147,6 +163,14 @@ export function renderTunnels() {
     edit.addEventListener("click", () => tunnelEdit(d));
     del.addEventListener("click", () => tunnelDelete(d));
     list.appendChild(row);
+  }
+  // Refocaliser le bouton qui l'était avant le vidage (cf. commentaire en tête).
+  // Un bouton désactivé (ligne busy) refuse le focus : on l'ignore alors, l'état
+  // étant transitoire.
+  if (focalise?.id) {
+    list
+      .querySelector<HTMLElement>(`[data-id="${CSS.escape(focalise.id)}"] [data-act="${focalise.act}"]`)
+      ?.focus();
   }
 }
 

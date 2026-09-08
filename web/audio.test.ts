@@ -152,6 +152,29 @@ describe("lecteur audio du bureau distant", () => {
     expect(ContexteFactice.instances).toHaveLength(2);
   });
 
+  it("conserve le volume reçu avant le premier bloc et l'applique à l'ouverture du contexte", () => {
+    // Trouvé par l'audit du 7 septembre 2026 : un serveur Windows envoie
+    // SNDC_VOLUME ([21]) dès la fin de la négociation, avant la première onde.
+    // Le gain n'existant pas encore, la consigne était perdue et le son jouait
+    // à 100 % jusqu'au prochain changement de volume côté serveur.
+    const lecteur = new LecteurAudio();
+    lecteur.volume(0, 0); // avant tout bloc : le serveur veut le muet
+    lecteur.jouer(blocStereo(48));
+    expect(ContexteFactice.instances[0].gain.gain.value).toBe(0);
+  });
+
+  it("garde la consigne de volume à travers une réouverture de contexte", () => {
+    // Même audit : la consigne doit survivre à `fermer()` pour qu'un contexte
+    // recréé reparte au volume voulu, pas à 100 %. Ce chemin n'est pour l'heure
+    // pas atteint par `closeRdp`, mais rien dans le lecteur ne doit l'oublier.
+    const lecteur = new LecteurAudio();
+    lecteur.volume(65535, 0); // gain moyen 0,5
+    lecteur.jouer(blocStereo(48));
+    lecteur.fermer();
+    lecteur.jouer(blocStereo(48)); // rouvre un contexte neuf
+    expect(ContexteFactice.instances[1].gain.gain.value).toBeCloseTo(0.5, 5);
+  });
+
   it("ne bloque rien sur une machine sans audio, ni sur un bloc illisible", () => {
     ContexteFactice.refuser = true;
     const lecteur = new LecteurAudio();

@@ -10,6 +10,8 @@ et — côté Windows — signé pour éviter les alertes.
 | Linux | `Avash-<version>-1.x86_64.rpm` | `dnf install ./Avash-<version>-1.x86_64.rpm` | idem (Fedora, openSUSE) |
 | Windows | `Avash_<version>_x64-setup.exe` (NSIS) | lancer l'installeur | WebView2 (préinstallé Win10 récent / Win11) |
 | Windows | `avash-<version>-windows-x64.zip` | décompresser et lancer, sans installation | WebView2 — garder `avash-rdp.exe` à côté d'`avash.exe` |
+| macOS | `Avash_<version>_aarch64.dmg` | ouvrir l'image, glisser dans Applications | WebView natif de macOS (WKWebView, présent d'origine) |
+| macOS | `Avash.app.tar.gz` (archive de mise à jour) | consommée par le plugin updater, pas installée à la main | idem (Apple Silicon) |
 
 > L'AppImage embarque WebKitGTK et ses dépendances : c'est le seul artefact
 > réellement « copier-coller et ça marche » sur une autre machine.
@@ -172,16 +174,31 @@ suivante, la télécharge et redémarre :
 
 **Publier une mise à jour — la voie normale :**
 
-1. Porter le numéro de version dans les six endroits qui le déclarent :
-   `Cargo.toml` (workspace), les trois `Cargo.toml` de crates, `tauri.conf.json`,
-   `web/package.json`, et `VERSION` dans `.github/workflows/release.yml`.
+1. Porter le numéro de version dans les quatre endroits qui le déclarent :
+   `Cargo.toml` (workspace, dont les deux crates membres héritent par
+   `version.workspace = true`), `rdp-sidecar/Cargo.toml` (hors espace de travail),
+   `tauri.conf.json` et `web/package.json`. Le `VERSION` du workflow Release se
+   dérive tout seul du tag (`${GITHUB_REF_NAME#v}`) : rien à y toucher.
+   Ajouter aussi l'entrée `<release version="X.Y.Z" date="AAAA-MM-JJ">` en tête
+   du bloc `<releases>` de `packaging/dev.avash.app.metainfo.xml` : l'AUR et
+   Flathub embarquent ce fichier depuis l'archive du tag, et sans elle la
+   logithèque (GNOME Logiciels, KDE Discover) annonce la version précédente
+   comme la plus récente (`appstreamcli` n'y voit rien, la logithèque si).
+   Enfin, régénérer puis **commiter** les deux `Cargo.lock` : sinon les builds
+   `--frozen` du PKGBUILD (AUR) et du manifeste Flathub échouent sur « the lock
+   file needs to be updated but --frozen was passed » (la CI, en `cargo build`
+   simple, les régénère sans le dire, ce qui masque le trou). Deux verrous
+   distincts, le sidecar étant hors espace de travail :
+   `cargo update -w -p avash -p avash-ui` (verrou du workspace) et
+   `cargo update --manifest-path rdp-sidecar/Cargo.toml -p avash-rdp` (celui du
+   sidecar).
 2. Renseigner le `CHANGELOG.md`.
 3. `NO_STRIP=1 ./scripts/release.sh` — valide, construit, et **régénère la
    distribution locale**. Ne pas sauter cette étape : sans elle, on essaie la
    version publiée en ligne pendant que sa propre copie est périmée.
 4. Poser le tag et le pousser : `git tag -a vX.Y.Z -m "…" && git push <remote> vX.Y.Z`.
-   Le workflow fait le reste — les deux plateformes, le manifeste signé, les
-   empreintes, l'attestation, la release.
+   Le workflow fait le reste — les trois plateformes (Linux, Windows, macOS),
+   le manifeste signé, les empreintes, l'attestation, la release.
 
 Le workflow **échoue volontairement** si aucune signature n'est trouvée : un
 manifeste sans signature ferait échouer la mise à jour sans rien dire, ce qui

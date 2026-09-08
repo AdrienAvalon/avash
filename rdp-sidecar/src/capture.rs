@@ -138,7 +138,7 @@ fn peindre_en_attente(
 
 /// Écrit une image décodée en PNG. Partagé avec le rejeu du magnétoscope
 /// (`--rejouer … --image`), qui produit la même image sans réseau.
-pub(crate) fn ecrire_png(image: &DecodedImage, path: &str) -> Result<()> {
+pub fn ecrire_png(image: &DecodedImage, path: &str) -> Result<()> {
     let buf: image::ImageBuffer<image::Rgba<u8>, _> = image::ImageBuffer::from_raw(
         u32::from(image.width()),
         u32::from(image.height()),

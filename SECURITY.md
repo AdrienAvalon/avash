@@ -26,14 +26,16 @@ correctifs de sécurité sont priorisés par rapport aux autres travaux.
 
 ## Versions supportées
 
-| Version | Supportée          |
-|---------|--------------------|
-| 0.6.x   | Oui                |
-| < 0.6   | Non                |
+| Version                  | Supportée |
+|--------------------------|-----------|
+| Dernière version publiée | Oui       |
+| Versions antérieures     | Non       |
 
-Les correctifs de sécurité sont publiés pour la série **0.6.x**, la dernière
-publiée ; une version antérieure se met à jour par la mise à jour automatique
-ou depuis la page des releases.
+Les correctifs de sécurité sont publiés pour la **dernière version publiée** sur
+la [page des releases](https://github.com/AdrienAvalon/avash/releases) ; toute
+version antérieure se met à jour par la mise à jour automatique ou depuis cette
+page. La politique ne cite volontairement aucun numéro : elle suit la dernière
+release et n'a donc pas à être retouchée à chaque publication.
 
 > **La 0.3.0 a corrigé plusieurs défauts sérieux des séries antérieures** — clé
 > d'hôte SSH insuffisamment vérifiée, certificat RDP pas vérifié du tout, repli
@@ -171,7 +173,12 @@ avec la distinction que fait OpenSSH (voir `check_server_key` dans
   (réinstallation du serveur ou interception possible) et l'empreinte SHA-256
   présentée. La clé n'est **jamais réapprise en silence** ;
 - **`known_hosts` illisible, ou certificat d'hôte non validable** : refus par
-  défaut (mieux vaut refuser qu'accepter à l'aveugle).
+  défaut (mieux vaut refuser qu'accepter à l'aveugle) ;
+- **`known_hosts` inécrivable au premier contact** (`~/.ssh` en lecture seule,
+  fichier en 0444, disque plein) : la connexion est **refusée** plutôt
+  qu'acceptée sans enregistrer la clé. C'est un choix fail-closed délibéré, là
+  où `ssh(1)` avertit (« Failed to add the host to the list of known hosts ») et
+  poursuit ; le message nomme le fichier et la cause de l'échec d'écriture.
 
 **L'algorithme n'entre pas en compte dans la décision**, et c'est le point le
 plus important. Le booléen de `check_known_hosts` de russh répond « hôte
@@ -389,6 +396,20 @@ Ce n'est pas une porte dérobée : qui peut poser une variable d'environnement
 dans le processus peut déjà bien davantage (précharger une bibliothèque,
 détourner le `PATH`). C'est documenté ici parce qu'une variable qui change
 l'endroit d'où l'on lit des clés mérite d'être connue, pas cachée.
+
+### `AVASH_TROUSSEAU` : trousseau en mémoire pour les tests
+
+Par défaut, Avash range les mots de passe dans le trousseau du système (Secret
+Service sous Linux, Gestionnaire d'identifiants sous Windows, Trousseau sous
+macOS). Posée à `memoire`, la variable `AVASH_TROUSSEAU` remplace ce trousseau
+par une table en mémoire, cloisonnée par `AVASH_HOME`.
+
+Elle n'existe que pour les tests : sous Linux, `keyring` interroge le vrai
+Secret Service à chaque `load`/`save`/`sonder` (un aller-retour D-Bus), si bien
+que la suite touchait le trousseau réel du poste alors que l'isolation de
+`~/.ssh` laissait croire le contraire. Les helpers de test posent
+`AVASH_TROUSSEAU=memoire` en même temps qu'`AVASH_HOME`. Un binaire publié ne la
+pose jamais : sans elle, le vrai trousseau du système reste seul en usage.
 
 ### Aucune télémétrie
 

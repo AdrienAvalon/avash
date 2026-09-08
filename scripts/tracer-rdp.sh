@@ -16,6 +16,12 @@
 # CredSSP qui porte le mot de passe. Il est écrit dans un répertoire temporaire
 # privé et effacé à la fin ; ne le conservez pas, ne le joignez à aucun rapport.
 #
+# ATTENTION : le mot de passe est poussé au sidecar par stdin, jamais en argument,
+# pour ne pas fuir via /proc/<pid>/cmdline du sidecar. Il reste toutefois le 4e
+# argument DU SCRIPT lui-même : visible dans son propre /proc/cmdline et dans
+# l'historique du shell. Sur un poste partagé, préfixez la commande d'une espace
+# (si l'option `histignorespace` est active) ou passez par le trousseau.
+#
 # Usage : scripts/tracer-rdp.sh <hôte> <port> <user> <mdp> [secondes] [options…]
 # Les options supplémentaires sont transmises telles quelles au processus RDP
 # (par exemple --sans-nla).
@@ -37,8 +43,12 @@ sudo tcpdump -i any -w "$TRAVAIL/flux.pcap" "tcp port $PORT" >/dev/null 2>&1 &
 sleep 2
 
 echo "▸ session de $DUREE s vers $HOTE:$PORT"
-SSLKEYLOGFILE="$TRAVAIL/cles.log" timeout "$DUREE" "$RDP" \
-  --host "$HOTE" --port "$PORT" -u "$USER_" -p "$MDP" "$@" \
+# Le mot de passe est poussé sur stdin (le sidecar le lit quand -p est absent),
+# jamais en argument : trouvé par l'audit du 8 septembre 2026, `-p "$MDP"` laissait
+# le mot de passe du bureau visé dans /proc/<pid>/cmdline pendant toute la session,
+# lisible par tout compte local (`ps -ef | grep avash-rdp`, collecteurs osquery).
+printf '%s\n' "$MDP" | SSLKEYLOGFILE="$TRAVAIL/cles.log" timeout "$DUREE" "$RDP" \
+  --host "$HOTE" --port "$PORT" -u "$USER_" "$@" \
   --width 1024 --height 768 --shot "$TRAVAIL/ecran.png" 2>&1 | sed 's/^/  /' || true
 
 sleep 2

@@ -84,6 +84,79 @@ fn connecteur_exigeant_tls(
         .unwrap()
 }
 
+/// Monteur TLS « identité » : sur un `DuplexStream` (tampon en mémoire),
+/// « passer sous TLS » ne change pas le flux, ce qui suffit à scénariser
+/// `vencrypt()` sans certificat ni pair TLS. Le vrai monteur (vnc.rs) échange le
+/// flux clair contre un flux chiffré ; ici le type `S` reste le même, donc
+/// l'identité convient. Trouvé par l'audit du 7 septembre 2026 : la voie
+/// VeNCrypt du client n'était éprouvée que par la suite bout en bout, jamais en
+/// test unitaire.
+fn upgrader_identite() -> crate::client::connector::TlsUpgrader<DuplexStream> {
+    Box::new(|flux| {
+        Box::pin(async move { Ok(flux) })
+            as std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<DuplexStream, crate::VncError>>
+                        + Send
+                        + Sync,
+                >,
+            >
+    })
+}
+
+/// Comme `connecteur`, mais l'appelant sait monter TLS : le `tls_upgrader` est
+/// posé, donc le client choisit VeNCrypt (type 19) quand le serveur l'offre
+/// (comme vnc.rs le pose en production, inconditionnellement).
+fn connecteur_avec_tls(
+    flux: DuplexStream,
+) -> crate::client::connector::VncState<
+    DuplexStream,
+    impl std::future::Future<Output = Result<String, crate::VncError>> + Send + Sync + 'static,
+> {
+    VncConnector::new(flux)
+        .set_auth_method(async { Ok("secret".to_owned()) })
+        .set_tls_upgrader(upgrader_identite())
+        .add_encoding(VncEncoding::Raw)
+        .set_pixel_format(PixelFormat::rgba())
+        .build()
+        .unwrap()
+}
+
+/// Le `ServerInit` d'un bureau 4×4 sans nom particulier, ce que `VncClient::new`
+/// lit une fois l'authentification (VeNCrypt ou VNC) passée.
+fn server_init_4x4() -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&4u16.to_be_bytes()); // largeur
+    s.extend_from_slice(&4u16.to_be_bytes()); // hauteur
+    s.extend_from_slice(&FORMAT);
+    s.extend_from_slice(&1u32.to_be_bytes()); // longueur du nom
+    s.push(b't');
+    s
+}
+
+/// Comme `serveur_qui_ecoute`, mais le serveur ne lit QUE `a_lire` octets du
+/// client puis ferme le flux : tout `read` du client resté en attente reçoit
+/// alors une fin de flux et le client renonce, au lieu d'attendre à jamais une
+/// réponse que ce serveur figé ne donnera pas. Sert à prouver le choix du
+/// client (les premiers octets) sans risque d'interblocage, quel que soit le
+/// chemin qu'il prend.
+fn serveur_qui_ecoute_borne(
+    script: Vec<u8>,
+    a_lire: usize,
+) -> (DuplexStream, tokio::task::JoinHandle<Vec<u8>>) {
+    let (client, mut serveur) = duplex(1 << 16);
+    let handle = tokio::spawn(async move {
+        serveur.write_all(&script).await.unwrap();
+        let mut recu = vec![0u8; a_lire];
+        tokio::io::AsyncReadExt::read_exact(&mut serveur, &mut recu)
+            .await
+            .unwrap();
+        drop(serveur);
+        recu
+    });
+    (client, handle)
+}
+
 /// Un serveur qui écrit `script`, puis lit tout ce que le client lui envoie
 /// jusqu'à la fermeture du flux, rendu par le `JoinHandle`. Sert à prouver ce
 /// que le client a — ou n'a pas — envoyé avant de renoncer.
@@ -461,4 +534,134 @@ async fn un_indice_de_palette_hors_borne_en_trle_est_une_erreur_pas_une_panique(
             Err(_) => panic!("aucun événement : le décodeur n'a ni abouti ni signalé d'erreur"),
         }
     }
+}
+
+/// VeNCrypt (type 19) doit être préféré à l'authentification VNC en clair
+/// (type 2) quand le serveur offre les deux ET que l'appelant sait monter TLS —
+/// ce qu'attendent les serveurs réels (TigerVNC avec
+/// `SecurityTypes=VeNCrypt,X509Vnc,VncAuth`). Le seul scénario TLS bout en bout
+/// n'offrait qu'un type (19) : il prouvait que le client SAIT faire VeNCrypt,
+/// jamais qu'il le PRÉFÈRE au clair. Une inversion de la condition de
+/// préférence dans `Authenticate` (tester `VncAuth` avant VeNCrypt) ferait
+/// basculer les serveurs réels en clair sans rien faire rougir.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `vencrypt()` n'avait aucun test
+/// unitaire, et le terminateur du serveur de test n'annonçait que le type 19.
+/// La preuve est directe : le premier octet écrit après la version est le type
+/// de sécurité choisi ; il doit valoir 19, pas 2.
+#[tokio::test]
+async fn vencrypt_est_prefere_a_l_auth_vnc_quand_les_deux_sont_offerts() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[2, 2, 19]); // deux types offerts : VncAuth (2) ET VeNCrypt (19)
+    s.extend_from_slice(&[0, 2]); // version VeNCrypt du serveur : 0.2
+    s.push(1); // ack de version ≠ 0 : le client renonce ici, après avoir choisi
+               // Le serveur lit la version (12 o) et l'octet de choix, puis ferme : que le
+               // client ait pris VeNCrypt (il bloquerait ensuite sur l'ack) ou VncAuth (il
+               // bloquerait sur le défi), il est débloqué et renonce — pas d'interblocage.
+    let (flux, ecoute) = serveur_qui_ecoute_borne(s, VERSION.len() + 1);
+    let issue = connecteur_avec_tls(flux).try_start().await;
+    assert!(
+        issue.is_err(),
+        "le serveur a refusé la version VeNCrypt : la connexion ne doit pas aboutir"
+    );
+    let recu = ecoute.await.unwrap();
+    assert_eq!(
+        recu[VERSION.len()],
+        19,
+        "le client a choisi le type {} au lieu de VeNCrypt (19) : il retombe en clair alors \
+         que VeNCrypt était offert",
+        recu[VERSION.len()]
+    );
+}
+
+/// VeNCrypt n'accepte que les sous-types X.509 : les sous-types TLS anonymes
+/// (Diffie-Hellman sans certificat, 256/257) ne prouvent pas à qui l'on parle.
+/// Un serveur qui n'offre qu'eux doit être refusé par une erreur nommant X.509,
+/// jamais accepté en silence. Trouvé par l'audit du 7 septembre 2026.
+#[tokio::test]
+async fn vencrypt_refuse_les_sous_types_tls_anonymes() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 19]); // un seul type : VeNCrypt
+    s.extend_from_slice(&[0, 2]); // version VeNCrypt 0.2
+    s.push(0); // ack de version : ok
+    s.push(2); // deux sous-types
+    s.extend_from_slice(&256u32.to_be_bytes()); // TLSNone (anonyme)
+    s.extend_from_slice(&257u32.to_be_bytes()); // TLSVnc (anonyme)
+    let flux = serveur(&s).await;
+    let Err(e) = connecteur_avec_tls(flux).try_start().await else {
+        panic!("un serveur VeNCrypt sans sous-type X.509 a été accepté")
+    };
+    assert!(
+        e.to_string().contains("X.509"),
+        "l'erreur doit nommer X.509 et le refus des sous-types anonymes : {e}"
+    );
+}
+
+/// Sous-type X509Vnc (261) : après le passage TLS, le client répond au défi
+/// VNC (DES) comme en authentification VNC classique, puis se connecte. Trouvé
+/// par l'audit du 7 septembre 2026 : cette voie n'avait aucun test unitaire.
+#[tokio::test]
+async fn vencrypt_x509vnc_repond_au_defi_et_se_connecte() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 19]); // VeNCrypt
+    s.extend_from_slice(&[0, 2]); // version 0.2
+    s.push(0); // ack de version
+    s.push(1); // un sous-type
+    s.extend_from_slice(&261u32.to_be_bytes()); // X509Vnc
+    s.push(1); // ack du sous-type choisi
+               // TLS (identité), puis défi VNC de 16 octets et résultat.
+    s.extend_from_slice(&[0x5a; 16]); // défi
+    s.extend_from_slice(&0u32.to_be_bytes()); // AuthResult : ok
+    s.extend_from_slice(&server_init_4x4());
+    let flux = serveur(&s).await;
+    connecteur_avec_tls(flux)
+        .try_start()
+        .await
+        .expect("VeNCrypt X509Vnc doit aboutir")
+        .finish()
+        .expect("le client doit être connecté");
+}
+
+/// Sous-type X509None (260) : après le passage TLS, le serveur n'envoie qu'un
+/// résultat de sécurité (pas de défi), et le client se connecte. Trouvé par
+/// l'audit du 7 septembre 2026 : cette voie n'avait aucun test unitaire.
+#[tokio::test]
+async fn vencrypt_x509none_lit_le_seul_resultat_et_se_connecte() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 19]); // VeNCrypt
+    s.extend_from_slice(&[0, 2]); // version 0.2
+    s.push(0); // ack de version
+    s.push(1); // un sous-type
+    s.extend_from_slice(&260u32.to_be_bytes()); // X509None
+    s.push(1); // ack du sous-type choisi
+               // TLS (identité), puis le seul résultat de sécurité.
+    s.extend_from_slice(&0u32.to_be_bytes()); // résultat : ok
+    s.extend_from_slice(&server_init_4x4());
+    let flux = serveur(&s).await;
+    connecteur_avec_tls(flux)
+        .try_start()
+        .await
+        .expect("VeNCrypt X509None doit aboutir")
+        .finish()
+        .expect("le client doit être connecté");
+}
+
+/// Le client ne parle que VeNCrypt 0.2 (la seule version qui porte les
+/// sous-types sur quatre octets) : une version antérieure annoncée par le
+/// serveur doit être refusée par une erreur nommant la version, jamais
+/// poursuivie à l'aveugle. Trouvé par l'audit du 7 septembre 2026.
+#[tokio::test]
+async fn vencrypt_refuse_une_version_anterieure_a_0_2() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 19]); // VeNCrypt
+    s.extend_from_slice(&[0, 1]); // version VeNCrypt 0.1 : trop ancienne
+    let flux = serveur(&s).await;
+    let Err(e) = connecteur_avec_tls(flux).try_start().await else {
+        panic!("une version VeNCrypt 0.1 a été acceptée")
+    };
+    let msg = e.to_string();
+    assert!(
+        msg.contains("0.1") && msg.contains("non prise en charge"),
+        "l'erreur doit nommer la version VeNCrypt refusée : {msg}"
+    );
 }

@@ -247,7 +247,7 @@ fn presse_papiers_vers_serveur(
     }
 }
 
-pub(crate) async fn executer(args: &Args) -> Result<()> {
+pub async fn executer(args: &Args) -> Result<()> {
     let tcp = tokio::time::timeout(
         DELAI_CONNEXION,
         TcpStream::connect((args.host.as_str(), args.port)),
@@ -467,6 +467,15 @@ pub(crate) async fn executer(args: &Args) -> Result<()> {
                             }
                         }
                         VncEvent::RawImage(rect, mut pixels) => {
+                            // Un rectangle vide (largeur ou hauteur nulle, que
+                            // certains serveurs émettent à la marge) ne peint
+                            // rien et, en x>0/y>0, donnerait une zone sale
+                            // dégénérée (right < left) : on l'écarte comme le
+                            // fait déjà `copier`. Trouvé par l'audit du
+                            // 7 septembre 2026.
+                            if rect.width == 0 || rect.height == 0 {
+                                continue;
+                            }
                             // Le quatrième octet est du remplissage côté
                             // serveur (souvent 0) : l'interface peint en RGBA,
                             // un alpha nul ferait un trou.
@@ -657,6 +666,44 @@ mod tests_entrees {
                 enfonce: true
             })
             .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_zone_sale {
+    use super::inclusif;
+    use crate::trames::ajouter_rect;
+    use vnc::Rect;
+
+    fn r(x: u16, y: u16, width: u16, height: u16) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un serveur (hostile, ou qui
+    /// émet des rectangles vides à la marge, ce que certains font) pouvait
+    /// envoyer un rectangle Raw de largeur ou de hauteur nulle en x>0 / y>0.
+    /// `inclusif` en tirait une zone dégénérée (right = x - 1 < left = x) que
+    /// `ajouter_rect` traitait par une soustraction brute `right - left + 1` en
+    /// u64 : débordement, panique « attempt to subtract with overflow » en
+    /// debug (tests, couverture instrumentée), enroulement en release. La
+    /// branche RawImage écarte désormais un rectangle vide avant de peindre
+    /// (comme le fait déjà `copier`), et le calcul d'aire sature comme la boucle
+    /// RECTS_MAX de `ajouter_rect` le fait déjà.
+    #[test]
+    fn un_rectangle_raw_de_largeur_nulle_ne_panique_pas() {
+        // Une zone déjà peuplée : c'est la comparaison de coûts qui appelle
+        // `aire` sur le rectangle ajouté, donc le vide doit y arriver.
+        let mut zone = vec![inclusif(r(0, 0, 3, 3))];
+        // Rectangle Raw 0×3 en (2,0) : inclusif -> {left:2, right:1}, dégénéré.
+        ajouter_rect(&mut zone, &inclusif(r(2, 0, 0, 3)));
+        // Hauteur nulle en (0,4) : inclusif -> {top:4, bottom:3}, dégénéré.
+        ajouter_rect(&mut zone, &inclusif(r(0, 4, 5, 0)));
+        // Aucune panique : une zone dégénérée compte pour une aire nulle.
     }
 }
 

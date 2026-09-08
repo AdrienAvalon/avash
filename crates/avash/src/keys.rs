@@ -168,8 +168,13 @@ pub fn generate(name: &str, comment: &str) -> Result<KeyEntry> {
     if name.is_empty() {
         return Err(anyhow!("Le nom de la clé est vide."));
     }
-    // Le nom finit dans un chemin : pas de traversee ni de separateur.
-    if name.contains(['/', '\\', '\0']) || name == "." || name == ".." {
+    // Le nom finit dans un chemin : pas de traversee ni de separateur, et sous
+    // Windows aucun piège NTFS. Trouvé par l'audit du 7 septembre 2026 :
+    // « travail:pro » créait le flux de données alternatif « pro » du fichier
+    // « travail » et y logeait la clé privée à l'insu du panneau ; un nom réservé
+    // (CON, NUL, COM1…) ou un point/espace final retombait sur un autre fichier.
+    // On partage le prédicat de `sftp` (source unique, déjà durci pour Windows).
+    if !crate::sftp::nom_d_entree_sur(name) {
         return Err(anyhow!("Nom de clé invalide : {name}"));
     }
     let dir = ssh_dir()?;
@@ -258,9 +263,12 @@ pub fn deploy_command(public_line: &str) -> Result<String> {
     if line.is_empty() {
         return Err(anyhow!("Clé publique vide."));
     }
-    // La ligne part dans un shell distant : on interdit tout ce qui pourrait
-    // en sortir. Une cle publique OpenSSH n'a jamais besoin de ces caracteres.
-    if line.contains('\n') || line.contains('\r') || line.contains('\'') {
+    // La ligne part dans un shell distant, entre apostrophes. Un saut de ligne
+    // ou un octet nul ne peut pas être cité sans casser la commande : on les
+    // refuse. Trouvé par l'audit du 7 septembre 2026 : l'octet nul manquait au
+    // filtre (seuls `\n`, `\r`, `'` y étaient), passait la garde et se faisait
+    // tronquer par le shell distant, posant une ligne différente de l'affichée.
+    if line.contains('\n') || line.contains('\r') || line.contains('\0') {
         return Err(anyhow!("Clé publique malformée : caractère interdit."));
     }
     if !line.starts_with("ssh-") && !line.starts_with("ecdsa-") {
@@ -269,13 +277,21 @@ pub fn deploy_command(public_line: &str) -> Result<String> {
             &line[..line.len().min(24)]
         ));
     }
+    // L'apostrophe est légitime dans un commentaire (« clé d'Adrien », ou un
+    // compte Windows « O'Brien » dans le commentaire par défaut) : la refuser
+    // rendait non déployable une clé qu'Avash venait de générer. On l'échappe
+    // plutôt (« ' » → « '\'' »), comme `citer()` (sftp) et `shellQuote` (web) le
+    // font déjà. `grep -qxF '…'` et `printf '%s\n' '…'` reçoivent tous deux la
+    // même chaîne réassemblée, donc l'idempotence de `grep` tient. Trouvé par
+    // l'audit du 7 septembre 2026.
+    let citee = line.replace('\'', "'\\''");
     Ok(format!(
         "set -e; \
          mkdir -p ~/.ssh && chmod 700 ~/.ssh; \
          touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys; \
-         grep -qxF '{line}' ~/.ssh/authorized_keys \
+         grep -qxF '{citee}' ~/.ssh/authorized_keys \
            && echo AVASH_DEJA_PRESENTE \
-           || {{ printf '%s\\n' '{line}' >> ~/.ssh/authorized_keys && echo AVASH_AJOUTEE; }}"
+           || {{ printf '%s\\n' '{citee}' >> ~/.ssh/authorized_keys && echo AVASH_AJOUTEE; }}"
     ))
 }
 
@@ -356,19 +372,64 @@ mod tests {
     }
 
     #[test]
-    fn deploy_command_refuse_une_injection_shell() {
-        // La ligne part dans un shell distant entre apostrophes : une
-        // apostrophe ou un saut de ligne permettrait d'en sortir.
+    fn deploy_command_neutralise_une_injection_shell() {
+        // Un saut de ligne ou un octet nul ne peut pas être cité sans casser la
+        // commande : on les refuse.
         for mechant in [
-            "ssh-ed25519 AAA' ; rm -rf ~ ; echo '",
             "ssh-ed25519 AAA\nrm -rf ~",
             "ssh-ed25519 AAA\r\nwhoami",
+            "ssh-ed25519 AAA\0cache",
         ] {
             assert!(
                 deploy_command(mechant).is_err(),
                 "devrait etre refuse : {mechant:?}"
             );
         }
+        // L'apostrophe, elle, est légitime dans un commentaire : on ne la refuse
+        // plus, on l'échappe (« ' » → « '\'' »), si bien qu'une tentative de
+        // sortie du quoting reste inoffensive et qu'aucune apostrophe brute ne
+        // clôt le littéral. Trouvé par l'audit du 7 septembre 2026.
+        let cmd = deploy_command("ssh-ed25519 AAA' ; rm -rf ~ ; echo '").unwrap();
+        assert!(
+            cmd.contains("'\\''"),
+            "l'apostrophe doit être échappée : {cmd}"
+        );
+        assert!(
+            !cmd.contains("AAA' ; rm"),
+            "aucune apostrophe brute ne doit rester dans la commande : {cmd}"
+        );
+    }
+
+    /// L'octet nul n'était pas dans le filtre (seuls `\n`, `\r`, `'` l'étaient) :
+    /// il passait la garde et se faisait tronquer par le shell distant, posant
+    /// dans `authorized_keys` une ligne différente de celle affichée. Trouvé par
+    /// l'audit du 7 septembre 2026.
+    #[test]
+    fn deploy_command_refuse_l_octet_nul() {
+        assert!(deploy_command("ssh-ed25519 AAAAC3Nz cle\0cachee").is_err());
+    }
+
+    /// Boucle complète : une clé générée avec un commentaire contenant une
+    /// apostrophe (« clé d'Adrien », naturel en français ; ou un compte Windows
+    /// « O'Brien » dans le commentaire par défaut) doit rester déployable par
+    /// Avash. Avant le correctif, `deploy_command` refusait toute apostrophe et
+    /// rendait non déployable une clé qu'Avash venait pourtant de créer.
+    /// Trouvé par l'audit du 7 septembre 2026.
+    #[test]
+    fn une_cle_generee_avec_apostrophe_reste_deployable() {
+        let _h = temp_home();
+        let k = generate("id_apostrophe", "clé d'Adrien").unwrap();
+        let ligne = k.public_line.expect("ligne publique attendue");
+        assert!(
+            ligne.contains("clé d'Adrien"),
+            "le commentaire doit être posé tel quel : {ligne}"
+        );
+        let cmd = deploy_command(&ligne).expect("la clé générée doit être déployable");
+        assert!(cmd.contains("authorized_keys"), "{cmd}");
+        assert!(
+            cmd.contains("'\\''"),
+            "l'apostrophe doit être échappée : {cmd}"
+        );
     }
 
     #[test]
@@ -415,6 +476,59 @@ mod tests {
             assert!(
                 generate(mauvais, "test").is_err(),
                 "devrait etre refuse : {mauvais:?}"
+            );
+        }
+    }
+
+    /// La règle des noms réservés Windows se calcule sans dépendre du système
+    /// hôte : on la vérifie donc partout, y compris en CI Linux. Trouvé par
+    /// l'audit du 7 septembre 2026 : `generate` acceptait « nul » ou « com1 »,
+    /// qui désignent un périphérique et non un fichier sous Windows.
+    #[test]
+    fn les_noms_de_peripheriques_windows_sont_reperes() {
+        use crate::sftp::nom_reserve_windows;
+        for reserve in [
+            "con", "CON", "Nul", "aux", "prn", "com1", "LPT9", "com1.txt",
+        ] {
+            assert!(nom_reserve_windows(reserve), "réservé : {reserve:?}");
+        }
+        // Un vrai nom de fichier qui commence pareil n'est pas réservé.
+        for bon in [
+            "console",
+            "com0",
+            "com10",
+            "lpt",
+            "aux2",
+            "travail",
+            "id_ed25519",
+        ] {
+            assert!(!nom_reserve_windows(bon), "pas réservé : {bon:?}");
+        }
+    }
+
+    /// Sous Windows, `dir.join("travail:pro")` désigne le flux de données
+    /// alternatif « pro » du fichier « travail » : sans garde, `generate` créait
+    /// un fichier « travail » de 0 octet portant la clé privée dans un flux
+    /// caché, absent de `list_keys`. On refuse « : », les noms réservés et les
+    /// points/espaces finaux AVANT toute écriture (audit du 7 septembre 2026).
+    /// Test propre à Windows : ailleurs « : » est un caractère de nom valide.
+    #[cfg(windows)]
+    #[test]
+    fn generate_refuse_les_pieges_ntfs_windows() {
+        let _h = temp_home();
+        // `generate` rogne déjà le nom : l'espace final n'y arrive pas, mais le
+        // point final survit au `trim` et doit être refusé.
+        for mauvais in ["travail:pro", "nul", "COM1", "com1.txt", "travail."] {
+            assert!(
+                generate(mauvais, "test").is_err(),
+                "devrait etre refuse sous Windows : {mauvais:?}"
+            );
+            // Rien ne doit rester derrière : ni le fichier visé ni un porteur de
+            // flux (« travail » pour « travail:pro »).
+            let base = mauvais.split(':').next().unwrap_or(mauvais);
+            assert!(
+                !ssh_dir().unwrap().join(base).exists(),
+                "un fichier « {base} » a été créé alors que le nom était refusé"
             );
         }
     }
@@ -583,6 +697,51 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(m, 0o600, "authorized_keys doit etre en 600");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// Exécution réelle d'une ligne dont le commentaire porte une apostrophe :
+    /// l'échappement doit poser la ligne verbatim (apostrophe comprise) dans
+    /// `authorized_keys`, et `grep -qxF` doit la retrouver à la relance sans
+    /// doublon. Trouvé par l'audit du 7 septembre 2026 : Avash refusait ce cas.
+    #[cfg(unix)]
+    #[test]
+    fn deploy_command_avec_apostrophe_s_installe_reellement() {
+        let pub_line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAPOS clé d'Adrien";
+        let cmd = deploy_command(pub_line).unwrap();
+        let home = std::env::temp_dir().join(format!(
+            "avash-deploy-apos-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+
+        let run = || {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .env("HOME", &home)
+                .output()
+                .unwrap()
+        };
+
+        let un = run();
+        assert!(interpret_deploy(&String::from_utf8_lossy(&un.stdout))
+            .unwrap()
+            .contains("installée"));
+        // Relance : `grep -qxF` retrouve la ligne réassemblée, donc pas de doublon.
+        let deux = run();
+        assert!(interpret_deploy(&String::from_utf8_lossy(&deux.stdout))
+            .unwrap()
+            .contains("déjà"));
+
+        let ak = std::fs::read_to_string(home.join(".ssh/authorized_keys")).unwrap();
+        assert_eq!(
+            ak.lines().filter(|l| l == &pub_line).count(),
+            1,
+            "la ligne doit être posée verbatim, apostrophe comprise : {ak:?}"
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 }

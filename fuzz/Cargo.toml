@@ -79,3 +79,17 @@ path = "fuzz_targets/vnc_serveur.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "glob_match_pur"
+path = "fuzz_targets/glob_match_pur.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "osinfo"
+path = "fuzz_targets/osinfo.rs"
+test = false
+doc = false
+bench = false

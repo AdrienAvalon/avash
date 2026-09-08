@@ -6,7 +6,7 @@
 // presse-papiers du système ni d'un bureau. Les octets sont comparés de bout
 // en bout, sur un fichier assez gros pour traverser plusieurs morceaux.
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -49,6 +49,10 @@ describe("RDP — fichiers par le presse-papiers", () => {
   after(() => {
     if (sidecar) sidecar.kill();
     if (srv) srv.kill();
+    // Trouvé par l'audit du 7 septembre 2026 : les fichiers offerts (2,5 Mo +
+    // 0,3 Mo aléatoires) et leurs copies reçues des deux côtés (~5,6 Mo par run)
+    // restaient dans /tmp. On efface la racine, comme rdp-lecteur.spec.js:after.
+    rmSync(racine, { recursive: true, force: true });
   });
 
   it("le poste reçoit le fichier copié sur le distant, et le distant reçoit celui du poste", async () => {

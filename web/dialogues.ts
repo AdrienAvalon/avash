@@ -85,7 +85,11 @@ export function askConfirm(text: string, opts: { ok?: string; danger?: boolean }
   msg.textContent = rest.join("\n\n");
   msg.hidden = rest.length === 0;
   const okBtn = $("confirm-ok") as HTMLButtonElement;
-  okBtn.textContent = opts.ok ?? "Confirmer";
+  // Trouvé par l'audit du 7 septembre 2026 : le libellé par défaut était écrit
+  // en dur (« Confirmer »), ce qui écrasait à chaque confirmation la traduction
+  // posée par data-i18n. En interface anglaise, toute suppression sans option
+  // `ok` affichait « Confirmer » face à « Cancel ». On passe par t("confirmer").
+  okBtn.textContent = opts.ok ?? t("confirmer");
   // Rouge par défaut : la plupart des confirmations gardent une action destructive.
   const dangereux = opts.danger !== false;
   okBtn.classList.toggle("btn-danger", dangereux);
@@ -141,7 +145,13 @@ function focusablesIn(box: HTMLElement): HTMLElement[] {
 
 /** La boîte de dialogue actuellement ouverte, s'il y en a une. */
 /// Boîtes qui s'ouvrent systématiquement par-dessus une autre.
-export const MODALES_AU_DESSUS = ["confirm-modal", "ask-modal", "pass-modal"] as const;
+// send-modal et sftp-copier-modal ajoutés EN FIN de liste (audit du 7 septembre
+// 2026) : eux aussi s'ouvrent toujours par-dessus une autre surface. Garde
+// jumelle du stopImmediatePropagation de leurs gestionnaires d'Échap, pour que
+// menu-hote ne ferme pas le dessous quel que soit l'ordre d'enregistrement des
+// écouteurs. En fin de liste, confirm/ask/pass gardent la priorité du piège de
+// focus (openDialogBox) s'ils s'ouvrent encore par-dessus ces deux-là.
+export const MODALES_AU_DESSUS = ["confirm-modal", "ask-modal", "pass-modal", "send-modal", "sftp-copier-modal"] as const;
 
 function openDialogBox(): HTMLElement | null {
   // Ces trois-là priment : `querySelector` rendait la PREMIÈRE du document, or

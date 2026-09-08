@@ -5,7 +5,7 @@
 // (fichier des empreintes du bac à sable, clé « vnc:hôte:port ») ; relancé
 // avec un autre certificat, le serveur est refusé, et la raison le dit.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { startVncServer, waitForPort, attendreBureauConnecte } from "./helpers.js";
@@ -39,13 +39,20 @@ async function connecterVnc(port, motDePasse) {
 describe("VNC — VeNCrypt, TLS et certificat épinglé", () => {
   let srv;
   let journal = "";
+  // Dossier du certificat rejoué (créé par le second scénario) : hissé ici pour
+  // que l'after le supprime. Trouvé par l'audit du 7 septembre 2026 : ce
+  // mkdtempSync restait dans /tmp après la suite.
+  let dossierCert = null;
 
   before(async () => {
     srv = startVncServer(VNC_PORT, (l) => { journal += l; }, { tlsPort: TLS_PORT, cert: CERT, key: KEY });
     await waitForPort(VNC_PORT);
     await waitForPort(TLS_PORT);
   });
-  after(() => { if (srv) srv.kill(); });
+  after(() => {
+    if (srv) srv.kill();
+    if (dossierCert) rmSync(dossierCert, { recursive: true, force: true });
+  });
 
   it("négocie VeNCrypt X509Vnc, monte TLS, s'authentifie et affiche le bureau", async () => {
     await connecterVnc(TLS_PORT, "test");
@@ -76,6 +83,7 @@ describe("VNC — VeNCrypt, TLS et certificat épinglé", () => {
     // Un autre certificat, même sujet : seule la clé publique change, et
     // c'est elle qui est épinglée.
     const d = mkdtempSync(join(tmpdir(), "avash-vnc-cert-"));
+    dossierCert = d; // l'after le supprimera
     execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=localhost",
       "-keyout", join(d, "key.pem"), "-out", join(d, "cert.pem")], { stdio: "ignore" });
     journal = "";

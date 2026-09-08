@@ -7,6 +7,7 @@
 // tests verrouillent le nouveau flux (proposition d'oubli + un seul nouvel
 // essai) et l'absence de tout marqueur `[AVASH_…]` dans le message affiché.
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { t } from "./i18n";
 
 const invoke = vi.hoisted(() => vi.fn());
 const openManualSession = vi.hoisted(() => vi.fn());
@@ -134,5 +135,60 @@ describe("connexion directe : autres marqueurs nettoyés", () => {
     expect(erreur.textContent).not.toContain("[AVASH_");
     // askConfirm ne concerne que la clé d'hôte : pas de proposition d'oubli ici.
     expect(askConfirm).not.toHaveBeenCalled();
+  });
+});
+
+// Trouvé par l'audit du 7 septembre 2026 : host_save précède la connexion. En
+// cas d'échec (mauvais mot de passe), la case « Enregistrer cet hôte » restait
+// cochée et le second submit rappelait host_save, refusé par append_host
+// (« déjà déclaré »), ce qui bloquait toute reconnexion depuis la modale.
+describe("connexion directe : enregistrement puis connexion échouée", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    openManualSession.mockReset();
+    askConfirm.mockReset();
+    monterDom();
+  });
+
+  /** Coche « Enregistrer », saisit un alias, adresse et utilisateur, soumet. */
+  async function soumettreAvecEnregistrement(manualSubmit: (ev: Event) => Promise<void>) {
+    (document.getElementById("m-addr") as HTMLInputElement).value = "10.0.0.7";
+    (document.getElementById("m-user") as HTMLInputElement).value = "root";
+    (document.getElementById("m-save") as HTMLInputElement).checked = true;
+    (document.getElementById("m-alias") as HTMLInputElement).value = "prod";
+    await manualSubmit(new Event("submit"));
+  }
+
+  it("décoche la case après l'enregistrement et ne rappelle plus host_save au second essai", async () => {
+    const { manualSubmit } = await import("./connexion-directe");
+    // host_save réussit ; la connexion échoue une fois (mot de passe faux) puis aboutit.
+    invoke.mockResolvedValue(1);
+    openManualSession
+      .mockRejectedValueOnce(new Error("Authentification refusée."))
+      .mockResolvedValueOnce(undefined);
+
+    await soumettreAvecEnregistrement(manualSubmit);
+
+    const save = document.getElementById("m-save") as HTMLInputElement;
+    const erreur = document.getElementById("m-error") as HTMLElement;
+    // L'hôte est enregistré : la case est décochée pour ne pas le réécrire…
+    expect(save.checked).toBe(false);
+    // …et le message rappelle que l'enregistrement a bien eu lieu.
+    expect(erreur.hidden).toBe(false);
+    expect(erreur.textContent).toContain(t("cd-hote-enregistre"));
+    expect(erreur.textContent).toContain("Authentification refusée.");
+    const appelsSave1 = invoke.mock.calls.filter((c) => c[0] === "host_save");
+    expect(appelsSave1).toHaveLength(1);
+    // L'alias saisi est passé à la session : l'onglet porte « prod ».
+    expect(openManualSession).toHaveBeenLastCalledWith(expect.anything(), "prod");
+
+    // Second submit (mot de passe corrigé) : plus de host_save, la connexion passe.
+    await manualSubmit(new Event("submit"));
+    const appelsSave2 = invoke.mock.calls.filter((c) => c[0] === "host_save");
+    expect(appelsSave2).toHaveLength(1);
+    expect(openManualSession).toHaveBeenCalledTimes(2);
+    // L'onglet du nouvel essai garde « prod » : l'hôte est enregistré sous ce
+    // nom même si la case a été décochée entre-temps.
+    expect(openManualSession).toHaveBeenLastCalledWith(expect.anything(), "prod");
   });
 });

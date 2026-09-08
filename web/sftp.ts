@@ -6,7 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic, fileIconName } from "./icons";
 import { humanSize, remoteJoin, parentDir, sortSftpEntries, shortDate, shellQuote, validFileName, type SftpEntry } from "./filters";
-import { $, type Session, state } from "./etat";
+import { $, type Session, state, ciblesDeCopie } from "./etat";
 import { askConfirm, askText } from "./dialogues";
 import { placerMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { langue, t } from "./i18n";
@@ -292,6 +292,12 @@ async function sftpNavigate(path: string) {
     if (premier) premier.tabIndex = 0;
     sftpStatus(t(entries.length > 1 ? "sftp-elements" : "sftp-element", { n: entries.length }));
   } catch (e) {
+    // Trouvé par l'audit du 7 septembre 2026 : même garde anti-course que le
+    // succès (plus haut). Un listage périmé (autre onglet, dossier précédent,
+    // ou permission refusée) qui rejette après qu'un listage plus récent a été
+    // rendu vidait la liste courante et affichait une erreur étrangère au
+    // dossier montré, réparable seulement par Rafraîchir.
+    if (sftpSession() !== s || s.sftpPath !== path) return;
     list.innerHTML = "";
     sftpStatus(`⚠️ ${e}`, "err");
   }
@@ -418,6 +424,28 @@ export function sftpSyncButton() {
   $("sftp-toggle").classList.toggle("active", has && sftp.open);
 }
 
+/** Reflète l'état COMPLET du panneau SFTP selon l'onglet courant : le bouton
+ *  (via `sftpSyncButton`) et la visibilité du panneau lui-même.
+ *
+ *  Trouvé par l'audit du 7 septembre 2026 : `focusRdp` (et `closeRdp` quand il
+ *  ne reste aucun onglet) ne resynchronisaient rien. En passant d'un onglet SSH
+ *  au panneau ouvert vers un bureau RDP, le bouton restait cliquable et « actif »
+ *  alors qu'un clic ne faisait rien (un bureau distant n'a pas de système de
+ *  fichiers, `sftpSession()===null`), et le panneau restait ouvert à côté du
+ *  bureau, affichant les fichiers de la session SSH précédente.
+ *
+ *  On pose donc la classe « open » à partir de `has && sftp.open`, ce qui masque
+ *  le panneau sur un onglet sans SFTP sans toucher à `sftp.open` : cette
+ *  préférence de l'utilisateur reste vraie et le panneau reparaît tel quel au
+ *  retour sur l'onglet SSH (sinon retirer la classe seule désynchroniserait
+ *  l'état et il faudrait deux Ctrl+B pour le revoir). À appeler à chaque bascule
+ *  ou fermeture d'onglet (`focusSession`, `focusRdp`, `closeSession`,
+ *  `closeRdp`). */
+export function sftpAppliquerVue() {
+  sftpSyncButton();
+  $("sftp-panel").classList.toggle("open", sftpSession() !== null && sftp.open);
+}
+
 /**
  * Ouvre le panneau sur un dossier de depart : on resout d'abord "." en
  * chemin absolu (certains serveurs refusent read_dir(".")), puis on liste.
@@ -429,7 +457,10 @@ export async function sftpOpenAt(s: Session, path: string) {
     const home = await invoke<string>("sftp_realpath", { id: s.id, path: "." });
     if (sftpSession() === s) void sftpNavigate(home || ".");
   } catch {
-    void sftpNavigate(".");
+    // Trouvé par l'audit du 7 septembre 2026 : même garde que la branche de
+    // succès. Un sftp_realpath lent qui échoue sur l'ancien onglet renvoyait le
+    // panneau de l'onglet courant sur « . » et écrasait son sftpPath.
+    if (sftpSession() === s) void sftpNavigate(".");
   }
 }
 // Le panneau prend sa place par une transition : le terminal ne recoit pas
@@ -465,7 +496,7 @@ let copieVisee: { entry: SftpEntry; path: string } | null = null;
 function sftpOuvrirCopie(entry: SftpEntry, path: string): void {
   const s = sftpSession();
   if (!s) return;
-  const autres = [...state.sessions.values()].filter((x) => x !== s);
+  const autres = ciblesDeCopie(s, state.sessions);
   if (autres.length === 0) {
     sftpStatus(t("sftp-aucune-autre-session"), "err");
     return;
@@ -500,7 +531,11 @@ $("sftp-copier-form").addEventListener("submit", (e) => {
   if (!s || !visee) return;
   const idCible = Number(($("sc-cible") as HTMLSelectElement).value);
   const cible = state.sessions.get(idCible);
-  if (!cible) { $("sc-error").textContent = t("sftp-aucune-autre-session"); $("sc-error").hidden = false; return; }
+  // La cible peut mourir pendant que la modale est ouverte (pty-closed marque
+  // `closed`, une fermeture d'onglet la retire du magasin) : on re-teste au
+  // moment de la soumission plutôt que de créer une ligne de transfert vouée à
+  // l'échec. Trouvé par l'audit du 7 septembre 2026.
+  if (!cible || cible.serie || cible.closed) { $("sc-error").textContent = t("sftp-aucune-autre-session"); $("sc-error").hidden = false; return; }
   const dossier = ($("sc-dossier") as HTMLInputElement).value.trim() || ".";
   const direct = ($("sc-direct") as HTMLInputElement).checked;
   const remote = remoteJoin(visee.path, visee.entry.name);
@@ -512,7 +547,14 @@ $("sftp-copier-form").addEventListener("submit", (e) => {
   }, direct);
 });
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && $("sftp-copier-modal").classList.contains("open")) sftpFermerCopie();
+  if (e.key === "Escape" && $("sftp-copier-modal").classList.contains("open")) {
+    // Même garde que le flux d'envoi des snippets : sans stopImmediatePropagation,
+    // le gestionnaire d'Échap de menu-hote fermait aussi la surface du dessous.
+    // Trouvé par l'audit du 7 septembre 2026 (fragilité latente : cette modale
+    // s'ouvre toujours par-dessus une autre).
+    e.stopImmediatePropagation();
+    sftpFermerCopie();
+  }
 });
 
 async function sftpPickAndUpload() {
@@ -610,7 +652,13 @@ $("sftp-context").addEventListener("click", (e) => {
     invoke("pty_write", { id: s.id, data: `cd ${shellQuote(target)}\r` }).catch(() => {});
     s.term.focus();
   } else if (act === "copy") {
-    navigator.clipboard.writeText(full).then(() => sftpStatus(t("sftp-chemin-copie", { chemin: full }), "ok"), () => {});
+    // Le rejet de writeText (WebKitGTK : permission, contexte) etait avale : le
+    // chemin n'etait pas copie et rien ne le disait. On le signale desormais,
+    // comme le fait la copie de cle publique (audit du 7 septembre 2026).
+    navigator.clipboard.writeText(full).then(
+      () => sftpStatus(t("sftp-chemin-copie", { chemin: full }), "ok"),
+      () => sftpStatus(t("enregistrements-copie-impossible"), "err"),
+    );
   } else if (act === "rename" && entry) void sftpRename(entry, path);
   else if (act === "mkdir") void sftpMkdir(path);
   else if (act === "delete" && entry) void sftpDelete(entry, path);

@@ -8,7 +8,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic } from "./icons";
 import { partageClipboard, sonBureau } from "./prefs";
 import { LecteurAudio } from "./audio";
-import { rdpScancode, le16, rdpMousePos, humanSize } from "./filters";
+import { rdpScancode, le16, rdpMousePos, humanSize, tailleBureau } from "./filters";
 import { langue } from "./i18n";
 import { FiltreCtrlAltGrWindows, estWindows, keysymDe, messageKeysym } from "./vnc-clavier";
 import { ToucheTenues } from "./touches-tenues";
@@ -22,6 +22,7 @@ import { focusTab, orderedTabs } from "./raccourcis";
 import { loadHosts, renderHosts } from "./main";
 import { notify, notifyErreur } from "./notifications";
 import { openMoveModal } from "./dossiers";
+import { sftp, sftpAppliquerVue } from "./sftp";
 import { t } from "./i18n";
 
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
@@ -170,6 +171,65 @@ async function bilanFichiers(id: number, b: { sens: string; dossier?: string; fi
   if (ouvrir && b.dossier) await invoke("rdp_ouvrir_dossier", { chemin: b.dossier }).catch((e) => notifyErreur(String(e)));
 }
 
+/** Décide de la taille à demander au serveur pour un redimensionnement natif du
+ *  bureau distant (message [5], Display Control DVC). Rend `[largeur, hauteur]`
+ *  bornée (largeur paire, 200..8192) ou `null` s'il n'y a rien à faire.
+ *
+ *  Trouvé par l'audit du 7 septembre 2026 :
+ *  - VNC (RFB) n'a aucun canal Display Control : le sidecar (vnc.rs) n'a pas de
+ *    bras pour [5] et ne renvoie jamais de [1] de confirmation. Poser un drapeau
+ *    « en vol » puis rejouer au filet des 3 s y tournerait en boucle permanente ;
+ *    on n'y redimensionne donc pas (le canvas suit la fenêtre en CSS de toute
+ *    façon).
+ *  - un volet caché ne se redimensionne pas ; un écart de moins de 8 px est du
+ *    bruit de sous-pixel du glissé, négligeable. */
+export function prochainRedimensionnement(
+  vnc: boolean,
+  affiche: boolean,
+  largeurConteneur: number,
+  hauteurConteneur: number,
+  largeurActuelle: number,
+  hauteurActuelle: number,
+  dpr: number = window.devicePixelRatio,
+): [number, number] | null {
+  if (vnc || !affiche) return null;
+  // `largeurActuelle`/`hauteurActuelle` sont la taille confirmée par le serveur
+  // (message CONNECTED), donc des pixels PHYSIQUES. On calcule la cible dans la
+  // MÊME unité (via `tailleBureau`, qui multiplie le rect CSS par le DPR) : sinon
+  // le seuil « négligeable » ci-dessous comparait des pixels CSS à des pixels
+  // physiques et, à DPR=2, l'écart valait la moitié de la définition — sendResize
+  // repartait à chaque ResizeObserver et le serveur renégociait en boucle.
+  // Trouvé par l'audit du 7 septembre 2026 (HiDPI).
+  const [w, h] = tailleBureau({ width: largeurConteneur, height: hauteurConteneur }, dpr);
+  if (Math.abs(w - largeurActuelle) < 8 && Math.abs(h - hauteurActuelle) < 8) return null;
+  return [w, h];
+}
+
+/** Faut-il redemander au sidecar l'image entière du bureau ([9]) quand un onglet
+ *  RDP prend le focus ?
+ *
+ *  Trouvé par l'audit du 7 septembre 2026 : `focusRdp` envoyait [9] à CHAQUE
+ *  activation d'onglet, sans regarder si le canvas était déjà affiché. Le
+ *  sidecar répond par une trame de l'image entière hors cadencement (8,3 Mo en
+ *  1080p, 33 Mo en 4K), poussée sur la boucle locale puis peinte d'un
+ *  `putImageData` plein écran — payé pour rien, y compris quand l'utilisateur
+ *  clique l'onglet DÉJÀ actif, qui n'a rien perdu.
+ *
+ *  On ne rafraîchit donc que si le canvas a pu perdre son contenu :
+ *  - il passait de caché à visible (`!etaitAffiche`) : le backing-store d'un
+ *    canvas resté en `display:none` peut avoir été vidé par WebKitGTK ;
+ *  - son conteneur a été reparenté (`aEteReparente`) : `appliquerVue` détruit et
+ *    recrée les `.volet` à chaque appel, donc en vue partagée le canvas est
+ *    brièvement hors document alors que son `display` n'a jamais valu « none » —
+ *    c'est justement là que le backing-store est le plus susceptible d'être
+ *    perdu. Se fier au seul `display` supprimerait le rafraîchissement dans ce
+ *    cas et rejouerait le flash noir consigné plus haut.
+ *
+ *  Un canvas déjà affiché et non reparenté n'a rien perdu : pas de [9]. */
+export function doitRafraichir(etaitAffiche: boolean, aEteReparente: boolean, wsOuverte: boolean): boolean {
+  return wsOuverte && (!etaitAffiche || aEteReparente);
+}
+
 export async function openRdp(cible: RdpTarget) {
   const id = state.nextId++;
   // Onglet
@@ -192,8 +252,26 @@ export async function openRdp(cible: RdpTarget) {
   const even = (n: number) => n - (n % 2);
   // Mutables : au redimensionnement natif, le serveur renvoie la vraie taille
   // (message CONNECTED) et on les remet à jour — le mappage souris suit.
-  let rdpW = Math.max(200, Math.min(8192, even(Math.round(cible.width || area.width || 1280))));
-  let rdpH = Math.max(200, Math.min(8192, Math.round(cible.height || area.height || 800)));
+  //
+  // HiDPI (audit du 7 septembre 2026) : la zone adaptative est mesurée en pixels
+  // CSS ; on la convertit en pixels PHYSIQUES (`tailleBureau`, ×DPR) pour ne pas
+  // négocier un bureau flou à 200 %. Une taille IMPOSÉE par un bureau enregistré
+  // est déjà en pixels du bureau : on la borne telle quelle, sans DPR. VNC : on
+  // ne double PAS (dpr=1) — le protocole RFB n'a pas d'équivalent du
+  // `desktop_scale_factor` de RDP, donc doubler la définition rétrécirait le
+  // texte distant sans compensation possible ; on préfère l'état actuel (grand,
+  // quitte à être un peu flou) à un texte net mais deux fois plus petit.
+  let rdpW: number;
+  let rdpH: number;
+  if (cible.width && cible.height) {
+    rdpW = Math.max(200, Math.min(8192, even(Math.round(cible.width))));
+    rdpH = Math.max(200, Math.min(8192, Math.round(cible.height)));
+  } else {
+    [rdpW, rdpH] = tailleBureau(
+      { width: area.width || 1280, height: area.height || 800 },
+      cible.vnc ? 1 : window.devicePixelRatio,
+    );
+  }
 
   // Canvas dans la zone terminal
   $("terminal-empty").style.display = "none";
@@ -281,10 +359,12 @@ export async function openRdp(cible: RdpTarget) {
   window.addEventListener("scroll", invaliderRect, true);
   // Retirés à la fermeture de l'onglet : sans quoi ils s'accumuleraient à chaque
   // bureau ouvert puis fermé.
+  let detacherDpr: (() => void) | null = null; // watcher HiDPI, armé plus bas
   const detachRect = () => {
     window.removeEventListener("resize", invaliderRect);
     window.removeEventListener("scroll", invaliderRect, true);
     document.removeEventListener("visibilitychange", surVisibiliteCachee);
+    detacherDpr?.();
   };
   // Mouvements souris throttlés au rAF : un seul paquet par frame d'affichage.
   let movePending = false;
@@ -383,16 +463,20 @@ export async function openRdp(cible: RdpTarget) {
   const sendResize = () => {
     // Seul un bureau affiché se redimensionne : l'actif, ou l'autre volet de la
     // vue partagée. La taille est celle de son conteneur, pas de toute la zone.
-    if (!estAffiche({ kind: "rdp", id })) return;
     const a = wrap.getBoundingClientRect();
-    const w = Math.max(200, Math.min(8192, even(Math.round(a.width))));
-    const h = Math.max(200, Math.min(8192, Math.round(a.height)));
-    if (Math.abs(w - rdpW) < 8 && Math.abs(h - rdpH) < 8) return; // négligeable
-    if (resizeInFlight) return; // on rejouera la taille finale à la fin (kind 1)
+    const taille = prochainRedimensionnement(cible.vnc === true, estAffiche({ kind: "rdp", id }), a.width, a.height, rdpW, rdpH);
+    if (!taille) return;
+    if (resizeInFlight) return; // une renégociation en cours ; le filet rejouera la taille courante
     resizeInFlight = true;
     window.clearTimeout(resizeGuard);
-    resizeGuard = window.setTimeout(() => { resizeInFlight = false; }, 3000); // filet
-    send([5, ...le16(w), ...le16(h)]);
+    // Filet : si le serveur ne confirme pas par [1] (son canal Display Control
+    // n'avait pas encore reçu ses capacités quand le [5] est parti — le sidecar
+    // l'ignore alors en silence), on relâche le drapeau ET on rejoue la taille
+    // courante. Sans ce rejeu, un redimensionnement demandé avant l'ouverture du
+    // canal restait perdu jusqu'à ce que l'utilisateur bouge lui-même la fenêtre
+    // (bureau letterboxé). Trouvé par l'audit du 7 septembre 2026.
+    resizeGuard = window.setTimeout(() => { resizeInFlight = false; sendResize(); }, 3000);
+    send([5, ...le16(taille[0]), ...le16(taille[1])]);
   };
   const ro = new ResizeObserver(() => {
     invaliderRect(); // la zone a changé de taille : le rect mémorisé est périmé
@@ -401,6 +485,26 @@ export async function openRdp(cible: RdpTarget) {
   });
   // Le conteneur, pas la zone : dans un volet, c'est lui qui a la bonne taille.
   ro.observe(wrap);
+  // Un changement de ratio de pixels — fenêtre déplacée d'un écran 100 % vers un
+  // écran 200 %, ou échelle du bureau modifiée — laisse la taille CSS identique :
+  // le ResizeObserver ne se déclenche pas et la session resterait à l'ancienne
+  // définition (floue ou trop grande). On écoute donc la résolution elle-même et
+  // on rejoue le calcul. `matchMedia` est figé sur le dppx courant, donc on le
+  // réarme sur le nouveau à chaque changement. Trouvé par l'audit du 7 septembre
+  // 2026 (HiDPI).
+  let mqDpr: MediaQueryList | null = null;
+  const surChangementDpr = () => {
+    invaliderRect();
+    sendResize();
+    armerMediaDpr();
+  };
+  const armerMediaDpr = () => {
+    mqDpr?.removeEventListener("change", surChangementDpr);
+    mqDpr = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    mqDpr.addEventListener("change", surChangementDpr);
+  };
+  armerMediaDpr();
+  detacherDpr = () => mqDpr?.removeEventListener("change", surChangementDpr);
   rdpSessions.get(id)!.ro = ro;
   rdpSessions.get(id)!.detachRect = detachRect;
   rdpSessions.get(id)!.syncSize = sendResize;
@@ -412,6 +516,12 @@ export async function openRdp(cible: RdpTarget) {
     const conn = await invoke<{ port: number; token: string }>("rdp_open", {
       id, host: cible.host, port: cible.port, user: cible.user, password: cible.password,
       width: rdpW, height: rdpH,
+      // HiDPI (audit du 7 septembre 2026) : on négocie la taille en pixels
+      // physiques ; il faut alors annoncer l'échelle au serveur RDP
+      // (`desktopScaleFactor`, MS-RDPBCGR : 100..500) pour qu'il rende son
+      // interface plus grande, comme mstsc. Sans cela le texte distant serait net
+      // mais deux fois plus petit à 200 %. VNC ignore ce champ (pas d'équivalent).
+      desktopScaleFactor: Math.round(window.devicePixelRatio * 100),
       sansNla: cible.sansNla === true || sansNlaAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
       vnc: cible.vnc === true,
       sansSon: !sonBureau(),
@@ -546,18 +656,40 @@ export async function openRdp(cible: RdpTarget) {
         } else {
           void bilanFichiers(id, corps as { sens: string; dossier?: string; fichiers: number; octets: number; erreurs: string[] });
         }
+      } else if (kind === 14) {
+        // Le presse-papiers distant a changé (texte ou autre format) : la liste
+        // de fichiers offerte est caduque, ses verrous côté serveur vont
+        // expirer. On efface la pastille et l'état pour ne plus proposer une
+        // réception vouée à l'échec. Sauf réception en cours : le sidecar ne
+        // l'envoie déjà pas dans ce cas, garde-fou ici aussi pour ne pas
+        // effacer la pastille « ⬇︎ … » d'un transfert légitime. Trouvé par
+        // l'audit du 7 septembre 2026.
+        const s = rdpSessions.get(id);
+        if (s && !s.reception) {
+          s.fichiers = null;
+          badge.hidden = true;
+          badge.classList.remove("en-cours");
+        }
       }
     };
     ws.onclose = () => {
       const st = tab.querySelector(".state");
       if (st) st.className = "state closed";
       tab.classList.add("dead");
-      // Le processus RDP et l'observateur de taille survivaient à la coupure :
-      // le premier restait dans la table côté Rust jusqu'à l'arrêt de
-      // l'application, le second continuait d'observer #terminal pour un
-      // canvas mort. L'onglet et le canvas restent, eux — « Reconnecter »
-      // doit rester possible.
-      rdpSessions.get(id)?.ro?.disconnect();
+      // Le processus RDP, l'observateur de taille, les écouteurs d'invalidation
+      // de rect (resize/scroll/visibilitychange) et le contexte audio (créé au
+      // premier bloc de son, message [20]) survivaient à la coupure : le
+      // premier restait dans la table côté Rust jusqu'à l'arrêt de
+      // l'application, le deuxième continuait d'observer #terminal pour un
+      // canvas mort, les troisièmes s'accumulaient, et le dernier gardait un
+      // flux de sortie ouvert sur le périphérique — l'application restait
+      // listée comme lisant du son — pour un onglet mort tant qu'il n'était pas
+      // fermé ou reconnecté. On relâche donc les mêmes ressources locales qu'à
+      // la fermeture explicite (`terminerSession`). L'onglet et le canvas
+      // restent, eux — « Reconnecter » doit rester possible. Contexte audio et
+      // écouteurs de rect ajoutés par l'audit du 7 septembre 2026.
+      const s = rdpSessions.get(id);
+      if (s) terminerSession(s);
       // Trouvé par l'audit du 7 septembre 2026 : `rdp_close` et `rdp_diagnostic`
       // sont des commandes synchrones, exécutées en ligne côté Rust dans l'ordre
       // d'émission. Appeler `rdp_close` (qui retire le journal) avant
@@ -662,6 +794,12 @@ export function focusRdp(id: number) {
     : rdpSessions.has(state.active) ? { kind: "rdp" as const, id: state.active } : { kind: "ssh" as const, id: state.active };
   state.active = id;
   surFocus({ kind: "rdp", id }, precedent);
+  // On relève, AVANT d'appliquer la vue, l'état du bureau qui prend le focus :
+  // était-il déjà affiché, et sous quel parent ? `appliquerVue` peut le
+  // reparenter (elle détruit et recrée les `.volet` en vue partagée).
+  const avant = rdpSessions.get(id);
+  const etaitAffiche = !!avant && (avant.canvas.parentElement as HTMLElement).style.display !== "none";
+  const parentAvant = avant?.canvas.parentElement?.parentElement ?? null;
   // La vue montre l'actif (et l'autre volet), cache le reste, prévient chaque
   // bureau de sa visibilité et rattrape la taille des affichés : une session
   // inactive n'a pas suivi les redimensionnements de la fenêtre.
@@ -671,9 +809,14 @@ export function focusRdp(id: number) {
     s.tab.classList.toggle("active", active);
     if (active) {
       donnerLeFocusAuBureau(s.canvas);
-      // Un canvas caché peut avoir perdu son contenu (backing-store WebKitGTK) :
-      // on demande au sidecar de renvoyer l'image entière. Message [9].
-      if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([9]));
+      // Un canvas caché ou reparenté peut avoir perdu son contenu (backing-store
+      // WebKitGTK) : on redemande alors l'image entière (message [9]). Sinon —
+      // canvas déjà affiché et non reparenté, p. ex. clic sur l'onglet déjà
+      // actif — rien n'a été perdu et on économise 8,3 Mo (1080p) à 33 Mo (4K)
+      // de trame hors cadencement. Trouvé par l'audit du 7 septembre 2026.
+      const aEteReparente = (s.canvas.parentElement?.parentElement ?? null) !== parentAvant;
+      const wsOuverte = !!s.ws && s.ws.readyState === WebSocket.OPEN;
+      if (doitRafraichir(etaitAffiche, aEteReparente, wsOuverte) && s.ws) s.ws.send(new Uint8Array([9]));
     }
   }
   state.sessions.forEach((s) => { s.tab.classList.remove("active"); });
@@ -685,7 +828,30 @@ export function focusRdp(id: number) {
   // que traverser (Ctrl+Tab). Le contenu part alors au premier clic dans le
   // canvas. Trouvé par l'audit du 7 septembre 2026.
   if (pousseAuGeste(rdpSessions.get(id)?.target?.vnc === true, "bascule")) void pushLocalClipboard(true);
+  // Un bureau distant n'a pas de système de fichiers : on grise le bouton
+  // « Fichiers (SFTP) » et on masque le panneau, hérités de l'onglet SSH
+  // précédent. `sftp.open` reste la préférence, restaurée au retour sur le SSH.
+  // Trouvé par l'audit du 7 septembre 2026.
+  sftpAppliquerVue();
   renderHosts(); // met à jour le surlignage « sélectionné »
+}
+
+/** Relâche les ressources locales d'une session de bureau — observateur de
+ *  taille, écouteurs d'invalidation de rect (resize/scroll/visibilitychange) et
+ *  contexte audio — sans retirer l'onglet ni le canvas, qui doivent survivre
+ *  pour « Reconnecter ». Partagé par la coupure serveur (`ws.onclose`) et la
+ *  fermeture explicite (`closeRdp`).
+ *
+ *  Trouvé par l'audit du 7 septembre 2026 : `ws.onclose` ne coupait que
+ *  l'observateur de taille ; le contexte WebAudio (créé au premier bloc de son)
+ *  et les écouteurs de rect survivaient à la coupure, gardant un flux de sortie
+ *  audio réservé sur le périphérique pour un onglet mort. `fermer()` étant
+ *  idempotent, le second appel depuis `closeRdp` après une coupure ne coûte
+ *  rien. */
+export function terminerSession(s: { ro?: ResizeObserver; detachRect?: () => void; audio?: LecteurAudio }): void {
+  s.ro?.disconnect();
+  s.detachRect?.();
+  s.audio?.fermer();
 }
 
 export function closeRdp(id: number) {
@@ -696,10 +862,8 @@ export function closeRdp(id: number) {
     document.body.classList.remove("rdp-full");
     getCurrentWindow().setFullscreen(false).catch(() => {});
   }
-  s.ro?.disconnect();
-  s.detachRect?.();
+  terminerSession(s);
   s.ws?.close();
-  s.audio?.fermer();
   invoke("rdp_close", { id }).catch(() => {});
   s.canvas.parentElement?.remove();
   s.tab.remove();
@@ -715,6 +879,14 @@ export function closeRdp(id: number) {
       focusTab(suivant);
     } else {
       $("terminal-empty").style.display = "flex";
+      // Pendant de `closeSession` : sans plus aucun onglet, le panneau SFTP n'a
+      // rien à montrer. `closeRdp` l'oubliait, si bien qu'après être passé sur un
+      // bureau RDP puis avoir fermé l'onglet SSH (state.active vaut alors l'id
+      // RDP, la branche de closeSession ne s'exécute pas) puis le bureau, on
+      // affichait « Aucune session » à côté d'un panneau resté ouvert. Trouvé par
+      // l'audit du 7 septembre 2026.
+      sftp.open = false;
+      sftpAppliquerVue();
     }
   }
   renderHosts(); // éteint le voyant vert de l'hôte fermé
@@ -918,15 +1090,26 @@ $("rdp-edit-form").addEventListener("submit", async (e) => {
     const oldUser = f.dataset.oldUser ?? user;
     const oldProtocole = f.dataset.oldProto ?? protocole;
     const accountChanged = oldHost !== host || oldPort !== port || oldUser !== user || oldProtocole !== protocole;
+    // Trouvé par l'audit du 7 septembre 2026 : ces trois `.catch(() => {})`
+    // avalaient l'échec du trousseau (Secret Service absent, session verrouillée,
+    // écriture refusée). La fiche se fermait « bureau enregistré » alors que le
+    // mot de passe n'était pas mémorisé, ou restait sous l'ancien compte après un
+    // changement d'hôte/port/utilisateur : la connexion suivante le redemandait
+    // sans que l'utilisateur sache pourquoi. On notifie désormais chaque échec.
+    // La fiche peut rester fermée : le bureau, lui, est bien sauvé.
     if (pw) {
-      await invoke("rdp_password_save", { host, port, user, password: pw, protocole }).catch(() => {});
+      await invoke("rdp_password_save", { host, port, user, password: pw, protocole })
+        .catch((ex) => notifyErreur(t("memorisation-impossible", { e: String(ex) })));
       if (accountChanged) {
-        await invoke("rdp_password_forget", { host: oldHost, port: oldPort, user: oldUser, protocole: oldProtocole }).catch(() => {});
+        await invoke("rdp_password_forget", { host: oldHost, port: oldPort, user: oldUser, protocole: oldProtocole })
+          .catch((ex) => notifyErreur(t("hote-mdp-non-oublie", { e: String(ex) })));
       }
     } else if (accountChanged) {
       // Migration confiée au cœur : le secret n'a aucune raison de faire
-      // l'aller-retour par l'interface pour changer de clé de trousseau.
-      await invoke("rdp_password_move", { oldHost, oldPort, oldUser, host, port, user, oldProtocole, protocole }).catch(() => {});
+      // l'aller-retour par l'interface pour changer de clé de trousseau. En cas
+      // d'échec le mot de passe reste sous l'ancien compte — on le dit.
+      await invoke("rdp_password_move", { oldHost, oldPort, oldUser, host, port, user, oldProtocole, protocole })
+        .catch((ex) => notifyErreur(t("rdp-mdp-non-deplace", { e: String(ex) })));
     }
     closeEditRdp();
     await loadHosts();

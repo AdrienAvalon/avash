@@ -242,6 +242,11 @@ pub fn rename_core(
     // écriture SSH, pour qu'une erreur soit signalée sans renommage partiel.
     let hosts_rdp = crate::rdphost::load_hosts_brut_from(rdp)
         .with_context(|| format!("bureaux RDP de {} non remappés", rdp.display()))?;
+    // Sonde des hôtes venus d'un `Include` (voir `hotes_inclus_affectes`) : on
+    // refuse avant toute écriture, sinon l'ancien dossier réapparaît dans l'arbre.
+    signaler_les_hotes_inclus(&hotes_inclus_affectes(ssh, |f| {
+        remap(f, &from, &to).is_some()
+    }))?;
     if let Some(content) = read_optional(ssh)? {
         let multiples = alias_a_alias_multiples(&content);
         let mut recales = Vec::new();
@@ -311,6 +316,47 @@ fn signaler_les_recales(recales: &[String], quoi: &str) -> Result<()> {
     )
 }
 
+/// Alias affectés par l'opération mais déclarés dans un fichier `Include`.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `rename_core`/`delete_core` ne
+/// parsaient que le fichier principal (`parse_config_str`, qui ignore
+/// `Include`), alors que l'arbre affiché résout les Include (`parse_ssh_config`).
+/// Un hôte d'un fichier inclus portant `#Folder: prod` — typiquement un bloc
+/// rangé par Avash dans le fichier principal, puis déplacé à la main dans
+/// `conf.d/` avec son marqueur — n'était ni remappé ni signalé : après un
+/// renommage `prod` → `production`, l'ancien dossier réapparaissait dans l'arbre
+/// avec lui. `set_host_folder_at` ne sait réécrire QUE le fichier principal, on
+/// ne peut donc pas remapper ces blocs en toute sûreté : on les signale, avec un
+/// message distinct de `signaler_les_recales` pour ne pas accuser à tort les
+/// droits de `~/.ssh/config`. La sonde est faite avant toute écriture, comme
+/// celle de `rdp.yaml`, pour ne pas laisser un renommage à moitié appliqué.
+fn hotes_inclus_affectes(ssh: &Path, affecte: impl Fn(&str) -> bool) -> Vec<String> {
+    let principaux: std::collections::HashSet<String> = match read_optional(ssh) {
+        Ok(Some(content)) => crate::parse_config_str(&content)
+            .into_iter()
+            .map(|h| h.alias)
+            .collect(),
+        _ => return Vec::new(),
+    };
+    crate::parse_config_resolu_at(ssh)
+        .into_iter()
+        .filter(|h| !principaux.contains(&h.alias) && affecte(&h.folder))
+        .map(|h| h.alias)
+        .collect()
+}
+
+/// Signale les hôtes affectés mais déclarés dans un fichier inclus.
+fn signaler_les_hotes_inclus(inclus: &[String]) -> Result<()> {
+    if inclus.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} hôte(s) déclaré(s) dans un fichier inclus, à déplacer à la main : {}.",
+        inclus.len(),
+        inclus.join(", ")
+    )
+}
+
 /// Supprime un dossier : ses hôtes (et ceux des sous-dossiers) reviennent à la
 /// racine, puis le dossier et ses descendants quittent le registre.
 ///
@@ -326,6 +372,9 @@ pub fn delete_core(ssh: &Path, rdp: &Path, reg: &Path, path: &str) -> Result<Vec
     // échouer la suppression sans laisser les bureaux dans un dossier disparu.
     let hosts_rdp = crate::rdphost::load_hosts_brut_from(rdp)
         .with_context(|| format!("bureaux RDP de {} non remappés", rdp.display()))?;
+    // Même sonde que `rename_core` : un hôte inclus dans le dossier supprimé
+    // resterait sinon dans `prod` alors que l'opération annonce le succès.
+    signaler_les_hotes_inclus(&hotes_inclus_affectes(ssh, |f| is_under(f, &norm)))?;
     if let Some(content) = read_optional(ssh)? {
         let multiples = alias_a_alias_multiples(&content);
         let mut recales = Vec::new();
@@ -640,6 +689,74 @@ mod tests {
         assert_eq!(crate::rdphost::load_hosts_from(&rdp).unwrap()[0].folder, "");
         assert!(!regs.iter().any(|p| p.starts_with("prod")));
         assert!(regs.contains(&"autre".to_string()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : `rename_core` ne parsait que le
+    /// fichier principal (`parse_config_str`, qui ignore `Include`), alors que
+    /// l'arbre affiché résout les Include (`parse_ssh_config`). Un hôte d'un
+    /// fichier inclus portant `#Folder: prod` — typiquement un bloc rangé par
+    /// Avash dans le fichier principal, puis déplacé à la main dans `conf.d/`
+    /// avec son marqueur — n'était ni remappé ni signalé : après `prod` →
+    /// `production`, l'ancien dossier `prod` réapparaissait dans l'arbre avec lui
+    /// (l'arbre est dérivé des hôtes). L'opération est désormais refusée en
+    /// nommant l'hôte, sans toucher au fichier principal (sonde avant écriture).
+    #[test]
+    fn rename_core_signale_un_hote_inclus() {
+        let d = scratch();
+        let confd = d.join("conf.d");
+        std::fs::create_dir_all(&confd).unwrap();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        std::fs::write(
+            &ssh,
+            "Include conf.d/*\n\nHost local\n    HostName 1\n    #Folder: prod\n",
+        )
+        .unwrap();
+        std::fs::write(
+            confd.join("clients"),
+            "Host acme\n    HostName 2\n    #Folder: prod\n",
+        )
+        .unwrap();
+        create_in(&reg, "prod").unwrap();
+
+        let e = rename_core(&ssh, &rdp, &reg, "prod", "production")
+            .expect_err("un hôte d'un fichier inclus doit être signalé")
+            .to_string();
+        assert!(e.contains("acme"), "l'hôte inclus doit être nommé : {e}");
+        // Sonde avant écriture : le fichier principal ne doit pas avoir bougé.
+        let contenu = std::fs::read_to_string(&ssh).unwrap();
+        assert!(
+            contenu.contains("#Folder: prod"),
+            "le fichier principal ne doit pas être remappé : {contenu}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `delete_core` partage le trou : un hôte d'un fichier inclus dans le
+    /// dossier supprimé restait dans `prod`, l'opération annonçant le succès.
+    /// Symétrique du test de renommage. Audit du 7 septembre 2026.
+    #[test]
+    fn delete_core_signale_un_hote_inclus() {
+        let d = scratch();
+        let confd = d.join("conf.d");
+        std::fs::create_dir_all(&confd).unwrap();
+        let (ssh, rdp, reg) = (d.join("config"), d.join("rdp.yaml"), d.join("folders.yaml"));
+        std::fs::write(
+            &ssh,
+            "Include conf.d/*\n\nHost local\n    HostName 1\n    #Folder: prod\n",
+        )
+        .unwrap();
+        std::fs::write(
+            confd.join("clients"),
+            "Host acme\n    HostName 2\n    #Folder: prod\n",
+        )
+        .unwrap();
+        create_in(&reg, "prod").unwrap();
+
+        let e = delete_core(&ssh, &rdp, &reg, "prod")
+            .expect_err("un hôte d'un fichier inclus doit être signalé")
+            .to_string();
+        assert!(e.contains("acme"), "l'hôte inclus doit être nommé : {e}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

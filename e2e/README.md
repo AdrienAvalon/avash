@@ -54,12 +54,17 @@ données, de cache et d'état ; `ENV_APP` les redirige donc aussi dans le bac à
 sable (`XDG_DATA_HOME`/`XDG_CACHE_HOME`/`XDG_STATE_HOME`) et `seedSandbox` les
 efface, si bien que `beforeSession` remet à zéro le stockage web **avec le
 reste** — un poste où `XDG_DATA_HOME` est exporté n'écrit jamais dans les
-données réelles de l'utilisateur. Il démarre aussi un **serveur RDP de test** local
-(`127.0.0.1:33899`, identifiants `test`/`test`) pour `rdp.spec.js`, et
-`vnc.spec.js` lance le **serveur VNC de test** (`test-vnc-server/`, port 35900,
-mot de passe `test`), qui sert une image connue et réagit aux entrées.
+données réelles de l'utilisateur. Seul le **sshd non-root** (port 2223, clé)
+est monté dans `onPrepare`, pour `ssh.spec.js` ; les serveurs RDP et VNC, eux,
+ne sont pas partagés : **chaque spec démarre son propre serveur dédié** dans son
+`before` (aucun couplage). RDP sur `33899` (`rdp.spec.js`, identifiants
+`test`/`test`), `33898` (`rdp-reconnect`), `33897` (`rdp-clipboard`,
+`rdp-audio`, `onglets-mixtes`) et `33896` (`rdp-fichiers`, `rdp-lecteur`) ;
+VNC sur `35900` (`vnc.spec.js`, mot de passe `test`, image connue qui réagit
+aux entrées) et `35903`/`35904` (`vnc-tls`, VeNCrypt derrière son terminateur
+TLS).
 
-## Couverture (71 scénarios, 36 fichiers)
+## Couverture (74 scénarios, 36 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -104,10 +109,13 @@ Chaque fichier de tests repart de l'état semé (`beforeSession` remet le bac à
 Serveurs locaux : chaque spec RDP démarre son propre serveur de test (aucun couplage) ;
 un **sshd non-root** (port 2223, clé) est monté dans `onPrepare` pour `ssh.spec`.
 
-En CI (`E2E_NO_RDP=1`), la configuration **exclut** les fichiers qui exigent
+Sans serveur local (`E2E_NO_RDP=1` — le job macOS de la chaîne, ou un poste sans
+sshd ni serveurs de test), la configuration **exclut** les fichiers qui exigent
 un serveur local (`ssh`, `sftp`, `rdp`, `rdp-reconnect`, `rdp-clipboard`, `rdp-fichiers`, `rdp-audio`, `rdp-lecteur`, `vnc`, `vnc-tls`,
 `onglets-mixtes`, `enregistrer-et-connecter`, `enregistrement`, `sante`,
 `restauration`, `vue-partagee`, `serie`).
+Les jobs Linux (`ci.yml`, `.gitlab-ci.yml`) et Windows, eux, jouent la suite
+complète avec ses serveurs.
 C'est une exclusion et non une énumération de ce qui tourne :
 la liste énumérative prenait du retard à chaque scénario ajouté, et cinq
 scénarios pourtant sans serveur ne tournaient plus qu'en local. Une nouvelle
@@ -166,25 +174,48 @@ coupe la session de pilotage embarquée (la page ne répond plus, `ECONNRESET`).
 - `getText()` renvoie parfois vide → lire `getProperty("textContent")`.
 - Le clic droit ne génère pas d'`contextmenu` → le dispatcher (`helpers.openCtx`).
 - Les radios stylées ne sont pas « interactables » → cocher via `browser.execute` + event `change`.
-- **Attendre un état, jamais une durée.** Les `browser.pause` ont tous disparu :
-  ils mesuraient la charge de la machine plus que le comportement. Pour un cas
-  « rien ne doit changer », attendre un événement observable — un aller simple
-  jusqu'au moteur via `requestAnimationFrame` — puis constater.
-- `waitForPort` exige **deux** connexions successives : une seule prouve que le
-  socket écoute, pas que le serveur est *revenu* l'écouter. Il traite ses
-  clients l'un après l'autre, et notre sonde en est un.
+- **Attendre un état, jamais une durée.** Les `browser.pause` qui subsistent
+  sont les seuls cas où aucun état observable ne borne l'attente : stabilisation
+  du rendu avant une capture visuelle (`visuel.spec.js`), boucle de retape du
+  port série (`serie.spec.js`, on retape tant que l'écho n'est pas revenu),
+  nettoyage d'un tunnel encore ouvert (`tunnels.spec.js`). Partout ailleurs,
+  attendre un événement observable, pas une horloge : `requestAnimationFrame`
+  pour un aller simple jusqu'au moteur, `sortiePty()` pour un octet vu par le
+  cœur.
+- **Jamais de pause fixe devant une assertion négative.** Une pause qui précède
+  un `expect(...).not...` ou un `toBe(0)` juge « rien n'est venu » avant que la
+  chose ait eu le temps de venir : sous charge, l'écho arrive après le délai et
+  le test passe alors même que le comportement est cassé (vu sur
+  `enregistrement.spec.js`, corrigé le 7 septembre 2026). Attendre plutôt l'état
+  qui prouve que le trajet est bouclé (`sortiePty()` capte l'octet avant
+  l'émission `pty-output`), puis constater l'absence.
+- `waitForPort` enchaîne **deux** connexions successives, mais comme simple délai
+  supplémentaire, pas comme preuve : l'événement `connect` est émis dès que le
+  noyau a fini la poignée de main (file d'attente, *backlog*), sans que le serveur
+  ait appelé `accept()`, donc deux connexions ne prouvent pas que la boucle
+  d'acceptation soit *revenue* écouter. Une sonde probante lirait les premiers
+  octets du serveur (VNC émet « RFB 003.008 » dès accept ; RDP exige un échange
+  X.224) — non fait. Le serveur de test traite ses clients l'un après l'autre, et
+  notre sonde en est un.
 
 ## Dépendances : les `overrides` de `package.json`
 
 WebdriverIO 9 tire `deepmerge-ts` 7 (épuisement de pile sur un graphe
 récursif) et, par mocha, `serialize-javascript` 6 (exécution de code par
 `RegExp.flags`), et aucune de ses versions ne les corrige : `npm audit fix` ne
-propose qu'une rétrogradation en 7.x. Les deux `overrides` imposent les
-versions corrigées ; la suite tourne pareil. Les avis restants viennent tous
-d'`extract-zip`, sans correctif amont : c'est du code de test, jamais
-embarqué, et `npm audit` n'y bloque que sur « critique » pour cette raison.
-Si une montée de WebdriverIO corrige l'un des deux, retirer l'`override`
-correspondant.
+propose qu'une rétrogradation en 7.x. Enfin, `@wdio/utils` dépend de
+`@puppeteer/browsers` `^2.2.0`, qui embarque `extract-zip`
+(GHSA-jmr9-qjv8-65gv, traversée de chemin par lien symbolique, sans correctif
+amont). Les trois `overrides` imposent les versions saines :
+`@puppeteer/browsers` `^3.2.2`, où `extract-zip` a laissé place à
+`modern-tar`, si bien que le verrou e2e ne contient plus `extract-zip` ;
+la suite tourne pareil. C'est du code de test, jamais embarqué, et `npm audit`
+n'y bloque que sur « critique » pour cette raison.
+
+Conditions de retrait : si une montée de WebdriverIO corrige `deepmerge-ts`
+ou `serialize-javascript`, retirer l'`override` correspondant ; retirer celui
+de `@puppeteer/browsers` quand `@wdio/utils` exigera lui-même la version 3 ou
+plus (aujourd'hui encore `^2.2.0`).
 
 ## Audit d'accessibilité (`axe.spec.js`)
 

@@ -24,6 +24,11 @@ pub(crate) enum ClipReq {
     RequestPaste(ClipboardFormatId),
     /// Texte reçu du serveur → à pousser vers le presse-papiers du poste.
     RemoteText(String),
+    /// Le presse-papiers distant a changé (nouvelle FormatList, quel que soit
+    /// le format annoncé) : toute liste de fichiers offerte auparavant est
+    /// caduque, ses verrous côté serveur vont expirer. La boucle l'oublie et
+    /// demande au front d'effacer la pastille, sauf réception en cours.
+    PressePapiersDistantChange,
     /// Le distant a copié des fichiers : leur liste (chemins partiellement
     /// assainis par IronRDP, revalidés composant par composant à la réception,
     /// cf. `fichiers::composant_sur`) et le verrou posé sur son presse-papiers,
@@ -103,6 +108,15 @@ impl CliprdrBackend for ClipBackend {
         if !self.partage_actif() {
             return; // on ne réclame même pas les données au serveur
         }
+        // Une nouvelle FormatList : le presse-papiers distant a changé, quel
+        // que soit le format qui suit. Toute liste de fichiers déjà offerte est
+        // caduque (verrous bientôt expirés). On le signale AVANT de réclamer le
+        // nouveau contenu, pour que la boucle invalide la liste puis la remette
+        // si c'est encore une liste de fichiers. Trouvé par l'audit du
+        // 7 septembre 2026 : après une copie de texte (ou d'un format ignoré :
+        // image, HTML) la pastille « N fichiers copiés » restait et « recevoir »
+        // lançait une réception vouée à l'échec (« le distant a refusé de servir »).
+        let _ = self.tx.send(ClipReq::PressePapiersDistantChange);
         // Des fichiers : on demande leur liste (noms et tailles, quelques
         // kilooctets), jamais leur contenu ; c'est l'utilisateur qui décide de
         // recevoir, depuis l'interface. Du texte : on le demande tel quel.

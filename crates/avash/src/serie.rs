@@ -63,9 +63,14 @@ fn chemin_plausible(chemin: &str) -> bool {
     #[cfg(windows)]
     {
         let c = chemin.trim_start_matches(r"\\.\");
-        c.len() > 3
-            && c[..3].eq_ignore_ascii_case("com")
-            && c[3..].chars().all(|x| x.is_ascii_digit())
+        // Sur les octets, pas sur des tranches d'index str : le chemin vient du
+        // champ libre « port série » du formulaire, et `c[..3]` paniquait
+        // (« byte index 3 is not a char boundary ») quand l'octet 3 tombe au
+        // milieu d'un caractère (« COé », « abé »). Trouvé par l'audit du
+        // 7 septembre 2026 : la panique tuait la tâche tokio de `serie_open`,
+        // laissant l'onglet figé sur « connexion à … ».
+        let b = c.as_bytes();
+        b.len() > 3 && b[..3].eq_ignore_ascii_case(b"com") && b[3..].iter().all(u8::is_ascii_digit)
     }
     #[cfg(not(windows))]
     {
@@ -182,6 +187,11 @@ mod tests {
             assert!(chemin_plausible("COM3"));
             assert!(chemin_plausible(r"\\.\COM12"));
             assert!(!chemin_plausible(r"C:\Windows\notepad.exe"));
+            // Un chemin non ASCII dont l'octet 3 tombe au milieu d'un caractère
+            // ne doit plus paniquer, juste être refusé (audit du 7 sept. 2026).
+            assert!(!chemin_plausible("COé"));
+            assert!(!chemin_plausible("abé"));
+            assert!(!chemin_plausible("COMx"));
         }
         assert!(ouvrir("/dev/null", 0).is_err(), "vitesse nulle refusée");
     }

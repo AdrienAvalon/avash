@@ -28,7 +28,7 @@ fois à trancher une question qu'aucun raisonnement n'aurait tranchée.
 
 | Outil | Ce qu'il permet |
 |---|---|
-| `podman` ou `docker` | le parc RDP local (voir [tests-parc](../tests-parc/README.md)) |
+| `podman` ou `docker` | le parc RDP local (voir [tests-parc](tests-parc/README.md)) |
 | `python3-numpy`, `python3-pil` | le détecteur de cisaillement d'image |
 | `freerdp` (`xfreerdp3`) | un client de référence, pour comparer notre rendu au sien |
 | `tcpdump`, `tshark` | lire le flux RDP déchiffré (voir `scripts/tracer-rdp.sh`) |
@@ -209,8 +209,12 @@ La porte qualité complète est le script `check.sh` à la racine :
   d'`avash-ui`, qui en dépend par `externalBin`.
 
 > **Toute crate ajoutée hors du workspace doit être branchée explicitement sur
-> les quatre portes** — `check.sh`, le hook de pré-commit,
-> `.github/workflows/ci.yml` et `.gitlab-ci.yml`. Aucune ne la verra autrement.
+> les trois portes obligatoires** — `check.sh`, `.github/workflows/ci.yml` et
+> `.gitlab-ci.yml`. Aucune ne la verra autrement. Le hook de pré-commit reste
+> une barrière *rapide* : il ne joue que le workspace et le processus RDP
+> (`rdp-sidecar`), pas les serveurs de test (`test-rdp-server`,
+> `test-vnc-server`), dont la compilation hors espace de travail alourdirait
+> chaque commit sans rien couvrir qu'une des trois portes ne voie déjà.
 
 Le hook `pre-commit` reprend l'essentiel : garde, format, clippy, tests Rust,
 tests du processus RDP, et les vérifications rapides du front (`tsc`, ESLint,
@@ -286,7 +290,7 @@ accommodent. La fonctionnalité `webdriver` n'entre jamais dans un binaire
 publié.
 
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
-et le détail des 69 scénarios.
+et le détail des 74 scénarios.
 
 ### Claude sur les issues et les PR
 
@@ -334,7 +338,7 @@ SFTP fait l'aller-retour à l'octet près.
 
 Ce que le parc **ne** couvre pas — GNOME Remote Desktop, Windows, la lecture du
 flux RDP au fil — est dit sans détour dans
-Voir [tests-parc/README.md](tests-parc/README.md).
+[tests-parc/README.md](tests-parc/README.md).
 
 ## Exécuteur GitLab
 
@@ -454,14 +458,18 @@ Défais exactement l'édition que tu as faite.
 ## Format des commits
 
 Le dépôt suit la convention [Conventional Commits](https://www.conventionalcommits.org/),
-avec le **message rédigé en français**. Types utilisés :
+avec le **message rédigé en français**. Types utilisés (alignés sur l'historique
+réel, où `ci` et `build` sont les plus fréquents après `fix`/`feat`/`test`) :
 
 - `feat:` — nouvelle fonctionnalité ;
 - `fix:` — correction de bug ;
 - `perf:` — optimisation de performance ;
 - `test:` — ajout ou modification de tests ;
-- `chore:` — maintenance, outillage, dépendances ;
-- `docs:` — documentation.
+- `docs:` — documentation ;
+- `ci:` — intégration continue (workflows, scripts de CI) ;
+- `build:` — système de build, dépendances, empaquetage ;
+- `refactor:` — remaniement sans changement de comportement ;
+- `chore:` — maintenance et outillage divers.
 
 Exemples tirés de l'historique :
 

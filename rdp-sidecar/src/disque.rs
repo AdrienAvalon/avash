@@ -276,13 +276,19 @@ impl Lecteur {
         let veut_dossier = req
             .create_options
             .contains(CreateOptions::FILE_DIRECTORY_FILE);
-        let ecriture = req.desired_access.intersects(
+        // Un bit d'écriture explicitement demandé : le refuser si le fichier ne
+        // l'accorde pas. `MAXIMUM_ALLOWED` en est tenu à part (voir plus bas).
+        let ecriture_explicite = req.desired_access.intersects(
             DesiredAccess::GENERIC_WRITE
                 | DesiredAccess::GENERIC_ALL
                 | DesiredAccess::FILE_WRITE_DATA_OR_FILE_ADD_FILE
-                | DesiredAccess::FILE_APPEND_DATA_OR_FILE_ADD_SUBDIRECTORY
-                | DesiredAccess::MAXIMUM_ALLOWED,
+                | DesiredAccess::FILE_APPEND_DATA_OR_FILE_ADD_SUBDIRECTORY,
         );
+        // `MAXIMUM_ALLOWED` (MS-SMB2 2.2.13.1) demande « le plus haut niveau
+        // d'accès possible » : on tente donc l'écriture, mais on saura y renoncer
+        // sur un fichier non inscriptible sans échouer (voir l'ouverture).
+        let ecriture =
+            ecriture_explicite || req.desired_access.contains(DesiredAccess::MAXIMUM_ALLOWED);
         let existe = existant.is_some();
         let est_dossier = existant.as_ref().is_some_and(std::fs::Metadata::is_dir);
         let disposition = req.create_disposition;
@@ -398,13 +404,27 @@ impl Lecteur {
             }
             _ => return Err(NtStatus::from(STATUS_OBJECT_NAME_INVALID)),
         };
-        // Un fichier qu'on ne peut pas ouvrir en écriture s'ouvre en lecture
-        // quand le serveur ne demandait que des attributs : l'explorateur
-        // interroge chaque fichier avant de l'afficher.
+        // Une simple ouverture (sans création ni troncature) : le repli en
+        // lecture seule ci-dessous n'a de sens que là ; ailleurs (`FILE_CREATE`,
+        // `FILE_OVERWRITE`…) l'écriture est intrinsèque et son refus est légitime.
+        let ouverture_simple = matches!(disposition, CreateDisposition::FILE_OPEN)
+            || (matches!(disposition, CreateDisposition::FILE_OPEN_IF) && existe);
         let fichier = match options.open(&chemin) {
             Ok(f) => f,
-            Err(e) if ecriture && e.kind() == std::io::ErrorKind::PermissionDenied => {
-                return Err(NtStatus::ACCESS_DENIED);
+            // Trouvé par l'audit du 7 septembre 2026 : un fichier 0444 ouvert
+            // avec `DesiredAccess = MAXIMUM_ALLOWED` + `FILE_OPEN` renvoyait
+            // ACCESS_DENIED. `MAXIMUM_ALLOWED` (MS-SMB2 2.2.13.1) veut « le plus
+            // haut accès possible », donc ici la lecture ; winpr (FreeRDP) ne le
+            // mappe pas non plus vers O_RDWR. Quand le SEUL bit impliquant
+            // l'écriture est `MAXIMUM_ALLOWED` et qu'aucune création/troncature
+            // n'est demandée, on retente en lecture seule au lieu de refuser. Un
+            // vrai droit d'écriture demandé (`GENERIC_WRITE`…) reste refusé.
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                if ecriture_explicite || !ouverture_simple {
+                    return Err(NtStatus::ACCESS_DENIED);
+                }
+                options.write(false);
+                options.open(&chemin).map_err(statut_io)?
             }
             Err(e) => return Err(statut_io(e)),
         };
@@ -823,8 +843,10 @@ impl Lecteur {
                     .ok_or_else(|| NtStatus::from(STATUS_FILE_IS_A_DIRECTORY))?;
                 let longueur = u64::try_from(a.allocation_size)
                     .map_err(|_| NtStatus::from(STATUS_OBJECT_NAME_INVALID))?;
-                // L'allocation ne rétrécit jamais le contenu : Windows la pose
-                // avant d'écrire, le fichier grandit ensuite de lui-même.
+                // L'allocation n'agrandit jamais le fichier : Windows la pose
+                // avant d'écrire, le contenu grandit ensuite de lui-même. Plus
+                // petite que la fin de fichier, elle la ramène (MS-FSCC 2.4.4,
+                // comme FreeRDP).
                 let actuelle = f.metadata().map_err(statut_io)?.len();
                 if longueur < actuelle {
                     f.set_len(longueur).map_err(statut_io)?;
@@ -1011,7 +1033,12 @@ fn attributs(m: &std::fs::Metadata, nom: &str) -> FileAttributes {
 
 /// Correspondance de motif DOS (`*`, `?`), sans tenir compte de la casse :
 /// c'est ainsi que le serveur Windows filtre une énumération.
-pub(crate) fn correspond(motif: &str, nom: &str) -> bool {
+///
+/// Public pour que `tests/` et une cible `fuzz/` puissent l'éprouver sur des
+/// motifs adverses (audit du 7 septembre 2026 : le motif multi-étoiles
+/// exponentiel ne se voyait que de l'extérieur du crate).
+#[must_use]
+pub fn correspond(motif: &str, nom: &str) -> bool {
     // Trouvé par l'audit du 7 septembre 2026 : l'ancienne récursion traitait
     // `*` par `rec(&m[1..], n) || rec(m, &n[1..])` sans mémoïsation, soit un
     // nombre d'appels en C(n+k, k) pour k étoiles et un nom de n caractères
@@ -1133,8 +1160,9 @@ fn espace_inconnu() -> Espace {
 mod tests {
     use super::*;
     use ironrdp::rdpdr::pdu::efs::{
-        DeviceIoRequest, FileDispositionInformation, FileEndOfFileInformation,
-        FileRenameInformation, MajorFunction, MinorFunction, SharedAccess,
+        DeviceIoRequest, FileAllocationInformation, FileDispositionInformation,
+        FileEndOfFileInformation, FileRenameInformation, MajorFunction, MinorFunction,
+        SharedAccess,
     };
 
     fn bac(nom: &str) -> PathBuf {
@@ -1272,7 +1300,23 @@ mod tests {
             },
         ));
         match r.pop() {
-            Some(RdpdrPdu::ClientDriveSetInformationResponse(_)) => NtStatus::SUCCESS,
+            Some(pdu @ RdpdrPdu::ClientDriveSetInformationResponse(_)) => {
+                // Trouvé par l'audit du 7 septembre 2026 : le helper rendait
+                // SUCCESS dès qu'une réponse existait, sans lire son io_status.
+                // Les statuts que `modifier_selon` renvoie au serveur
+                // (OBJECT_NAME_COLLISION pour un renommage sans replace,
+                // DIRECTORY_NOT_EMPTY pour un dossier plein, NOT_SUPPORTED)
+                // n'étaient donc jamais éprouvés : un renommage qui aurait
+                // faussement rendu Ok(()) restait vert. On relit l'en-tête
+                // comme test-rdp-server : encoder le PDU, sauter les 4 octets
+                // du SharedHeader, décoder DeviceIoResponse, rendre io_status.
+                let octets = ironrdp::core::encode_vec(&pdu).expect("encodage de la réponse");
+                let mut src = ironrdp::core::ReadCursor::new(&octets);
+                let _ = src.read_u32();
+                DeviceIoResponse::decode(&mut src)
+                    .expect("en-tête de réponse")
+                    .io_status
+            }
             None => panic!("une réponse de modification"),
             _ => panic!("une réponse de modification"),
         }
@@ -1374,6 +1418,99 @@ mod tests {
             mode, 0o644,
             "seul le propriétaire regagne l'écriture, pas le groupe ni les autres"
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Ouvre avec un `DesiredAccess` précis (le helper `ouvrir` ne connaît que
+    /// lecture / lecture-écriture) ; rend (statut, `file_id`, information).
+    fn ouvrir_acces(
+        l: &mut Lecteur,
+        chemin: &str,
+        acces: DesiredAccess,
+        disposition: CreateDisposition,
+    ) -> (NtStatus, u32, u8) {
+        let mut r = l.traiter(ServerDriveIoRequest::ServerCreateDriveRequest(
+            DeviceCreateRequest {
+                device_io_request: io(0, 1, MajorFunction::Create),
+                desired_access: acces,
+                allocation_size: 0,
+                file_attributes: FileAttributes::empty(),
+                shared_access: SharedAccess::empty(),
+                create_disposition: disposition,
+                create_options: CreateOptions::empty(),
+                path: chemin.to_owned(),
+            },
+        ));
+        match r.pop() {
+            Some(RdpdrPdu::DeviceCreateResponse(c)) => {
+                (c.device_io_reply.io_status, c.file_id, c.information.bits())
+            }
+            _ => panic!("une réponse de création"),
+        }
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un fichier 0444 ouvert avec
+    /// `DesiredAccess = MAXIMUM_ALLOWED` + `FILE_OPEN` renvoyait ACCESS_DENIED.
+    /// `MAXIMUM_ALLOWED` (MS-SMB2 2.2.13.1) était compté comme une demande
+    /// d'écriture, l'ouverture O_RDWR d'un fichier sans droit d'écriture
+    /// échouait, et le programme distant concluait à un refus alors que le
+    /// fichier est lisible (comportement de winpr/FreeRDP : lecture). On ouvre
+    /// désormais en lecture. Le cas « aucun accès » (0000) reste ACCESS_DENIED.
+    #[cfg(unix)]
+    #[test]
+    fn maximum_allowed_ouvre_en_lecture_un_fichier_sans_ecriture() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = bac("maximum-allowed");
+        let lisible = d.join("lisible.txt");
+        std::fs::write(&lisible, b"contenu").unwrap();
+        std::fs::set_permissions(&lisible, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let interdit = d.join("interdit.txt");
+        std::fs::write(&interdit, b"secret").unwrap();
+        std::fs::set_permissions(&interdit, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut l = Lecteur::nouveau(&d).unwrap();
+
+        // Un 0444 : MAXIMUM_ALLOWED + FILE_OPEN ouvre en lecture, sans refus.
+        let (s, id, info) = ouvrir_acces(
+            &mut l,
+            "\\lisible.txt",
+            DesiredAccess::MAXIMUM_ALLOWED,
+            CreateDisposition::FILE_OPEN,
+        );
+        assert_eq!(
+            (s, info),
+            (NtStatus::SUCCESS, Information::FILE_OPENED.bits()),
+            "un 0444 ouvert avec MAXIMUM_ALLOWED doit s'ouvrir, pas être refusé"
+        );
+        assert_ne!(id, 0);
+        let (sl, data) = lire(&mut l, id, 0, 7);
+        assert_eq!((sl, data), (NtStatus::SUCCESS, b"contenu".to_vec()));
+        assert_eq!(fermer(&mut l, id), NtStatus::SUCCESS);
+
+        // Un droit d'écriture explicite sur ce même 0444 reste refusé.
+        let (s, id, _) = ouvrir_acces(
+            &mut l,
+            "\\lisible.txt",
+            DesiredAccess::GENERIC_READ | DesiredAccess::GENERIC_WRITE,
+            CreateDisposition::FILE_OPEN,
+        );
+        assert_eq!(s, NtStatus::ACCESS_DENIED, "GENERIC_WRITE sur un 0444");
+        assert_eq!(id, 0);
+
+        // Un 0000 : aucun accès, même MAXIMUM_ALLOWED n'ouvre rien. (root
+        // outrepasse les droits Unix : on ne l'affirme que pour un compte
+        // ordinaire, sinon le fichier serait réellement lisible.)
+        if unsafe { libc::geteuid() } != 0 {
+            let (s, id, _) = ouvrir_acces(
+                &mut l,
+                "\\interdit.txt",
+                DesiredAccess::MAXIMUM_ALLOWED,
+                CreateDisposition::FILE_OPEN,
+            );
+            assert_eq!(s, NtStatus::ACCESS_DENIED, "aucun droit -> refus");
+            assert_eq!(id, 0);
+        }
+
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1551,18 +1688,26 @@ mod tests {
                 file_name: "\\deux.txt".to_owned(),
             }),
         );
-        assert_eq!(collision, NtStatus::SUCCESS, "la réponse existe");
+        assert_eq!(
+            collision,
+            NtStatus::OBJECT_NAME_COLLISION,
+            "renommer vers un nom existant sans replace_if_exists refuse"
+        );
         assert!(
             d.join("un.txt").exists(),
             "rien n'a bougé sans replace_if_exists"
         );
-        modifier(
-            &mut l,
-            id,
-            FileInformationClass::Rename(FileRenameInformation {
-                replace_if_exists: Boolean::True,
-                file_name: "\\trois.txt".to_owned(),
-            }),
+        assert_eq!(
+            modifier(
+                &mut l,
+                id,
+                FileInformationClass::Rename(FileRenameInformation {
+                    replace_if_exists: Boolean::True,
+                    file_name: "\\trois.txt".to_owned(),
+                }),
+            ),
+            NtStatus::SUCCESS,
+            "renommer avec replace_if_exists aboutit"
         );
         assert!(!d.join("un.txt").exists() && d.join("trois.txt").exists());
         modifier(
@@ -1594,22 +1739,63 @@ mod tests {
 
         // Un dossier plein ne se supprime pas ; vidé, si.
         let (_, id, _) = ouvrir(&mut l, "\\plein", CreateDisposition::FILE_OPEN, true, false);
-        let mut r = l.traiter(ServerDriveIoRequest::ServerDriveSetInformationRequest(
-            ServerDriveSetInformationRequest {
-                device_io_request: io(id, 8, MajorFunction::SetInformation),
-                set_buffer: FileInformationClass::Disposition(FileDispositionInformation {
-                    delete_pending: 1,
-                }),
-            },
-        ));
-        assert!(matches!(
-            r.pop(),
-            Some(RdpdrPdu::ClientDriveSetInformationResponse(_))
-        ));
+        assert_eq!(
+            modifier(
+                &mut l,
+                id,
+                FileInformationClass::Disposition(FileDispositionInformation { delete_pending: 1 }),
+            ),
+            NtStatus::DIRECTORY_NOT_EMPTY,
+            "un dossier plein refuse la suppression"
+        );
         assert_eq!(fermer(&mut l, id), NtStatus::SUCCESS);
         assert!(
             d.join("plein").exists(),
             "DIRECTORY_NOT_EMPTY ne pose pas la suppression"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : le commentaire de la branche
+    /// Allocation disait « ne rétrécit jamais » alors que le code tronque quand
+    /// l'allocation est plus petite que la fin de fichier (MS-FSCC 2.4.4). Ce
+    /// test fige les deux cas pour qu'un correctif « aligné sur le commentaire »
+    /// n'aille pas retirer la troncature : une allocation inférieure ramène le
+    /// contenu, une allocation supérieure n'agrandit rien (Windows la pose avant
+    /// d'écrire, le contenu grandit ensuite de lui-même).
+    #[test]
+    fn l_allocation_inferieure_tronque_mais_superieure_n_agrandit_pas() {
+        let d = bac("allocation");
+        std::fs::write(d.join("f.txt"), b"0123456789").unwrap();
+        let mut l = Lecteur::nouveau(&d).unwrap();
+
+        let (_, id, _) = ouvrir(&mut l, "\\f.txt", CreateDisposition::FILE_OPEN, false, true);
+
+        // Allocation supérieure à la fin de fichier : aucun agrandissement.
+        modifier(
+            &mut l,
+            id,
+            FileInformationClass::Allocation(FileAllocationInformation {
+                allocation_size: 4096,
+            }),
+        );
+        assert_eq!(
+            std::fs::metadata(d.join("f.txt")).unwrap().len(),
+            10,
+            "une allocation plus grande que la fin de fichier n'agrandit pas"
+        );
+
+        // Allocation inférieure à la fin de fichier : elle la ramène.
+        modifier(
+            &mut l,
+            id,
+            FileInformationClass::Allocation(FileAllocationInformation { allocation_size: 4 }),
+        );
+        assert_eq!(fermer(&mut l, id), NtStatus::SUCCESS);
+        assert_eq!(
+            std::fs::metadata(d.join("f.txt")).unwrap().len(),
+            4,
+            "une allocation plus petite que la fin de fichier tronque le contenu"
         );
         let _ = std::fs::remove_dir_all(&d);
     }

@@ -5,6 +5,7 @@ import { $, FONT_MAX, FONT_MIN, type Session, state } from "./etat";
 import { notify, notifyErreur } from "./notifications";
 import { t } from "./i18n";
 import { collerDansTerminal } from "./dialogues";
+import { placerMenu } from "./menu-hote";
 
 // ---------- Zoom de police, recherche, menu clic droit ----------
 
@@ -65,15 +66,26 @@ $("terminal").addEventListener("contextmenu", (e) => {
   const m = ctxMenu();
   const s = state.sessions.get(state.active);
   const hasSel = !!s?.term.getSelection();
-  // Griser « copier » sans sélection.
-  (m.querySelector('[data-act="copy"]') as HTMLElement).classList.toggle("disabled", !hasSel);
+  // Griser « copier » sans sélection. aria-disabled double la classe (invisible
+  // au lecteur d'écran) pour qu'Orca/NVDA annoncent l'entrée grisée après
+  // Maj+F10 (audit du 7 septembre 2026).
+  const copie = m.querySelector('[data-act="copy"]') as HTMLElement;
+  copie.classList.toggle("disabled", !hasSel);
+  copie.setAttribute("aria-disabled", String(!hasSel));
   // Une seule entrée d'enregistrement à la fois : démarrer, ou arrêter.
   const enCours = !!s?.tab.classList.contains("rec");
   (m.querySelector('[data-act="record"]') as HTMLElement).hidden = enCours;
   (m.querySelector('[data-act="record-stop"]') as HTMLElement).hidden = !enCours;
-  m.style.left = `${(e as MouseEvent).clientX}px`;
-  m.style.top = `${(e as MouseEvent).clientY}px`;
-  m.classList.add("open");
+  // Poser le menu aux coordonnées brutes du clic le laissait déborder de la
+  // fenêtre près du bord bas/droit : le terminal occupant presque tout l'écran,
+  // un clic droit dans son quart inférieur rendait « Tout sélectionner »,
+  // « Effacer l'écran » et « Enregistrer la session » hors champ, et un menu de
+  // 200 px était tronqué à droite (audit du 7 septembre 2026). On réutilise
+  // placerMenu, qui mesure le menu et le rabat dans la fenêtre comme les cinq
+  // autres menus contextuels. L'appel reste APRÈS les bascules disabled/hidden
+  // pour que getBoundingClientRect mesure le bon jeu d'entrées ; placerMenu
+  // ajoute déjà la classe `open`.
+  placerMenu(m, e as MouseEvent);
 });
 window.addEventListener("click", hideContext);
 window.addEventListener("blur", hideContext);
@@ -83,6 +95,8 @@ ctxMenu().addEventListener("click", (e) => {
   if (!s) return;
   if (act === "copy") {
     const sel = s.term.getSelection();
+    // Copie de la sélection du terminal : un rejet reste muet à dessein, geste
+    // répétable et sans conséquence (audit du 7 septembre 2026).
     if (sel) navigator.clipboard.writeText(sel).catch(() => {});
   } else if (act === "paste") {
     navigator.clipboard.readText().then(

@@ -50,6 +50,22 @@ pub fn parse_ssh_config() -> anyhow::Result<Vec<SshHost>> {
     Ok(parse_config_str(&resolve_includes(&content, &base, 0)))
 }
 
+/// Comme [`parse_ssh_config`], mais sur un chemin explicite (testable), en
+/// résolvant les `Include` relativement au dossier de ce fichier. Un fichier
+/// principal absent ou illisible rend une liste vide.
+///
+/// Sert au registre des dossiers (`folders`) pour repérer les hôtes déclarés
+/// dans un fichier inclus : ils ne sont pas dans le fichier principal que
+/// `set_host_folder_at` réécrit, mais figurent bien dans l'arbre affiché.
+#[must_use]
+pub(crate) fn parse_config_resolu_at(path: &Path) -> Vec<SshHost> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    parse_config_str(&resolve_includes(&content, &base, 0))
+}
+
 /// Profondeur maximale de resolution des `Include`.
 ///
 /// OpenSSH s'arrete a 16 ; on fait de meme. Sans borne, deux fichiers qui
@@ -137,17 +153,47 @@ fn expand_include(pattern: &str, base: &Path) -> Vec<PathBuf> {
 }
 
 /// Correspondance de motif minimale : `*` et `?`, sans classes.
-fn glob_match(pattern: &str, name: &str) -> bool {
-    fn inner(p: &[u8], n: &[u8]) -> bool {
-        match (p.first(), n.first()) {
-            (None, None) => true,
-            (Some(b'*'), _) => inner(&p[1..], n) || (!n.is_empty() && inner(p, &n[1..])),
-            (Some(b'?'), Some(_)) => inner(&p[1..], &n[1..]),
-            (Some(a), Some(b)) if a == b => inner(&p[1..], &n[1..]),
-            _ => false,
+///
+/// Trouvé par l'audit du 7 septembre 2026 : la version récursive (deux appels
+/// sur `*`) faisait un retour arrière exponentiel : un motif d'`Include` à
+/// plusieurs étoiles (`conf.d/*a*a…*b`) sur un long nom sans correspondance
+/// figeait `parse_ssh_config` à chaque rafraîchissement. On balaie désormais les
+/// octets une fois, avec un seul point de repli (dernière étoile vue et position
+/// à reprendre) : O(n*m), même résultat.
+///
+/// Exposée (fonction pure) pour la cible cargo-fuzz `glob_match_pur`, qui rejoue
+/// le cas pathologique décrit ci-dessus sous `-timeout`.
+#[must_use]
+pub fn glob_match(pattern: &str, name: &str) -> bool {
+    let p = pattern.as_bytes();
+    let n = name.as_bytes();
+    let (mut pi, mut ni) = (0, 0);
+    // `etoile` = index dans `p` de la dernière `*` rencontrée ; `repli` = index
+    // dans `n` à partir duquel cette `*` reprendra en avalant un octet de plus.
+    let mut etoile: Option<usize> = None;
+    let mut repli = 0;
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            etoile = Some(pi);
+            repli = ni;
+            pi += 1;
+        } else if let Some(e) = etoile {
+            // Pas de correspondance ici : l'étoile avale un octet de plus.
+            pi = e + 1;
+            repli += 1;
+            ni = repli;
+        } else {
+            return false;
         }
     }
-    inner(pattern.as_bytes(), name.as_bytes())
+    // Nom épuisé : le reste du motif ne doit être que des étoiles.
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
 /// Retire une paire de guillemets doubles entourant une valeur de directive.
@@ -488,6 +534,68 @@ mod tests {
         assert!(split_proxy_jump("  ,  ").is_empty());
     }
 
+    // Trouvé par l'audit du 7 septembre 2026 : un bastion IPv6 littéral s'écrit
+    // entre crochets (`[2001:db8::1]:2222`), la seule syntaxe qu'OpenSSH accepte
+    // en ProxyJump (`hpdelim` coupe une IPv6 nue au premier `:`, « Bad
+    // ProxyJump »). Le `rsplit_once(':')` gardait les crochets dans l'hôte, si
+    // bien que russh recevait `"[2001:db8::1]"`, ni IP analysable ni nom
+    // résolvable : le rebond échouait là où `ssh -J` marchait.
+    #[test]
+    fn split_proxy_jump_retire_les_crochets_ipv6() {
+        let v = split_proxy_jump("u@[2001:db8::1]:2222");
+        assert_eq!(v.len(), 1);
+        assert_eq!(
+            v[0],
+            HopSpec {
+                user: Some("u".into()),
+                host: "2001:db8::1".into(),
+                port: Some(2222)
+            }
+        );
+
+        // Même adresse sans port : les crochets tombent, port `None`.
+        let sans_port = split_proxy_jump("[2001:db8::1]");
+        assert_eq!(
+            sans_port,
+            vec![HopSpec {
+                user: None,
+                host: "2001:db8::1".into(),
+                port: None
+            }]
+        );
+
+        // Un port nul derrière les crochets reste refusé : morceau sans port,
+        // la résolution le dira introuvable plutôt que de viser le port 0.
+        let port_nul = split_proxy_jump("[2001:db8::1]:0");
+        assert_eq!(port_nul[0].host, "2001:db8::1");
+        assert_eq!(port_nul[0].port, None);
+
+        // Crochet ouvrant sans fermant (saisie malformée) : on retire quand même
+        // le `[` de tête pour tenir l'invariant « pas de crochet dans l'hôte »
+        // gardé par la cible fuzz et le test de mutation. La résolution refusera
+        // cet hôte de toute façon.
+        let non_ferme = split_proxy_jump("[2001:db8::1");
+        assert_eq!(non_ferme[0].host, "2001:db8::1");
+        assert_eq!(non_ferme[0].port, None);
+        assert!(!non_ferme[0].host.starts_with('['));
+    }
+
+    // Comportement documenté d'une IPv6 littérale SANS crochets : OpenSSH la
+    // refuse en ProxyJump, il n'y a donc pas de résultat « correct » à viser.
+    // On note ce que rend `split_proxy_jump` (découpe au dernier `:`, jamais
+    // entre crochets) pour que le choix soit visible et gardé : la forme entre
+    // crochets reste la seule voie vers un bastion IPv6 littéral.
+    #[test]
+    fn split_proxy_jump_ipv6_nue_reste_une_erreur_de_config() {
+        let v = split_proxy_jump("2001:db8::1");
+        // Le dernier groupe décimal (`1`) est pris pour un port : résultat
+        // volontairement faux, comme une IPv6 nue l'est déjà pour OpenSSH.
+        assert_eq!(v[0].host, "2001:db8:");
+        assert_eq!(v[0].port, Some(1));
+        // Aucun morceau ne conserve de crochet : invariant tenu même ici.
+        assert!(!v[0].host.starts_with('['));
+    }
+
     #[test]
     fn parses_basic_config() {
         let cfg = r"
@@ -618,17 +726,44 @@ pub fn split_proxy_jump(spec: &str) -> Vec<HopSpec> {
                 Some((u, r)) => (Some(u.trim()).filter(|u| !u.is_empty()), r.trim()),
                 None => (None, token),
             };
-            // `host:port` — on ne coupe que si la partie apres `:` est un port
-            // (evite de casser une adresse IPv6 nue, rare en ProxyJump). Zéro
-            // n'en est pas un : le morceau reste entier, et la résolution le
-            // dira introuvable plutôt que de viser le port 0.
-            let (host, port) = match rest.rsplit_once(':') {
-                Some((h, p))
-                    if !h.trim().is_empty() && p.trim().parse::<u16>().is_ok_and(|p| p != 0) =>
-                {
-                    (h.trim().to_string(), p.trim().parse::<u16>().ok())
+            // `host:port`. Une IPv6 littérale s'écrit entre crochets
+            // (`[2001:db8::1]:2222`) : c'est la seule syntaxe qu'OpenSSH
+            // accepte en ProxyJump, et la seule que nous sachions découper sans
+            // ambiguïté (une IPv6 nue partage le `:` avec le port). Trouvé par
+            // l'audit du 7 septembre 2026 : le `rsplit_once(':')` gardait les
+            // crochets dans l'hôte, si bien que russh recevait `"[2001:db8::1]"`
+            // (ni IP analysable ni nom résolvable) et que le rebond échouait là
+            // où `ssh -J` marchait. On retire donc les crochets comme le fait
+            // `cleanhostname` d'OpenSSH et on ne lit un `:port` que derrière `]`.
+            // Hors crochets, on ne coupe que si la partie après le dernier `:`
+            // est un port : zéro n'en est pas un, le morceau reste entier et la
+            // résolution le dira introuvable plutôt que de viser le port 0.
+            let (host, port) = if let Some(reste) = rest.strip_prefix('[') {
+                match reste.split_once(']') {
+                    Some((hote, apres)) => {
+                        let port = apres
+                            .strip_prefix(':')
+                            .and_then(|p| p.trim().parse::<u16>().ok())
+                            .filter(|p| *p != 0);
+                        (hote.trim().to_string(), port)
+                    }
+                    // Crochet ouvrant sans fermant : morceau malformé. On retire
+                    // quand même le `[` de tête (russh ne sait pas le lire, et
+                    // l'invariant « pas de crochet dans l'hôte » doit tenir, y
+                    // compris pour la cible fuzz) ; la résolution refusera cet
+                    // hôte de toute façon.
+                    None => (reste.trim().to_string(), None),
                 }
-                _ => (rest.to_string(), None),
+            } else {
+                match rest.rsplit_once(':') {
+                    Some((h, p))
+                        if !h.trim().is_empty()
+                            && p.trim().parse::<u16>().is_ok_and(|p| p != 0) =>
+                    {
+                        (h.trim().to_string(), p.trim().parse::<u16>().ok())
+                    }
+                    _ => (rest.to_string(), None),
+                }
             };
             HopSpec {
                 user: user.map(str::to_string),
@@ -638,6 +773,23 @@ pub fn split_proxy_jump(spec: &str) -> Vec<HopSpec> {
         })
         .filter(|h| !h.host.is_empty())
         .collect()
+}
+
+/// Séparateur de ligne à réémettre pour préserver la fin de ligne du fichier.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `content.lines()` retire `\r\n`, et
+/// `remove_host`/`update_host`/`set_host_folder_at` réémettaient chaque ligne en
+/// `\n`. Sous Windows (Bloc-notes, éditeurs en CRLF), un simple déplacement de
+/// dossier ou une édition convertissait donc TOUT le fichier en LF, remplissant
+/// `git diff` d'un dépôt de dotfiles versionné et masquant le vrai changement.
+/// On garde le séparateur du fichier ; sur un fichier déjà mixte on suit la fin
+/// de la PREMIÈRE ligne plutôt qu'un `contains("\r\n")` qui basculerait tout en
+/// CRLF. Un fichier sans `\n` (une seule ligne, ou vide) reste en LF.
+fn fin_de_ligne(content: &str) -> &'static str {
+    match content.find('\n') {
+        Some(i) if i > 0 && content.as_bytes()[i - 1] == b'\r' => "\r\n",
+        _ => "\n",
+    }
 }
 
 pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
@@ -690,17 +842,27 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
         ));
     }
 
+    // Fin de ligne du fichier existant : `render_host_block` produit du LF, on
+    // convertit le bloc ajouté juste avant l'écriture (voir `fin_de_ligne`).
+    // Sans cela un `~/.ssh/config` en CRLF se retrouvait mixte, le bloc Avash y
+    // étant collé en LF.
+    let fin = fin_de_ligne(&existing);
     let mut block = String::new();
     // Une ligne vide avant le bloc, sauf si le fichier est vide ou en finit
     // deja par une : sinon le `Host` se colle a la directive precedente et
-    // en devient une sous-directive.
-    if !existing.is_empty() && !existing.ends_with("\n\n") {
+    // en devient une sous-directive. La détection tient compte du CRLF (une
+    // ligne vide de fin y vaut `\r\n\r\n`).
+    let finit_par_ligne_vide = existing.ends_with("\n\n") || existing.ends_with("\r\n\r\n");
+    if !existing.is_empty() && !finit_par_ligne_vide {
         if !existing.ends_with('\n') {
             block.push('\n');
         }
         block.push('\n');
     }
     block.push_str(&render_host_block(host));
+    if fin == "\r\n" {
+        block = block.replace('\n', "\r\n");
+    }
 
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -715,6 +877,47 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     Ok(())
+}
+
+/// Si `alias` figure dans un bloc `Host` à plusieurs noms (`Host a b`), rend la
+/// liste d'alias telle qu'écrite (« a b ») ; sinon `None`.
+///
+/// La détection suit `parse_config_str` : mot-clé insensible à la casse,
+/// séparateur espace OU tabulation (`HoSt\ta b` compte). La comparaison de
+/// l'alias est exacte, comme celle qui décide `in_target`/`matche` dans les
+/// éditeurs de blocs.
+fn bloc_multi_alias_citant(content: &str, alias: &str) -> Option<String> {
+    for line in content.lines() {
+        let Some((key, value)) = line.trim_start().split_once(char::is_whitespace) else {
+            continue;
+        };
+        if !key.eq_ignore_ascii_case("host") {
+            continue;
+        }
+        let noms: Vec<&str> = value.split_whitespace().collect();
+        if noms.len() > 1 && noms.contains(&alias) {
+            return Some(noms.join(" "));
+        }
+    }
+    None
+}
+
+/// Message d'échec quand un alias visé n'a pas pu être édité en place.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : `set_host_folder_at`, `remove_host`
+/// et `update_host` rendaient « Hôte « a » introuvable » pour un alias déclaré
+/// dans un bloc `Host a b`. L'hôte est pourtant listé (`parse_config_str` éclate
+/// `Host a b` en deux entrées) et glissable dans l'arbre : le message affirmait
+/// un fait faux. Ces trois chemins refusent volontairement d'éditer un bloc à
+/// plusieurs alias (on ne saurait où poser le marqueur ni quel bloc réécrire
+/// sans changer le sens pour les autres noms) ; le message le dit désormais, et
+/// ne garde « introuvable » que si aucun bloc ne cite l'alias.
+fn erreur_alias_non_editable(content: &str, alias: &str, path: &std::path::Path) -> anyhow::Error {
+    if let Some(bloc) = bloc_multi_alias_citant(content, alias) {
+        anyhow::anyhow!("Le bloc « Host {bloc} » a plusieurs alias : rangez-le à la main.")
+    } else {
+        anyhow::anyhow!("Hôte « {alias} » introuvable dans {}.", path.display())
+    }
 }
 
 /// Supprime un hôte de `~/.ssh/config`, en préservant tout le reste.
@@ -794,16 +997,21 @@ pub fn remove_host(alias: &str) -> anyhow::Result<()> {
     vider(&mut out, &mut tampon);
 
     if !removed {
-        return Err(anyhow::anyhow!(
-            "Hôte « {alias} » introuvable dans {}.",
-            path.display()
-        ));
+        return Err(erreur_alias_non_editable(&content, alias, &path));
     }
-    // Compacter les lignes vides en trop laissees par la suppression.
+    // Compacter les lignes vides en trop laissees par la suppression. On
+    // travaille en LF (la compaction `\n\n\n` ne verrait rien en CRLF), puis on
+    // rétablit la fin de ligne d'origine juste avant l'écriture.
     while out.contains("\n\n\n") {
         out = out.replace("\n\n\n", "\n\n");
     }
-    ecrire_atomiquement(&path, out.trim_start_matches('\n').as_bytes())?;
+    let sortie = out.trim_start_matches('\n');
+    let sortie = if fin_de_ligne(&content) == "\r\n" {
+        sortie.replace('\n', "\r\n")
+    } else {
+        sortie.to_string()
+    };
+    ecrire_atomiquement(&path, sortie.as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -919,15 +1127,21 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
     }
 
     if !replaced {
-        return Err(anyhow::anyhow!(
-            "Hôte « {old_alias} » introuvable dans {}.",
-            path.display()
-        ));
+        return Err(erreur_alias_non_editable(&content, old_alias, &path));
     }
     while out.contains("\n\n\n") {
         out = out.replace("\n\n\n", "\n\n");
     }
-    ecrire_atomiquement(&path, out.trim_start_matches('\n').as_bytes())?;
+    // On a travaillé en LF (`render_host_block` et la compaction sont en LF) :
+    // rétablir la fin de ligne d'origine juste avant l'écriture, sans quoi une
+    // édition convertissait tout un `~/.ssh/config` CRLF en LF.
+    let sortie = out.trim_start_matches('\n');
+    let sortie = if fin_de_ligne(&content) == "\r\n" {
+        sortie.replace('\n', "\r\n")
+    } else {
+        sortie.to_string()
+    };
+    ecrire_atomiquement(&path, sortie.as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1044,12 +1258,17 @@ pub fn set_host_folder_at(path: &std::path::Path, alias: &str, folder: &str) -> 
     flush_folder_block(&mut out, &mut block, in_target, folder);
 
     if !found {
-        return Err(anyhow::anyhow!(
-            "Hôte « {alias} » introuvable dans {}.",
-            path.display()
-        ));
+        return Err(erreur_alias_non_editable(&content, alias, path));
     }
-    ecrire_atomiquement(path, out.as_bytes())?;
+    // La (re)pose du seul `#Folder:` ne doit pas convertir tout le fichier :
+    // `flush_folder_block` réémet chaque ligne en LF, on rétablit la fin de
+    // ligne d'origine juste avant l'écriture (voir `fin_de_ligne`).
+    let sortie = if fin_de_ligne(&content) == "\r\n" {
+        out.replace('\n', "\r\n")
+    } else {
+        out
+    };
+    ecrire_atomiquement(path, sortie.as_bytes())?;
     Ok(())
 }
 
@@ -1504,16 +1723,55 @@ mod tests_ecriture_atomique {
         }
     }
 
-    /// Un chemin impossible doit remonter une erreur, pas laisser un temporaire
-    /// derrière lui.
+    /// Un parent qui est un fichier fait échouer `create_dir_all` : on remonte
+    /// une erreur avant même de créer un temporaire.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : ce cas s'appelait
+    /// `un_echec_ne_laisse_pas_de_temporaire` mais n'affirmait que `is_err()` et,
+    /// échouant dans `create_dir_all` avant `options.open(&tmp)`, ne touchait
+    /// jamais au nettoyage `remove_file` des branches d'écriture/renommage. Il est
+    /// renommé d'après ce qu'il vérifie vraiment ; l'absence de temporaire est
+    /// gardée par `un_renommage_impossible_ne_laisse_pas_de_temporaire`.
     #[test]
-    fn un_echec_ne_laisse_pas_de_temporaire() {
+    fn un_parent_qui_est_un_fichier_remonte_une_erreur() {
         let home = temp_home();
         let obstacle = home.dir().join("obstacle");
         std::fs::write(&obstacle, b"je suis un fichier").unwrap();
         // « obstacle » est un fichier : on ne peut pas en faire un répertoire.
         let cible = obstacle.join("dedans.yaml");
         assert!(ecrire_atomiquement(&cible, b"x").is_err());
+    }
+
+    /// Le renommage sur un répertoire existant échoue APRÈS création du
+    /// temporaire : c'est la seule branche où `remove_file` (le nettoyage sur
+    /// échec de renommage) compte, et le test précédent ne l'atteignait pas.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : aucun test ne gardait ce
+    /// nettoyage ; le retirer laissait un `<nom>.tmp<pid>.<n>` orphelin (fichier
+    /// 0600 abandonné dans `~/.ssh` ou `~/.config/avash`) sans qu'aucune suite ne
+    /// le dise. On vérifie d'abord qu'on est bien tombé dans la branche de
+    /// renommage — sans quoi une régression future qui ferait échouer plus tôt
+    /// (garde lecture seule étendu aux répertoires, par exemple) rendrait ce test
+    /// vert pour la mauvaise raison.
+    #[test]
+    fn un_renommage_impossible_ne_laisse_pas_de_temporaire() {
+        let home = temp_home();
+        let dir = home.dir().join("cible-est-un-dossier");
+        std::fs::create_dir(&dir).unwrap();
+        // Cible = un répertoire existant : le temporaire est créé, puis
+        // `rename(tmp, dir)` échoue (EISDIR) — la branche à garder.
+        let e = ecrire_atomiquement(&dir, b"x").unwrap_err().to_string();
+        assert!(e.contains("Renommage vers"), "échec trop tôt : {e}");
+        // Le nom du temporaire suit `with_extension` : pour une cible sans
+        // extension, `cible-est-un-dossier.tmp<pid>.<n>`, d'où le `contains`.
+        let restants: Vec<_> = std::fs::read_dir(home.dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            restants.iter().all(|n| !n.contains(".tmp")),
+            "temporaire orphelin : {restants:?}"
+        );
     }
 }
 
@@ -2052,6 +2310,30 @@ Host autre
         assert!(!glob_match("a*b", "a"));
     }
 
+    /// Trouvé par l'audit du 7 septembre 2026 : `glob_match` faisait le même
+    /// retour arrière exponentiel que les moteurs de motif naïfs. Un motif
+    /// d'`Include` à plusieurs étoiles (`conf.d/*a*a*a…*b`) confronté à un long
+    /// nom de fichier sans correspondance (`aaaa…a` dans `~/.ssh` ou un `conf.d`)
+    /// faisait exploser le temps et figeait `parse_ssh_config` à chaque
+    /// rafraîchissement de la liste d'hôtes. Le balayage itératif à un seul point
+    /// de retour rend en O(n*m) : on borne ici à une seconde, alors que la
+    /// version récursive n'en finissait pas.
+    #[test]
+    fn glob_match_ne_part_pas_en_retour_arriere_exponentiel() {
+        let motif = format!("{}b", "*a".repeat(30));
+        let nom = "a".repeat(60);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(glob_match(&motif, &nom));
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(r) => assert!(!r, "le motif ne doit pas correspondre au nom"),
+            Err(e) => {
+                panic!("glob_match n'a pas rendu la main en une seconde ({e}) : retour arrière exponentiel")
+            }
+        }
+    }
+
     // ---------- remove_host ----------
 
     /// Un bloc `Match` qui suit l'hôte retiré termine le bloc à retirer et
@@ -2136,7 +2418,164 @@ Host autre
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "Host prod backup\n  User root\n").unwrap();
         let e = remove_host("prod").unwrap_err().to_string();
+        // Trouvé par l'audit du 7 septembre 2026 : le refus est délibéré, mais le
+        // message disait « introuvable » alors que « prod » est bien listé. Il
+        // doit maintenant dire « plusieurs alias » et nommer le bloc.
+        assert!(e.contains("plusieurs alias"), "{e}");
+        assert!(e.contains("Host prod backup"), "{e}");
+        assert!(!e.contains("introuvable"), "{e}");
+    }
+
+    #[test]
+    fn update_host_dit_plusieurs_alias_sur_un_bloc_a_noms_multiples() {
+        // Même contre-vérité qu'au glisser-déposer : éditer « prod » depuis le
+        // menu contextuel donnait « introuvable » pour un bloc `Host prod backup`.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "Host prod backup\n  User root\n").unwrap();
+        let e = update_host("prod", &host("prod")).unwrap_err().to_string();
+        assert!(e.contains("plusieurs alias"), "{e}");
+        assert!(e.contains("Host prod backup"), "{e}");
+        assert!(!e.contains("introuvable"), "{e}");
+    }
+
+    // Vrai si aucun `\n` du texte n'est « nu » (non précédé de `\r`) : la marque
+    // qu'un fichier CRLF n'a pas été partiellement converti en LF.
+    fn aucun_lf_nu(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.iter()
+            .enumerate()
+            .all(|(i, &c)| c != b'\n' || (i > 0 && b[i - 1] == b'\r'))
+    }
+
+    #[test]
+    fn un_fichier_crlf_reste_en_crlf_apres_suppression() {
+        // Trouvé par l'audit du 7 septembre 2026 : `content.lines()` retire les
+        // `\r\n` et `remove_host` réémettait en `\n`, convertissant tout un
+        // `~/.ssh/config` CRLF (Bloc-notes, dotfiles versionnés sous Windows) en
+        // LF au premier retrait — `git diff` de toutes les lignes au lieu d'une.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "Host a\r\n  HostName 1\r\n\r\nHost b\r\n  HostName 2\r\n",
+        )
+        .unwrap();
+        remove_host("a").unwrap();
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(aucun_lf_nu(&apres), "LF nu introduit : {apres:?}");
+        assert!(apres.contains("Host b\r\n  HostName 2\r\n"), "{apres:?}");
+        assert!(!apres.contains("Host a"), "{apres:?}");
+    }
+
+    #[test]
+    fn un_fichier_crlf_reste_en_crlf_apres_edition() {
+        // Même conversion silencieuse par `update_host` : éditer un hôte d'un
+        // fichier CRLF ne doit toucher que son bloc, pas les fins de ligne du reste.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "Host a\r\n  HostName 1\r\n\r\nHost b\r\n  HostName 2\r\n",
+        )
+        .unwrap();
+        update_host("a", &host("a")).unwrap();
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(aucun_lf_nu(&apres), "LF nu introduit : {apres:?}");
+        assert!(apres.contains("Host b\r\n  HostName 2\r\n"), "{apres:?}");
+    }
+
+    #[test]
+    fn un_fichier_crlf_reste_en_crlf_apres_rangement() {
+        // `set_host_folder_at` ne pose qu'une ligne `#Folder:` : le reste du
+        // fichier CRLF doit rester octet pour octet identique, fins de ligne
+        // comprises. Chemin emprunté aussi par `folders::rename_core`.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let origine = "Host a\r\n  HostName x\r\n";
+        std::fs::write(&path, origine).unwrap();
+        set_host_folder_at(&path, "a", "prod").unwrap();
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(aucun_lf_nu(&apres), "LF nu introduit : {apres:?}");
+        assert!(apres.contains("    #Folder: prod\r\n"), "{apres:?}");
+        // Hors la ligne #Folder, le fichier est inchangé octet pour octet.
+        let mut sans_folder = String::new();
+        for l in apres.lines().filter(|l| !l.contains("#Folder:")) {
+            sans_folder.push_str(l);
+            sans_folder.push_str("\r\n");
+        }
+        assert_eq!(sans_folder, origine, "contenu altéré hors #Folder");
+    }
+
+    #[test]
+    fn append_host_conserve_le_crlf_du_fichier() {
+        // `append_host` ne passe pas par `lines()` mais collait `render_host_block`
+        // (LF) à la fin d'un fichier CRLF : fichier mixte. Le bloc ajouté suit
+        // désormais la fin de ligne du fichier.
+        let _h = crate::testutil::temp_home();
+        let path = ssh_config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "Host a\r\n  HostName 1\r\n").unwrap();
+        append_host(&host("b")).unwrap();
+        let apres = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            aucun_lf_nu(&apres),
+            "bloc ajouté en LF dans un fichier CRLF : {apres:?}"
+        );
+        assert!(apres.contains("Host b\r\n"), "{apres:?}");
+    }
+
+    #[test]
+    fn set_host_folder_dit_plusieurs_alias_sur_un_bloc_a_noms_multiples() {
+        // Constat de l'audit : glisser « a » de `Host a b` dans un dossier rendait
+        // « Hôte « a » introuvable », alors qu'il est sous les yeux de l'utilisateur.
+        let dir = std::env::temp_dir().join(format!("avash-multi-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config");
+        std::fs::write(&path, "Host a b\n  HostName x\n").unwrap();
+        let e = set_host_folder_at(&path, "a", "prod")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("plusieurs alias"), "{e}");
+        assert!(e.contains("Host a b"), "{e}");
+        assert!(!e.contains("introuvable"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_host_folder_detecte_le_bloc_multi_alias_en_casse_mixte() {
+        // `parse_config_str` accepte `HoSt` et la tabulation comme séparateur :
+        // la détection du bloc à plusieurs alias doit les reconnaître aussi, sinon
+        // `HoSt\ta b` retomberait sur « introuvable ».
+        let dir = std::env::temp_dir().join(format!("avash-multi-cx-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config");
+        std::fs::write(&path, "HoSt\ta b\n  HostName x\n").unwrap();
+        let e = set_host_folder_at(&path, "a", "prod")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("plusieurs alias"), "{e}");
+        assert!(!e.contains("introuvable"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_host_folder_garde_introuvable_pour_un_vrai_absent() {
+        // Aucun bloc ne cite « fantome » : le message « introuvable » reste juste.
+        let dir = std::env::temp_dir().join(format!("avash-absent-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config");
+        std::fs::write(&path, "Host a b\n  HostName x\n").unwrap();
+        let e = set_host_folder_at(&path, "fantome", "prod")
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("introuvable"), "{e}");
+        assert!(!e.contains("plusieurs alias"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2504,6 +2943,10 @@ Host *
                 if let Some(pj) = &h.proxy_jump {
                     for hop in split_proxy_jump(pj) {
                         assert_eq!(hop.host.trim(), hop.host, "rebond non rogné : {hop:?}");
+                        assert!(
+                            !hop.host.starts_with('['),
+                            "crochet IPv6 gardé dans l'hôte : {hop:?}"
+                        );
                     }
                 }
             }

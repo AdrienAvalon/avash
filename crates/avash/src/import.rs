@@ -224,15 +224,17 @@ pub fn convertir_ppk(ppk: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
 
 // ---------- PuTTY ----------
 
-/// Décode un nom de fichier de session `PuTTY` (`prod%20web` → `prod web`).
+/// Reconstitue les octets d'un nom de session `PuTTY` échappé en `%XX`
+/// (`prod%20web` → `prod web`). Le choix de l'encodage pour les relire diffère
+/// selon la source (fichier Unix en UTF-8, registre Windows en page ANSI),
+/// d'où cette partie commune isolée.
 ///
 /// Travaille octet par octet : découper la chaîne à `i + 1..i + 3` faisait
 /// paniquer sur un `%` suivi d'un caractère multi-octets (`x%é`), c'est-à-dire
 /// sur un simple nom de fichier dans `~/.putty/sessions` — trouvé par le
 /// fuzzing. Seuls deux chiffres hexadécimaux forment une séquence ;
 /// `u8::from_str_radix` acceptait aussi `%+2`.
-#[must_use]
-pub fn decoder_nom_putty(nom: &str) -> String {
+fn octets_depuis_nom_putty(nom: &str) -> Vec<u8> {
     let chiffre = |b: u8| {
         char::from(b)
             .to_digit(16)
@@ -252,7 +254,103 @@ pub fn decoder_nom_putty(nom: &str) -> String {
         out.push(octets[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
+}
+
+/// Décode un nom de fichier de session `PuTTY` (`prod%20web` → `prod web`).
+///
+/// Pour `~/.putty/sessions` : `PuTTY` sous Unix échappe des octets UTF-8
+/// (`café` → `caf%C3%A9`), qu'on relit donc en UTF-8. Le registre Windows
+/// suit une autre convention (voir `decoder_nom_putty_windows`).
+#[must_use]
+pub fn decoder_nom_putty(nom: &str) -> String {
+    String::from_utf8_lossy(&octets_depuis_nom_putty(nom)).into_owned()
+}
+
+/// Décode un nom de session `PuTTY` lu dans le registre Windows.
+///
+/// Trouvé par l'audit du 8 septembre 2026 : le `mungestr` de `PuTTY` échappe les
+/// octets > 0x7E des noms dans la page ANSI courante (`CP_ACP`), pas en UTF-8 :
+/// sur un poste FR, `café` devient `caf%E9` (0xE9 = « é » en CP1252). Le relire
+/// en UTF-8 (comme le faisait le chemin registre, qui appelait
+/// `decoder_nom_putty`) donnait `caf\u{FFFD}`, un alias mojibaké écrit tel quel
+/// dans `~/.ssh/config`. On décode donc les octets avec `MultiByteToWideChar
+/// (CP_ACP)`. Hors Windows, aucune page ANSI n'a de sens : repli UTF-8 (le
+/// registre n'y est de toute façon pas lu ; `parse_reg_query` rejette ensuite
+/// tout alias resté mojibaké).
+#[must_use]
+pub fn decoder_nom_putty_windows(nom: &str) -> String {
+    let octets = octets_depuis_nom_putty(nom);
+    #[cfg(windows)]
+    {
+        page_de_code::decoder(&octets, page_de_code::CP_ACP)
+    }
+    #[cfg(not(windows))]
+    {
+        String::from_utf8_lossy(&octets).into_owned()
+    }
+}
+
+/// FFI minimale vers `MultiByteToWideChar` (kernel32), sans nouvelle
+/// dépendance : convertir des octets d'une page de code Windows en UTF-16.
+///
+/// Trouvé par l'audit du 8 septembre 2026 : `reg query` écrit dans la page de
+/// code OEM de la console (850 en France), pas en UTF-8, et `mungestr` échappe
+/// les noms dans la page ANSI. Deux pages distinctes sont donc en jeu, d'où le
+/// paramètre.
+#[cfg(windows)]
+mod page_de_code {
+    /// Page ANSI courante : noms de session échappés par `mungestr`.
+    pub const CP_ACP: u32 = 0;
+    /// Page OEM de la console : sortie de `reg query`.
+    pub const CP_OEMCP: u32 = 1;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MultiByteToWideChar(
+            code_page: u32,
+            flags: u32,
+            octets: *const u8,
+            n_octets: i32,
+            large: *mut u16,
+            n_large: i32,
+        ) -> i32;
+    }
+
+    /// Décode `octets` selon `page`. En cas d'échec de l'API (octet invalide,
+    /// entrée vide), repli sur un décodage UTF-8 permissif plutôt que de perdre
+    /// la donnée.
+    #[must_use]
+    pub fn decoder(octets: &[u8], page: u32) -> String {
+        let Ok(n) = i32::try_from(octets.len()) else {
+            return String::from_utf8_lossy(octets).into_owned();
+        };
+        if n == 0 {
+            return String::new();
+        }
+        // Premier appel : longueur nécessaire en unités UTF-16.
+        let besoin =
+            unsafe { MultiByteToWideChar(page, 0, octets.as_ptr(), n, std::ptr::null_mut(), 0) };
+        let Ok(besoin) = usize::try_from(besoin) else {
+            return String::from_utf8_lossy(octets).into_owned();
+        };
+        if besoin == 0 {
+            return String::from_utf8_lossy(octets).into_owned();
+        }
+        let mut tampon = vec![0u16; besoin];
+        let Ok(cap) = i32::try_from(besoin) else {
+            return String::from_utf8_lossy(octets).into_owned();
+        };
+        let ecrits =
+            unsafe { MultiByteToWideChar(page, 0, octets.as_ptr(), n, tampon.as_mut_ptr(), cap) };
+        match usize::try_from(ecrits) {
+            Ok(ecrits) if ecrits != 0 => {
+                tampon.truncate(ecrits);
+                String::from_utf16_lossy(&tampon)
+            }
+            _ => String::from_utf8_lossy(octets).into_owned(),
+        }
+    }
 }
 
 /// Lit une session `PuTTY` depuis ses paires `clé=valeur` (fichier
@@ -380,6 +478,12 @@ pub fn parse_reg_query(sortie: &str) -> Lecture {
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
             match session_putty_depuis(&nom, paires.into_iter()) {
+                // Filet du 8 septembre 2026 : si le décodage ANSI d'un nom a
+                // échoué (octet non convertible dans la page courante), ne pas
+                // écrire un alias mojibaké dans ~/.ssh/config — on préfère
+                // ignorer la session. Sur un poste correctement décodé, ce cas
+                // ne se présente pas.
+                Some(s) if s.host.alias.contains('\u{fffd}') => lecture.ignorees += 1,
                 Some(s) => lecture.sessions.push(s),
                 None if nom != "Default Settings" => lecture.ignorees += 1,
                 None => {}
@@ -396,7 +500,7 @@ pub fn parse_reg_query(sortie: &str) -> Lecture {
             let Some((_, nom)) = ligne.rsplit_once("\\Sessions\\") else {
                 continue;
             };
-            courante = Some((decoder_nom_putty(nom.trim()), Vec::new()));
+            courante = Some((decoder_nom_putty_windows(nom.trim()), Vec::new()));
             continue;
         }
         let Some((_, paires)) = courante.as_mut() else {
@@ -428,7 +532,14 @@ pub fn putty_sessions_registre() -> Lecture {
         .args(["query", r"HKCU\Software\SimonTatham\PuTTY\Sessions", "/s"])
         .output();
     match sortie {
-        Ok(o) if o.status.success() => parse_reg_query(&String::from_utf8_lossy(&o.stdout)),
+        // Trouvé par l'audit du 8 septembre 2026 : `reg query` écrit dans la
+        // page de code OEM de la console (850 en France), pas en UTF-8. Relire
+        // sa sortie en UTF-8 remplaçait tout octet non ASCII d'une valeur
+        // (`PublicKeyFile=C:\Users\Jérôme\cle.ppk`, `UserName`) par U+FFFD, et
+        // la conversion de clé échouait ensuite sur un chemin inexistant.
+        Ok(o) if o.status.success() => {
+            parse_reg_query(&page_de_code::decoder(&o.stdout, page_de_code::CP_OEMCP))
+        }
         _ => Lecture::default(),
     }
 }
@@ -618,6 +729,23 @@ mod tests {
         assert_eq!(decoder_nom_putty("fin%2"), "fin%2");
     }
 
+    /// Trouvé par l'audit du 8 septembre 2026 : sous Windows, `mungestr`
+    /// échappe les octets > 0x7E des noms dans la page ANSI, pas en UTF-8
+    /// (`café` → `caf%E9`, 0xE9 = « é » en CP1252). La reconstitution d'octets
+    /// est commune aux deux plateformes ; c'est le décodage qui diffère. Ce
+    /// test verrouille la partie commune et montre pourquoi relire ces octets
+    /// en UTF-8 (l'ancien chemin registre) donnait un alias mojibaké.
+    #[test]
+    fn les_octets_d_un_nom_ansi_sont_reconstitues() {
+        assert_eq!(
+            octets_depuis_nom_putty("caf%E9"),
+            vec![b'c', b'a', b'f', 0xE9]
+        );
+        assert_eq!(octets_depuis_nom_putty("prod%20web"), b"prod web".to_vec());
+        // Relu en UTF-8, l'octet 0xE9 seul est invalide : mojibaké.
+        assert_eq!(decoder_nom_putty("caf%E9"), "caf\u{fffd}");
+    }
+
     #[test]
     fn une_session_putty_donne_un_hote_complet() {
         let s = parse_putty_session(
@@ -751,6 +879,54 @@ mod tests {
         assert_eq!(s.host.user.as_deref(), Some("adrien"));
         assert!(s.host.identity_file.is_none());
         assert_eq!(l.ignorees, 1);
+    }
+
+    /// Trouvé par l'audit du 8 septembre 2026 : le chemin registre relisait le
+    /// nom de session avec `decoder_nom_putty` (UTF-8), alors que `mungestr`
+    /// échappe en page ANSI. Une session « café » (`caf%E9`) produisait alors
+    /// l'alias `caf\u{FFFD}`, écrit tel quel dans ~/.ssh/config. Le décodage
+    /// passe désormais par `decoder_nom_putty_windows` (page ANSI sous Windows) ;
+    /// hors Windows, faute de page ANSI, le filet de `parse_reg_query` ignore la
+    /// session plutôt que d'en écrire un alias mojibaké. Ce test échouait avant
+    /// le correctif (la session était reprise avec un alias contenant U+FFFD).
+    #[test]
+    fn un_nom_de_registre_non_ascii_ne_donne_jamais_un_alias_mojibake() {
+        let sortie = "HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\caf%E9\r\n    HostName    REG_SZ    10.0.0.7\r\n    Protocol    REG_SZ    ssh\r\n";
+        let l = parse_reg_query(sortie);
+        assert!(
+            l.sessions
+                .iter()
+                .all(|s| !s.host.alias.contains('\u{fffd}')),
+            "aucun alias importé ne doit contenir U+FFFD : {l:?}"
+        );
+        // Sous Windows, la session est reprise (nom décodé « café ») ; ailleurs,
+        // faute de page ANSI, elle est ignorée plutôt que mojibakée.
+        #[cfg(windows)]
+        {
+            assert_eq!(l.sessions.len(), 1, "{l:?}");
+            assert_eq!(l.sessions[0].host.alias, "café");
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(l.sessions.is_empty(), "{l:?}");
+            assert_eq!(l.ignorees, 1, "{l:?}");
+        }
+    }
+
+    /// Trouvé par l'audit du 8 septembre 2026 : `reg query` imprime dans la
+    /// page OEM de la console et `mungestr` échappe les noms en page ANSI. La
+    /// FFI vers `MultiByteToWideChar` doit relire ces octets sans U+FFFD. Test
+    /// fixé sur la page 1252 (Windows-1252) pour être indépendant de la locale.
+    #[cfg(windows)]
+    #[test]
+    fn une_page_de_code_windows_est_decodee_sans_mojibake() {
+        assert_eq!(page_de_code::decoder(b"caf\xe9", 1252), "café");
+        // La moitié « clé » du défaut : un chemin de valeur relu intact.
+        assert_eq!(
+            page_de_code::decoder(b"C:\\Users\\J\xe9r\xf4me\\cle.ppk", 1252),
+            "C:\\Users\\Jérôme\\cle.ppk"
+        );
+        assert_eq!(page_de_code::decoder(b"", 1252), "");
     }
 
     const MOBA: &str = "[Bookmarks]\r\nSubRep=\r\nImgNum=42\r\nDeck=#109#0%192.168.137.40%22%deck%%0%0%%%%%0%0%0%%%-1%0%0%0%%1080%%0%0%1%#MobaFont%10%0%0%-1%15%236,236,236%30,30,30%180,180,192%0%-1%0%%xterm%-1%0%_Std_Colors_0_%80%24%0%1%-1%<none>%%0%0%-1%-1#0# #-1\r\nBureau=#91#4%10.0.0.9%3389%adrien%...\r\n\r\n[Bookmarks_1]\r\nSubRep=Clients\\Acme\r\nImgNum=41\r\nweb acme=#109#0%web.acme.fr%2222%%%-1%-1%%%%%0%0%0%_CurrentDrive_:\\Users\\a\\.ssh\\id_ed25519%%-1%0%0%0%%1080%%0%0%1%#MobaFont%10#0# #-1\r\n";

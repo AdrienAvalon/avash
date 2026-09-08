@@ -375,11 +375,51 @@ pub fn memoriser(cle: &str, chemin: &std::path::Path) {
     if Politique::pour(cle, Some(chemin)) == Politique::Accepter {
         return;
     }
-    let ancien = std::fs::read_to_string(chemin).unwrap_or_default();
-    // Atomique, comme le fichier d'empreintes : ce fichier vit au même endroit
-    // et une coupure pendant `fs::write` l'aurait laissé vide — chaque serveur
-    // à canal graphique aurait de nouveau coûté une reconnexion.
-    let _ = crate::atomique::ecrire(chemin, format!("{ancien}{cle}\n").as_bytes());
+    // On AJOUTE la ligne en O_APPEND au lieu de relire tout le fichier puis le
+    // renommer par-dessus (`atomique::ecrire`). Trouvé par l'audit du 7 septembre
+    // 2026 : comme pour `rdp_known_hosts`, deux sidecars (deux onglets RDP ouverts
+    // à la suite, restauration d'un groupe) mémorisant des serveurs distincts au
+    // même instant lisaient le même `ancien` et le dernier `rename` effaçait la
+    // ligne de l'autre — l'atomicité du rename ne couvre pas la
+    // lecture-modification-écriture concurrente, et le serveur perdu recoûtait une
+    // reconnexion à chaque session. Un `write_all` unique en O_APPEND est atomique
+    // entre processus sur un FS local et ne laisse jamais le fichier vide. Une
+    // ligne en double pour le même serveur est inoffensive : `Politique::pour`
+    // teste `any`.
+    if let Some(dir) = chemin.parent() {
+        let _ = std::fs::create_dir_all(dir);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    // Un fichier hérité édité à la main sans saut de ligne final collerait
+    // notre ligne à la dernière (« autre:3389hote:3389 ») : `Politique::pour`
+    // comparant ligne à ligne, ni l'ancienne ni la nouvelle ne correspondraient
+    // plus, et le serveur déjà présent sur cette ligne serait perdu lui aussi.
+    // Trouvé par l'audit du 7 septembre 2026 : comme `memoriser_empreinte`, on
+    // préfixe un saut de ligne au besoin. (avash écrit toujours un `\n` final ;
+    // ce cas ne naît que d'une édition manuelle du fichier.)
+    let besoin_saut = std::fs::read_to_string(chemin)
+        .map(|ancien| !ancien.is_empty() && !ancien.ends_with('\n'))
+        .unwrap_or(false);
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(mut fichier) = options.open(chemin) {
+        let ligne = if besoin_saut {
+            format!("\n{cle}\n")
+        } else {
+            format!("{cle}\n")
+        };
+        let _ = fichier.write_all(ligne.as_bytes());
+    }
 }
 
 /// Identifiant du canal graphique, partagé avec la boucle de session.
@@ -629,7 +669,11 @@ impl Egfx {
     }
 
     /// Traite un PDU du serveur. Rend un accusé de trame le cas échéant.
-    fn traiter(&mut self, p: &Pdu) -> Option<Vec<u8>> {
+    ///
+    /// Public pour que `tests/` et une cible `fuzz/` puissent enchaîner
+    /// `decouper` puis ce traitement sur un flux hostile (audit du 7 septembre
+    /// 2026 : jusque-là injoignable hors du crate).
+    pub fn traiter(&mut self, p: &Pdu) -> Option<Vec<u8>> {
         if self.journal {
             Self::journaliser(p);
         }
@@ -1282,6 +1326,98 @@ mod tests {
             Politique::pour("autre:3389", Some(&memoire)),
             Politique::Accepter
         );
+
+        let _ = std::fs::remove_dir_all(&dossier);
+    }
+
+    /// Un `rdp_canal_graphique` édité à la main sans saut de ligne final ne
+    /// doit pas faire coller la nouvelle clé à la dernière ligne, ce qui
+    /// perdrait l'ancienne comme la nouvelle.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : `memoriser` ajoutait `{cle}\n`
+    /// en O_APPEND sans vérifier que l'existant se terminait par un saut de
+    /// ligne. Sur un fichier « autre:3389 » sans `\n` final (un éditeur qui
+    /// n'en pose pas après suppression d'une ligne), l'ajout donnait
+    /// « autre:3389hote:3389 » : `Politique::pour` comparant ligne à ligne, ni
+    /// l'un ni l'autre serveur n'était plus reconnu, et chaque reconnexion EGFX
+    /// recoûtait. `memoriser_empreinte` traitait déjà ce cas, pas `memoriser`.
+    #[test]
+    fn un_fichier_sans_saut_de_ligne_final_n_avale_pas_la_derniere_entree() {
+        use super::{memoriser, Politique};
+        let dossier =
+            std::env::temp_dir().join(format!("avash-egfx-sansnl-{}", std::process::id()));
+        let memoire = dossier.join("rdp_canal_graphique");
+        let _ = std::fs::remove_dir_all(&dossier);
+        std::fs::create_dir_all(&dossier).unwrap();
+        // Une entrée héritée SANS saut de ligne final, comme la laisserait un
+        // éditeur qui n'en pose pas après avoir retiré une ligne.
+        std::fs::write(&memoire, b"autre:3389").unwrap();
+
+        memoriser("hote:3389", &memoire);
+
+        // La nouvelle entrée est apprise...
+        assert_eq!(
+            Politique::pour("hote:3389", Some(&memoire)),
+            Politique::Accepter,
+            "la nouvelle clé collée à la dernière ligne n'est jamais apprise ; fichier :\n{}",
+            std::fs::read_to_string(&memoire).unwrap()
+        );
+        // ...et l'entrée héritée survit.
+        assert_eq!(
+            Politique::pour("autre:3389", Some(&memoire)),
+            Politique::Accepter,
+            "l'entrée héritée est perdue ; fichier :\n{}",
+            std::fs::read_to_string(&memoire).unwrap()
+        );
+
+        let _ = std::fs::remove_dir_all(&dossier);
+    }
+
+    /// Plusieurs sidecars retenant au même instant que des serveurs DISTINCTS
+    /// n'ont que le canal graphique — deux onglets RDP ouverts à la suite,
+    /// restauration d'un groupe — ne doivent en perdre aucun.
+    ///
+    /// Trouvé par l'audit du 7 septembre 2026 : `memoriser` relisait tout le
+    /// fichier puis renommait un temporaire par-dessus (`atomique::ecrire`) ;
+    /// comme pour `rdp_known_hosts`, deux processus lisant le même contenu
+    /// voyaient le dernier `rename` effacer la ligne de l'autre. Le serveur
+    /// perdu recoûtait une reconnexion (l'IronRDP se tait faute de dessin, on
+    /// rebascule sur le canal graphique) à chaque session. L'ajout en O_APPEND
+    /// fait survivre toutes les lignes.
+    #[test]
+    fn des_memorisations_simultanees_survivent_toutes() {
+        use super::{memoriser, Politique};
+        let dossier = std::env::temp_dir().join(format!("avash-egfx-conc-{}", std::process::id()));
+        let memoire = dossier.join("rdp_canal_graphique");
+        let _ = std::fs::remove_dir_all(&dossier);
+        std::fs::create_dir_all(&dossier).unwrap();
+
+        const N: usize = 16;
+        // Barrière : tous les fils écrivent ensemble pour recouvrir au maximum
+        // les lectures-écritures. Sans le correctif, plusieurs lignes manquent.
+        let depart = std::sync::Arc::new(std::sync::Barrier::new(N));
+        let fils: Vec<_> = (0..N)
+            .map(|i| {
+                let depart = std::sync::Arc::clone(&depart);
+                let memoire = memoire.clone();
+                std::thread::spawn(move || {
+                    depart.wait();
+                    memoriser(&format!("hote{i}:3389"), &memoire);
+                })
+            })
+            .collect();
+        for f in fils {
+            f.join().expect("fil terminé");
+        }
+
+        let contenu = std::fs::read_to_string(&memoire).expect("lecture");
+        for i in 0..N {
+            assert_eq!(
+                Politique::pour(&format!("hote{i}:3389"), Some(&memoire)),
+                Politique::Accepter,
+                "serveur hote{i} perdu ; fichier :\n{contenu}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dossier);
     }

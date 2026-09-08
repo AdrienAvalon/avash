@@ -1,0 +1,8 @@
+# Bastion IPv6 littéral en ProxyJump : seule syntaxe qu'OpenSSH accepte.
+Host derriere-ipv6
+  HostName 10.0.0.9
+  User adrien
+  ProxyJump u@[2001:db8::1]:2222, [fe80::1]
+Host bastion6
+  HostName [2001:db8::2]
+  User rebond

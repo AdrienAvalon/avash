@@ -18,6 +18,32 @@ fn chemin_partiel(local: &Path) -> PathBuf {
     PathBuf::from(nom)
 }
 
+/// Promeut le `.part` complet sur sa cible définitive ; si le renommage échoue,
+/// garde le `.part` et le dit dans l'erreur.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : un téléchargement se termine par ce
+/// renommage pour ne toucher la cible existante qu'à la fin. Sous Unix, `rename`
+/// remplace toujours ; sous Windows, le remplacement échoue par violation de
+/// partage si la cible est ouverte ailleurs sans `FILE_SHARE_DELETE` (Acrobat,
+/// Excel, un aperçu de l'Explorateur) ou porte l'attribut lecture seule. Le
+/// transfert est pourtant COMPLET, tout entier dans le `.part` — que le code
+/// laissait alors muet, en rendant un sec « Renommage vers X », transfert à
+/// 100 % annoncé en échec. On pointe désormais le `.part`, qu'on ne supprime
+/// pas : aucune perte de données, et l'utilisateur sait où est son fichier. Le
+/// message enrichi ne borne pas son texte à `cfg(windows)` : il reste juste
+/// partout (tout échec de renommage laisse bien le `.part`) et ne change aucun
+/// comportement (ni suppression, ni nouvelle tentative), ce qui le rend
+/// vérifiable sous Unix en forçant l'échec (cible qui est un répertoire).
+async fn promouvoir_partiel(partiel: &Path, local: &Path) -> Result<()> {
+    tokio::fs::rename(partiel, local).await.with_context(|| {
+        format!(
+            "Renommage vers {} (le fichier complet est dans {})",
+            local.display(),
+            partiel.display()
+        )
+    })
+}
+
 use super::ssh::AvashSession;
 
 #[derive(Debug, Clone, Serialize)]
@@ -129,9 +155,7 @@ impl SftpHandle {
                 .await;
             return match recu {
                 Ok(n) => {
-                    tokio::fs::rename(&partiel, local)
-                        .await
-                        .with_context(|| format!("Renommage vers {}", local.display()))?;
+                    promouvoir_partiel(&partiel, local).await?;
                     Ok(n)
                 }
                 Err(e) => {
@@ -199,9 +223,7 @@ impl SftpHandle {
                  (le fichier distant a changé pendant le transfert)."
             );
         }
-        tokio::fs::rename(&partiel, local)
-            .await
-            .with_context(|| format!("Renommage vers {}", local.display()))?;
+        promouvoir_partiel(&partiel, local).await?;
         Ok(done)
     }
 
@@ -857,9 +879,7 @@ impl SftpHandle {
              (le fichier distant a changé pendant le transfert)."
         );
         let _ = tokio::fs::remove_file(&carte).await;
-        tokio::fs::rename(&partiel, local)
-            .await
-            .with_context(|| format!("Renommage vers {}", local.display()))?;
+        promouvoir_partiel(&partiel, local).await?;
         Ok(fait)
     }
 
@@ -1272,15 +1292,45 @@ impl SftpHandle {
     }
 }
 
-/// Un nom d'entrée qu'on accepte de recopier tel quel sous un dossier :
-/// un seul composant, sans séparateur ni octet nul, ni `.` ni `..`. Un
-/// serveur SFTP peut annoncer n'importe quoi ; c'est ici que ça s'arrête.
-fn nom_d_entree_sur(nom: &str) -> bool {
+/// Un nom d'entrée qu'on accepte de recopier tel quel sous un dossier, et
+/// plus largement un nom de fichier qu'on accepte de créer : un seul
+/// composant, sans séparateur ni octet nul, ni `.` ni `..`. Un serveur SFTP
+/// peut annoncer n'importe quoi et un nom de clé vient de l'utilisateur ;
+/// c'est ici que ça s'arrête.
+///
+/// Sous Windows on écarte en plus les pièges NTFS que le reste du chemin ne
+/// voit pas. Trouvé par l'audit du 7 septembre 2026 : `keys::generate`
+/// acceptait « travail:pro », que NTFS lit comme le flux de données alternatif
+/// « pro » du fichier « travail » — la clé privée finissait dans un flux caché,
+/// invisible du panneau. Les noms réservés (CON, NUL, COM1…) désignent un
+/// périphérique et non un fichier, et un point ou une espace final est retiré
+/// par le système, ce qui fait retomber sur un autre nom.
+pub(crate) fn nom_d_entree_sur(nom: &str) -> bool {
     !nom.is_empty()
         && nom != "."
         && nom != ".."
         && !nom.contains(['/', '\\', '\0'])
-        && !(cfg!(windows) && nom.contains(':'))
+        && !(cfg!(windows)
+            && (nom.contains(':')
+                || nom.ends_with('.')
+                || nom.ends_with(' ')
+                || nom_reserve_windows(nom)))
+}
+
+/// Vrai si `nom` est un nom de périphérique réservé par Windows (CON, PRN,
+/// AUX, NUL, COM1-9, LPT1-9), quelle que soit la casse et même suivi d'une
+/// extension : `com1.txt` désigne toujours le port série, pas un fichier.
+/// Le calcul ne dépend pas du système hôte, ce qui rend la règle testable
+/// partout ; l'appel n'est fait que sous Windows.
+pub(crate) fn nom_reserve_windows(nom: &str) -> bool {
+    // Le radical est la partie avant le premier point (con.txt -> con), puis
+    // débarrassée des espaces finaux, que Windows retire aussi.
+    let radical = nom.split('.').next().unwrap_or(nom).trim_end_matches(' ');
+    let haut = radical.to_ascii_uppercase();
+    matches!(haut.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (haut.len() == 4
+            && (haut.starts_with("COM") || haut.starts_with("LPT"))
+            && matches!(haut.as_bytes()[3], b'1'..=b'9'))
 }
 
 /// Concatène un dossier distant et un chemin relatif (séparateur `/`).

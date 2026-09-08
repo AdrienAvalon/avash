@@ -49,29 +49,43 @@ pub fn parse_probe_output(out: &str) -> Option<OsInfo> {
             return Some(info);
         }
     }
-    // Pas d'os-release : premiere ligne de uname / ver.
-    let first = text.lines().next()?.trim();
-    let lower = first.to_lowercase();
-    let id = if lower.contains("windows") {
-        "windows"
-    } else if lower == "darwin" {
-        "darwin"
-    } else if lower.contains("bsd") {
+    // Pas d'os-release : repli sur `uname -s` (Unix) ou `ver` (Windows).
+    // Trouvé par l'audit du 7 septembre 2026 : sur un OpenSSH Windows dont le
+    // shell est cmd.exe, la sonde imprime d'abord des erreurs sur stderr (cmd
+    // échoue à créer `\dev\null`, ou ne connaît ni `cat` ni `uname`), et stderr
+    // est mêlé à stdout par `executer_borne` ; la ligne « Microsoft Windows … »
+    // n'est donc plus la première. On balaie toutes les lignes et l'on retient
+    // la première classable, en ignorant le bruit — même robustesse que la
+    // branche os-release ci-dessus.
+    for ligne in text.lines() {
+        let ligne = ligne.trim();
+        let lower = ligne.to_lowercase();
+        // `linux`/`darwin` en égalité stricte (sortie exacte de `uname -s`) :
+        // un `contains` attraperait « GNU/Linux » ou un chemin dans un message
+        // d'erreur. `windows`/`bsd` par sous-chaîne, seules formes stables de
+        // `ver` et des `uname` BSD (FreeBSD, OpenBSD, NetBSD, DragonFly).
+        let id = if lower.contains("windows") {
+            "windows"
+        } else if lower == "darwin" {
+            "darwin"
+        } else if lower.contains("bsd") {
+            return Some(OsInfo {
+                id: lower,
+                like: vec!["bsd".into()],
+                pretty: ligne.to_string(),
+            });
+        } else if lower == "linux" {
+            "linux"
+        } else {
+            continue;
+        };
         return Some(OsInfo {
-            id: lower.clone(),
-            like: vec!["bsd".into()],
-            pretty: first.to_string(),
+            id: id.into(),
+            like: Vec::new(),
+            pretty: ligne.to_string(),
         });
-    } else if lower == "linux" {
-        "linux"
-    } else {
-        return None;
-    };
-    Some(OsInfo {
-        id: id.into(),
-        like: Vec::new(),
-        pretty: first.to_string(),
-    })
+    }
+    None
 }
 
 #[cfg(test)]
@@ -110,9 +124,46 @@ mod tests {
         assert_eq!(i.id, "windows");
     }
 
+    // Trouvé par l'audit du 7 septembre 2026 : sur un OpenSSH Windows dont le
+    // shell est cmd.exe, `2>/dev/null` de la sonde fait échouer cmd (il tente
+    // de créer `\dev\null`), qui imprime « Le chemin d'accès spécifié est
+    // introuvable. » sur stderr (une fois par commande) avant que `ver` ne
+    // s'exécute. stderr étant mêlé à stdout, la sortie commence par ce bruit ;
+    // ne classer que la première ligne rendait `None`, donc aucun logo Windows.
+    #[test]
+    fn ver_precede_d_erreurs_cmd_donne_windows() {
+        let out = "Le chemin d'accès spécifié est introuvable.\r\nLe chemin d'accès spécifié est introuvable.\r\n\r\nMicrosoft Windows [version 10.0.22631.4037]\r\n";
+        assert_eq!(parse_probe_output(out).unwrap().id, "windows");
+    }
+
+    // Variante anglaise du même cas (locale par défaut d'un poste Windows) ;
+    // « Version » avec majuscule, la forme réelle de `ver`.
+    #[test]
+    fn ver_precede_d_erreurs_cmd_anglais_donne_windows() {
+        let out = "The system cannot find the path specified.\r\nThe system cannot find the path specified.\r\n\r\nMicrosoft Windows [Version 10.0.22631.4037]\r\n";
+        assert_eq!(parse_probe_output(out).unwrap().id, "windows");
+    }
+
+    // Même défaut côté sh : un shell distant peut baver sur stderr avant
+    // `uname` (locale absente, message de connexion) ; la ligne utile n'est
+    // alors plus la première.
+    #[test]
+    fn uname_precede_d_un_bruit_stderr_donne_linux() {
+        let out = "bash: warning: setlocale: LC_ALL: cannot change locale\nLinux\n";
+        assert_eq!(parse_probe_output(out).unwrap().id, "linux");
+    }
+
     #[test]
     fn sortie_vide_ou_inconnue_ne_donne_rien() {
         assert!(parse_probe_output("").is_none());
         assert!(parse_probe_output("cat: /etc/os-release: No such file").is_none());
+        // Régression : du bruit sur plusieurs lignes, sans aucune ligne
+        // classable, reste `None` (sinon on afficherait un logo au hasard).
+        assert!(
+            parse_probe_output(
+                "Le chemin d'accès spécifié est introuvable.\r\nThe system cannot find the path specified.\r\n"
+            )
+            .is_none()
+        );
     }
 }

@@ -13,12 +13,12 @@ fuzzing va plus loin, plus longtemps.
 | Cible | Entrée | Ce qui doit tenir |
 |---|---|---|
 | `config_ssh` | `~/.ssh/config` | aucune panique ; alias jamais vide ni multiligne, port jamais nul, rebonds rognés ; tout bloc rendu par `render_host_block` se relit avec le même alias |
+| `glob_match_pur` | motif et nom d'un `Include` (`~/.ssh/config`), séparés par un octet NUL | aucune panique, aucun retour arrière exponentiel sous `-timeout` ; un motif sans joker correspond à lui-même |
 | `putty_session` | un fichier de `~/.putty/sessions/` et son nom encodé `%XX` | aucune panique ; une session acceptée a un alias, un hôte, un port non nul |
 | `reg_query` | la sortie de `reg query` (registre Windows) | idem |
 | `mobaxterm_ini` | `MobaXterm.ini` (`#109#` SSH, `#91#` bureaux RDP) | idem, et un bureau a un nom, un hôte, un port non nul |
 | `asciicast` | un enregistrement asciicast v2 | aucune panique ; jamais plus d'événements que de lignes |
 | `clearcodec` | deux images ClearCodec (MS-RDPEGFX 2.2.4.1) décodées à la suite par le même décodeur : couches résiduelle, bandes et sous-codecs (brut, NSCodec, RLEX), caches de glyphes et de barres | aucune panique ; une image acceptée a exactement `largeur × hauteur × 4` octets |
-
 | `vnc_serveur` | le flux entier d'un serveur VNC (version, sécurité, initialisation, mises à jour Raw, ZRLE, CopyRect, taille de bureau, presse-papiers), lu par le client `vnc-rs` porté | aucune panique, aucune allocation dictée par le serveur au-delà de la borne ; une image acceptée a exactement ses pixels |
 
 ## Lancer

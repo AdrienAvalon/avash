@@ -2,7 +2,7 @@
 // distant, télécharge un dossier entier par la file des transferts, et copie
 // un fichier vers un autre onglet SSH sans l'écrire sur le poste. Valide
 // UI → commandes → russh/SFTP contre un vrai sshd.
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -109,6 +109,10 @@ describe("SFTP — panneau, dossier entier, copie vers un autre hôte", () => {
   writeFileSync(join(arbre, "sous", "b.bin"), gros);
   const cible = join(racine, "cible");
   mkdirSync(cible);
+
+  // Trouvé par l'audit du 7 septembre 2026 : l'arbre SFTP (~300 Ko) restait dans
+  // /tmp après la suite. On l'efface, comme rdp-lecteur.spec.js:after.
+  after(() => rmSync(racine, { recursive: true, force: true }));
 
   it("ouvre le panneau et affiche des entrées", async () => {
     await ouvrirSessionEtPanneau();

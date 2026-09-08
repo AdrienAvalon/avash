@@ -34,32 +34,16 @@
     clippy::many_single_char_names
 )]
 
-use crate::acces_local::Poste;
-use crate::args::parse_args;
-use crate::connexion::{FermeeApresAuthentification, TOURS_MAX};
-use crate::empreintes::chemin_canal_graphique;
-use crate::session::{executer, Suite};
+// Les modules vivent désormais dans la bibliothèque `avash_rdp` (voir
+// `src/lib.rs`) : le binaire n'en est qu'un appelant. Trouvé par l'audit du
+// 7 septembre 2026.
 use anyhow::Result;
-
-mod acces_local;
-mod args;
-mod atomique;
-mod capture;
-mod connexion;
-mod disque;
-mod egfx;
-mod empreintes;
-mod entrees;
-mod fichiers;
-mod magnetoscope;
-mod presse_papiers;
-mod progressif;
-mod session;
-mod son;
-mod surface;
-mod trames;
-mod vnc;
-mod vnc_tls;
+use avash_rdp::acces_local::Poste;
+use avash_rdp::args::parse_args;
+use avash_rdp::connexion::{FermeeApresAuthentification, TOURS_MAX};
+use avash_rdp::empreintes::chemin_canal_graphique;
+use avash_rdp::session::{executer, Suite};
+use avash_rdp::{capture, egfx, magnetoscope, vnc};
 
 /// Sous cargo-llvm-cov (`cfg(coverage)`, posé par lui seul), le profil
 /// d'exécution est réécrit toutes les secondes. Le profil ne s'écrit
@@ -268,9 +252,9 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests_reprise {
     use super::{faut_il_reprendre, FermeeApresAuthentification};
-    use crate::egfx::Politique;
-    use crate::session::Suite;
     use anyhow::Result;
+    use avash_rdp::egfx::Politique;
+    use avash_rdp::session::Suite;
 
     // Cas confirmés par l'audit du 7 septembre 2026 : la décision de reprendre
     // avec le canal graphique ne doit dépendre QUE d'une session réellement

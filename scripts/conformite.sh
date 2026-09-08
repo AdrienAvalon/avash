@@ -28,11 +28,15 @@ DELAI=45
 cible() { scripts/parc-rdp.sh cible "$1"; }
 SORTIE="$(mktemp -d)"; trap 'rm -rf "$SORTIE"' EXIT
 echecs=0
+# Nombre de contrôles réellement joués : un verdict vert n'a de sens que si
+# quelque chose a été éprouvé (voir la garde de non-vacuité en fin de script).
+controles=0
 
 vert()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 rouge() { printf '  \033[31m✗\033[0m %s\n' "$1"; echecs=$((echecs+1)); }
 
 eprouver() { # nom
+  controles=$((controles+1))
   local nom="$1" hote port img="$SORTIE/$1.png" journal="$SORTIE/$1.log"
   read -r hote port <<<"$(cible "$nom")"
   export PARC_HOTE="$hote"
@@ -110,6 +114,7 @@ eprouver() { # nom
 }
 
 eprouver_ssh() {
+  controles=$((controles+1))
   local hote port
   read -r hote port <<<"$(cible ssh)"
   export PARC_HOTE="$hote"
@@ -124,11 +129,27 @@ eprouver_ssh() {
 }
 
 quoi="${1:-xfce}"
+# Trouvé par l'audit du 8 septembre 2026 : un argument inconnu (faute de frappe
+# « xcfe », singulier « tout » au lieu de « tous », « ssh-only »…) ne déclenchait
+# aucun contrôle, si bien qu'echecs restait à 0 et que le script imprimait « tout
+# est vert », code 0, sans rien avoir éprouvé. On valide donc l'argument avant
+# d'agir plutôt que de le laisser filer à travers les trois aiguillages.
+case "$quoi" in
+  xfce|gnome|ssh|tous) ;;
+  *) echo "usage : $0 [xfce|gnome|ssh|tous]" >&2; exit 2 ;;
+esac
 [ "$quoi" = "xfce"  ] || [ "$quoi" = "tous" ] && eprouver xfce
 [ "$quoi" = "gnome" ] || [ "$quoi" = "tous" ] && eprouver gnome
 [ "$quoi" = "ssh"   ] || [ "$quoi" = "tous" ] && eprouver_ssh
 
 echo
+# Garde de non-vacuité : si aucun contrôle n'a été joué (aiguillage cassé par une
+# régression future, malgré la validation de l'argument ci-dessus), ne pas rendre
+# un verdict vert — un « tout est vert » qui n'a rien éprouvé est un faux positif.
+if [ "$controles" -eq 0 ]; then
+  printf '\033[1;31m✗ Conformité : aucun contrôle joué (aiguillage cassé ?).\033[0m\n' >&2
+  exit 2
+fi
 if [ "$echecs" -eq 0 ]; then
   printf '\033[1;32m✓ Conformité : tout est vert.\033[0m\n'
 else

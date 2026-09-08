@@ -71,16 +71,27 @@ demarrer() { # nom
   fi
 }
 
+identifiant_conteneur() { # → identifiant du conteneur courant (repli sur le nom d'hôte)
+  # L'identifiant du conteneur, pas son nom d'hôte : l'exécuteur GitLab donne
+  # aux siens un nom d'hôte qui n'est pas leur identifiant, et ni « network
+  # connect » ni « network disconnect » ne le connaissent — l'échec, avalé,
+  # laissait l'attente pendre une heure sur une adresse injoignable (job 31269).
+  # Le montage de /etc/hostname porte l'identifiant.
+  local moi
+  # Trouvé par l'audit du 8 septembre 2026 : sous `set -euo pipefail`, grep sort
+  # non nul quand mountinfo ne porte pas l'identifiant (runtime/data-root
+  # atypique) ou est illisible (code 2), et l'affectation nue prend ce code —
+  # errexit tuait le script AVANT le repli, arrêt muet code 1. Le `|| true`
+  # rend la main pour que le repli hostname joue.
+  moi=$(grep -o -m1 'containers/[0-9a-f]\{64\}' /proc/self/mountinfo 2>/dev/null | cut -d/ -f2 || true)
+  [ -n "$moi" ] || moi="$(hostname)"
+  printf '%s\n' "$moi"
+}
+
 raccorder() { # l'appelant est un conteneur : le raccorder au réseau du parc
   [ -n "$PARC_RESEAU" ] && [ -f /.dockerenv ] || return 0
-  # L'identifiant du conteneur, pas son nom d'hôte : l'exécuteur GitLab donne
-  # aux siens un nom d'hôte qui n'est pas leur identifiant, et « network
-  # connect » ne le connaissait pas — l'échec, avalé, laissait l'attente
-  # pendre une heure sur une adresse injoignable (job 31269). Le montage de
-  # /etc/hostname porte l'identifiant.
   local moi
-  moi=$(grep -o -m1 'containers/[0-9a-f]\{64\}' /proc/self/mountinfo 2>/dev/null | cut -d/ -f2)
-  [ -n "$moi" ] || moi="$(hostname)"
+  moi="$(identifiant_conteneur)"
   if $MOTEUR network inspect "$PARC_RESEAU" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null | grep -q "$moi"; then
     return 0
   fi
@@ -112,6 +123,14 @@ lancer() { # nom
 case "${1:-status}" in
   up)
     quoi="${2:-xfce}"
+    # Trouvé par l'audit du 8 septembre 2026 : un argument inconnu (« xcfe »,
+    # singulier « tout ») ne démarrait aucun conteneur et le script imprimait
+    # quand même « parc prêt », code 0 ; conformite.sh trouvait alors le vide.
+    # On valide l'argument avant d'agir (même liste que conformite.sh).
+    case "$quoi" in
+      xfce|gnome|ssh|tous) ;;
+      *) echo "usage : $0 up [xfce|gnome|ssh|tous]" >&2; exit 2 ;;
+    esac
     [ "$quoi" = "xfce"  ] || [ "$quoi" = "tous" ] && lancer xfce
     [ "$quoi" = "gnome" ] || [ "$quoi" = "tous" ] && lancer gnome
     [ "$quoi" = "ssh"   ] || [ "$quoi" = "tous" ] && lancer ssh
@@ -120,7 +139,13 @@ case "${1:-status}" in
   down)
     for n in avash-parc-xfce avash-parc-gnome avash-parc-ssh; do $MOTEUR rm -f "$n" >/dev/null 2>&1 || true; done
     if [ -n "$PARC_RESEAU" ]; then
-      [ -f /.dockerenv ] && $MOTEUR network disconnect "$PARC_RESEAU" "$(hostname)" >/dev/null 2>&1 || true
+      # Trouvé par l'audit du 8 septembre 2026 : `down` détachait par `$(hostname)`
+      # alors que raccorder documente que ce n'est pas l'identifiant du conteneur
+      # sur l'exécuteur GitLab — le disconnect échouait (avalé), l'endpoint du job
+      # restait attaché, et `network rm avash-parc` échouait à son tour (« has
+      # active endpoints »), si bien que le réseau fuyait après chaque pipeline.
+      # On détache par le même identifiant que raccorder a utilisé pour rejoindre.
+      [ -f /.dockerenv ] && $MOTEUR network disconnect "$PARC_RESEAU" "$(identifiant_conteneur)" >/dev/null 2>&1 || true
       $MOTEUR network rm "$PARC_RESEAU" >/dev/null 2>&1 || true
     fi
     echo "✓ parc arrêté"

@@ -127,3 +127,26 @@ describe("renderTunnels : geler la ligne d'un tunnel en cours de démarrage", ()
     expect(del.disabled).toBe(true);
   });
 });
+
+// Trouvé par l'audit du 7 septembre 2026 : renderTunnels vide #tunnel-list
+// (innerHTML = "") et recrée chaque ligne ; le minuteur le rappelle toutes les
+// 1,5 s (et tunnelStart/tunnelsRefresh juste après un clic). Un bouton de ligne
+// focalisé au clavier était détruit à chaque redessin, le focus retombait sur
+// <body> et le piège de focus de la modale renvoyait le Tab suivant en haut :
+// impossible d'atteindre une ligne basse sans se dépêcher. On note ligne+action
+// avant le vidage pour refocaliser après reconstruction.
+describe("renderTunnels : le focus survit à un redessin", () => {
+  it("le rendu des tunnels conserve le bouton focalisé", () => {
+    tunnels.defs = [tunnelDef("t1"), tunnelDef("t2")];
+    renderTunnels();
+    // Focaliser « Modifier » de la 2e ligne, comme un utilisateur au clavier.
+    const cible = document.querySelector<HTMLButtonElement>('#tunnel-list [data-id="t2"] [data-act="edit"]')!;
+    cible.focus();
+    expect(document.activeElement).toBe(cible);
+    // Le minuteur (1,5 s) rappelle renderTunnels : la ligne est reconstruite.
+    renderTunnels();
+    const actif = document.activeElement as HTMLElement;
+    expect(actif.closest<HTMLElement>("[data-id]")?.dataset.id).toBe("t2");
+    expect(actif.dataset.act).toBe("edit");
+  });
+});

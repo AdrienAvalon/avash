@@ -9,6 +9,14 @@ publish = false
 description = "Avash — sidecar client RDP (IronRDP), isolé de russh"
 license = "AGPL-3.0-or-later"
 
+# Bibliothèque en plus du binaire : `tests/` et les cibles `fuzz/` doivent
+# pouvoir piloter les parseurs du sidecar (cadrage EGFX, motifs RDPDR, etc.)
+# depuis l'extérieur du crate. Trouvé par l'audit du 7 septembre 2026 : sans
+# `[lib]`, rien ne pouvait en dépendre.
+[lib]
+name = "avash_rdp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "avash-rdp"
 path = "src/main.rs"

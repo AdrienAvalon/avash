@@ -4,7 +4,7 @@
 // (événement `pty-output`), que le scénario écoute comme le front. Linux
 // seulement : ni socat ni pseudo-terminal série sur les autres exécuteurs.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { attendreSessionLive, ecouterSortiePty, sortiePty } from "./helpers.js";
@@ -22,7 +22,9 @@ describe("Port série — connexion directe sur un pseudo-terminal", () => {
     await browser.waitUntil(() => existsSync(port), { timeout: 5000, timeoutMsg: "socat n'a pas créé le pseudo-terminal" });
   });
 
-  after(() => { socat?.kill(); });
+  // Trouvé par l'audit du 7 septembre 2026 : le dossier du pseudo-terminal
+  // restait dans /tmp. On l'efface (vide hors Linux, où il n'a pas été créé).
+  after(() => { socat?.kill(); if (dossier) rmSync(dossier, { recursive: true, force: true }); });
 
   it("ouvre le port, envoie une commande et reçoit son écho", async () => {
     await $("#manual-btn").click();

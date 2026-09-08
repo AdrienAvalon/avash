@@ -3,7 +3,10 @@ resolver = "2"
 members = ["crates/avash", "crates/avash-ui"]
 exclude = ["rdp-sidecar", "test-rdp-server", "test-vnc-server", "fuzz"]
 
-# Metadonnees communes : un seul endroit a modifier pour une release.
+# Metadonnees communes, heritees par les deux crates membres (`*.workspace =
+# true`) : bumper cette version suffit pour eux. Le sidecar rdp-sidecar est hors
+# espace de travail (exclude ci-dessus) et garde sa propre version ; tauri.conf.json
+# et web/package.json aussi. Les emplacements restants sont listes dans RELEASE.md.
 [workspace.package]
 version = "0.9.2"
 edition = "2021"

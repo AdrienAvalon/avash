@@ -69,6 +69,14 @@ beforeEach(async () => {
   document.body.innerHTML = corpsIndex();
   (globalThis as unknown as { WebSocket: unknown }).WebSocket = FauxWebSocket;
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = FauxResizeObserver;
+  // jsdom n'a pas matchMedia, que `openRdp` appelle pour le watcher HiDPI.
+  window.matchMedia = ((): MediaQueryList =>
+    ({
+      matches: false,
+      media: "",
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }) as unknown as MediaQueryList) as typeof window.matchMedia;
   ({ openRdp } = await import("./rdp"));
 });
 

@@ -13,7 +13,18 @@
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vendor"
 for p in ironrdp-session ironrdp-connector ironrdp-pdu ironrdp-graphics ironrdp-rdpdr ironrdp-svc vnc-rs; do
-  n=$(cd "$p" && cargo test 2>&1 | grep -oP '^test result: ok\. \K\d+' \
+  # Trouvé par l'audit du 8 septembre 2026 : compter directement dans le tube
+  # (`n=$(cargo test | grep | awk)`) engloutissait toute la sortie de cargo, et
+  # sur un test porté en échec (cargo sort 101) ou une compilation cassée,
+  # pipefail + set -e arrêtaient le script AVANT le moindre affichage : la porte
+  # rougissait sans dire quel paquet ni quel test. On sépare donc exécution et
+  # comptage : on capture la sortie, on l'imprime sur échec, puis on compte.
+  if ! sortie=$(cd "$p" && cargo test 2>&1); then
+    printf '%s\n' "$sortie" | tail -60 >&2
+    echo "échec des tests de $p" >&2
+    exit 1
+  fi
+  n=$(printf '%s\n' "$sortie" | grep -oP '^test result: ok\. \K\d+' \
       | awk '{s+=$1} END {print s+0}')
   [ "$n" -ge 1 ] || { echo "aucun test exécuté pour $p" >&2; exit 1; }
   echo "  $p : $n tests"

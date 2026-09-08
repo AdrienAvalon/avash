@@ -1,0 +1,26 @@
+# Vulnérabilités connues, examinées et acceptées.
+#
+# cargo-audit ne lit sa configuration QUE depuis ./.cargo/audit.toml (puis
+# ~/.cargo/audit.toml) : joint CONFIG_FILE = "audit.toml" à ./.cargo. Un fichier
+# `audit.toml` à la racine n'était donc lu par aucun outil (trouvé par l'audit
+# du 8 septembre 2026 : la liste effective vivait dans les --ignore de check.sh
+# et des deux CI, qui divergeaient de ce fichier mort). Les avis acceptés sont
+# désormais ICI, une seule fois, pour les deux appels (workspace et sidecar).
+#
+# Source autoritaire jumelle : deny.toml, dont le [advisories] ignore doit
+# lister exactement les deux mêmes avis (garde : scripts/tests/audit-config-centralise.sh).
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — attaque Marvin sur le crate `rsa` (5.9 moyenne).
+    # Aucun correctif amont. Arrive via ssh-key pour la prise en charge RSA.
+    # Le désactiver donne zéro vulnérabilité mais casse la connexion aux
+    # serveurs à clé d'hôte RSA et aux clés id_rsa (vérifié contre un vrai
+    # sshd : « Wrong server signature »). Arbitrage documenté dans
+    # crates/avash/Cargo.toml.
+    "RUSTSEC-2023-0071",
+    # RUSTSEC-2024-0429 — glib, itérateurs VariantStrIter non sûrs. Dépendance
+    # TRANSITIVE de la pile GTK de Tauri (avash-ui), pas de notre code ; on ne
+    # peut ni la retirer ni la corriger, le correctif remontera par Tauri.
+    # Absente de l'arbre du sidecar RDP (vérifié) : l'y ignorer est sans effet.
+    "RUSTSEC-2024-0429",
+]

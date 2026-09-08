@@ -153,7 +153,22 @@ fn marqueur_bloquant_dans(contenu: &str, hote: &str) -> Option<String> {
 /// que tous les tests partagent. C'est la différence entre refuser une clé
 /// qu'on ne peut pas vérifier et l'apprendre en silence.
 fn fichier_present_mais_illisible(chemin: &std::path::Path) -> bool {
-    chemin.exists() && std::fs::File::open(chemin).is_err()
+    // On tente une vraie LECTURE, pas seulement l'ouverture : sous Unix, ouvrir
+    // un répertoire réussit (c'est la lecture qui échoue), et un `known_hosts`
+    // remplacé par un répertoire passait alors pour « pas de souci ». Trouvé par
+    // l'audit du 8 septembre 2026 : le test du cas n'exerçait même pas cette
+    // fonction. Un fichier vide se lit sans erreur (0 octet) et n'est donc pas
+    // signalé — c'est bien un premier contact, pas un fichier illisible.
+    if !chemin.exists() {
+        return false;
+    }
+    std::fs::File::open(chemin)
+        .and_then(|mut f| {
+            use std::io::Read as _;
+            let mut octet = [0u8; 1];
+            f.read(&mut octet).map(|_| ())
+        })
+        .is_err()
 }
 
 /// `whoami::username()` est faillible depuis la version 2 (compte systeme
@@ -447,13 +462,21 @@ impl russh::client::Handler for AvashAuth {
 
             // Hôte inconnu : premier contact, on mémorise.
             VerdictCle::PremierContact => {
-                russh::keys::known_hosts::learn_known_hosts_path(
-                    &self.host,
-                    self.port,
-                    server_public_key,
-                    &chemin,
-                )
-                .map_err(|_| russh::Error::UnknownKey)?;
+                // Trouvé par l'audit du 7 septembre 2026 : quand l'écriture de
+                // known_hosts échoue (`~/.ssh` en lecture seule sur un poste
+                // géré, dossier synchronisé, ou known_hosts en 0444), c'était le
+                // SEUL refus de `check_server_key` à ne poser aucun verdict.
+                // `connect` rendait alors le « Unknown server key » brut de russh
+                // (ou, côté GUI, le seul « Connexion SSH à srv:22 »), et l'on ne
+                // pouvait distinguer un hôte inconnu d'un fichier inécrivable. On
+                // reste fail-closed (là où ssh(1) avertit et continue) mais on
+                // nomme la cause.
+                if let Err(reason) =
+                    apprendre_cle_hote(&chemin, &self.host, self.port, server_public_key)
+                {
+                    *self.verdict.lock().unwrap() = Some(reason);
+                    return Err(russh::Error::UnknownKey);
+                }
                 Ok(true)
             }
 
@@ -1024,7 +1047,10 @@ impl AvashSession {
         }
     }
 
-    /// Exécution one-shot : stdout + exit code.
+    /// Exécution one-shot : sortie (stdout ET stderr mêlés, `ExtendedData`
+    /// compris) + exit code. Le mélange est voulu — la sonde d'OS
+    /// (`osinfo::parse_probe_output`) doit d'ailleurs tolérer le bruit de
+    /// stderr d'un shell distant.
     pub async fn run(&mut self, command: &str) -> Result<(String, u32)> {
         self.executer_borne(command, None).await
     }
@@ -1166,6 +1192,41 @@ impl AvashSession {
             .agent_forward(true)
             .await
             .context("demande de redirection d'agent")?;
+        // Trouvé par l'audit du 7 septembre 2026 : `agent_forward(true)` ne fait
+        // qu'ENVOYER la requête (`want_reply = true`) ; le verdict du serveur
+        // arrive plus tard en `ChannelMsg::Success`/`Failure`. La boucle exec
+        // plus bas l'ignorait (`_ => {}`), si bien qu'un serveur durci
+        // `AllowAgentForwarding no` (qui répond CHANNEL_FAILURE) était avalé :
+        // Avash lançait quand même `scp … autre:` là-bas, qui échouait
+        // « Permission denied (publickey) » en accusant la clé, jamais le refus
+        // de redirection. On consomme donc le verdict AVANT `exec`.
+        //
+        // Attente BORNÉE, et silence = on continue : tous les serveurs
+        // n'émettent pas ce verdict sur le canal. russh 0.63 côté serveur y
+        // répond même par un message GLOBAL (REQUEST_SUCCESS/FAILURE) que le
+        // client ne voit jamais sur le canal, et un pair non conforme peut se
+        // taire malgré `want_reply`. À l'expiration on poursuit comme avant
+        // plutôt que de rendre la copie directe inutilisable contre ces pairs.
+        let refuse = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match channel.wait().await {
+                    Some(russh::ChannelMsg::Success) => break false,
+                    Some(russh::ChannelMsg::Failure) => break true,
+                    // Canal clos avant tout verdict : on laisse `exec` échouer.
+                    Some(russh::ChannelMsg::Close | russh::ChannelMsg::Eof) | None => break false,
+                    // Ajustement de fenêtre, etc. : on attend encore le verdict.
+                    Some(_) => {}
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+        if refuse {
+            anyhow::bail!(
+                "Le serveur refuse la redirection d'agent (AllowAgentForwarding). \
+                 La copie directe d'hôte à hôte a besoin de vos clés là-bas."
+            );
+        }
         channel.exec(false, command).await?;
         let mut sortie = String::new();
         let mut exit_code = 0u32;
@@ -1246,10 +1307,15 @@ impl AvashSession {
     /// et appelle `resize_tx` pour `window_change`.
     pub async fn open_pty(&mut self, cols: u32, rows: u32, term: &str) -> Result<PtyChannel> {
         let channel = self.session.channel_open_session().await?;
+        // `want_reply = false` : on n'attend PAS de verdict du serveur, donc ce
+        // contexte ne peut couvrir qu'une erreur d'ENVOI de la requête, jamais
+        // un refus du serveur. Trouvé par l'audit du 7 septembre 2026 : l'ancien
+        // « Demande PTY refusée » mentait sur ce qu'il détecte (le canal exec de
+        // `run_avec_agent` avait le même angle mort sur `agent_forward`).
         channel
             .request_pty(false, term, cols, rows, 0, 0, &[])
             .await
-            .context("Demande PTY refusée")?;
+            .context("envoi de la demande PTY")?;
         channel.request_shell(false).await?;
 
         // Le canal est partagé entre le pump de sortie et le writer d'entrée :
@@ -1429,6 +1495,26 @@ pub fn forget_host_key(host: &str, port: u16) -> Result<usize> {
     forget_host_key_at(host, port, &path)
 }
 
+/// Apprend la clé d'hôte au premier contact en l'ajoutant à `chemin`
+/// (`known_hosts`). Cœur testable sur un chemin explicite, comme
+/// [`forget_host_key_at`] : rend, en cas d'échec d'écriture, le verdict prêt à
+/// poser (avec la cause `{e}` : EACCES, ENOSPC et EROFS restent distincts) au
+/// lieu de laisser remonter le « Unknown server key » brut de russh.
+fn apprendre_cle_hote(
+    chemin: &Path,
+    host: &str,
+    port: u16,
+    cle: &russh::keys::PublicKey,
+) -> std::result::Result<(), String> {
+    russh::keys::known_hosts::learn_known_hosts_path(host, port, cle, chemin).map_err(|e| {
+        format!(
+            "Impossible d'enregistrer la clé de {host}:{port} dans {} : {e}. \
+             Connexion refusée.",
+            chemin.display()
+        )
+    })
+}
+
 /// Coeur testable de [`forget_host_key`], sur un fichier `known_hosts`
 /// explicite (evite toute dependance a `HOME` dans les tests).
 pub fn forget_host_key_at(host: &str, port: u16, path: &Path) -> Result<usize> {
@@ -1598,7 +1684,52 @@ mod tests_marqueurs {
 
 #[cfg(test)]
 mod tests_known_hosts_illisible {
-    use super::fichier_present_mais_illisible;
+    use super::{apprendre_cle_hote, fichier_present_mais_illisible};
+
+    /// Trouvé par l'audit du 7 septembre 2026 : quand `~/.ssh` (ou
+    /// `known_hosts`) n'est pas inscriptible, `learn_known_hosts_path` échoue en
+    /// EACCES au premier contact. C'était le SEUL refus de `check_server_key`
+    /// sans verdict posé, donc `connect` remontait le « Unknown server key » brut
+    /// de russh, sans nommer la cause. Le verdict doit désormais citer
+    /// `known_hosts` et l'échec d'enregistrement.
+    ///
+    /// Répertoire scratch en 0o500, et non le HOME virtuel partagé du processus,
+    /// dont le `.ssh` sert aux autres tests parallèles. `#[cfg(unix)]` : sous
+    /// Windows un répertoire en lecture seule n'empêche pas la création d'un
+    /// fichier.
+    #[test]
+    #[cfg(unix)]
+    fn un_known_hosts_inecrivable_donne_un_verdict_clair() {
+        use russh::keys::{Algorithm, PrivateKey};
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::testutil::temp_home();
+        let repertoire = dir.dir().join("ssh-lecture-seule");
+        std::fs::create_dir(&repertoire).unwrap();
+        let chemin = repertoire.join("known_hosts");
+        std::fs::set_permissions(&repertoire, std::fs::Permissions::from_mode(0o500)).unwrap();
+        // Régression vue en CI GitLab (voir `un_fichier_aux_droits_retires...`) :
+        // en root (conteneur de l'exécuteur), CAP_DAC_OVERRIDE ignore les droits
+        // et l'écriture réussirait — le cas n'existe pas pour lui, on le constate
+        // plutôt que d'exiger une erreur que le noyau ne produira pas.
+        let droits_appliques = std::fs::File::create(repertoire.join("sonde")).is_err();
+        let cle = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
+            .unwrap()
+            .public_key()
+            .clone();
+        let resultat = apprendre_cle_hote(&chemin, "srv", 22, &cle);
+        // Restaurer les droits pour que le nettoyage du répertoire temporaire
+        // puisse retirer son contenu.
+        std::fs::set_permissions(&repertoire, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if !droits_appliques {
+            eprintln!("droits non appliqués (root ?) : cas sans objet ici");
+            return;
+        }
+        let message = resultat.expect_err("l'écriture dans un répertoire 0o500 doit échouer");
+        assert!(
+            message.contains("known_hosts") && message.contains("enregistrer"),
+            "le verdict doit nommer known_hosts et l'échec d'enregistrement : {message}"
+        );
+    }
 
     /// russh rend une liste vide dès qu'il n'arrive pas à ouvrir le fichier —
     /// ce que le reste du code prendrait pour « hôte inconnu », donc pour un
@@ -1649,11 +1780,15 @@ mod tests_known_hosts_illisible {
         let dir = crate::testutil::temp_home();
         let p = dir.dir().join("known_hosts");
         std::fs::create_dir(&p).unwrap();
-        // Sous Unix, ouvrir un répertoire en lecture réussit ; c'est la lecture
-        // qui échoue. On se contente donc de constater qu'on ne le prend pas
-        // pour un fichier lisible normal.
+        // Sous Unix, ouvrir un répertoire réussit ; c'est la LECTURE qui échoue.
+        // La fonction doit donc le signaler comme « présent mais illisible »,
+        // pour qu'un known_hosts remplacé par un répertoire refuse la connexion
+        // au lieu de la traiter comme un premier contact.
         assert!(p.exists());
-        assert!(std::fs::read_to_string(&p).is_err());
+        assert!(
+            fichier_present_mais_illisible(&p),
+            "un répertoire à la place du fichier doit être signalé"
+        );
     }
 }
 

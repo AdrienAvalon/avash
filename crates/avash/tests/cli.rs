@@ -61,16 +61,52 @@ fn une_commande_inconnue_sort_en_2() {
     let sortie = avash(&home, &["bidule"]);
     assert_eq!(sortie.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&sortie.stderr).contains("Commande inconnue"));
+    // `connect` figurait dans la docstring mais n'a jamais eu de bras dans le
+    // `match` : c'est une commande inconnue comme une autre. La docstring a été
+    // alignée sur l'usage réel (`list|run`) ; ce test garde l'accord.
+    let connect = avash(&home, &["connect", "prod"]);
+    assert_eq!(connect.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&connect.stderr).contains("Commande inconnue"));
     let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
 fn run_exige_un_alias_et_une_commande() {
     let home = bac("run");
-    std::fs::write(home.join(".ssh/config"), "Host prod\n  HostName 10.0.0.1\n").unwrap();
+    // HostName volontairement non résoluble (.invalid, RFC 6761) : si le
+    // refus de la commande vide régressait, `avash run prod` tenterait la
+    // connexion au lieu de refuser tout de suite ; le test rendrait alors la
+    // main sur un échec réseau plutôt que sur le message d'usage, ce qui rend
+    // le faux positif visible au lieu de le laisser passer.
+    std::fs::write(
+        home.join(".ssh/config"),
+        "Host prod\n  HostName avash-inexistant.invalid\n",
+    )
+    .unwrap();
     let sans_alias = avash(&home, &["run"]);
     assert!(!sans_alias.status.success());
     assert!(String::from_utf8_lossy(&sans_alias.stderr).contains("Usage"));
+    // Trouvé par l'audit du 7 septembre 2026 : `avash run prod` sans commande
+    // exécutait une commande vide côté serveur (sortie vide, code 0) au lieu de
+    // rappeler l'usage, car `args.get(3..)` renvoie `Some(&[])` et le garde-fou
+    // ne se déclenchait jamais. On exige le message « Usage » et non un simple
+    // échec : avant le correctif ce cas « passait » en tentant une connexion.
+    let sans_commande = avash(&home, &["run", "prod"]);
+    assert!(!sans_commande.status.success());
+    assert!(
+        String::from_utf8_lossy(&sans_commande.stderr).contains("Usage"),
+        "{}",
+        String::from_utf8_lossy(&sans_commande.stderr)
+    );
+    // Une commande faite uniquement d'arguments vides ou d'espaces est traitée
+    // comme absente : `avash run prod ""` ne doit pas non plus exécuter `""`.
+    let commande_vide = avash(&home, &["run", "prod", "   "]);
+    assert!(!commande_vide.status.success());
+    assert!(
+        String::from_utf8_lossy(&commande_vide.stderr).contains("Usage"),
+        "{}",
+        String::from_utf8_lossy(&commande_vide.stderr)
+    );
     let alias_inconnu = avash(&home, &["run", "absent", "true"]);
     assert!(!alias_inconnu.status.success());
     assert!(String::from_utf8_lossy(&alias_inconnu.stderr).contains("introuvable"));

@@ -45,6 +45,16 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Sidecar (bâti instrumenté par scripts/couverture.sh) et serveurs de
+          # test, tous hors espace de travail : sans les nommer, rust-cache ne
+          # cache que `./target` et recompile IronRDP/rustls/tokio à chaque
+          # passage (audit du 8 septembre 2026). `.` reste listé.
+          workspaces: |
+            .
+            rdp-sidecar
+            test-rdp-server
+            test-vnc-server
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
           tool: cargo-llvm-cov

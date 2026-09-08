@@ -1,13 +1,18 @@
 [package]
 name = "avash"
-version = "0.9.2"
-edition = "2021"
+# Métadonnées héritées du workspace : un seul numéro à bumper pour une release.
+# Trouvé par l'audit du 8 septembre 2026 : ces champs étaient codés en dur ici,
+# si bien que la version du [workspace.package] n'était lue par personne.
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
 # Application, pas bibliothèque : rien n'est publié sur crates.io. Le dire
 # empêche une publication par mégarde, et lève l'avertissement de cargo-deny
 # sur la dépendance de chemin interne.
 publish = false
 description = "Avash — native SSH/RDP connection manager. Light, fast, secure, multi-platform."
-license = "AGPL-3.0-or-later"
+license.workspace = true
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

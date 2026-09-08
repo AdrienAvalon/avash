@@ -2,6 +2,15 @@
 name = "test-rdp-server"
 version = "0.1.0"
 edition = "2021"
+# Serveur de test, pas bibliothèque : rien n'est publié sur crates.io. Le dire
+# empêche une publication par mégarde, comme les cinq autres manifestes du dépôt.
+# Trouvé par l'audit du 8 septembre 2026 : ce manifeste était le seul sans
+# publish = false ni licence, alors qu'il embarque du code AGPL du dépôt et une
+# copie modifiée d'ironrdp-server (dont la licence MIT OR Apache-2.0 du vendor/
+# reste distincte et ne qualifie pas ce paquet-ci).
+publish = false
+description = "Avash — serveur RDP de test pour la suite bout en bout"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 # `rdpdr` et `svc` : le côté serveur de la redirection de lecteur (MS-RDPEFS),

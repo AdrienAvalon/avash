@@ -3,6 +3,29 @@
 # Contournement ponctuel : git commit --no-verify
 set -e
 cd "$(git rev-parse --show-toplevel)"
+
+# Trouve par l'audit du 8 septembre 2026 : les verifications ci-dessous portent
+# sur l'arbre de travail, pas sur l'index. Avec un ajout partiel (git add -p, ou
+# un fichier modifie apres git add) l'index differe de l'arbre : le hook pouvait
+# etre vert alors que le commit produit ne compilait pas (le hunk non indexe
+# portait la definition appelee par les hunks indexes, CI rouge sur main), et a
+# l'inverse refuser un commit sain a cause de travail non indexe ailleurs.
+# On ne remise PAS l'arbre pour isoler l'index : `git stash --keep-index` puis
+# `git stash pop` corrompt l'arbre justement dans le cas de l'ajout partiel (le
+# pop rejoue la 3e modif contre l'index a 2 hunks et laisse des marqueurs de
+# conflit <<<<<<< dans le fichier suivi) — verifie a l'audit, perte de travail
+# inacceptable dans une barriere rapide. Le hook refuse donc le commit quand
+# l'index differe de l'arbre suivi, en expliquant pourquoi : il ne rend un
+# verdict que lorsqu'il peut valider exactement ce qui sera commite.
+if ! git diff --quiet; then
+  echo "✗ pre-commit : l'index differe de l'arbre de travail (ajout partiel," >&2
+  echo "  ou fichier modifie apres 'git add'). Le hook verifie l'arbre : son" >&2
+  echo "  verdict ne refleterait pas le commit produit (faux vert possible)." >&2
+  echo "  Indexe tout ('git add -u' ou 'git add .') puis recommence, ou" >&2
+  echo "  contourne par 'git commit --no-verify' en t'appuyant sur ./check.sh." >&2
+  exit 1
+fi
+
 echo "▸ pre-commit : garde front"
 ./scripts/guard.sh
 echo "▸ pre-commit : format"

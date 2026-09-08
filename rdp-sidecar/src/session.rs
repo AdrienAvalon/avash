@@ -22,7 +22,9 @@ use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::input::Database;
 use ironrdp::pdu::geometry::InclusiveRectangle;
 use ironrdp::session::image::DecodedImage;
-use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
+use ironrdp::session::{
+    ActiveStage, ActiveStageBuilder, ActiveStageOutput, GracefulDisconnectReason,
+};
 use ironrdp_tokio::single_sequence_step;
 use ironrdp_tokio::FramedWrite as _;
 use std::time::{Duration, Instant};
@@ -32,7 +34,7 @@ use tokio_tungstenite::tungstenite::Message;
 /// passé ce délai plutôt que de figer l'affichage.
 const ACK_TIMEOUT: Duration = Duration::from_millis(250);
 
-pub(crate) enum Suite {
+pub enum Suite {
     /// Rien n'a été dessiné : ce serveur n'a probablement que le canal
     /// graphique, qu'il faut lui offrir — donc se reconnecter.
     ReprendreAvecGraphique,
@@ -42,7 +44,7 @@ pub(crate) enum Suite {
     Rediriger(Box<ironrdp::session::redirection::Redirection>),
 }
 
-pub(crate) async fn executer(
+pub async fn executer(
     args: &Args,
     redirection: Option<Box<ironrdp::session::redirection::Redirection>>,
     poste: &mut Option<Poste>,
@@ -692,6 +694,19 @@ pub(crate) async fn executer(
                         m.extend_from_slice(text.as_bytes());
                         sink.send(Message::Binary(m.into())).await.context("envoi presse-papiers")?;
                     }
+                    ClipReq::PressePapiersDistantChange => {
+                        // Le distant a changé son presse-papiers : la liste de
+                        // fichiers offerte est caduque. On l'oublie et on efface
+                        // la pastille du front, sauf réception en cours (ses
+                        // verrous sont gardés en grâce, sa progression reste).
+                        if presse_papiers_distant_a_change(&mut fichiers_distants, reception.is_some()) {
+                            // PRESSE-PAPIERS DISTANT VIDÉ [14] : le front efface
+                            // `s.fichiers` et la pastille (si aucune réception).
+                            sink.send(Message::Binary(vec![14u8].into()))
+                                .await
+                                .context("envoi presse-papiers distant vidé")?;
+                        }
+                    }
                     ClipReq::FichiersDistants(liste, data_id) => {
                         // Le distant a copié des fichiers : l'interface le montre,
                         // l'utilisateur décide. Rien n'est téléchargé d'ici.
@@ -775,7 +790,15 @@ pub(crate) async fn executer(
                             ajouter_rect(&mut dirty, &rect);
                             flush_dirty!();
                         }
-                        ActiveStageOutput::Terminate(_) => return Ok(Suite::Fini),
+                        ActiveStageOutput::Terminate(raison) => {
+                            // Le protocole a transmis la cause de la fin et le
+                            // sidecar l'a décodée : on la journalise pour que le
+                            // journal de 32 lignes repris par l'interface
+                            // (`suivre_diagnostic`) l'affiche dans l'incrustation
+                            // « Connexion RDP fermée ».
+                            eprintln!("{}", motif_terminaison(&raison));
+                            return Ok(Suite::Fini);
+                        }
                         ActiveStageOutput::Redirection(r) => return Ok(Suite::Rediriger(r)),
                         ActiveStageOutput::DeactivateAll => {
                             // Le serveur a accepté le changement de résolution : dérouler
@@ -818,9 +841,6 @@ pub(crate) async fn executer(
     Ok(Suite::Fini)
 }
 
-/// L'annonce de capacités graphiques à écrire, s'il y en a une.
-///
-/// Rendue prête à l'emploi : le PDU est déjà encadré pour le canal statique.
 /// Combien de temps une offre de fichiers attend que le canal du
 /// presse-papiers revienne à l'état prêt. Un échange de collage se termine en
 /// quelques PDU ; trois secondes couvrent un serveur lent sans faire croire à
@@ -834,11 +854,36 @@ fn canal_pas_pret(e: &impl std::fmt::Display) -> bool {
     e.to_string().contains("not in Ready state")
 }
 
+/// Une nouvelle FormatList du distant : son presse-papiers a changé, quel que
+/// soit le format copié. La liste de fichiers précédemment offerte n'est plus
+/// valable (ses verrous côté serveur passent en `Expired`) : on l'oublie pour
+/// ne pas proposer une réception qui finirait sur « le distant a refusé de
+/// servir ». Sauf réception en cours : IronRDP garde alors ses verrous en
+/// période de grâce pour que le téléchargement survive au changement de
+/// presse-papiers (cf. `lib.rs` « Do NOT clear sent_file_contents_requests
+/// here ») ; on ne touche ni la liste ni la pastille de progression tant
+/// qu'elle tourne.
+///
+/// Rend `true` quand la pastille du front doit être effacée (aucune réception
+/// en cours). Trouvé par l'audit du 7 septembre 2026 : après une copie de texte
+/// (ou d'un format ignoré) sur le distant, la pastille « N fichiers copiés »
+/// restait et « recevoir » lançait une réception sur des verrous expirés.
+fn presse_papiers_distant_a_change<T>(fichiers: &mut Option<T>, reception_en_cours: bool) -> bool {
+    if reception_en_cours {
+        return false;
+    }
+    *fichiers = None;
+    true
+}
+
 /// L'accusé d'une offre qui n'a pas abouti, tel que le front l'attend.
 fn accuse_offre_echec(erreur: &str) -> serde_json::Value {
     serde_json::json!({ "sens": "offre", "fichiers": 0, "octets": 0, "erreurs": [erreur] })
 }
 
+/// L'annonce de capacités graphiques à écrire, s'il y en a une.
+///
+/// Rendue prête à l'emploi : le PDU est déjà encadré pour le canal statique.
 pub(crate) fn annonce_egfx(
     active: &mut ActiveStage,
     g: &Graphique<'_>,
@@ -850,6 +895,88 @@ pub(crate) fn annonce_egfx(
         .process_svc_processor_messages(egfx::lot_dvc(id, pdu)?)
         .context("encodage egfx")?;
     Ok(Some((id, bytes)))
+}
+
+/// Le motif d'un `Terminate` serveur, en français, pour le journal affiché par
+/// l'interface. Le vendor ne rend que de l'anglais (`description()`), on traduit
+/// donc les deux variantes connues ; `Other` porte une description déjà décodée
+/// (raison MCS ou ErrorInfo) qu'on relaie telle quelle.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : la branche `Terminate(_)` jetait le
+/// `GracefulDisconnectReason`, puis `main.rs` rendait `Ok(())` (code 0, rien sur
+/// stderr) ; l'incrustation « Connexion RDP fermée » se résumait à « connecté :
+/// WxH ». Une déconnexion par un administrateur, par une limite d'inactivité ou
+/// par une autre ouverture de session sur le même compte ressemblait alors à une
+/// coupure réseau, alors que le protocole avait transmis la cause.
+fn motif_terminaison(raison: &GracefulDisconnectReason) -> String {
+    let cause = match raison {
+        GracefulDisconnectReason::UserInitiated => {
+            "déconnexion demandée par l'utilisateur".to_owned()
+        }
+        GracefulDisconnectReason::ServerInitiated => {
+            "déconnexion décidée par le serveur".to_owned()
+        }
+        GracefulDisconnectReason::Other(description) => description.clone(),
+    };
+    format!("Le serveur a mis fin à la session : {cause}")
+}
+
+#[cfg(test)]
+mod tests_motif_terminaison {
+    use super::motif_terminaison;
+    use ironrdp::session::GracefulDisconnectReason;
+
+    /// Trouvé par l'audit du 7 septembre 2026 : le motif du Terminate serveur
+    /// était jeté, l'onglet se fermait sans rien dire. Chaque variante doit
+    /// produire une phrase non vide qui nomme la fin de session ; `Other` doit
+    /// relayer la description décodée par le sidecar (limite d'inactivité,
+    /// éviction par un administrateur, autre ouverture de session…).
+    #[test]
+    fn chaque_raison_donne_un_motif_lisible() {
+        let u = motif_terminaison(&GracefulDisconnectReason::UserInitiated);
+        let s = motif_terminaison(&GracefulDisconnectReason::ServerInitiated);
+        let o = motif_terminaison(&GracefulDisconnectReason::Other(
+            "The disconnection was initiated by the server administration tool.".to_owned(),
+        ));
+        for m in [&u, &s, &o] {
+            assert!(
+                m.contains("Le serveur a mis fin à la session"),
+                "motif muet : {m}"
+            );
+        }
+        // Les deux variantes connues sont traduites (pas l'anglais du vendor).
+        assert!(u.contains("utilisateur"));
+        assert!(s.contains("serveur"));
+        // `Other` relaie la description décodée sans la perdre.
+        assert!(o.contains("server administration tool"));
+    }
+}
+
+#[cfg(test)]
+mod tests_presse_papiers_distant {
+    use super::presse_papiers_distant_a_change;
+
+    /// Trouvé par l'audit du 7 septembre 2026 : sur le bureau distant, copier
+    /// trois fichiers puis un mot dans le Bloc-notes laissait la pastille
+    /// « 3 fichiers copiés » et « recevoir » lançait une réception sur des
+    /// verrous expirés. Une nouvelle FormatList hors réception doit oublier la
+    /// liste et demander l'effacement de la pastille.
+    #[test]
+    fn un_changement_hors_reception_oublie_la_liste_et_efface_la_pastille() {
+        let mut fichiers = Some(("liste", 42u32));
+        assert!(presse_papiers_distant_a_change(&mut fichiers, false));
+        assert!(fichiers.is_none());
+    }
+
+    /// Réception en cours : IronRDP garde ses verrous en période de grâce pour
+    /// que le téléchargement survive au changement de presse-papiers. On ne
+    /// touche alors ni la liste ni la pastille de progression.
+    #[test]
+    fn une_reception_en_cours_preserve_la_liste_et_la_pastille() {
+        let mut fichiers = Some(("liste", 42u32));
+        assert!(!presse_papiers_distant_a_change(&mut fichiers, true));
+        assert!(fichiers.is_some());
+    }
 }
 
 #[cfg(test)]

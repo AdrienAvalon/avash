@@ -2,11 +2,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { ic } from "./icons";
-import { snippetPreview, snippetVars, renderSnippet, type Snippet } from "./filters";
+import { snippetPreview, snippetVars, renderSnippet, resultatEnvoi, type Snippet } from "./filters";
 import { $, state } from "./etat";
 import { askConfirm } from "./dialogues";
 import { focusSession } from "./main";
-import { notifyErreur } from "./notifications";
+import { notify, notifyErreur } from "./notifications";
 import { t } from "./i18n";
 
 // ---------- Snippets ----------
@@ -226,7 +226,15 @@ function updateSendPreview() {
 $("send-vars").addEventListener("input", updateSendPreview);
 $("send-cancel").addEventListener("click", () => $("send-modal").classList.remove("open"));
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && $("send-modal").classList.contains("open")) $("send-modal").classList.remove("open");
+  if (e.key === "Escape" && $("send-modal").classList.contains("open")) {
+    // La touche s'arrête ici, comme pour confirm/ask/pass : sans cela, le
+    // gestionnaire d'Échap de menu-hote s'exécutait aussi et, send-modal venant
+    // de se fermer, il fermait snippets-modal restée derrière. Trouvé par l'audit
+    // du 7 septembre 2026 : Échap dans « Envoyer » pour revenir à la liste la
+    // faisait disparaître, alors qu'Annuler ne fermait que send-modal.
+    e.stopImmediatePropagation();
+    $("send-modal").classList.remove("open");
+  }
 });
 
 $("send-form").addEventListener("submit", async (e) => {
@@ -247,11 +255,30 @@ $("send-form").addEventListener("submit", async (e) => {
   }
   try {
     const n = await invoke<number>("snippet_send", { sessionIds: ids, command, run });
+    // `snippet_send` ignore sans erreur une cible fermée entre-temps et rend le
+    // compte réellement atteint. Le front l'ignorait (`void n`) : un envoi à
+    // zéro session passait pour réussi, un envoi partiel laissait croire tout
+    // le parc traité. Trouvé par l'audit du 7 septembre 2026.
+    const res = resultatEnvoi(n, ids.length);
+    if (res.etat === "aucune") {
+      // Toutes les cibles cochées ont été fermées pendant la saisie des
+      // variables : rien n'est parti. On garde la modale ouverte, on le dit, et
+      // on ne déplace pas le focus (aucun onglet vivant où aller).
+      $("send-error").textContent = t("snippets-aucune-session-atteinte");
+      $("send-error").hidden = false;
+      return;
+    }
     $("send-modal").classList.remove("open");
     snippetsClose();
-    // Retour a l'onglet vise (le premier), pour voir le resultat.
-    focusSession(ids[0]);
-    void n;
+    if (res.etat === "partiel") {
+      notify(t("snippets-envoye-partiel", { n: res.n, total: res.total }), "info");
+    }
+    // Retour à la première cible ENCORE VIVANTE, pas `ids[0]` : l'utilisateur a
+    // pu fermer cet onglet à la main pendant la saisie (closeSession fait
+    // `state.sessions.delete`), et focusSession poserait alors `state.active`
+    // sur un onglet fantôme. Trouvé par l'audit du 7 septembre 2026.
+    const cible = ids.find((id) => state.sessions.has(id));
+    if (cible !== undefined) focusSession(cible);
   } catch (ex) {
     $("send-error").textContent = String(ex);
     $("send-error").hidden = false;

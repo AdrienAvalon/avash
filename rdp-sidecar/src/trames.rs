@@ -201,8 +201,15 @@ const ENTETE_RECT: usize = 8;
 /// l'union gaspille le moins. Une trame ne peut pas porter un nombre illimité
 /// de rectangles.
 pub(crate) fn ajouter_rect(zone: &mut Vec<InclusiveRectangle>, r: &InclusiveRectangle) {
+    // saturating_sub : un rectangle dégénéré (right < left, top > bottom) compte
+    // pour une aire nulle plutôt que de faire déborder la soustraction — panique
+    // en debug, enroulement en release. Un tel rectangle vient d'un codage vide
+    // (Raw de largeur ou hauteur nulle en x>0), écarté à la source par la garde
+    // de vnc.rs, mais `ajouter_rect` reste robuste par lui-même, comme la boucle
+    // RECTS_MAX plus bas. Trouvé par l'audit du 7 septembre 2026.
     let aire = |a: &InclusiveRectangle| {
-        (u64::from(a.right) - u64::from(a.left) + 1) * (u64::from(a.bottom) - u64::from(a.top) + 1)
+        (u64::from(a.right) + 1).saturating_sub(u64::from(a.left))
+            * (u64::from(a.bottom) + 1).saturating_sub(u64::from(a.top))
     };
     let union = |a: &InclusiveRectangle, b: &InclusiveRectangle| InclusiveRectangle {
         left: a.left.min(b.left),

@@ -4,11 +4,14 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 6 septembre 2026, après la publication de la version 0.9.2
-— un lot de fond (panneau SFTP sur la session du terminal, mot de passe oublié
-dès la connexion, front et processus RDP découpés en modules, chaîne
-d'intégration complète, quarante tests de plus, fuzzing du parseur), après la
-0.6.1 qui durcissait le collage, la webview et les traces RDP.
+Dernière révision : 6 septembre 2026, après la publication de la version 0.9.2.
+Le lot de la 0.7 à la 0.9.2 a apporté les bureaux VNC (dont VeNCrypt à
+certificat épinglé), le port série, le son et la redirection de lecteur du
+bureau distant, les fichiers par le presse-papiers RDP, la vue partagée, la
+réouverture des onglets de la dernière fois, l'export d'un diagnostic, la
+soumission à winget, et la couverture mesurée tests unitaires et suite bout en
+bout confondus. Le détail version par version est dans `CHANGELOG.md` (à la
+racine).
 
 Dépôts : [GitHub](https://github.com/AdrienAvalon/avash) (public) · GitLab interne (privé).
 
@@ -36,7 +39,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 06/09/2026 |
 |---|---|
-| Tests | 441 Rust (158 cœur, 47 intégration, 72 interface, 135 processus RDP, 29 serveurs de test) · 597 dans les paquets IronRDP et vnc-rs portés · 124 front · 71 scénarios bout en bout dans 36 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
+| Tests | 623 Rust (218 cœur, 65 intégration, 115 interface, 193 processus RDP, 32 serveurs de test) · 614 dans les paquets IronRDP et vnc-rs portés · 273 front · 74 scénarios bout en bout dans 36 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 172 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -213,11 +216,13 @@ Argument d'adoption le plus direct : un utilisateur qui retrouve ses connexions
 sans les ressaisir reste. Les sessions PuTTY sont lues dans `~/.putty/sessions`
 (fichiers `clé=valeur`, noms encodés en `%XX`) ou dans le registre Windows par
 `reg query` ; celles de MobaXterm dans `MobaXterm.ini` ou un export
-`.mxtsessions`, avec leur dossier. Seules les sessions SSH sont reprises ; les
-autres protocoles sont comptés et dits. Une clé `.ppk` ou un mandataire ne
+`.mxtsessions`, avec leur dossier. Les sessions SSH et, chez MobaXterm, les
+bureaux RDP (`#91`) sont repris ; telnet, série et les autres protocoles sont
+comptés et dits. Une clé `.ppk` ou un mandataire ne
 sont pas repris, et le candidat le signale. L'interface propose la liste, alias
 modifiables, un hôte déjà déclaré pour le même serveur décoché d'office, et
-écrit dans `~/.ssh/config`. Testé par parseurs (échantillons réels des deux
+écrit les sessions dans `~/.ssh/config` et les bureaux RDP dans le magasin des
+bureaux distants. Testé par parseurs (échantillons réels des deux
 formats), par les commandes, et de bout en bout sur des sessions PuTTY semées.
 
 ### 2.4 Canaux de distribution — **en cours** (04/09/2026)
@@ -493,8 +498,8 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 69 | en hausse à chaque fonctionnalité |
-| Couverture des tests | 75 % des lignes (cœur + interface), 66 % (processus RDP) | en hausse à chaque version |
+| Scénarios bout en bout | 74 | en hausse à chaque fonctionnalité |
+| Couverture des tests | 84 % des lignes (cœur + interface), 81 % (processus RDP), unitaires et bout en bout confondus | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |
 

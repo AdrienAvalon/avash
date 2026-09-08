@@ -148,4 +148,28 @@ describe("Audit d'accessibilité (axe-core)", () => {
     await browser.keys("Escape");
     expect(rapport(violations)).toBe(AUCUNE);
   });
+
+  it("la palette de commandes ouverte ne présente aucune violation", async () => {
+    // Trouvé par l'audit du 7 septembre 2026 : renderPalette pose role="option"
+    // sur chaque résultat, mais #palette-results n'était pas un role="listbox"
+    // et #palette-input pas un role="combobox" — axe rapportait
+    // aria-required-parent (options orphelines). Aucun des trois audits ci-dessus
+    // n'ouvre la palette : la vue principale la garde masquée. On l'ouvre donc
+    // ici (Ctrl+K) : à requête vide, renderPalette liste déjà toutes les
+    // commandes comme role="option", ce qui suffit à exercer aria-required-parent
+    // sans dépendre des hôtes du bac d'essai. On audite "#palette" une fois les
+    // animations gelées.
+    await $("#host-list").waitForExist({ timeout: 15000 });
+    await figerLesAnimations();
+    await browser.keys(["Control", "k"]);
+    await $("#palette.open").waitForDisplayed({ timeout: 5000 });
+    await browser.waitUntil(
+      async () => (await $$("#palette-results .item")).length > 0,
+      { timeout: 5000, timeoutMsg: "la palette n'a rendu aucun résultat" },
+    );
+    await figerLesAnimations();
+    const violations = await auditer("#palette");
+    await browser.keys("Escape");
+    expect(rapport(violations)).toBe(AUCUNE);
+  });
 });

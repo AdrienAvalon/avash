@@ -17,13 +17,12 @@ pub(crate) fn valeur_du_jeton(brut: &[u8]) -> String {
         .to_owned()
 }
 
-/// Ce qu'une session a donné.
 /// Le poste de travail côté interface : l'écoute locale et le client accepté.
 ///
 /// Il survit aux reconnexions RDP. Une redirection de serveur rétablit la
 /// session distante par en dessous ; l'interface, elle, garde le même port, le
 /// même jeton et la même WebSocket, et n'a rien à réapprendre.
-pub(crate) struct Poste {
+pub struct Poste {
     pub(crate) _listener: TcpListener,
     pub(crate) sink:
         futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, Message>,

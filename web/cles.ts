@@ -81,10 +81,20 @@ async function keysRefresh() {
       copy.className = "kcopy";
       copy.type = "button";
       copy.textContent = t("cles-copier-publique");
-      copy.addEventListener("click", async () => {
-        await navigator.clipboard.writeText(k.public_line!);
-        copy.textContent = t("cles-copiee");
-        setTimeout(() => (copy.textContent = t("cles-copier-publique")), 1500);
+      // Sous WebKitGTK, writeText peut rejeter (permission, contexte non
+      // securise) : sans branche d'echec, la promesse partait en rejet non
+      // gere, le libelle restait « copier la publique » et l'utilisateur
+      // collait l'ancien contenu du presse-papiers dans authorized_keys sans
+      // rien voir (audit du 7 septembre 2026). Style promesse plutot qu'async
+      // pour tenir les deux branches sans await orphelin.
+      copy.addEventListener("click", () => {
+        navigator.clipboard.writeText(k.public_line!).then(
+          () => {
+            copy.textContent = t("cles-copiee");
+            setTimeout(() => (copy.textContent = t("cles-copier-publique")), 1500);
+          },
+          () => keyFeedback(t("cles-copie-impossible"), "error"),
+        );
       });
       row.appendChild(copy);
 

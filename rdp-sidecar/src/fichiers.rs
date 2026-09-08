@@ -211,6 +211,9 @@ struct EnCours {
     recu: u64,
     /// Requêtes en vol : `streamId` → (position, longueur demandée).
     en_vol: HashMap<u32, (u64, u32)>,
+    /// `streamId` d'une requête FILECONTENTS_SIZE en attente, quand le
+    /// descripteur n'a pas donné la taille (FD_FILESIZE absent) ; sinon `None`.
+    flux_taille: Option<u32>,
 }
 
 /// L'état d'une réception : les fichiers annoncés, celui qu'on reçoit, ce qui
@@ -337,8 +340,14 @@ impl Reception {
                 .with_context(|| format!("création de {}", parent.display()))?;
         }
         let cible = sans_collision(&cible);
-        let taille = d.file_size.unwrap_or(0);
-        if taille == 0 {
+        // On distingue `Some(0)` (le distant affirme un fichier vide, on le
+        // crée tel quel) de `None` (FD_FILESIZE absent : la taille est inconnue,
+        // MS-RDPECLIP 2.2.5.2.3.1). Trouvé par l'audit du 7 septembre 2026 :
+        // `file_size.unwrap_or(0)` confondait les deux, si bien qu'un serveur
+        // qui n'annonce pas la taille faisait recevoir des fichiers de 0 octet
+        // comptés « réussis » (bilan « 0 erreur »). Pour `None`, on demande
+        // d'abord la taille par FILECONTENTS_SIZE (plus bas).
+        if d.file_size == Some(0) {
             tokio::fs::File::create(&cible)
                 .await
                 .with_context(|| format!("création de {}", cible.display()))?;
@@ -364,12 +373,45 @@ impl Reception {
             partiel,
             cible,
             fichier,
-            taille,
+            taille: d.file_size.unwrap_or(0),
             demande: 0,
             recu: 0,
             en_vol: HashMap::new(),
+            flux_taille: None,
         });
-        Ok(Some(self.remplir()))
+        // Taille connue (> 0) : on demande les plages. Taille inconnue (`None`) :
+        // on demande d'abord la taille, la réponse SIZE fixera `taille`.
+        if d.file_size.is_some() {
+            Ok(Some(self.remplir()))
+        } else {
+            Ok(Some(self.demander_taille()))
+        }
+    }
+
+    /// Émet une requête FILECONTENTS_SIZE pour le fichier en cours dont le
+    /// descripteur n'a pas donné la taille (FD_FILESIZE absent). La réponse
+    /// (8 octets, taille en petit-boutien, MS-RDPECLIP 2.2.5.4) fixera `taille`
+    /// dans [`Self::recevoir`], puis les plages suivront par [`Self::remplir`].
+    fn demander_taille(&mut self) -> Vec<FileContentsRequest> {
+        let data_id = self.data_id;
+        let stream_id = {
+            let f = self.prochain_flux;
+            self.prochain_flux = self.prochain_flux.wrapping_add(1).max(1);
+            f
+        };
+        let Some(e) = self.en_cours.as_mut() else {
+            return Vec::new();
+        };
+        e.flux_taille = Some(stream_id);
+        let index = i32::try_from(e.index).unwrap_or(i32::MAX);
+        vec![FileContentsRequest {
+            stream_id,
+            index,
+            flags: FileContentsFlags::SIZE,
+            position: 0,
+            requested_size: 8,
+            data_id,
+        }]
     }
 
     /// Remet des requêtes en vol jusqu'à `EN_VOL`, ou jusqu'à la fin du fichier.
@@ -418,6 +460,36 @@ impl Reception {
         let Some(e) = self.en_cours.as_mut() else {
             return Vec::new();
         };
+        if e.flux_taille == Some(stream_id) {
+            // Réponse à la requête FILECONTENTS_SIZE émise pour un descripteur
+            // sans FD_FILESIZE : 8 octets, taille en petit-boutien (2.2.5.4).
+            e.flux_taille = None;
+            let taille = donnees
+                .filter(|d| d.len() == 8)
+                .map(|d| u64::from_le_bytes(d[..8].try_into().expect("8 octets")));
+            let Some(taille) = taille else {
+                // Toujours pas de taille : on ne peut pas recevoir ce fichier,
+                // et on le signale au lieu de le compter « réussi » (0 octet).
+                let e = self.en_cours.take().expect("en cours");
+                let _ = tokio::fs::remove_file(&e.partiel).await;
+                self.erreurs.push(format!(
+                    "{} : taille inconnue",
+                    chemin_relatif(&self.fichiers[e.index])
+                ));
+                self.termines += 1;
+                return self.demarrer().await;
+            };
+            e.taille = taille;
+            // La taille annoncée manquait au total (comptée 0) : on la rattrape
+            // pour que la progression n'affiche plus 0 pour ce fichier.
+            self.total += taille;
+            if taille == 0 {
+                // Le distant confirme un fichier vide : le `.part` (vide) est
+                // promu tel quel.
+                return self.promouvoir_et_suivre().await;
+            }
+            return self.remplir();
+        }
         let Some((position, longueur)) = e.en_vol.remove(&stream_id) else {
             return Vec::new(); // une réponse à une requête qu'on ne suit plus
         };
@@ -467,26 +539,33 @@ impl Reception {
             .as_ref()
             .is_some_and(|e| e.recu >= e.taille && e.en_vol.is_empty());
         if complet {
-            let mut e = self.en_cours.take().expect("en cours");
-            let fin = async {
-                e.fichier.flush().await.context("vidage")?;
-                drop(e.fichier);
-                tokio::fs::rename(&e.partiel, &e.cible)
-                    .await
-                    .with_context(|| format!("renommage vers {}", e.cible.display()))
-            }
-            .await;
-            if let Err(err) = fin {
-                let _ = tokio::fs::remove_file(&e.partiel).await;
-                self.erreurs.push(format!(
-                    "{} : {err:#}",
-                    chemin_relatif(&self.fichiers[e.index])
-                ));
-            }
-            self.termines += 1;
-            return self.demarrer().await;
+            return self.promouvoir_et_suivre().await;
         }
         self.remplir()
+    }
+
+    /// Promeut le fichier en cours (`.part` → cible), le compte terminé, et
+    /// démarre le suivant. Un échec de vidage ou de renommage retire le `.part`
+    /// et devient une erreur du bilan.
+    async fn promouvoir_et_suivre(&mut self) -> Vec<FileContentsRequest> {
+        let mut e = self.en_cours.take().expect("en cours");
+        let fin = async {
+            e.fichier.flush().await.context("vidage")?;
+            drop(e.fichier);
+            tokio::fs::rename(&e.partiel, &e.cible)
+                .await
+                .with_context(|| format!("renommage vers {}", e.cible.display()))
+        }
+        .await;
+        if let Err(err) = fin {
+            let _ = tokio::fs::remove_file(&e.partiel).await;
+            self.erreurs.push(format!(
+                "{} : {err:#}",
+                chemin_relatif(&self.fichiers[e.index])
+            ));
+        }
+        self.termines += 1;
+        self.demarrer().await
     }
 }
 
@@ -889,6 +968,89 @@ mod tests {
         assert!(r.erreurs()[0].contains("refusé"), "{:?}", r.erreurs());
         assert!(!d.join("C:evil.exe.part").exists());
         assert_eq!(std::fs::read(d.join("bon.txt")).unwrap(), b"ok");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Un descripteur sans FD_FILESIZE (`file_size` à `None`) ne doit pas être
+    /// confondu avec un fichier vide : le sidecar demande d'abord la taille par
+    /// FILECONTENTS_SIZE (MS-RDPECLIP 2.2.5.2.3.1), puis reçoit le contenu
+    /// entier. Trouvé par l'audit du 7 septembre 2026 : `file_size.unwrap_or(0)`
+    /// créait un fichier de 0 octet compté « réussi » (bilan « 0 erreur »),
+    /// impossible à distinguer d'un vrai fichier vide.
+    #[tokio::test]
+    async fn un_descripteur_sans_taille_demande_filecontents_size() {
+        let d = temp("sans-taille");
+        let taille = u64::from(MORCEAU) + 42; // plus d'un morceau
+        let contenu: Vec<u8> = (0..taille).map(|i| (i % 251) as u8).collect();
+        // Descripteur SANS with_file_size : file_size vaut None (FD_FILESIZE
+        // absent), comme un serveur qui ne renseigne pas la taille.
+        let desc =
+            FileDescriptor::new("mystere.bin").with_attributes(ClipboardFileAttributes::NORMAL);
+        assert_eq!(
+            desc.file_size, None,
+            "le descripteur ne porte pas de taille"
+        );
+        let mut r = Reception::nouvelle(d.clone(), vec![desc], Some(3), 1);
+
+        // Premier tour : une seule requête, et c'est une requête de TAILLE.
+        let reqs = r.demarrer().await;
+        assert_eq!(reqs.len(), 1, "une requête FILECONTENTS_SIZE d'abord");
+        assert_eq!(reqs[0].flags, FileContentsFlags::SIZE);
+        assert_eq!((reqs[0].requested_size, reqs[0].position), (8, 0));
+        assert_eq!(reqs[0].data_id, Some(3));
+
+        // On répond la taille (8 octets petit-boutien) : les requêtes de plage
+        // suivent, et aucune n'est encore une requête de taille.
+        let mut suite = r
+            .recevoir(reqs[0].stream_id, Some(&taille.to_le_bytes()))
+            .await;
+        assert!(!suite.is_empty(), "les plages suivent la taille");
+        assert!(suite.iter().all(|q| q.flags == FileContentsFlags::RANGE));
+        while !suite.is_empty() {
+            let mut prochaines = Vec::new();
+            for req in suite {
+                let debut = usize::try_from(req.position).unwrap().min(contenu.len());
+                let fin = (debut + req.requested_size as usize).min(contenu.len());
+                prochaines.extend(r.recevoir(req.stream_id, Some(&contenu[debut..fin])).await);
+            }
+            suite = prochaines;
+        }
+        assert!(r.terminee() && r.erreurs().is_empty(), "{:?}", r.erreurs());
+        assert_eq!(std::fs::read(d.join("mystere.bin")).unwrap(), contenu);
+        assert!(
+            !d.join("mystere.bin.part").exists(),
+            "le .part doit être promu"
+        );
+        // La progression connaît la vraie taille : elle n'affiche plus 0.
+        let p = r.progression();
+        assert_eq!(
+            (p.fait, p.total, p.termines, p.nombre),
+            (taille, taille, 1, 1)
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Un serveur qui, taille demandée, refuse la réponse (aucune donnée) ne
+    /// laisse pas croire à une réussite : le fichier devient une erreur du
+    /// bilan, pas un fichier de 0 octet silencieux.
+    #[tokio::test]
+    async fn une_taille_refusee_devient_une_erreur() {
+        let d = temp("taille-refusee");
+        let desc =
+            FileDescriptor::new("mystere.bin").with_attributes(ClipboardFileAttributes::NORMAL);
+        let mut r = Reception::nouvelle(d.clone(), vec![desc], None, 1);
+        let reqs = r.demarrer().await;
+        assert_eq!(reqs[0].flags, FileContentsFlags::SIZE);
+        // Le distant refuse : `None` (réponse d'erreur côté protocole).
+        let suite = r.recevoir(reqs[0].stream_id, None).await;
+        assert!(suite.is_empty() && r.terminee());
+        assert_eq!(r.erreurs().len(), 1, "{:?}", r.erreurs());
+        assert!(
+            r.erreurs()[0].contains("taille inconnue"),
+            "{:?}",
+            r.erreurs()
+        );
+        assert!(!d.join("mystere.bin").exists() && !d.join("mystere.bin.part").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 

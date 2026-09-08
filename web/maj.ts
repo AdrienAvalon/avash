@@ -52,11 +52,32 @@ async function checkForUpdates() {
       { danger: false, ok: t("maj-installer") },
     );
     if (!ok) return;
-    await update.downloadAndInstall();
-    if (await askConfirm(t("maj-installee-redemarrer"), { danger: false, ok: t("maj-redemarrer") })) await relaunch();
+    // Trouvé par l'audit du 7 septembre 2026 : un seul catch englobait
+    // checkUpdate(), downloadAndInstall() et relaunch(), si bien qu'une signature
+    // invalide, un réseau coupé pendant le téléchargement ou un AppImage non
+    // inscriptible étaient annoncés comme « Vérification impossible » alors que la
+    // vérification avait réussi. On distingue donc chaque étape par un catch
+    // propre. `ver` affiche déjà `prev` (posé plus haut), rien à restaurer ici.
+    try {
+      await update.downloadAndInstall();
+    } catch (e) {
+      notifyErreur(t("maj-installation-impossible", { e: String(e) }));
+      return;
+    }
+    // La mise à jour est désormais sur le disque : si le redémarrage échoue, le
+    // dire explicitement (« prendra effet au prochain lancement »), sinon
+    // l'utilisateur relance un cycle de vérification pour une mise à jour déjà
+    // appliquée.
+    if (await askConfirm(t("maj-installee-redemarrer"), { danger: false, ok: t("maj-redemarrer") })) {
+      try {
+        await relaunch();
+      } catch (e) {
+        notifyErreur(t("maj-redemarrage-impossible", { e: String(e) }));
+      }
+    }
   } catch (e) {
     // Endpoint injoignable / pas encore configuré / hors ligne : on le dit
-    // sans dramatiser.
+    // sans dramatiser. Ne reste ici que l'échec de vérification (checkUpdate).
     ver.textContent = prev;
     notifyErreur(t("maj-verification-impossible", { e: String(e) }));
   } finally {

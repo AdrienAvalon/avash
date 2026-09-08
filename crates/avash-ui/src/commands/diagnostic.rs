@@ -183,12 +183,45 @@ fn agent() -> String {
     }
     #[cfg(windows)]
     {
-        if std::path::Path::new(r"\\.\pipe\openssh-ssh-agent").exists() {
-            "agent OpenSSH de Windows présent".to_owned()
-        } else {
-            "aucun agent (tube openssh-ssh-agent absent)".to_owned()
-        }
+        let tube_openssh = std::path::Path::new(r"\\.\pipe\openssh-ssh-agent").exists();
+        agent_windows_texte(tube_openssh, pageant_present())
     }
+}
+
+/// Rend l'état de l'agent SSH sous Windows selon ce que répond chaque transport.
+/// Séparé de la sonde pour que le test couvre les trois états sans poste Windows
+/// ni agent vivant.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : la branche Windows ne sondait que le
+/// tube OpenSSH ; sur un poste où seul Pageant (l'agent de `PuTTY`) tourne, le
+/// diagnostic annonçait « aucun agent » alors que l'authentification par agent
+/// fonctionnait (ssh.rs sonde déjà les deux transports), ce qui envoyait le
+/// mainteneur sur une fausse piste. Pageant classique n'expose pas le tube
+/// OpenSSH, donc le faux négatif était réel.
+#[cfg(any(windows, test))]
+fn agent_windows_texte(tube_openssh: bool, pageant: bool) -> String {
+    match (tube_openssh, pageant) {
+        (true, _) => "agent OpenSSH de Windows présent".to_owned(),
+        (false, true) => "Pageant présent".to_owned(),
+        (false, false) => "aucun agent (ni tube openssh-ssh-agent ni Pageant)".to_owned(),
+    }
+}
+
+/// Pageant répond-il ? Pageant classique ne passe pas par le tube OpenSSH mais
+/// par sa fenêtre cachée (WM_COPYDATA) : on le sonde par le même transport que
+/// l'auth (`pageant::PageantStream`, tel que `connect_pageant` l'ouvre). Sonde
+/// brève sur un fil dédié avec son propre runtime, pour ne dépendre d'aucun
+/// runtime tokio déjà actif dans le contexte de la commande de diagnostic.
+#[cfg(windows)]
+fn pageant_present() -> bool {
+    std::thread::spawn(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .is_ok_and(|rt| rt.block_on(async { pageant::PageantStream::new().await.is_ok() }))
+    })
+    .join()
+    .unwrap_or(false)
 }
 
 /// Le texte du diagnostic, prêt à coller dans un ticket.
@@ -336,6 +369,30 @@ mod tests_diagnostic {
         let t = composer(&f);
         assert!(!t.contains("secret-prod"), "{t}");
         assert!(!t.contains("203.0.113"), "{t}");
+    }
+
+    /// Sous Windows, le diagnostic doit reconnaître Pageant même quand le tube
+    /// OpenSSH est absent. Trouvé par l'audit du 7 septembre 2026 : sur un poste
+    /// `PuTTY` où seul Pageant tourne, l'authentification par agent réussissait
+    /// mais le diagnostic exporté disait « aucun agent », fausse piste pour le
+    /// mainteneur. On éprouve la seule logique de décision (les trois états),
+    /// la sonde des transports demandant un poste Windows et un agent vivant.
+    #[test]
+    fn le_diagnostic_windows_reconnait_pageant_seul() {
+        use super::agent_windows_texte;
+        assert_eq!(
+            agent_windows_texte(true, false),
+            "agent OpenSSH de Windows présent"
+        );
+        assert_eq!(
+            agent_windows_texte(true, true),
+            "agent OpenSSH de Windows présent"
+        );
+        assert_eq!(agent_windows_texte(false, true), "Pageant présent");
+        assert_eq!(
+            agent_windows_texte(false, false),
+            "aucun agent (ni tube openssh-ssh-agent ni Pageant)"
+        );
     }
 
     /// La commande écrit le fichier d'un seul tenant, en 0600, et refuse un

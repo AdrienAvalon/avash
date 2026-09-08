@@ -102,11 +102,20 @@ pub(crate) fn with_ssh_config(contents: &str) -> HomeGuard {
     // dans le cœur.
     let previous = std::env::var("HOME").ok();
     let previous_avash = std::env::var("AVASH_HOME").ok();
+    // Isole aussi le trousseau : `Target::from_alias` appelle `secrets::load`
+    // et le diagnostic `secrets::sonder`, qui sans cette dérogation tapent dans
+    // le vrai Secret Service du poste (keyring v1 sous Linux = un aller-retour
+    // D-Bus). `with_ssh_config` isolait `~/.ssh`, pas le trousseau ; une entrée
+    // réelle `deploy@10.0.0.1:2222` faisait alors échouer les `is_none()`.
+    // Trouvé par l'audit du 7 septembre 2026. Voir `avash::secrets::en_memoire`.
+    let previous_trousseau = std::env::var("AVASH_TROUSSEAU").ok();
     std::env::set_var("HOME", &dir);
     std::env::set_var("AVASH_HOME", &dir);
+    std::env::set_var("AVASH_TROUSSEAU", "memoire");
     HomeGuard {
         previous,
         previous_avash,
+        previous_trousseau,
         dir,
         _lock: lock,
     }
@@ -115,6 +124,7 @@ pub(crate) fn with_ssh_config(contents: &str) -> HomeGuard {
 pub(crate) struct HomeGuard {
     previous: Option<String>,
     previous_avash: Option<String>,
+    previous_trousseau: Option<String>,
     dir: std::path::PathBuf,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
@@ -128,6 +138,10 @@ impl Drop for HomeGuard {
         match &self.previous_avash {
             Some(h) => std::env::set_var("AVASH_HOME", h),
             None => std::env::remove_var("AVASH_HOME"),
+        }
+        match &self.previous_trousseau {
+            Some(t) => std::env::set_var("AVASH_TROUSSEAU", t),
+            None => std::env::remove_var("AVASH_TROUSSEAU"),
         }
         let _ = std::fs::remove_dir_all(&self.dir);
     }
@@ -907,6 +921,126 @@ async fn une_session_plus_recente_evince_l_ancienne_sans_etre_close_par_elle() {
     // Celle de la session courante, si.
     clore_session(app.handle(), 3, 2);
     assert!(state.inner.lock().unwrap().get(&3).is_none());
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : `clore_session` testait l'époque
+/// (`is_superseded`) puis retirait l'entrée sous DEUX prises de verrou
+/// distinctes. Une session enregistrée entre les deux était alors retirée à la
+/// place de l'ancienne, et son pump émettait `pty-closed` pour un onglet que le
+/// front croyait vivant (renumérotation après rechargement de la webview).
+///
+/// Deux fils martèlent le même identifiant : l'un enregistre l'époque
+/// « nouvelle », l'autre clôt l'époque « ancienne » que le magasin portait
+/// avant le tour. La clôture de l'ancienne ne doit JAMAIS emporter la nouvelle :
+/// à la fin de chaque tour, l'entrée doit exister et porter la nouvelle époque.
+/// Le test tourne sous un runtime multi-thread : en `current_thread`, l'absence
+/// d'`await` dans `clore_session` rend l'entrelacement impossible et le trou
+/// resterait invisible (c'est le piège qui l'a laissé passer).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clore_session_ne_retire_que_l_epoque_qu_on_lui_donne() {
+    use std::sync::Arc;
+    use std::sync::Barrier;
+
+    const N: u64 = 20_000;
+    const ID: u64 = 3;
+
+    let app = app_de_test();
+    let debut = Arc::new(Barrier::new(3));
+    let fin = Arc::new(Barrier::new(3));
+
+    // Fil qui enregistre l'époque « nouvelle » du tour.
+    let fil_reg = {
+        let handle = app.handle().clone();
+        let debut = debut.clone();
+        let fin = fin.clone();
+        std::thread::spawn(move || {
+            for i in 1..=N {
+                debut.wait();
+                let e_new = 2 * i;
+                enregistrer_session(&handle.state::<SessionStore>(), ID, poignee(e_new)).unwrap();
+                fin.wait();
+            }
+        })
+    };
+    // Fil qui clôt l'époque « ancienne » que le magasin portait au départ.
+    let fil_clo = {
+        let handle = app.handle().clone();
+        let debut = debut.clone();
+        let fin = fin.clone();
+        std::thread::spawn(move || {
+            for i in 1..=N {
+                debut.wait();
+                let e_prev = 2 * i - 1;
+                clore_session(&handle, ID, e_prev);
+                fin.wait();
+            }
+        })
+    };
+
+    for i in 1..=N {
+        let e_prev = 2 * i - 1;
+        let e_new = 2 * i;
+        // On amorce le magasin avec l'époque « ancienne » : la clôture concurrente
+        // la voit et croit avoir le droit de retirer, tandis que l'enregistrement
+        // concurrent la remplace par l'époque « nouvelle ».
+        enregistrer_session(&app.state::<SessionStore>(), ID, poignee(e_prev)).unwrap();
+        debut.wait();
+        fin.wait();
+        // Sous le correctif, seule une clôture de `e_new` pourrait retirer
+        // l'entrée, et personne ne la demande ce tour-ci : l'entrée doit donc
+        // exister et porter `e_new`. Le défaut la retirait à la place de
+        // l'ancienne, laissant le magasin vide.
+        let epoque = app
+            .state::<SessionStore>()
+            .inner
+            .lock()
+            .unwrap()
+            .get(&ID)
+            .map(|h| h.epoch);
+        assert_eq!(
+            epoque,
+            Some(e_new),
+            "la clôture de l'époque {e_prev} a emporté l'époque {e_new} (tour {i})"
+        );
+    }
+
+    fil_reg.join().unwrap();
+    fil_clo.join().unwrap();
+}
+
+/// Trouvé par l'audit du 7 septembre 2026 : quand une copie directe (scp)
+/// retenait le verrou de session, le `disconnect().await` du pump — et donc le
+/// retrait du magasin et `pty-closed` — attendait la fin de la copie. Shell
+/// mort, l'onglet restait alors listé « connecté » et chaque frappe rendait
+/// « channel closed ». On vérifie que la fermeture de l'onglet précède la
+/// déconnexion : même si celle-ci ne rend jamais la main, l'entrée a déjà quitté
+/// le magasin. Avant le correctif (déconnexion d'abord), l'entrée y restait.
+#[tokio::test]
+async fn le_pump_ferme_l_onglet_avant_le_disconnect_bloque() {
+    let app = app_de_test();
+    let id = 5u64;
+    let epoch = 9u64;
+    enregistrer_session(&app.state::<SessionStore>(), id, poignee(epoch)).unwrap();
+
+    // `deconnexion` qui ne se résout jamais : imite un `disconnect().await`
+    // retenu par une copie directe toujours en cours.
+    let jamais = tokio::sync::Notify::new();
+    let handle = app.handle().clone();
+    tokio::select! {
+        () = fermer_onglet_apres_pump(&handle, id, epoch, async { jamais.notified().await }) => {
+            panic!("la déconnexion ne devait jamais rendre la main");
+        }
+        () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+    }
+    assert!(
+        app.state::<SessionStore>()
+            .inner
+            .lock()
+            .unwrap()
+            .get(&id)
+            .is_none(),
+        "l'onglet doit avoir quitté le magasin avant que le disconnect ne rende la main"
+    );
 }
 
 /// Une frappe vers une session fermée doit être une erreur, pas un silence :

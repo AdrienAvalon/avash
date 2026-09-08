@@ -1,14 +1,20 @@
 //! Serveur VNC de TEST pour Avash : un vrai serveur RFB (rustvncserver, ZRLE
 //! compris) qui sert une image connue et RÉAGIT aux entrées, pour que la suite
 //! bout en bout vérifie tout le chemin — poignée de main, mot de passe,
-//! décodage, peinture, clavier, souris, presse-papiers — sur des pixels
-//! qu'elle peut mesurer, sans machine de plus.
+//! décodage, peinture, clavier, souris, presse-papiers (ASCII) — sur des
+//! pixels qu'elle peut mesurer, sans machine de plus.
 //!
 //! Le bureau : moitié gauche rouge, moitié droite bleue. Puis :
 //! - la touche « g » (keysym 0x67) repeint tout en vert ;
 //! - un clic gauche pose un carré magenta de 40 pixels à l'endroit du clic ;
-//! - un texte collé par le client revient sur son presse-papiers, précédé
-//!   de « reçu: ».
+//! - un texte ASCII collé par le client revient sur son presse-papiers,
+//!   précédé de « recu: ». L'aller-retour se limite à l'ASCII : le serveur
+//!   rustvncserver code le fil en UTF-8 alors que le client d'avash le lit en
+//!   Latin-1 (RFC 6143), si bien qu'un caractère hors ASCII repartirait doublé
+//!   (« é » relu « Ã© ») ; le préfixe est « recu: » sans cédille pour que le
+//!   texte ASCII revienne verbatim. Aucun scénario bout en bout ne colle
+//!   encore de texte : c'est une capacité offerte au scénario, pas un chemin
+//!   déjà couvert.
 //!
 //! Chaque entrée est aussi écrite sur la sortie standard, une ligne par
 //! événement, pour que le scénario lise ce que le serveur a compris (le
@@ -69,6 +75,21 @@ fn bureau(largeur: u16, hauteur: u16) -> Vec<u8> {
         }
     }
     px
+}
+
+/// L'écho renvoyé au presse-papiers du client pour un texte collé.
+///
+/// Trouvé par l'audit du 8 septembre 2026 : l'en-tête promettait l'aller-retour
+/// du presse-papiers pour « un texte » quelconque, mais seul l'ASCII tient, et
+/// même le préfixe devait devenir ASCII. `send_cut_text_to_all` code la chaîne
+/// en UTF-8 (rustvncserver) là où le client porté d'avash lit le fil en Latin-1
+/// (RFC 6143) : tout octet hors ASCII repart doublé (« é » relu « Ã© »), et le
+/// préfixe « reçu: » d'origine arrivait déjà « reÃ§u: ». Préfixe « recu: » sans
+/// cédille pour que le texte ASCII revienne verbatim ; extrait en fonction pour
+/// être testable.
+#[must_use]
+fn echo_presse_papiers(texte: &str) -> String {
+    format!("recu:{texte}")
 }
 
 /// Un carré uni de `cote` pixels, borné au cadre, en (x, y).
@@ -144,7 +165,9 @@ async fn main() -> anyhow::Result<()> {
                     // sur cinq du scénario bout en bout, 2026-09-04).
                     let serveur = reacteur.clone();
                     tokio::spawn(async move {
-                        let _ = serveur.send_cut_text_to_all(format!("reçu:{text}")).await;
+                        let _ = serveur
+                            .send_cut_text_to_all(echo_presse_papiers(&text))
+                            .await;
                     });
                 }
                 _ => {}
@@ -174,7 +197,38 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bureau, carre};
+    use super::{bureau, carre, echo_presse_papiers};
+
+    /// Ce que le client, qui lit le fil en Latin-1 (RFC 6143), reposerait dans
+    /// son presse-papiers à partir des octets envoyés par le serveur : un
+    /// caractère par octet, comme le fait le client porté (messages.rs).
+    fn relu_en_latin1(echo: &str) -> String {
+        echo.as_bytes().iter().map(|&o| char::from(o)).collect()
+    }
+
+    /// Un texte ASCII fait l'aller-retour verbatim (« abc » -> « recu:abc ») :
+    /// en ASCII les octets UTF-8 du serveur et la lecture Latin-1 du client
+    /// coïncident. Avec l'ancien préfixe « reçu: », la cédille se relisait
+    /// « Ã§ » et le presse-papiers arrivait « reÃ§u:abc » : ce test le voit
+    /// (audit du 8 septembre 2026).
+    #[test]
+    fn l_echo_ascii_revient_verbatim_au_client_latin1() {
+        let echo = echo_presse_papiers("abc");
+        assert_eq!(echo, "recu:abc");
+        assert_eq!(relu_en_latin1(&echo), "recu:abc");
+    }
+
+    /// Au-delà de l'ASCII, l'aller-retour ne tient pas : l'écho part en UTF-8
+    /// et le client Latin-1 le relit doublé. Ce test verrouille la limite
+    /// documentée dans l'en-tête ; s'il devenait possible de préserver le
+    /// non-ASCII, il faudra corriger l'en-tête.
+    #[test]
+    fn l_echo_non_ascii_ne_survit_pas_au_client_latin1() {
+        let echo = echo_presse_papiers("é");
+        assert_eq!(echo, "recu:é");
+        // « é » (U+00E9) part en deux octets UTF-8 (0xC3 0xA9), relus « Ã© ».
+        assert_eq!(relu_en_latin1(&echo), "recu:Ã©");
+    }
 
     #[test]
     fn le_bureau_est_rouge_a_gauche_et_bleu_a_droite() {

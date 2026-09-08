@@ -11,6 +11,7 @@
 import { $, state } from "./etat";
 import { marquerVisibilite, rdpSessions } from "./rdp";
 import { orderedTabs } from "./raccourcis";
+import { setTitlebar } from "./titre";
 
 export type Onglet = { kind: "ssh" | "rdp"; id: number };
 
@@ -135,6 +136,12 @@ export function appliquerVue(): void {
     if (visible) r.syncSize?.();
   }
   if (affiches.length > 0) $("terminal-empty").style.display = "none";
+  // Trouvé par l'audit du 7 septembre 2026 : le titre n'était repeint qu'aux
+  // transitions d'état (`setSessionState`) et à la fermeture du dernier onglet.
+  // Un simple changement d'onglet (`focusSession`, `focusRdp`, partage) passe
+  // toujours par ici sans en être une : on repeint donc le titre au passage
+  // commun, sinon la barre restait figée sur le dernier nom posé.
+  setTitlebar();
   requestAnimationFrame(() => {
     for (const o of affiches) if (o.kind === "ssh") state.sessions.get(o.id)?.fit.fit();
   });

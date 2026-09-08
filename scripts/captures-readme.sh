@@ -21,7 +21,12 @@ mkdir -p "$CAPTURES_DOSSIER"
 if [ -n "${1:-}" ]; then
   export CAPTURES_RDP_HOTE="$1"
   export CAPTURES_RDP_UTILISATEUR="${CAPTURES_RDP_UTILISATEUR:-Administrateur}"
-  CAPTURES_RDP_MDP="$(secret-tool lookup service avash username "rdp:$CAPTURES_RDP_UTILISATEUR@$1:3389")"
+  # `secret-tool lookup` sort non nul quand aucun secret ne correspond : sans
+  # `|| true`, cette affectation nue tue le script sous `set -e` (trouvé par
+  # l'audit du 8 septembre 2026) avant la garde ci-dessous, qui restait donc
+  # inatteignable. Avec `|| true` la substitution rend 0 avec une valeur vide,
+  # et c'est la garde qui explique quoi enregistrer dans le trousseau.
+  CAPTURES_RDP_MDP="$(secret-tool lookup service avash username "rdp:$CAPTURES_RDP_UTILISATEUR@$1:3389" || true)"
   export CAPTURES_RDP_MDP
   [ -n "$CAPTURES_RDP_MDP" ] || { echo "aucun mot de passe dans le trousseau pour rdp:$CAPTURES_RDP_UTILISATEUR@$1:3389" >&2; exit 1; }
 fi

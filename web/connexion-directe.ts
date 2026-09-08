@@ -200,12 +200,18 @@ export async function manualSubmit(ev: Event) {
   // Retenu hors du bloc : l'onglet doit porter ce nom-là, pas
   // « utilisateur@adresse ».
   let alias: string | undefined;
+  let enregistre = false;
+  // Alias lu même si la case est décochée : après un enregistrement réussi
+  // suivi d'un échec de connexion, on décoche (voir plus bas) mais l'hôte
+  // porte toujours ce nom ; l'onglet du nouvel essai doit le garder plutôt
+  // que de retomber sur « utilisateur@adresse ».
+  const aliasSaisi = ($("m-alias") as HTMLInputElement).value.trim();
   try {
     if (($("m-save") as HTMLInputElement).checked) {
       // Enregistrer AVANT de connecter : si l'ecriture echoue (alias deja
       // pris, fichier illisible), l'utilisateur le voit dans le formulaire
       // plutot que de decouvrir plus tard que rien n'a ete sauve.
-      alias = ($("m-alias") as HTMLInputElement).value.trim();
+      alias = aliasSaisi;
       if (!alias) throw new Error(t("cd-nom-hote"));
       await invoke("host_save", {
         alias,
@@ -217,6 +223,19 @@ export async function manualSubmit(ev: Event) {
         tags: null,
       });
       await loadHosts();
+      // Trouvé par l'audit du 7 septembre 2026 : host_save précède la connexion,
+      // mais si celle-ci échouait ensuite (mot de passe faux) le formulaire
+      // restait ouvert avec « Enregistrer cet hôte » encore coché ; le second
+      // submit rappelait host_save, refusé par append_host (« déjà déclaré »),
+      // une erreur sans rapport qui bloquait toute reconnexion depuis la modale.
+      // L'hôte est désormais en config : on décoche pour ne plus le réécrire.
+      enregistre = true;
+      ($("m-save") as HTMLInputElement).checked = false;
+      manualSyncSaveRow();
+    } else if (aliasSaisi) {
+      // Case déjà décochée (enregistrement réussi au submit précédent) :
+      // on ne réécrit pas l'hôte, mais on garde son nom pour l'onglet.
+      alias = aliasSaisi;
     }
     await openManualSession(target, alias);
     manualClose();
@@ -248,7 +267,11 @@ export async function manualSubmit(ev: Event) {
         manualError().hidden = false;
       }
     } else {
-      manualError().textContent = nettoyerMarqueurs(msg);
+      // La case vient peut-être d'être décochée après un enregistrement réussi :
+      // on le rappelle, sinon ce décochage silencieux laisserait croire que
+      // l'hôte n'a pas été sauvé.
+      const clean = nettoyerMarqueurs(msg);
+      manualError().textContent = enregistre ? `${t("cd-hote-enregistre")} ${clean}` : clean;
       manualError().hidden = false;
     }
   } finally {

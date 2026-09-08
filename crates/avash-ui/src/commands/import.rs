@@ -143,10 +143,27 @@ pub fn import_scan(chemin: Option<String>) -> Result<BilanImport, String> {
             let mut host = s.host;
             host.alias = avash::import::alias_libre(&host.alias, &pris);
             pris.push(host.alias.clone());
+            // Trouvé par l'audit du 7 septembre 2026 : un hôte déclaré sans
+            // `HostName` (bloc `Host web.example.com` seul) porte
+            // `hostname: None`, alors que le candidat PuTTY/MobaXterm vise
+            // `Some("web.example.com")`. La comparaison stricte ne voyait pas
+            // le doublon : le candidat était proposé coché et l'import créait
+            // une seconde entrée `web.example.com-2` pour le même serveur. On
+            // applique le même repli que `hosts_health` (hostname sinon alias)
+            // et, comme la branche bureaux ci-dessus et `append_host`, on
+            // compare sans tenir compte de la casse (les noms DNS y sont
+            // insensibles). Le candidat PuTTY/MobaXterm a toujours un
+            // `hostname`, donc le repli sur son alias — déjà réécrit en `-N`
+            // par `alias_libre` juste au-dessus — ne joue jamais ici ; il n'est
+            // là que pour la symétrie.
+            let cible_candidat = host.hostname.as_deref().unwrap_or(&host.alias);
             let doublon = existants
                 .iter()
                 .find(|e| {
-                    e.hostname == host.hostname
+                    e.hostname
+                        .as_deref()
+                        .unwrap_or(&e.alias)
+                        .eq_ignore_ascii_case(cible_candidat)
                         && e.port.unwrap_or(22) == host.port.unwrap_or(22)
                         && e.user == host.user
                 })
@@ -298,6 +315,60 @@ mod tests_import {
             .unwrap();
         assert!(db.doublon.is_none());
         assert_eq!(bilan.consultes, vec![dir.display().to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Trouvé par l'audit du 7 septembre 2026 : un hôte déclaré sans `HostName`
+    /// (bloc `Host web.example.com` seul, donc `hostname: None`) n'était pas
+    /// reconnu comme doublon d'une session `PuTTY` visant le même nom, faute du
+    /// repli hostname-sinon-alias qu'applique déjà `hosts_health`. Le candidat
+    /// était proposé coché et l'import créait une seconde entrée
+    /// `web.example.com-2` pour le même serveur.
+    #[test]
+    fn scan_voit_le_doublon_d_un_hote_declare_sans_hostname() {
+        let _g = with_ssh_config("Host web.example.com\n  User adrien\n");
+        let dir =
+            std::env::temp_dir().join(format!("avash-import-sanshost-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("web.example.com"),
+            "HostName=web.example.com\nUserName=adrien\nProtocol=ssh\n",
+        )
+        .unwrap();
+        let bilan = import_scan(Some(dir.display().to_string())).unwrap();
+        assert_eq!(bilan.candidats.len(), 1);
+        let c = &bilan.candidats[0];
+        assert_eq!(c.doublon.as_deref(), Some("web.example.com"));
+        assert_eq!(
+            c.host.alias, "web.example.com-2",
+            "l'alias libre est tout de même proposé"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Même cas, variante casse : la comparaison du repli est insensible à la
+    /// casse (noms DNS insensibles), comme la branche bureaux et `append_host`.
+    /// Un `Host WEB.example.com` / `HostName WEB.EXAMPLE.COM` doit reconnaître
+    /// une session `PuTTY` visant `web.example.com`.
+    #[test]
+    fn scan_voit_le_doublon_sans_hostname_meme_en_casse_mixte() {
+        let _g =
+            with_ssh_config("Host WEB.example.com\n  HostName WEB.EXAMPLE.COM\n  User adrien\n");
+        let dir = std::env::temp_dir().join(format!("avash-import-casse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("web.example.com"),
+            "HostName=web.example.com\nUserName=adrien\nProtocol=ssh\n",
+        )
+        .unwrap();
+        let bilan = import_scan(Some(dir.display().to_string())).unwrap();
+        assert_eq!(bilan.candidats.len(), 1);
+        assert_eq!(
+            bilan.candidats[0].doublon.as_deref(),
+            Some("WEB.example.com")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

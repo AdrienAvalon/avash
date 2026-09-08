@@ -183,6 +183,37 @@ négatif ; check.sh et la suite bout en bout au vert.
   Windows ; `puttygen` ne fait plus clignoter de fenêtre ; le manifeste Flathub
   ouvre le son et les périphériques série.
 
+### Vague des constats bas (audit des 7-8 septembre 2026)
+
+Cent-neuf constats de sévérité basse, corrigés par voie, chacun avec le test ou
+le contrôle reproductible qui l'aurait vu ; check.sh et la suite bout en bout au
+vert. Pour l'essentiel : finitions d'accessibilité et d'ergonomie, cohérence de
+la documentation, hygiène des tests, petits écarts de plateforme.
+
+- **Accessibilité et ergonomie.** Rôles et libellés ARIA de la palette et des
+  interrupteurs segmentés ; vérification des mises à jour atteignable au clavier ;
+  contrastes du thème clair ; messages d'erreur rendus visibles ; menus au
+  clavier sans fuite d'écouteur ; diagnostic Windows qui reconnaît Pageant.
+- **Cohérence de la documentation, rendue vérifiable.** Une quarantaine de
+  contrôles reproductibles ajoutés (`scripts/tests/`) et branchés dans check.sh :
+  compteurs de scénarios et de couverture accordés entre la feuille de route, les
+  README (français et anglais, même structure), `docs/qualite.md`, `CONTRIBUTING`
+  et `e2e/README` ; versions cohérentes dans tous les manifestes ; justifications
+  des exceptions d'audit ; permissions Flathub ; emplacements de version au
+  release. Le README anglais porte désormais la même section Documentation.
+- **Hygiène des tests.** Plusieurs tests rendus discriminants ou isolés : un test
+  « en parallèle » qui ne l'était pas, un `known_hosts` partagé réécrit pendant
+  que d'autres tests y apprennent, un dernier utilisateur porté par serveur plutôt
+  qu'en global, l'absence de fichier temporaire observée pendant le transfert et
+  non après coup, un garde de lisibilité qui n'exerçait pas sa fonction.
+- **Outillage.** `fuzz.sh` montre la fin du journal quand la compilation échoue ;
+  le tableau des cibles du README de fuzz se rend en entier ; divers scripts de
+  la chaîne durcis (sortie par identifiant, mot de passe RDP par l'entrée
+  standard, détachement des conteneurs du parc).
+
+Compteurs de tests à jour : 623 Rust, 614 dans les paquets portés, 273 front,
+74 scénarios bout en bout — 1584 au total.
+
 ## [0.9.2] - 2026-09-06
 
 - **Un fichier offert au bureau distant juste après en avoir reçu un n'échoue

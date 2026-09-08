@@ -1,16 +1,19 @@
 //! Écriture atomique d'un petit fichier d'état, en 0600.
 //!
 //! Le processus RDP ne dépend pas du crate `avash`, qui a déjà cette fonction :
-//! on la refait ici, plus courte, pour la liste des serveurs à canal graphique
-//! (`rdp_canal_graphique`) : une coupure pendant l'écriture ne doit pas la
-//! laisser vide, ce qui coûterait une reconnexion par serveur.
+//! on la refait ici, plus courte. Le remplacement par un temporaire renommé
+//! garantit qu'un lecteur voit soit l'ancien contenu, soit le nouveau, jamais un
+//! fichier tronqué ou vide : c'est ce que couvre `ecrire`, et rien de plus.
 //!
-//! Le fichier d'empreintes (`rdp_known_hosts`), lui, n'écrit PLUS par ce chemin :
-//! le rename est certes atomique, mais la lecture-modification-écriture qui le
-//! précède perdait l'entrée d'un premier contact concurrent (deux sidecars
-//! lisant le même contenu, le dernier `rename` effaçant la ligne du premier).
-//! `memoriser_empreinte` ajoute désormais sa ligne en O_APPEND (voir
-//! `empreintes`), atomique entre processus.
+//! Ce qu'`ecrire` NE fait PAS : sérialiser deux lectures-modifications-écritures
+//! concurrentes. Le rename est atomique, mais si deux sidecars relisent le même
+//! contenu avant d'écrire, le dernier `rename` efface la ligne que l'autre venait
+//! d'ajouter (« lost update »). C'est pourquoi les deux fichiers d'état en ajout
+//! pur — les empreintes de certificats (`rdp_known_hosts`) et la liste des
+//! serveurs à canal graphique (`rdp_canal_graphique`) — n'écrivent PLUS par ce
+//! chemin : `memoriser_empreinte` (voir `empreintes`) et `egfx::memoriser`
+//! ajoutent leur ligne en O_APPEND, atomique entre processus. `ecrire` reste pour
+//! une éventuelle réécriture complète, où il n'y a pas de course de ce genre.
 
 use std::path::Path;
 
