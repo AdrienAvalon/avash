@@ -41,8 +41,13 @@ release et n'a donc pas à être retouchée à chaque publication.
 > d'hôte SSH insuffisamment vérifiée, certificat RDP pas vérifié du tout, repli
 > de NLA vers TLS accepté — la 0.6.1 durcit le collage, la webview et le
 > processus RDP, et la 0.6.2 cesse de garder le mot de passe en mémoire une
-> fois la session établie. Une mise à jour depuis toute version antérieure est
-> vivement recommandée. Le détail est dans le [CHANGELOG](CHANGELOG.md).
+> fois la session établie. La **0.10.0** ferme plusieurs défauts trouvés par un
+> audit : l'épinglage TLS du VNC (VeNCrypt) contournable, une clé d'hôte SSH
+> révoquée réapprise sur un port non standard, une traversée de chemin par le
+> lecteur et le presse-papiers RDP, un déni de service pilotable par un serveur
+> graphique, et le presse-papiers du poste envoyé au distant sans geste. Une
+> mise à jour depuis toute version antérieure est vivement recommandée. Le
+> détail est dans le [CHANGELOG](CHANGELOG.md).
 
 ## Modèle de sécurité
 

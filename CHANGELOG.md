@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.10.0] - 2026-09-08
+
 ### Sécurité
 
 - **VNC sous TLS (VeNCrypt) : l'épinglage du certificat n'est plus
@@ -1835,6 +1837,7 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
 [Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.9.2...HEAD
+[0.10.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.10.0
 [0.9.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.9.2
 [0.9.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.9.1
 [0.9.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.9.0

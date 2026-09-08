@@ -4,7 +4,9 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 6 septembre 2026, après la publication de la version 0.9.2.
+Dernière révision : 8 septembre 2026, après la publication de la version 0.10.0
+(un audit multi-agents complet du dépôt, deux cent constats vérifiés et corrigés
+par vagues de gravité, dont plusieurs de sécurité), après la 0.9.2.
 Le lot de la 0.7 à la 0.9.2 a apporté les bureaux VNC (dont VeNCrypt à
 certificat épinglé), le port série, le son et la redirection de lecteur du
 bureau distant, les fichiers par le presse-papiers RDP, la vue partagée, la
@@ -45,7 +47,7 @@ défaut n'est pas livrée, même terminée.
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Couverture | 84 % des lignes de l'espace de travail (cœur 91 %, interface 70 %), 81 % du processus RDP, tests unitaires et suite bout en bout confondus sur des binaires instrumentés (`scripts/couverture.sh`, 06/09/2026) ; 201 mutants sur 264 attrapés sur les modules de sécurité |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.9.2 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
+| Version publiée | 0.10.0 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
