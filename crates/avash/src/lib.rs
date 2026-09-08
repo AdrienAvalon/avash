@@ -578,6 +578,32 @@ mod tests {
         assert_eq!(non_ferme[0].host, "2001:db8::1");
         assert_eq!(non_ferme[0].port, None);
         assert!(!non_ferme[0].host.starts_with('['));
+
+        // Crochets imbriqués (`[[h]:22`), trouvés par cargo-fuzz après le
+        // premier correctif : le premier `[` retiré, `split_once(']')` laissait
+        // `[h`. Aucun crochet ne doit subsister dans l'hôte.
+        for pathologique in [
+            "[[h]:22",
+            "[[2001:db8::1]]",
+            "[]",
+            "[a]b]",
+            "] a",
+            "[ a",
+            "a ]",
+            "] a ]:2",
+        ] {
+            for hop in split_proxy_jump(pathologique) {
+                assert!(
+                    !hop.host.contains(['[', ']']),
+                    "crochet gardé pour {pathologique:?} : {hop:?}"
+                );
+                assert_eq!(
+                    hop.host.trim(),
+                    hop.host,
+                    "hôte non rogné pour {pathologique:?} : {hop:?}"
+                );
+            }
+        }
     }
 
     // Comportement documenté d'une IPv6 littérale SANS crochets : OpenSSH la
@@ -765,6 +791,16 @@ pub fn split_proxy_jump(spec: &str) -> Vec<HopSpec> {
                     _ => (rest.to_string(), None),
                 }
             };
+            // Filet de sécurité : aucune paire de crochets ne doit subsister
+            // dans l'hôte, y compris pour des entrées pathologiques à crochets
+            // imbriqués (`[[h]:22` → `[h` gardait un crochet, trouvé par
+            // cargo-fuzz après le premier correctif). OpenSSH (`cleanhostname`)
+            // retire les crochets du nom d'hôte ; on fait de même, ce qui tient
+            // l'invariant « pas de crochet dans l'hôte » quoi qu'on reçoive.
+            // On re-rogne APRÈS le retrait des crochets : un `[` ou `]` en bord
+            // collé à une espace (`] a`) la mettrait à découvert, cassant
+            // l'invariant « hôte rogné » (second cas trouvé par cargo-fuzz).
+            let host = host.replace(['[', ']'], "").trim().to_string();
             HopSpec {
                 user: user.map(str::to_string),
                 host,

@@ -1,0 +1,17 @@
+# Configuration gitleaks du dépôt.
+#
+# On garde toutes les règles par défaut (`useDefault = true`) et l'on n'ajoute
+# qu'une liste d'autorisation pour des valeurs FACTICES de tests — jamais des
+# secrets réels. Trouvé le 8 septembre 2026 : la règle générique `generic-api-key`
+# prend le jeton binaire d'un `#[tokio::test]` du contrôle d'accès local du
+# sidecar (`0123456789abcdef`) pour une clé d'API.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Jetons factices de tests (pas des secrets) : jeton binaire du contrôle d'accès local du sidecar et autres valeurs de démonstration"
+# On autorise la valeur factice elle-même, où qu'elle apparaisse : elle n'a rien
+# d'un secret et sert à vérifier qu'un mauvais jeton est rejeté.
+regexes = [
+  '''0123456789abcdef''',
+]

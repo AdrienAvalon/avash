@@ -7,6 +7,25 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.10.1] - 2026-09-08
+
+### Corrigé
+
+- **Un `ProxyJump` à crochets imbriqués (`[[h]:22`) ne laisse plus de crochet
+  dans le nom d'hôte.** Le premier correctif de crochets IPv6 retirait un seul
+  `[` ; `cargo-fuzz` a trouvé qu'une entrée pathologique en gardait un, ce qui
+  faisait échouer le rebond (russh ne sait pas lire un hôte crocheté) et
+  déclenchait la garde du fuzzing. Tous les crochets sont désormais retirés du
+  nom d'hôte, comme le fait `cleanhostname` d'OpenSSH.
+
+### Intégration continue
+
+- **gitleaks : une valeur factice de test n'est plus prise pour un secret.** Le
+  jeton binaire d'un test du contrôle d'accès local du processus RDP
+  (`0123456789abcdef`) déclenchait la règle générique de clé d'API. Une
+  `.gitleaks.toml` l'autorise explicitement, sans rien relâcher d'autre.
+
+
 ## [0.10.0] - 2026-09-08
 
 ### Sécurité
@@ -1837,6 +1856,7 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
 [Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.9.2...HEAD
+[0.10.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.10.1
 [0.10.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.10.0
 [0.9.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.9.2
 [0.9.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.9.1
