@@ -199,7 +199,8 @@ La porte qualité complète est le script `check.sh` à la racine :
 - `cargo audit` sur **les deux** `Cargo.lock` (si `cargo-audit` est installé),
   et `cargo deny` sur les deux également : licences, dépendances en joker,
   sources hors du registre officiel — trois portes qu'`audit` ne regarde pas ;
-- pour le front : la garde `scripts/guard.sh`, ESLint typé, stylelint sur le
+- la garde `scripts/guard.sh` (front **et** sources Rust) ; puis pour le
+  front : ESLint typé, stylelint sur le
   CSS d'`index.html`, knip (fichiers jamais importés, exports jamais lus,
   dépendances jamais utilisées — il a vu deux modules décrochés par un
   découpage, que ni `tsc` ni ESLint ne pouvaient voir), `tsc --noEmit`,
@@ -431,6 +432,11 @@ d'`openssh-server` dans `.gitlab-ci.yml`) ou, mieux, d'exempter
   WebKitGTK/WRY** : `confirm()` renvoie une `Promise` toujours vraie,
   `prompt()` renvoie `null`, et `alert()` ne bloque pas. Utilise à la place les
   fonctions maison `askConfirm()`, `askText()` et `notify()`.
+  Elle couvre aussi les **sources Rust** (hors paquets portés) : un marqueur de
+  contrôle négatif laissé en place (`CONTROLE NEGATIF`, où qu'il soit, y compris
+  en fin de ligne de code) et les macros `dbg!` / `todo!` hors commentaires.
+  Un correctif neutralisé pour vérifier que son test rougit, puis oublié, avait
+  survécu au format, à clippy et aux tests unitaires (8 septembre 2026).
 
 ## Écrire un test
 

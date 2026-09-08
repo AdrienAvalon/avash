@@ -133,6 +133,12 @@ run "garde"              "$ROOT" ./scripts/guard.sh
 # y compris préfixées (window.confirm(, globalThis.prompt(, self.alert() : un
 # `.` dans la classe négative les laissait passer (audit du 8 septembre 2026).
 run "garde : dialogues natifs préfixés proscrits" "$ROOT" ./scripts/tests/guard-dialogues-natifs-globaux.sh
+# Trouvé le 8 septembre 2026 : un contrôle négatif oublié dans le Rust, un fuzz
+# qui s'arrêtait à la première cible, une publication qui n'attendait pas la
+# sécurité — les trois causes des deux ratés de la 0.10.0.
+run "garde : marqueurs Rust proscrits" "$ROOT" ./scripts/tests/guard-marqueurs-rust.sh
+run "fuzz : toutes les cibles jouées" "$ROOT" ./scripts/tests/fuzz-continue-toutes-cibles.sh
+run "release : publier attend la sécurité" "$ROOT" ./scripts/tests/release-publier-attend-securite.sh
 # Le manifeste de mise à jour (latest.json du workflow Release) doit proposer les
 # cibles deb/rpm : sans elles, une installation par paquet se rabat sur l'AppImage
 # et échoue à l'installer. Contrôle guardé par PyYAML (pas une dépendance du dépôt).

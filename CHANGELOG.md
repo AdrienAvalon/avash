@@ -7,6 +7,29 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Chaîne d'intégration et garde-fous
+
+Trois durcissements tirés des deux ratés de la 0.10.0 (publiée pendant que le
+fuzzing et gitleaks rougissaient sur le même commit, puis un contrôle négatif
+oublié dans une source Rust attrapé de justesse).
+
+- **La publication attend la sécurité.** Le workflow Release rejoue désormais,
+  avant de publier, les deux contrôles rapides qui ont mordu : gitleaks sur
+  l'historique et une campagne de fuzz sur toutes les cibles. Le job `publier`
+  dépend de ce job `securite` en plus du build ; CodeQL, long et déjà planifié,
+  reste au workflow Sécurité.
+- **Le fuzzing joue toutes les cibles.** `fuzz/fuzz.sh` s'arrêtait à la première
+  cible qui plantait : la chaîne de la 0.10.0 a rougi sur `config_ssh` sans rien
+  dire des six autres. Toutes sont jouées, les échecs nommés à la fin.
+- **La garde couvre le Rust.** `scripts/guard.sh` proscrit désormais dans les
+  sources Rust (hors paquets portés) un marqueur de contrôle négatif laissé en
+  place, où qu'il soit, et les macros `dbg!` / `todo!` hors commentaires. Un
+  `break false, // CONTROLE NEGATIF` avait survécu au format, à clippy et aux
+  tests unitaires.
+
+Chaque point a son contrôle reproductible dans `scripts/tests/`, branché dans
+`check.sh`, et vérifié en contrôle négatif.
+
 ## [0.10.1] - 2026-09-08
 
 ### Corrigé

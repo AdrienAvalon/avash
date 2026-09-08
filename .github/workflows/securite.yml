@@ -123,9 +123,12 @@ jobs:
         if: github.event_name == 'pull_request'
         run: cargo +nightly fuzz build
         working-directory: fuzz
-      # Sort en erreur au premier plantage ; l'entrée fautive est publiée pour
-      # être rejouée en local (`cargo +nightly fuzz run <cible> <fichier>`).
-      - name: Fuzz — 45 s par cible
+      # Toutes les cibles sont jouées puis le bilan rougit s'il y a eu au moins
+      # un plantage (le script s'arrêtait à la première cible tombée, masquant
+      # l'état des autres — trouvé le 8 septembre 2026). L'entrée fautive est
+      # dans `artifacts/<cible>/`, rejouable en local
+      # (`cargo +nightly fuzz run <cible> <fichier>`).
+      - name: Fuzz — 45 s par cible, toutes les cibles
         if: github.event_name != 'pull_request'
         run: DUREE=45 fuzz/fuzz.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
