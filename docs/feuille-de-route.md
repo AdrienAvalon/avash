@@ -249,9 +249,12 @@ qui est en place, et ce qui attend :
 - **Flathub** : manifeste `packaging/flathub/io.github.AdrienAvalon.avash.yml`,
   construction hors ligne (GNOME 49, Rust stable et Node 22 du SDK, sources
   cargo et npm figées), construit, installé et lancé sur le poste par
-  `flatpak-builder` du temps où il pointait le tag v0.8.0, puis passé à v0.10.1
-  sans que cette construction ait été rejouée : elle est à refaire avant la
-  soumission (garde `scripts/tests/flathub-tag-feuille-de-route.sh`) ; le
+  `flatpak-builder` du temps où il pointait le tag v0.8.0, passé à v0.10.1 sans
+  que cette construction soit rejouée, puis rejouée le 9 septembre 2026 sur le
+  tag v0.11.0 (construite, installée, lancée sous Xvfb : la fenêtre tient ; le
+  lancement sans `--own-name` reste à éprouver, `flatpak run` ne sachant pas
+  retirer ce droit à l'essai ; garde
+  `scripts/tests/flathub-tag-feuille-de-route.sh`) ; le
   linter Flathub passe hormis cinq droits qui demandent une exception
   justifiée : `--socket=ssh-auth` (l'agent SSH du poste),
   `--filesystem=home` (clés, `known_hosts`, transferts
