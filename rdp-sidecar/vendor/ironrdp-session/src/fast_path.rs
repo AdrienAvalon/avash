@@ -78,6 +78,39 @@ fn retirer_remplissage(buf: &mut Vec<u8>, largeur_bitmap: usize, largeur_rect: u
     buf.truncate(ecrit);
 }
 
+/// Applique un bitmap RLE entrelacé décompressé, selon le format rendu par le
+/// décodeur.
+///
+/// Regroupé en un seul point de passage : le correctif du remplissage avait été
+/// recopié format par format, et la copie avait sauté le 8 bits indexé (audit du
+/// 9 septembre 2026). Avec un seul endroit qui décide, l'oubli n'est plus
+/// possible.
+fn appliquer_bitmap_rle(
+    image: &mut DecodedImage,
+    buf: &mut Vec<u8>,
+    format: RlePixelFormat,
+    largeur_bitmap: usize,
+    hauteur: usize,
+    rectangle: &InclusiveRectangle,
+    palette: &[[u8; 3]; 256],
+) -> SessionResult<InclusiveRectangle> {
+    let largeur_rect = usize::from(rectangle.width());
+
+    let octets_par_pixel = match format {
+        RlePixelFormat::Rgb8 => 1,
+        RlePixelFormat::Rgb15 | RlePixelFormat::Rgb16 => 2,
+        RlePixelFormat::Rgb24 => 3,
+    };
+    retirer_remplissage(buf, largeur_bitmap, largeur_rect, hauteur, octets_par_pixel);
+
+    match format {
+        RlePixelFormat::Rgb16 => image.apply_rgb16_bitmap(buf, rectangle),
+        RlePixelFormat::Rgb15 => image.apply_rgb15_bitmap(buf, rectangle),
+        RlePixelFormat::Rgb24 => image.apply_bgr24_bitmap(buf, rectangle),
+        RlePixelFormat::Rgb8 => image.apply_rgb8_with_palette(buf, rectangle, palette),
+    }
+}
+
 impl Processor {
     pub fn update_mouse_pos(&mut self, x: u16, y: u16) {
         self.mouse_pos_update = Some((x, y));
@@ -277,21 +310,15 @@ impl Processor {
                         usize::from(update.height),
                         usize::from(update.bits_per_pixel),
                     ) {
-                        Ok(RlePixelFormat::Rgb16) => {
-                            retirer_remplissage(&mut buf, usize::from(update.width), usize::from(update.rectangle.width()), usize::from(update.height), 2);
-                            image.apply_rgb16_bitmap(&buf, &update.rectangle)?
-                        }
-                        Ok(RlePixelFormat::Rgb15) => {
-                            retirer_remplissage(&mut buf, usize::from(update.width), usize::from(update.rectangle.width()), usize::from(update.height), 2);
-                            image.apply_rgb15_bitmap(&buf, &update.rectangle)?
-                        }
-                        Ok(RlePixelFormat::Rgb24) => {
-                            retirer_remplissage(&mut buf, usize::from(update.width), usize::from(update.rectangle.width()), usize::from(update.height), 3);
-                            image.apply_bgr24_bitmap(&buf, &update.rectangle)?
-                        }
-                        Ok(RlePixelFormat::Rgb8) => {
-                            image.apply_rgb8_with_palette(&buf, &update.rectangle, self.palette.colors())?
-                        }
+                        Ok(format) => appliquer_bitmap_rle(
+                            image,
+                            &mut buf,
+                            format,
+                            usize::from(update.width),
+                            usize::from(update.height),
+                            &update.rectangle,
+                            self.palette.colors(),
+                        )?,
 
                         Err(e) => {
                             warn!("Invalid RLE-compressed bitmap: {e}");
@@ -801,5 +828,111 @@ mod tests_remplissage {
         let mut buf = vec![1, 2, 3];
         retirer_remplissage(&mut buf, 4, 3, 2, 1);
         assert!(buf.len() <= 3);
+    }
+}
+
+#[cfg(test)]
+mod tests_rle_remplissage {
+    use ironrdp_graphics::image_processing::PixelFormat;
+    use ironrdp_graphics::rle::RlePixelFormat;
+    use ironrdp_pdu::geometry::InclusiveRectangle;
+
+    use super::appliquer_bitmap_rle;
+    use crate::image::DecodedImage;
+
+    /// Palette où l'indice se lit directement dans le canal rouge : la couleur
+    /// obtenue dénonce l'indice qui a servi, donc le décalage de ligne s'il y en a un.
+    fn palette_indices() -> [[u8; 3]; 256] {
+        let mut couleurs = [[0u8; 3]; 256];
+        for (indice, couleur) in couleurs.iter_mut().enumerate() {
+            *couleur = [u8::try_from(indice).unwrap(), 0, 0];
+        }
+        couleurs
+    }
+
+    /// Lit le canal rouge de chaque pixel de l'image, ligne par ligne.
+    fn rouges(image: &DecodedImage) -> Vec<u8> {
+        let [decalage_rouge, ..] = image.pixel_format().channel_offsets();
+        image.data().chunks_exact(4).map(|px| px[decalage_rouge]).collect()
+    }
+
+    /// Trouvé par l'audit du 9 septembre 2026 : le correctif « affichage en biais »
+    /// contre xrdp avait été recopié pour le 16, le 15 et le 24 bits, mais oublié
+    /// pour le 8 bits indexé. Une session en profondeur 8 bits contre un serveur qui
+    /// complète ses tuiles (bitmapWidth 4 pour un rectangle de 3) recevait donc une
+    /// image cisaillée en diagonale, exactement le symptôme que le correctif visait.
+    #[test]
+    fn un_bitmap_rle_8_bits_plus_large_que_le_rectangle_ne_part_pas_en_biais() {
+        let mut image = DecodedImage::new(PixelFormat::RgbA32, 3, 2);
+        let rectangle = InclusiveRectangle {
+            left: 0,
+            top: 0,
+            right: 2,
+            bottom: 1,
+        };
+
+        // Le décodeur RLE écrit à la largeur du BITMAP : 4 indices par ligne,
+        // dont un de remplissage (99) que le rectangle de 3 n'utilise pas.
+        let mut buf = vec![1, 2, 3, 99, 4, 5, 6, 99];
+
+        appliquer_bitmap_rle(
+            &mut image,
+            &mut buf,
+            RlePixelFormat::Rgb8,
+            4,
+            2,
+            &rectangle,
+            &palette_indices(),
+        )
+        .expect("l'application du bitmap doit aboutir");
+
+        // Les bitmaps RDP arrivent de bas en haut : la dernière ligne du tampon
+        // occupe la première ligne de l'image.
+        assert_eq!(
+            rouges(&image),
+            vec![4, 5, 6, 1, 2, 3],
+            "aucun indice de remplissage ne doit se retrouver dans l'image"
+        );
+    }
+
+    /// Le pendant 16 bits du test ci-dessus : ce chemin-là était déjà correct, il
+    /// sert de témoin pour que le regroupement des formats ne le casse pas.
+    #[test]
+    fn un_bitmap_rle_16_bits_plus_large_que_le_rectangle_ne_part_pas_en_biais() {
+        let mut image = DecodedImage::new(PixelFormat::RgbA32, 3, 2);
+        let rectangle = InclusiveRectangle {
+            left: 0,
+            top: 0,
+            right: 2,
+            bottom: 1,
+        };
+
+        // Rouge pur en RGB565 : 0xF800. Deux lignes de trois pixels rouges,
+        // suivies chacune d'un pixel de remplissage bleu (0x001F).
+        let rouge = [0x00u8, 0xF8];
+        let bleu = [0x1Fu8, 0x00];
+        let mut buf = Vec::new();
+        for _ in 0..2 {
+            for _ in 0..3 {
+                buf.extend_from_slice(&rouge);
+            }
+            buf.extend_from_slice(&bleu);
+        }
+
+        appliquer_bitmap_rle(
+            &mut image,
+            &mut buf,
+            RlePixelFormat::Rgb16,
+            4,
+            2,
+            &rectangle,
+            &[[0u8; 3]; 256],
+        )
+        .expect("l'application du bitmap doit aboutir");
+
+        assert!(
+            rouges(&image).iter().all(|&r| r > 0xF0),
+            "tous les pixels doivent être rouges, aucun pixel de remplissage"
+        );
     }
 }

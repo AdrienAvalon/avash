@@ -41,7 +41,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 06/09/2026 |
 |---|---|
-| Tests | 623 Rust (218 cœur, 65 intégration, 115 interface, 193 processus RDP, 32 serveurs de test) · 614 dans les paquets IronRDP et vnc-rs portés · 273 front · 74 scénarios bout en bout dans 36 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
+| Tests | 655 Rust (235 cœur, 71 intégration, 118 interface, 199 processus RDP, 32 serveurs de test) · 620 dans les paquets IronRDP et vnc-rs portés · 280 front · 74 scénarios bout en bout dans 36 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 172 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -249,13 +249,24 @@ qui est en place, et ce qui attend :
 - **Flathub** : manifeste `packaging/flathub/io.github.AdrienAvalon.avash.yml`,
   construction hors ligne (GNOME 49, Rust stable et Node 22 du SDK, sources
   cargo et npm figées), construit, installé et lancé sur le poste par
-  `flatpak-builder`, depuis le tag v0.8.0 ; le linter Flathub passe hormis
-  trois droits qui demandent une exception justifiée (agent SSH, dossier
-  personnel, nom D-Bus de Tauri). La branche de soumission est prête sur le
-  fork ; la PR elle-même revient au mainteneur en personne : la politique de
-  Flathub sur l'IA générative exige de déclarer le code écrit avec Claude et
-  interdit qu'un agent ouvre la PR (la #10077, ouverte sans la liste à cocher
-  du modèle, a été fermée par le robot ; voir RELEASE.md).
+  `flatpak-builder` du temps où il pointait le tag v0.8.0, puis passé à v0.10.1
+  sans que cette construction ait été rejouée : elle est à refaire avant la
+  soumission (garde `scripts/tests/flathub-tag-feuille-de-route.sh`) ; le
+  linter Flathub passe hormis cinq droits qui demandent une exception
+  justifiée : `--socket=ssh-auth` (l'agent SSH du poste),
+  `--filesystem=home` (clés, `known_hosts`, transferts
+  SFTP et fichiers RDP), `--socket=pulseaudio` (le son du bureau distant, joué
+  par la webview), `--device=all` (les consoles série, aucune option plus
+  étroite ne ciblant les tty) et `--own-name=dev.avash.app` (accordé en croyant
+  que Tauri enregistrait ce nom sur D-Bus, ce que l'audit du 9 septembre 2026 a
+  démenti : à retirer dès qu'une construction en bac à sable réel confirme que
+  la fenêtre s'ouvre sans lui). Chaque justification est rédigée dans
+  RELEASE.md §8, dont ce point doit rester le reflet exact (garde
+  `scripts/tests/flathub-exceptions-nombre-coherent.sh`). La branche de
+  soumission est prête sur le fork ; la PR revient au mainteneur en personne :
+  la politique de Flathub sur l'IA générative exige de déclarer le code écrit
+  avec Claude et interdit qu'un agent ouvre la PR (la #10077, ouverte sans la
+  liste à cocher du modèle, a été fermée par le robot ; voir RELEASE.md).
 - **Vitrine** : https://adrienavalon.github.io/avash/ (et `/en/`), publiée par
   GitHub Pages à chaque changement de `site/` ; les fichiers de la dernière
   version y sont listés par système.

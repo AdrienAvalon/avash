@@ -2,6 +2,39 @@ use super::security;
 use crate::{VncError, VncVersion};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Plus longue raison d'échec que le client accepte de lire (RFB 3.8 §7.1.2).
+/// Ces textes sont des phrases (« Authentication failed. ») : mille octets les
+/// contiennent toutes, et une annonce plus longue est le fait d'un serveur qui
+/// cherche à faire lire, pas à s'expliquer.
+pub(super) const RAISON_MAX: u32 = 1024;
+
+/// Lit la raison qui suit un refus (échec d'authentification ou de connexion) :
+/// une longueur sur quatre octets, puis exactement autant d'octets, bornés à
+/// [`RAISON_MAX`]. Une fin de flux rend une raison vide : certains serveurs
+/// (rustvncserver) raccrochent sans rien dire, et c'est encore un refus, pas
+/// une erreur de lecture (« unexpected end of file » à l'écran).
+///
+/// Trouvé par l'audit du 9 septembre 2026 : la longueur annoncée était lue
+/// puis jetée, et la raison ramassée par `read_to_string`, qui ne s'arrête qu'à
+/// la fermeture du flux. Un serveur qui refuse puis garde la connexion ouverte
+/// en y déversant des octets tenait le sidecar en lecture jusqu'au délai de
+/// connexion (25 s, `rdp-sidecar/src/vnc.rs`), à empiler tout ce qu'il envoyait.
+/// C'est le principe déjà appliqué au nom de bureau de ServerInit : borner
+/// côté client plutôt que faire confiance à ce que le serveur annonce.
+pub(super) async fn lire_raison<S>(reader: &mut S) -> String
+where
+    S: AsyncRead + Unpin,
+{
+    let Ok(annoncee) = reader.read_u32().await else {
+        return String::new();
+    };
+    let mut brut = vec![0u8; annoncee.min(RAISON_MAX) as usize];
+    if reader.read_exact(&mut brut).await.is_err() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&brut).into_owned()
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -48,10 +81,7 @@ impl SecurityType {
                 let security_type = reader.read_u32().await?;
                 let security_type = (security_type as u8).try_into()?;
                 if let SecurityType::Invalid = security_type {
-                    let _ = reader.read_u32().await?;
-                    let mut err_msg = String::new();
-                    reader.read_to_string(&mut err_msg).await?;
-                    return Err(VncError::General(err_msg));
+                    return Err(VncError::General(lire_raison(reader).await));
                 }
                 Ok(vec![security_type])
             }
@@ -66,10 +96,7 @@ impl SecurityType {
                 let num = reader.read_u8().await?;
 
                 if num == 0 {
-                    let _ = reader.read_u32().await?;
-                    let mut err_msg = String::new();
-                    reader.read_to_string(&mut err_msg).await?;
-                    return Err(VncError::General(err_msg));
+                    return Err(VncError::General(lire_raison(reader).await));
                 }
                 // Le protocole veut que le client ignore les types de sécurité
                 // qu'il ne connaît pas et en choisisse un qu'il parle. Un

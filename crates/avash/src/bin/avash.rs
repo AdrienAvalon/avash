@@ -65,19 +65,37 @@ fn cmd_list() {
         // port et le rebond effectifs — ceux avec lesquels `avash run` et `ssh`
         // se connectent — au lieu de « ? » quand ils viennent d'un `Host *`.
         let h = avash::resoudre_hote(&h.alias).unwrap_or_else(|| h.clone());
-        let target = format!(
-            "{}@{}:{}",
-            h.user.as_deref().unwrap_or("?"),
-            h.hostname.as_deref().unwrap_or(h.alias.as_str()),
-            h.port.map_or_else(|| "22".into(), |p| p.to_string())
-        );
-        let jump = h
-            .proxy_jump
-            .as_ref()
-            .map(|j| format!("  (via {j})"))
-            .unwrap_or_default();
-        println!("  • {:<20} → {}{}", h.alias, target, jump);
+        println!("{}", ligne_hote(&h));
     }
+}
+
+/// Compose la ligne que `avash list` imprime pour un hôte.
+///
+/// Sortie de `cmd_list` par l'audit du 9 septembre 2026 : tant que le format
+/// vivait au milieu d'une boucle qui imprime, aucun test ne pouvait le lire, et
+/// la relecture a montré qu'on retirait les appels à `sans_controle` sans
+/// qu'une assertion du dépôt ne rougisse. `sans_controle` passe sur tout ce qui
+/// vient du fichier : Avash refuse désormais d'écrire un caractère de contrôle,
+/// mais rien ne garantit que le `~/.ssh/config` lu vienne de lui. Un `HostName
+/// srv\x1b]0;PWNED\x07` posé par un autre outil rejouait sa séquence à chaque
+/// `avash list`, sans que personne ouvre le fichier. Le port, lui, est un
+/// entier : rien à neutraliser.
+fn ligne_hote(h: &avash::SshHost) -> String {
+    let cible = format!(
+        "{}@{}:{}",
+        avash::sans_controle(h.user.as_deref().unwrap_or("?")),
+        avash::sans_controle(h.hostname.as_deref().unwrap_or(h.alias.as_str())),
+        h.port.map_or_else(|| "22".into(), |p| p.to_string())
+    );
+    let rebond = h
+        .proxy_jump
+        .as_deref()
+        .map(|j| format!("  (via {})", avash::sans_controle(j)))
+        .unwrap_or_default();
+    format!(
+        "  • {:<20} → {cible}{rebond}",
+        avash::sans_controle(&h.alias)
+    )
 }
 
 async fn cmd_run(host: avash::SshHost, command: String) -> anyhow::Result<()> {
@@ -98,4 +116,69 @@ async fn cmd_run(host: avash::SshHost, command: String) -> anyhow::Result<()> {
     // Un code de sortie Unix tient sur 8 bits. Borner evite le
     // debordement u32 -> i32 signale par clippy, et reflete la realite.
     std::process::exit(i32::from((code & 0xFF) as u8));
+}
+
+#[cfg(test)]
+mod tests_affichage {
+    use super::ligne_hote;
+
+    #[test]
+    fn la_ligne_de_avash_list_ne_rejoue_aucun_caractere_de_controle() {
+        // Trouvé par l'audit du 9 septembre 2026. Avash refuse désormais
+        // d'écrire un caractère de contrôle dans `~/.ssh/config`, mais rien ne
+        // garantit que le fichier lu vienne de lui : un `HostName
+        // srv\x1b]0;PWNED\x07` posé par un import maison, un éditeur ou des
+        // dotfiles partagés rejouait sa séquence à chaque `avash list`, sans
+        // que personne ouvre le fichier (titre de fenêtre réécrit,
+        // presse-papiers manipulé par OSC 52). La composition de la ligne est
+        // sortie de `cmd_list` exprès : la relecture du 9 septembre a montré
+        // qu'on pouvait retirer les quatre appels à `sans_controle` sans
+        // qu'une seule assertion du dépôt rougisse.
+        let piege = avash::SshHost {
+            alias: "prod\u{1b}]0;PWNED\u{7}".into(),
+            hostname: Some("srv\u{1b}]0;PWNED\u{7}".into()),
+            user: Some("root\u{7f}".into()),
+            proxy_jump: Some("bastion\u{9b}".into()),
+            port: Some(2222),
+            ..Default::default()
+        };
+        let ligne = ligne_hote(&piege);
+        // ESC, BEL, DEL et un C1 (0x9B, CSI sur un octet) : chacun doit être
+        // tombé, quel que soit le champ d'où il vient.
+        assert!(
+            !ligne.chars().any(char::is_control),
+            "il reste un caractère de contrôle dans la ligne : {ligne:?}"
+        );
+        // Le texte reste montré : on neutralise, on ne censure pas, sans quoi
+        // l'utilisateur ne verrait pas qu'un champ est piégé.
+        assert!(ligne.contains("PWNED"), "ligne : {ligne:?}");
+    }
+
+    #[test]
+    fn la_ligne_de_avash_list_reste_lisible_pour_un_hote_ordinaire() {
+        // Le pendant du cas précédent : neutraliser ne doit rien changer à
+        // l'affichage courant, accents compris.
+        let sain = avash::SshHost {
+            alias: "prod".into(),
+            hostname: Some("prod.exemple.com".into()),
+            user: Some("adrien".into()),
+            port: Some(2222),
+            ..Default::default()
+        };
+        assert_eq!(
+            ligne_hote(&sain),
+            "  • prod                 → adrien@prod.exemple.com:2222"
+        );
+        // Sans utilisateur ni port, `avash list` montre « ? » et 22 ; le
+        // rebond, lui, s'ajoute entre parenthèses.
+        let par_defaut = avash::SshHost {
+            alias: "relais-été".into(),
+            proxy_jump: Some("bastion".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            ligne_hote(&par_defaut),
+            "  • relais-été           → ?@relais-été:22  (via bastion)"
+        );
+    }
 }

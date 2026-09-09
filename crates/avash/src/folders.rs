@@ -27,11 +27,18 @@ pub fn folders_path() -> PathBuf {
 
 /// Normalise un chemin de dossier : segments non vides, sans espaces de bord,
 /// joints par `/`. `""` = racine.
+///
+/// Un segment portant un caractère de contrôle est retiré, pas nettoyé : le nom
+/// finit en commentaire `# Folder` dans `~/.ssh/config`, donc sous les yeux de
+/// qui relit ce fichier ou lance `avash list`. La liste était `\n \r \0`, la
+/// même trop courte que celle de `validate_config_value` ; l'audit du
+/// 9 septembre 2026 l'a élargie à tout le plan de contrôle (ESC, BEL, DEL, C1),
+/// tabulation comprise.
 #[must_use]
 pub fn normalize(path: &str) -> String {
     path.split('/')
         .map(str::trim)
-        .filter(|s| !s.is_empty() && *s != "." && *s != ".." && !s.contains(['\n', '\r', '\0']))
+        .filter(|s| !s.is_empty() && *s != "." && *s != ".." && !s.contains(char::is_control))
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -452,6 +459,24 @@ mod tests {
     fn normalize_nettoie() {
         assert_eq!(normalize(" /a// b /c/ "), "a/b/c");
         assert_eq!(normalize("///"), "");
+    }
+
+    #[test]
+    fn normalize_retire_un_segment_a_caractere_de_controle() {
+        // Trouvé par l'audit du 9 septembre 2026. `normalize` ne connaissait
+        // que `\n`, `\r` et `\0`, la même liste trop courte que
+        // `validate_config_value` : un nom de dossier finit en `# Folder` dans
+        // `~/.ssh/config`, donc dans le terminal de qui relit ce fichier ou
+        // lance `avash list`. ESC, BEL, DEL et les C1 tombent avec le reste.
+        for c in ['\u{1b}', '\u{7}', '\u{7f}', '\u{9b}', '\t'] {
+            assert_eq!(normalize(&format!("prod{c}x")), "", "U+{:04X}", c as u32);
+            assert_eq!(normalize(&format!("ok/bad{c}x/end")), "ok/end");
+        }
+        // Rien de légitime ne tombe au passage : accents et espace interne.
+        assert_eq!(
+            normalize("Prod été/Bases de données"),
+            "Prod été/Bases de données"
+        );
     }
 
     #[test]

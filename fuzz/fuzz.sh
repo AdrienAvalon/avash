@@ -12,7 +12,15 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 DUREE="${DUREE:-60}"
-CIBLES=(config_ssh putty_session reg_query mobaxterm_ini asciicast clearcodec vnc_serveur)
+# Les cibles se lisent dans Cargo.toml, qui les déclare déjà : une liste écrite
+# en dur ici avait pris du retard sur lui, et `glob_match_pur` comme `osinfo`
+# n'étaient jamais fuzzées, seulement compilées sur les PR, donc couvertes sur
+# le papier et jamais secouées en fait. Trouvé par l'audit du 9 septembre 2026.
+mapfile -t CIBLES < <(sed -n '/^\[\[bin\]\]/,/^$/ s/^name = "\(.*\)"/\1/p' Cargo.toml)
+if [ "${#CIBLES[@]}" -eq 0 ]; then
+  echo "✗ fuzz : aucune cible lue dans fuzz/Cargo.toml" >&2
+  exit 1
+fi
 journal="$(mktemp)"
 trap 'rm -f "$journal"' EXIT
 echecs=()

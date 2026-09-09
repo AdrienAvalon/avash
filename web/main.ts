@@ -12,7 +12,7 @@ import { appliquerVue, basculerPartage, ongletsAffiches, surFermeture, surFocus,
 import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
 import { partageClipboard, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage } from "./prefs";
-import { filterHosts, isPasswordRequired, isHostKeyChanged, stripHtml, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode } from "./filters";
+import { filterHosts, isPasswordRequired, isHostKeyChanged, stripHtml, nettoyerMarqueurs, nettoyerPourTerminal, etiquetteHote, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode } from "./filters";
 import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, hostSessionState, renderTagBar, terminalTheme } from "./theme";
 import { MENUS_CONTEXTUELS, openHostMenu, ouvrirMenuAuClavier } from "./menu-hote";
@@ -592,7 +592,7 @@ async function newSessionShell(label: string) {
       if (data === "\r" && s.reconnect) void s.reconnect();
       return;
     }
-    invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${e}\r\n`));
+    invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${nettoyerPourTerminal(String(e))}\r\n`));
   });
   // Le shell distant n'a besoin que de la taille finale : on attend une
   // courte accalmie avant de la lui envoyer (un SIGWINCH par image le
@@ -643,7 +643,9 @@ export async function openSerie(cible: { chemin: string; vitesse: number }) {
   const connecter = async () => {
     session.closed = false;
     setSessionState(id, "connecting");
-    term.write(`\x1b[90m${t("connexion-a", { cible: `${cible.chemin} @ ${cible.vitesse}` })}\x1b[0m\r\n`);
+    // Le chemin et surtout la description du port série viennent du descripteur
+    // USB du périphérique branché : du texte que l'utilisateur n'a pas écrit.
+    term.write(`\x1b[90m${nettoyerPourTerminal(t("connexion-a", { cible: `${cible.chemin} @ ${cible.vitesse}` }))}\x1b[0m\r\n`);
     try {
       const label = await invoke<string>("serie_open", { id, chemin: cible.chemin, vitesse: cible.vitesse });
       session.alias = label;
@@ -655,7 +657,7 @@ export async function openSerie(cible: { chemin: string; vitesse: number }) {
       // avalait le message du cœur (port occupé, chemin absent, droits).
       // On réutilise « echec-connexion » (même variable {e}), déjà servie par
       // le chemin SSH juste en dessous.
-      term.write(`\r\n\x1b[31m${t("echec-connexion", { e: String(e) })}\x1b[0m\r\n`);
+      term.write(`\r\n\x1b[31m${nettoyerPourTerminal(t("echec-connexion", { e: String(e) }))}\x1b[0m\r\n`);
       session.closed = true;
       setSessionState(id, "closed");
       throw e;
@@ -683,7 +685,12 @@ async function connectByAlias(s: Session, h: Host) {
   const { id, term } = s;
   s.closed = false;
   setSessionState(id, "connecting");
-  const label = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
+  // Composée par `etiquetteHote`, qui neutralise les caractères de contrôle :
+  // ces trois champs viennent de ~/.ssh/config, qu'un autre outil a pu piéger,
+  // et l'étiquette part à la fois dans le terminal et dans la modale de mot de
+  // passe. Trouvé par la relecture de l'audit du 9 septembre 2026 : le
+  // durcissement n'avait couvert que le CLI `avash list`, pas le Tauri.
+  const label = etiquetteHote(h);
 
   // Un hote sans IdentityFile n'a aucun moyen de s'authentifier : autant
   // demander le mot de passe AVANT, plutot que d'echouer puis redemander.
@@ -702,7 +709,7 @@ async function connectByAlias(s: Session, h: Host) {
     /* on tentera sans, le backend dira ce qui manque */
   }
 
-  term.write(`\x1b[90m${t("connexion-a", { cible: label })}\x1b[0m\r\n`);
+  term.write(`\x1b[90m${nettoyerPourTerminal(t("connexion-a", { cible: label }))}\x1b[0m\r\n`);
 
   for (let essai = 0; essai < 3; essai++) {
     // L'onglet a pu être fermé pendant qu'on attendait : sans cette garde, la
@@ -723,13 +730,16 @@ async function connectByAlias(s: Session, h: Host) {
           port: h.port,
           user: h.user ?? null,
           password,
-        }).catch((e) => term.write(`\r\n\x1b[33m⚠️ ${t("memorisation-impossible", { e: String(e) })}\x1b[0m\r\n`));
+        }).catch((e) => term.write(`\r\n\x1b[33m⚠️ ${nettoyerPourTerminal(t("memorisation-impossible", { e: String(e) }))}\x1b[0m\r\n`));
       }
       return;
     } catch (e) {
       const msg = String(e);
       if (isHostKeyChanged(msg)) {
-        const clean = msg.replace("[AVASH_HOST_KEY_CHANGED]", "").trim();
+        // Le message peut porter du texte venu du serveur : on retire tous les
+        // marqueurs internes (pas seulement celui-ci) et les caractères de
+        // contrôle avant de le montrer dans la boîte de confirmation.
+        const clean = nettoyerPourTerminal(nettoyerMarqueurs(msg));
         const ok = await askConfirm(`${clean}\n\n${t("cle-hote-oublier-question")}`);
         if (!ok) {
           markClosed(s, t("connexion-annulee-cle-changee"));
@@ -771,7 +781,12 @@ async function connectByAlias(s: Session, h: Host) {
  * Marque un onglet termine et explique quoi faire : sans cette ligne,
  * l'utilisateur ne sait pas si ca charge encore ni comment relancer.
  */
-function markClosed(s: Session, why: string) {
+function markClosed(s: Session, raison: string) {
+  // Trouvé par l'audit du 9 septembre 2026 : ce texte peut contenir un message
+  // du serveur distant (invite `keyboard-interactive` recopiée par le cœur), et
+  // il partait tel quel dans xterm.js, donc avec ses séquences ANSI, capables
+  // d'effacer l'écran ou d'imiter une invite locale.
+  const why = nettoyerPourTerminal(raison);
   // L'onglet peut avoir été fermé entre-temps : `term` est alors détruit et
   // l'écriture se perd au mieux.
   if (!state.sessions.has(s.id)) return;
@@ -828,7 +843,7 @@ async function connectManual(s: Session, cible: ManualTarget) {
   const { id, term } = s;
   s.closed = false;
   setSessionState(id, "connecting");
-  term.write(`\x1b[90m${t("connexion-a", { cible: `${cible.user}@${cible.addr}` })}\x1b[0m\r\n`);
+  term.write(`\x1b[90m${nettoyerPourTerminal(t("connexion-a", { cible: `${cible.user}@${cible.addr}` }))}\x1b[0m\r\n`);
   const label = await invoke<string>("pty_open_manual", {
     id,
     addr: cible.addr,

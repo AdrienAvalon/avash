@@ -49,12 +49,17 @@ forbid "(^|[^a-zA-Z_\$])(window\.|globalThis\.|self\.)?alert\(" "dialogue natif 
 # test d'intégration. Le marqueur, lui, est trivial à repérer.
 #
 # Sources Rust du dépôt, hors paquets portés (`vendor/`, code amont) : le cœur,
-# l'interface, le processus RDP et les serveurs de test.
+# l'interface, le processus RDP, les serveurs de test et les cibles de fuzzing.
+# `fuzz/fuzz_targets` a été ajouté par l'audit du 9 septembre 2026 : c'était le
+# seul code Rust du dépôt que rien ne relisait, ni cette garde, ni clippy, ni
+# check.sh : le crate est hors espace de travail et ne se compile qu'en nightly.
+# Or c'est justement là qu'on pose un dbg!() pour comprendre un plantage trouvé
+# par cargo-fuzz, et qu'on risque de l'oublier.
 # Seuls les répertoires présents sont passés à grep : sur un répertoire absent,
 # grep -r sort en code 2 et un `if hits=$(...)` prendrait alors de VRAIS
 # résultats pour une absence de résultat.
 RUST_DIRS=()
-for d in crates/avash/src crates/avash-ui/src rdp-sidecar/src test-rdp-server/src test-vnc-server/src; do
+for d in crates/avash/src crates/avash-ui/src rdp-sidecar/src test-rdp-server/src test-vnc-server/src fuzz/fuzz_targets; do
   [ -d "$d" ] && RUST_DIRS+=("$d")
 done
 

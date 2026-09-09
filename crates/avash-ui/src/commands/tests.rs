@@ -149,10 +149,64 @@ impl Drop for HomeGuard {
 
 // ---------- local_target ----------
 
+/// Un chemin imposé libre reste respecté tel quel : la garde posée par l'audit
+/// du 9 septembre 2026 ne déplace la cible que si elle est déjà prise. Le test
+/// visait `/tmp/ailleurs.md` en dur, ce qui n'exerçait plus rien une fois la
+/// garde en place (le fichier peut exister sur le poste) : il travaille
+/// maintenant sous le HOME jetable du garde.
 #[test]
 fn local_target_respecte_le_chemin_impose() {
-    let got = local_target("/srv/rapport.md", Some("/tmp/ailleurs.md".into())).unwrap();
-    assert_eq!(got, "/tmp/ailleurs.md");
+    let _g = with_ssh_config("");
+    let dir = avash::sftp::default_local_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let vise = dir.join("ailleurs.md");
+    let got = local_target("/srv/rapport.md", Some(vise.to_string_lossy().into_owned())).unwrap();
+    assert_eq!(std::path::Path::new(&got), vise);
+}
+
+/// Trouvé par l'audit du 9 septembre 2026 : dès que l'appelant IPC fournissait
+/// un `local`, `local_target` le rendait tel quel, sans passer par
+/// `chemin_local_libre`. Un appel direct à `sftp_download` depuis la webview
+/// (dépendance front compromise, outils de développement) écrivait alors le contenu d'un
+/// serveur choisi par l'attaquant par-dessus `~/.bashrc` : `download_reprise`
+/// finit par un `rename()` POSIX, qui remplace la cible sans un mot. La règle
+/// de SECURITY.md (« rien n'écrase un fichier existant ») vaut aussi pour un
+/// chemin imposé, pas seulement pour la cible dérivée du nom distant.
+#[test]
+fn local_target_n_ecrase_pas_un_chemin_impose_deja_pris() {
+    let _g = with_ssh_config("");
+    let dir = avash::sftp::default_local_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let pris = dir.join("bashrc");
+    std::fs::write(&pris, b"a moi").unwrap();
+
+    let got = local_target("/srv/piege", Some(pris.to_string_lossy().into_owned())).unwrap();
+    let got = std::path::Path::new(&got);
+    assert_ne!(got, pris, "la cible ne doit pas viser le fichier existant");
+    assert!(
+        !got.exists(),
+        "le nom choisi doit être libre : {}",
+        got.display()
+    );
+    assert_eq!(
+        std::fs::read(&pris).unwrap(),
+        b"a moi",
+        "le fichier existant a été écrasé"
+    );
+}
+
+/// Même audit : toutes les commandes voisines qui touchent au disque local
+/// exigent un chemin absolu (`diagnostic_exporter`, `dossier_partage`,
+/// `rdp_ouvrir_dossier`). Un chemin relatif se résoudrait contre le répertoire
+/// courant de l'application, que l'utilisateur ne voit nulle part.
+#[test]
+fn local_target_refuse_un_chemin_impose_relatif() {
+    for l in ["ailleurs.md", "../../etc/passwd", ""] {
+        assert!(
+            local_target("/srv/rapport.md", Some(l.to_owned())).is_err(),
+            "{l} devrait être refusé"
+        );
+    }
 }
 
 #[test]
@@ -227,6 +281,41 @@ fn local_target_evite_aussi_un_dossier_homonyme() {
         got.ends_with("logs (2)"),
         "nom libre attendu : {}",
         got.display()
+    );
+}
+
+/// Trouvé par l'audit du 9 septembre 2026 : le `local` de `sftp_upload` est le
+/// fichier LOCAL lu puis envoyé au serveur distant, et il partait sans aucune
+/// garde, seul de tout ce fichier de commandes. Il doit au moins être absolu et
+/// désigner quelque chose qui existe, comme le dossier partagé RDP
+/// (`dossier_partage`) et le chemin de diagnostic (`diagnostic_exporter`) :
+/// un chemin relatif viserait le répertoire courant de l'application, invisible
+/// pour l'utilisateur, et une cible absente doit donner une erreur claire
+/// plutôt qu'un échec de lecture au milieu du transfert.
+#[test]
+fn local_source_refuse_un_chemin_relatif_ou_absent() {
+    let _g = with_ssh_config("");
+    let dir = avash::sftp::default_local_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let present = dir.join("rapport.md");
+    std::fs::write(&present, b"contenu").unwrap();
+
+    assert!(
+        local_source("rapport.md").is_err(),
+        "un chemin relatif devrait être refusé"
+    );
+    assert!(
+        local_source("").is_err(),
+        "un chemin vide devrait être refusé"
+    );
+    assert!(
+        local_source(&dir.join("absent.md").to_string_lossy()).is_err(),
+        "un fichier absent devrait être refusé"
+    );
+    assert_eq!(
+        local_source(&present.to_string_lossy()).unwrap(),
+        present,
+        "un fichier absolu et existant reste accepte tel quel"
     );
 }
 

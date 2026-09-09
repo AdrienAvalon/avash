@@ -1,5 +1,5 @@
 use super::{
-    auth::{AuthHelper, AuthResult, SecurityType},
+    auth::{lire_raison, AuthHelper, AuthResult, SecurityType},
     connection::VncClient,
 };
 use std::future::Future;
@@ -165,14 +165,12 @@ where
                                 // le plus souvent) ne dit rien de plus que l'échec
                                 // lui-même : on la trace, et l'appelant reçoit le
                                 // même `WrongPassword` qu'en 3.7, qu'il sait
-                                // présenter. Certains serveurs (rustvncserver)
-                                // raccrochent sans l'envoyer : une fin de flux
-                                // ici est encore un refus, pas une erreur de
-                                // lecture (« unexpected end of file » à l'écran).
-                                let mut err_msg = String::new();
-                                if connector.stream.read_u32().await.is_ok() {
-                                    let _ = connector.stream.read_to_string(&mut err_msg).await;
-                                }
+                                // présenter. `lire_raison` s'en tient à la
+                                // longueur annoncée, bornée : un serveur qui
+                                // refuse puis ne raccroche pas ne doit pas tenir
+                                // le sidecar en lecture (audit du 9 septembre
+                                // 2026).
+                                let err_msg = lire_raison(&mut connector.stream).await;
                                 trace!("authentification refusée : {err_msg}");
                                 return Err(VncError::WrongPassword);
                             }
@@ -281,10 +279,7 @@ where
         let auth = AuthHelper::read(&mut stream, &credential).await?;
         auth.write(&mut stream).await?;
         if let AuthResult::Failed = auth.finish(&mut stream).await? {
-            let mut err_msg = String::new();
-            if stream.read_u32().await.is_ok() {
-                let _ = stream.read_to_string(&mut err_msg).await;
-            }
+            let err_msg = lire_raison(&mut stream).await;
             trace!("authentification VeNCrypt refusée : {err_msg}");
             return Err(VncError::WrongPassword);
         }

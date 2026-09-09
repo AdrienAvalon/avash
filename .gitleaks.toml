@@ -10,8 +10,13 @@ useDefault = true
 
 [[allowlists]]
 description = "Jetons factices de tests (pas des secrets) : jeton binaire du contrôle d'accès local du sidecar et autres valeurs de démonstration"
-# On autorise la valeur factice elle-même, où qu'elle apparaisse : elle n'a rien
-# d'un secret et sert à vérifier qu'un mauvais jeton est rejeté.
+# La valeur factice ELLE-MÊME, et rien qui la contienne. Les ancres ne sont pas
+# décoratives : gitleaks évalue ces regexes en correspondance libre sur le
+# secret détecté, si bien que sans elles toute clé d'API contenant cette suite
+# (une vraie, de trente-six caractères) était blanchie où qu'elle soit dans le
+# dépôt. Le CHANGELOG de la 0.10.1 affirmait « sans rien relâcher d'autre » :
+# c'était faux. Trouvé et mesuré par l'audit du 9 septembre 2026, le contrôle
+# est rejoué par scripts/tests/gitleaks-allowlist-etroite.sh.
 regexes = [
-  '''0123456789abcdef''',
+  '''^0123456789abcdef$''',
 ]

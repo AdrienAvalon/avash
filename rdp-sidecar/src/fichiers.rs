@@ -9,8 +9,11 @@
 //! parcourir les dossiers offerts et servir les octets demandés. Tout ce qui
 //! vient du distant reste une entrée non fiable : IronRDP retire `..` et les
 //! préfixes absolus en tête, mais laisse passer un nom sans séparateur portant
-//! une lettre de lecteur (« C:evil.exe ») ou un nom de périphérique réservé, si
-//! bien qu'on revalide chaque composant nous-mêmes (voir [`composant_sur`]) ;
+//! une lettre de lecteur (« C:evil.exe »), un nom de périphérique réservé ou un
+//! nom truqué par un contrôle de direction Unicode qui inverse l'extension à
+//! l'affichage, si bien qu'on revalide chaque composant nous-mêmes (voir
+//! [`composant_sur`]) et qu'on rend lisible ce qu'on affiche (voir
+//! [`lisible`]) ;
 //! les tailles annoncées ne servent qu'à l'affichage et à borner les requêtes,
 //! jamais à allouer.
 
@@ -44,12 +47,74 @@ pub(crate) struct FichierDistant {
     pub(crate) dossier: bool,
 }
 
-/// Chemin relatif d'un descripteur, séparateurs `/`.
+/// Un caractère qui ment sur ce qu'on lit : contrôles de direction
+/// bidirectionnelle (ils réordonnent le texte qui suit), caractères invisibles
+/// sans chasse (un nom peut alors se lire comme un autre), et caractères qui
+/// coupent une ligne d'affichage en deux.
+///
+/// Trouvé par l'audit du 9 septembre 2026 : voir [`composant_sur`].
+///
+/// Les séparateurs de ligne et de paragraphe (U+2028, U+2029) comptent autant
+/// que les contrôles C0/C1 : le front est une webview, et dans un nœud texte
+/// HTML un « \n » est replié en espace par le traitement des blancs alors que
+/// ces deux-là restent des sauts de ligne forcés. Une première version du
+/// filtre ne prenait que C0/C1 et laissait donc passer le seul cas qui coupe
+/// vraiment le badge des fichiers en cours et la notification d'erreurs
+/// (relecture du 9 septembre 2026).
+///
+/// L'antiliant et le liant sans chasse (U+200C, U+200D) restent permis : ils
+/// ne réordonnent rien, l'écriture persane repose sur l'antiliant et les
+/// séquences emoji sur le liant. Les sélecteurs de variante restent permis
+/// pour la même raison (U+FE0F fait l'emoji).
+fn caractere_trompeur(c: char) -> bool {
+    matches!(c,
+        '\u{0}'..='\u{1f}'
+            | '\u{7f}'..='\u{9f}'
+            | '\u{ad}'
+            | '\u{61c}'
+            | '\u{115f}'
+            | '\u{1160}'
+            | '\u{180e}'
+            | '\u{200b}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{3164}'
+            | '\u{feff}'
+            | '\u{ffa0}'
+            | '\u{fff9}'..='\u{fffb}')
+}
+
+/// Le même nom, mais lisible : chaque caractère trompeur devient U+FFFD.
+///
+/// L'interface voit le nom annoncé *avant* que l'utilisateur accepte la
+/// réception, et le voit encore dans les messages d'erreur du bilan : sans
+/// cela, un « malware\u{202E}txt.exe » s'affichait « malwareexe.txt » et le
+/// texte français qui l'entoure partait à l'envers avec lui.
+fn lisible(nom: &str) -> String {
+    if nom.chars().any(caractere_trompeur) {
+        nom.chars()
+            .map(|c| if caractere_trompeur(c) { '\u{fffd}' } else { c })
+            .collect()
+    } else {
+        nom.to_owned()
+    }
+}
+
+/// Chemin relatif d'un descripteur, séparateurs `/`, rendu lisible pour
+/// l'affichage : ce chemin ne sert jamais à ouvrir un fichier (c'est
+/// [`chemin_local`] qui construit la cible), seulement à dire à l'utilisateur
+/// ce que le distant annonce.
 fn chemin_relatif(d: &FileDescriptor) -> String {
-    match d.relative_path.as_deref().filter(|p| !p.is_empty()) {
+    let brut = match d.relative_path.as_deref().filter(|p| !p.is_empty()) {
         Some(p) => format!("{}/{}", p.replace('\\', "/"), d.name),
         None => d.name.clone(),
-    }
+    };
+    lisible(&brut)
 }
 
 fn est_dossier(d: &FileDescriptor) -> bool {
@@ -96,8 +161,18 @@ pub(crate) fn dossier_par_defaut() -> PathBuf {
 
 /// Un composant de nom sûr : un unique [`Component::Normal`], sans deux-points
 /// (préfixe de disque « C: » ou flux ADS sous Windows), sans séparateur ni
-/// octet nul, et qui n'est pas un nom de périphérique réservé Windows (CON,
-/// NUL, LPT1…, que `sanitize_file_path` ne filtre pas).
+/// octet nul, sans caractère trompeur ([`caractere_trompeur`]), et qui n'est
+/// pas un nom de périphérique réservé Windows (CON, NUL, LPT1…, que
+/// `sanitize_file_path` ne filtre pas).
+///
+/// Trouvé par l'audit du 9 septembre 2026 : rien ne filtrait les contrôles de
+/// direction Unicode, ni ici, ni dans `sanitize_file_path` d'IronRDP, ni au
+/// front. Un serveur annonçant « malware\u{202E}txt.exe » faisait lire
+/// « malwareexe.txt » à l'utilisateur au moment d'accepter, puis dans son
+/// gestionnaire de fichiers (mêmes règles de rendu bidirectionnel partout) :
+/// il croyait ouvrir un fichier texte et lançait un exécutable. On refuse le
+/// fichier plutôt que de réécrire son nom : le nom accepté est alors celui que
+/// l'utilisateur a vu.
 ///
 /// Trouvé par l'audit du 7 septembre 2026 : `sanitize_file_path` d'IronRDP rend
 /// « C:evil.exe » tel quel (aucun séparateur, chemin de sortie inchangé) et ne
@@ -107,6 +182,9 @@ pub(crate) fn dossier_par_defaut() -> PathBuf {
 /// réception. On valide donc chaque composant nous-mêmes.
 fn composant_sur(c: &str) -> bool {
     if c.contains([':', '/', '\\', '\0']) || ironrdp::cliprdr::is_windows_device_name(c) {
+        return false;
+    }
+    if c.chars().any(caractere_trompeur) {
         return false;
     }
     let mut composants = Path::new(c).components();
@@ -143,12 +221,77 @@ fn chemin_local(dossier: &Path, d: &FileDescriptor) -> Option<PathBuf> {
     }
     p.push(&d.name);
     // Défense en profondeur : après le join, la cible reste sous le dossier de
-    // réception (les composants validés le garantissent déjà).
+    // réception (les composants validés le garantissent déjà). Cette vérité
+    // n'est que lexicale : c'est [`creer_sous`] qui empêche un lien symbolique
+    // préexistant de faire sortir la destination du dossier.
     p.starts_with(dossier).then_some(p)
 }
 
+/// Un nom déjà pris sur le disque, lien symbolique compris (même pendouillant).
+///
+/// Trouvé par l'audit du 9 septembre 2026 : `exists()` suit les liens, donc un
+/// lien dont la cible manque passait pour un nom libre et la création d'un
+/// fichier vide écrivait au bout du lien, hors du dossier de réception.
+fn occupe(p: &Path) -> bool {
+    std::fs::symlink_metadata(p).is_ok()
+}
+
+/// Crée sous `dossier` chaque composant manquant de `chemin` sans jamais suivre
+/// un lien : un composant qui existe déjà mais n'est pas un vrai dossier (lien
+/// symbolique en tête) fait échouer la préparation.
+///
+/// Trouvé par l'audit du 9 septembre 2026 : `create_dir_all` traverse sans
+/// broncher un sous-dossier qui est en réalité un lien, si bien qu'un
+/// `Téléchargements/partage -> ~/.ssh` posé par stow, une synchro nuagique ou
+/// l'utilisateur lui-même laissait un serveur annonçant `relative_path =
+/// "partage"` écrire où pointe le lien. Le module RDPDR voisin
+/// (`disque.rs::resoudre`) se défendait déjà ainsi ; la réception CLIPRDR non.
+async fn creer_sous(dossier: &Path, chemin: &Path) -> Result<()> {
+    // Le dossier de réception vient du poste (défaut ou choix de l'utilisateur),
+    // pas du distant : on le crée d'un bloc s'il manque, comme le faisait le
+    // `create_dir_all` d'avant. Seuls les composants annoncés par le serveur
+    // descendent ensuite un à un.
+    tokio::fs::create_dir_all(dossier)
+        .await
+        .with_context(|| format!("création de {}", dossier.display()))?;
+    let reste = chemin.strip_prefix(dossier).map_err(|_| {
+        anyhow::anyhow!(
+            "{} n'est pas sous le dossier de réception",
+            chemin.display()
+        )
+    })?;
+    let mut courant = dossier.to_path_buf();
+    for c in reste.components() {
+        courant.push(c);
+        match tokio::fs::symlink_metadata(&courant).await {
+            Ok(m) if m.is_dir() => continue,
+            Ok(m) if m.is_symlink() => {
+                anyhow::bail!("{} est un lien symbolique", courant.display())
+            }
+            Ok(_) => anyhow::bail!("{} n'est pas un dossier", courant.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("lecture de {}", courant.display())),
+        }
+        match tokio::fs::create_dir(&courant).await {
+            Ok(()) => {}
+            // Course avec un autre écrivain : on repasse par la même règle,
+            // c'est le lien qu'on refuse, pas la simultanéité.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let vrai_dossier = tokio::fs::symlink_metadata(&courant)
+                    .await
+                    .is_ok_and(|m| m.is_dir());
+                if !vrai_dossier {
+                    anyhow::bail!("{} n'est pas un dossier", courant.display());
+                }
+            }
+            Err(e) => return Err(e).with_context(|| format!("création de {}", courant.display())),
+        }
+    }
+    Ok(())
+}
+
 fn sans_collision(p: &Path) -> PathBuf {
-    if !p.exists() {
+    if !occupe(p) {
         return p.to_path_buf();
     }
     let tige = p
@@ -161,7 +304,7 @@ fn sans_collision(p: &Path) -> PathBuf {
         .unwrap_or_default();
     for n in 2..10_000u32 {
         let candidat = p.with_file_name(format!("{tige} ({n}){ext}"));
-        if !candidat.exists() {
+        if !occupe(&candidat) {
             return candidat;
         }
     }
@@ -303,14 +446,15 @@ impl Reception {
             let d = self.fichiers[index].clone();
             let Some(cible) = chemin_local(&self.dossier, &d) else {
                 // Nom refusé (préfixe de disque, séparateur, périphérique
-                // réservé) : on n'écrit rien et on signale le fichier.
+                // réservé, caractère trompeur) : on n'écrit rien et on signale
+                // le fichier.
                 self.erreurs
                     .push(format!("{} : nom de fichier refusé", chemin_relatif(&d)));
                 self.termines += 1;
                 continue;
             };
             if est_dossier(&d) {
-                if let Err(e) = tokio::fs::create_dir_all(&cible).await {
+                if let Err(e) = creer_sous(&self.dossier, &cible).await {
                     self.erreurs.push(format!("{} : {e}", chemin_relatif(&d)));
                 }
                 self.termines += 1;
@@ -335,9 +479,7 @@ impl Reception {
         cible: PathBuf,
     ) -> Result<Option<Vec<FileContentsRequest>>> {
         if let Some(parent) = cible.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("création de {}", parent.display()))?;
+            creer_sous(&self.dossier, parent).await?;
         }
         let cible = sans_collision(&cible);
         // On distingue `Some(0)` (le distant affirme un fichier vide, on le
@@ -969,6 +1111,207 @@ mod tests {
         assert!(!d.join("C:evil.exe.part").exists());
         assert_eq!(std::fs::read(d.join("bon.txt")).unwrap(), b"ok");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Un nom qui porte un contrôle bidirectionnel Unicode ou un caractère
+    /// invisible est refusé à l'écriture, et l'affichage rend ces caractères
+    /// visibles au lieu de les laisser réordonner le texte. Les caractères
+    /// légitimes (accents, liant d'emoji) passent.
+    ///
+    /// Trouvé par l'audit du 9 septembre 2026 : un serveur annonçant
+    /// « malware\u{202E}txt.exe » faisait afficher « malwareexe.txt » à
+    /// l'utilisateur (le RIGHT-TO-LEFT OVERRIDE inverse ce qui suit), qui
+    /// acceptait un exécutable en croyant prendre un fichier texte ; le nom
+    /// écrit sur le disque gardait le caractère et continuait de mentir dans
+    /// tous les gestionnaires de fichiers.
+    #[test]
+    fn un_nom_a_controle_bidirectionnel_est_refuse_et_neutralise_a_l_affichage() {
+        for d in [
+            FileDescriptor::new("malware\u{202E}txt.exe"),
+            FileDescriptor::new("facture\u{2066}gpj.exe"),
+            FileDescriptor::new("note\u{200F}txt.exe"),
+            FileDescriptor::new("a\u{200B}b.txt"),
+            FileDescriptor::new("a\u{FEFF}b.txt"),
+            FileDescriptor::new("saut\nde ligne.txt"),
+            // Le front est une webview : dans un nœud texte, « \n » est replié
+            // en espace par le traitement des blancs, tandis que U+2028 et
+            // U+2029 restent des sauts de ligne forcés. C'est donc eux, et non
+            // « \n », qui coupent en deux le badge des fichiers en cours et la
+            // notification d'erreurs.
+            FileDescriptor::new("a\u{2028}b.txt"),
+            FileDescriptor::new("a\u{2029}b.txt"),
+            // Invisibles sans chasse que la première correction avait laissés
+            // passer alors qu'elle annonçait les filtrer.
+            FileDescriptor::new("a\u{00AD}b.txt"),
+            FileDescriptor::new("a\u{180E}b.txt"),
+            FileDescriptor::new("a\u{115F}b.txt"),
+            FileDescriptor::new("a\u{1160}b.txt"),
+            FileDescriptor::new("a\u{3164}b.txt"),
+            FileDescriptor::new("a\u{FFA0}b.txt"),
+            FileDescriptor::new("a\u{2061}b.txt"),
+            FileDescriptor::new("a\u{FFF9}b.txt"),
+            FileDescriptor::new("f.txt").with_relative_path("dossier\u{202E}"),
+        ] {
+            assert_eq!(
+                chemin_local(std::path::Path::new("/r"), &d),
+                None,
+                "nom trompeur accepté : {:?} / {:?}",
+                d.relative_path,
+                d.name
+            );
+        }
+        // Ce qui est légitime reste accepté : accents, liant d'emoji (U+200D,
+        // ce qui soude une séquence emoji) et antiliant (U+200C, ce sur quoi
+        // repose l'écriture persane, « می‌رود » sans lui devient un autre mot).
+        for d in [
+            FileDescriptor::new("é\u{300}tat des lieux.txt"),
+            FileDescriptor::new("famille \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.png"),
+            FileDescriptor::new("می\u{200C}رود.txt"),
+        ] {
+            assert!(
+                chemin_local(std::path::Path::new("/r"), &d).is_some(),
+                "nom légitime refusé : {:?}",
+                d.name
+            );
+        }
+        // L'affichage voit le nom avant toute acceptation : il ne doit plus
+        // porter le caractère qui inverse la lecture.
+        let a = annonce(&[fichier("malware\u{202E}txt.exe", 4)]);
+        assert!(
+            !a[0].chemin.contains('\u{202E}'),
+            "le chemin annoncé garde le contrôle bidi : {:?}",
+            a[0].chemin
+        );
+        assert!(a[0].chemin.contains('\u{FFFD}'), "{:?}", a[0].chemin);
+    }
+
+    /// La réception écarte le fichier au nom trompeur sans rien écrire, et le
+    /// message d'erreur lui-même ne réordonne pas le bilan affiché.
+    ///
+    /// Trouvé par l'audit du 9 septembre 2026 : voir le test précédent.
+    #[tokio::test]
+    async fn un_nom_a_controle_bidirectionnel_n_est_pas_ecrit_sur_le_disque() {
+        let d = temp("bidi");
+        let piege = "malware\u{202E}txt.exe";
+        // Le second piège coupe en deux le bilan affiché : dans la webview,
+        // U+2028 est un saut de ligne forcé que le traitement des blancs ne
+        // replie pas, contrairement à « \n ».
+        let coupure = "bilan\u{2028}tronqué.txt";
+        let mut r = Reception::nouvelle(
+            d.clone(),
+            vec![
+                fichier(piege, 4),
+                fichier(coupure, 4),
+                fichier("bon.txt", 2),
+            ],
+            None,
+            1,
+        );
+        let reqs = r.demarrer().await;
+        // Les deux premiers fichiers sont écartés ; c'est « bon.txt » qui démarre.
+        assert_eq!(reqs.len(), 1);
+        let fin = r.recevoir(reqs[0].stream_id, Some(b"ok")).await;
+        assert!(fin.is_empty() && r.terminee());
+        assert_eq!(r.erreurs().len(), 2, "{:?}", r.erreurs());
+        assert!(
+            r.erreurs().iter().all(|e| e.contains("refusé")),
+            "{:?}",
+            r.erreurs()
+        );
+        assert!(
+            !r.erreurs()
+                .iter()
+                .any(|e| e.contains('\u{202E}') || e.contains('\u{2028}')),
+            "l'erreur affichée garde le caractère trompeur : {:?}",
+            r.erreurs()
+        );
+        assert!(!d.join(piege).exists() && !d.join(format!("{piege}.part")).exists());
+        assert!(!d.join(coupure).exists() && !d.join(format!("{coupure}.part")).exists());
+        assert_eq!(std::fs::read(d.join("bon.txt")).unwrap(), b"ok");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Un sous-dossier du dossier de réception qui est en réalité un lien
+    /// symbolique ne laisse pas le serveur distant écrire à l'autre bout du
+    /// lien, et un nom de fichier déjà occupé par un lien pendouillant n'est
+    /// pas suivi non plus.
+    ///
+    /// Trouvé par l'audit du 9 septembre 2026 : `chemin_local` ne vérifiait la
+    /// sortie du dossier que lexicalement (`starts_with` sur des composants
+    /// dont aucun n'est `..`, donc toujours vrai), sans jamais résoudre les
+    /// liens. Un `Téléchargements/partage -> ~/.ssh` préexistant (stow, synchro
+    /// nuagique, raccourci de l'utilisateur) suffisait à ce qu'un serveur
+    /// annonçant `relative_path = "partage"` et `name = "authorized_keys"`
+    /// fasse écrire un contenu de son choix hors du dossier de réception. Le
+    /// module RDPDR voisin (`disque.rs::resoudre`) s'en défendait déjà.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn un_lien_du_dossier_de_reception_n_est_pas_suivi() {
+        let d = temp("lien-reception");
+        let dehors = temp("lien-reception-dehors");
+        std::fs::write(dehors.join("authorized_keys"), b"cle de l utilisateur").unwrap();
+        // Le piège du scénario : un sous-dossier qui est un lien vers ailleurs.
+        std::os::unix::fs::symlink(&dehors, d.join("partage")).unwrap();
+        // Second piège : un lien pendouillant portant le nom d'un fichier
+        // annoncé. Sa cible n'existe pas encore, `exists()` le disait libre et
+        // la création d'un fichier vide écrivait donc au bout du lien.
+        std::os::unix::fs::symlink(dehors.join("neuf.txt"), d.join("neuf.txt")).unwrap();
+
+        let fichiers = vec![
+            fichier("authorized_keys", 4).with_relative_path("partage"),
+            fichier("neuf.txt", 0),
+            fichier("bon.txt", 2),
+        ];
+        let mut r = Reception::nouvelle(d.clone(), fichiers, None, 1);
+        jouer(&mut r, &[b"pwn!".to_vec(), vec![], b"ok".to_vec()]).await;
+        assert!(r.terminee());
+
+        // Rien n'a traversé les liens : au bout, on retrouve exactement ce que
+        // le poste y avait, et pas un fichier de plus (ni la cible reçue, ni un
+        // nom dérivé « (2) », ni un fichier de travail « .part »).
+        let mut restant: Vec<String> = std::fs::read_dir(&dehors)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        restant.sort();
+        assert_eq!(
+            restant,
+            ["authorized_keys"],
+            "le serveur a écrit hors du dossier de réception"
+        );
+        assert_eq!(
+            std::fs::read(dehors.join("authorized_keys")).unwrap(),
+            b"cle de l utilisateur"
+        );
+        assert_eq!(r.erreurs().len(), 1, "{:?}", r.erreurs());
+        assert!(r.erreurs()[0].contains("lien"), "{:?}", r.erreurs());
+
+        // Le lien pendouillant n'a pas été suivi : le lien est toujours là et
+        // le fichier reçu a pris un nom dérivé, à l'intérieur du dossier.
+        assert!(std::fs::symlink_metadata(d.join("neuf.txt"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(d.join("neuf (2).txt").exists());
+
+        // Un fichier sain de la même offre passe quand même.
+        assert_eq!(std::fs::read(d.join("bon.txt")).unwrap(), b"ok");
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&dehors);
+    }
+
+    /// Le dossier de réception manquant est créé, comme avant que la descente
+    /// composant par composant ne remplace `create_dir_all`. Écrit avec la
+    /// correction de l'audit du 9 septembre 2026 pour garder ce comportement.
+    #[tokio::test]
+    async fn un_dossier_de_reception_absent_est_cree() {
+        let d = temp("absent").join("sous").join("encore");
+        assert!(!d.exists());
+        let mut r = Reception::nouvelle(d.clone(), vec![fichier("f.txt", 2)], None, 1);
+        jouer(&mut r, &[b"ok".to_vec()]).await;
+        assert!(r.terminee() && r.erreurs().is_empty(), "{:?}", r.erreurs());
+        assert_eq!(std::fs::read(d.join("f.txt")).unwrap(), b"ok");
+        let _ = std::fs::remove_dir_all(d.parent().unwrap().parent().unwrap());
     }
 
     /// Un descripteur sans FD_FILESIZE (`file_size` à `None`) ne doit pas être

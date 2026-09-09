@@ -46,3 +46,11 @@ packaging/aur/avash/pkg/
 couverture/
 # Profils bruts de couverture écrits par un binaire instrumenté lancé hors du script
 *.profraw
+
+# Jetons chiffrés sops et aide d'identifiants git (voir CLAUDE.md, « Sécurité et
+# secrets »). Rien de tout cela n'a jamais été suivi, mais la règle vivait dans
+# .git/info/exclude, propre à un seul clone : sur une machine reconstruite ou
+# chez un contributeur, un `git add -A` n'aurait rencontré aucun garde-fou.
+# Trouvé par l'audit du 9 septembre 2026.
+secrets/
+.sops.yaml

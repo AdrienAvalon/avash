@@ -24,27 +24,29 @@ joue_garde() { # contenu_de_la_source_rust
   bac="$(mktemp -d)"
   mkdir -p "$bac/scripts" "$bac/web" \
     "$bac/crates/avash/src" "$bac/crates/avash-ui/src" "$bac/rdp-sidecar/src" \
-    "$bac/test-rdp-server/src" "$bac/test-vnc-server/src"
+    "$bac/test-rdp-server/src" "$bac/test-vnc-server/src" "$bac/fuzz/fuzz_targets"
   cp "$guard" "$bac/scripts/guard.sh"
   # Partie front neutre : la garde doit y rester verte.
   : > "$bac/web/index.html"
   printf 'export const x = 1;\n' > "$bac/web/cas.ts"
-  printf '%s\n' "$1" > "$bac/crates/avash/src/cas.rs"
+  # `${2:-crates/avash/src}` : le même cas peut être posé dans n'importe quel
+  # répertoire Rust surveillé, pour vérifier qu'aucun n'échappe à la garde.
+  printf '%s\n' "$1" > "$bac/${2:-crates/avash/src}/cas.rs"
   ( cd "$bac" && bash scripts/guard.sh >/dev/null 2>&1 ) && code=0 || code=$?
   rm -rf "$bac"
   return "$code"
 }
 
-doit_rougir() { # description  contenu
-  if joue_garde "$2"; then
+doit_rougir() { # description  contenu  [répertoire]
+  if joue_garde "$2" "${3:-}"; then
     echo "  ✗ garde restée verte alors qu'elle devait proscrire : $1" >&2
     echo "      contenu : $2" >&2
     echec=1
   fi
 }
 
-doit_verdir() { # description  contenu
-  if ! joue_garde "$2"; then
+doit_verdir() { # description  contenu  [répertoire]
+  if ! joue_garde "$2" "${3:-}"; then
     echo "  ✗ garde a rougi sur un cas légitime : $1" >&2
     echo "      contenu : $2" >&2
     echec=1
@@ -58,6 +60,13 @@ doit_rougir "contrôle négatif accentué"        '// CONTRÔLE NÉGATIF'
 doit_rougir "contrôle négatif avec tiret bas"  'let _ = x; // CONTROLE_NEGATIF'
 doit_rougir "dbg! oublié"                      'let y = dbg!(x + 1);'
 doit_rougir "todo! oublié"                     'fn f() { todo!() }'
+
+# Trouvé par l'audit du 9 septembre 2026 : `fuzz/fuzz_targets/` était le seul
+# code Rust du dépôt que rien ne vérifiait : ni la garde, ni clippy, ni check.sh,
+# le crate étant hors espace de travail. Un dbg!() laissé pendant le diagnostic
+# d'un plantage cargo-fuzz y serait passé inaperçu jusqu'au dépôt.
+doit_rougir "dbg! dans une cible de fuzzing" 'let y = dbg!(donnee);' 'fuzz/fuzz_targets'
+doit_rougir "contrôle négatif dans une cible de fuzzing" '// CONTROLE NEGATIF' 'fuzz/fuzz_targets'
 
 doit_verdir "code ordinaire"                   'fn f(a: u32) -> u32 { a + 1 }'
 doit_verdir "commentaire en prose (minuscules)" '// un contrôle négatif a été fait à la main, puis remis'

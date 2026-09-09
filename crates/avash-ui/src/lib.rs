@@ -28,13 +28,20 @@ pub fn run() {
         })
         .manage(rdp::RdpStore::default())
         .manage(commands::TransfertsStore::default())
-        // Trois commandes ont été retirées de cette liste : `run_command`,
-        // `snippet_vars` et `password_known`, qu'aucun appel du front
-        // n'utilisait. `run_command` était la plus fâcheuse — elle exécute une
-        // commande arbitraire sur n'importe quel alias, avec le mot de passe du
-        // trousseau chargé automatiquement. Une commande enregistrée est une
-        // surface offerte à la webview ; celle qui ne sert pas ne s'enregistre
-        // pas. Elles restent publiques dans le crate, donc testées.
+        // Quatre commandes ont été retirées de cette liste : `run_command`,
+        // `snippet_vars`, `password_known`, puis `enregistrement_en_cours`
+        // (audit du 9 septembre 2026), qu'aucun appel du front n'utilisait.
+        // `run_command` était la plus fâcheuse : elle exécute une commande
+        // arbitraire sur n'importe quel alias, avec le mot de passe du
+        // trousseau chargé automatiquement ; `enregistrement_en_cours` livrait
+        // le chemin absolu du fichier d'enregistrement de n'importe quel onglet
+        // à tout script de la webview. Une commande enregistrée est une surface
+        // offerte à la webview ; celle qui ne sert pas ne s'enregistre pas.
+        // Elles restent publiques dans le crate, donc testées, et la règle est
+        // désormais tenue par un contrôle
+        // (`scripts/tests/ipc-commandes-appelees-par-le-front.sh`) : la
+        // quatrième avait été oubliée parce que rien ne comparait la liste aux
+        // appels du front.
         .plugin(langue::plugin());
     // Serveur WebDriver embarqué : la suite bout en bout pilote l'application
     // par lui sous Windows (Edge WebDriver ne lance plus une application
@@ -69,7 +76,6 @@ pub fn run() {
             commands::import_apply,
             commands::enregistrement_demarrer,
             commands::enregistrement_arreter,
-            commands::enregistrement_en_cours,
             commands::enregistrements_lister,
             commands::enregistrements_ouvrir_dossier,
             commands::hosts_health,

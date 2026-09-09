@@ -4,7 +4,7 @@ use ironrdp::cliprdr::backend::CliprdrBackend;
 use ironrdp::cliprdr::pdu::{
     ClipboardFormat, ClipboardFormatId, ClipboardFormatName, ClipboardGeneralCapabilityFlags,
     FileContentsRequest, FileContentsResponse, FileDescriptor, FormatDataRequest,
-    FormatDataResponse, LockDataId, OwnedFormatDataResponse,
+    FormatDataResponse, LockDataId, OwnedFileContentsResponse, OwnedFormatDataResponse,
 };
 use ironrdp::core::IntoOwned;
 
@@ -38,6 +38,10 @@ pub(crate) enum ClipReq {
     ContenuRecu(u32, Option<Vec<u8>>),
     /// Le distant réclame un morceau d'un fichier que le poste lui a offert.
     ServirContenu(FileContentsRequest),
+    /// Même requête, mais le partage est coupé : la réponse d'erreur est déjà
+    /// prête, la boucle n'a plus qu'à l'écrire sur le canal CLIPRDR. Sans elle,
+    /// le distant attendait son `stream_id` jusqu'à son propre délai d'attente.
+    RefuserContenu(OwnedFileContentsResponse),
     /// Le distant verrouille (ou libère) la liste offerte : la boucle garde une
     /// copie de l'offre sous cet identifiant, servie même si l'offre change.
     Verrou(LockDataId),
@@ -165,9 +169,17 @@ impl CliprdrBackend for ClipBackend {
         }
     }
     fn on_file_contents_request(&mut self, req: FileContentsRequest) {
-        if self.partage_actif() {
-            let _ = self.tx.send(ClipReq::ServirContenu(req));
-        }
+        // Partage coupé : on répond quand même, par une erreur, comme le fait
+        // `on_format_data_request` pour le texte. Abandonner la requête laissait
+        // l'explorateur d'en face bloqué sur un `stream_id` sans réponse, le
+        // temps de son propre délai d'attente. Trouvé par l'audit du
+        // 9 septembre 2026 : bascule du partage en plein collage de fichiers.
+        let req = if self.partage_actif() {
+            ClipReq::ServirContenu(req)
+        } else {
+            ClipReq::RefuserContenu(FileContentsResponse::new_error(req.stream_id).into_owned())
+        };
+        let _ = self.tx.send(req);
     }
     fn on_file_contents_response(&mut self, resp: FileContentsResponse<'_>) {
         let donnees = (!resp.is_error()).then(|| resp.data().to_vec());
@@ -202,5 +214,66 @@ mod tests_formats {
             Some(ClipboardFormatId::new(0xC0A1))
         );
         assert_eq!(format_liste_de_fichiers(&formats[..1]), None);
+    }
+}
+
+#[cfg(test)]
+mod tests_partage_coupe {
+    use super::{ClipBackend, ClipReq, LocalClip};
+    use ironrdp::cliprdr::backend::CliprdrBackend;
+    use ironrdp::cliprdr::pdu::{FileContentsFlags, FileContentsRequest};
+
+    fn backend(partage: bool) -> (ClipBackend, tokio::sync::mpsc::UnboundedReceiver<ClipReq>) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let dos = ClipBackend {
+            local_text: LocalClip::default(),
+            tx,
+            partage: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(partage)),
+        };
+        (dos, rx)
+    }
+
+    fn requete(stream_id: u32) -> FileContentsRequest {
+        FileContentsRequest {
+            stream_id,
+            index: 0,
+            flags: FileContentsFlags::RANGE,
+            position: 0,
+            requested_size: 1024,
+            data_id: None,
+        }
+    }
+
+    /// Trouvé par l'audit du 9 septembre 2026 : couper le partage pendant que le
+    /// distant collait des fichiers faisait disparaître sa requête sans un mot.
+    /// L'explorateur d'en face attendait alors un `stream_id` qui n'arrivait
+    /// jamais, jusqu'à son propre délai d'attente, alors que le chemin texte
+    /// referme toujours l'échange par une `FormatDataResponse::new_error`.
+    #[test]
+    fn le_partage_coupe_refuse_le_contenu_au_lieu_de_se_taire() {
+        let (mut dos, mut rx) = backend(false);
+        dos.on_file_contents_request(requete(42));
+        let recu = rx
+            .try_recv()
+            .expect("le partage coupé doit répondre, pas abandonner la requête");
+        match recu {
+            ClipReq::RefuserContenu(resp) => {
+                assert!(resp.is_error(), "la réponse doit signaler l'échec");
+                assert_eq!(resp.stream_id(), 42, "sur le flux demandé");
+            }
+            autre => panic!("attendu un refus explicite, reçu {autre:?}"),
+        }
+    }
+
+    /// Le garde-fou ne doit pas non plus manger le cas normal : partage actif,
+    /// la requête part bien vers la boucle qui lit le fichier offert.
+    #[test]
+    fn le_partage_actif_transmet_toujours_la_requete_de_contenu() {
+        let (mut dos, mut rx) = backend(true);
+        dos.on_file_contents_request(requete(7));
+        match rx.try_recv().expect("la requête doit être transmise") {
+            ClipReq::ServirContenu(req) => assert_eq!(req.stream_id, 7),
+            autre => panic!("attendu ServirContenu, reçu {autre:?}"),
+        }
     }
 }

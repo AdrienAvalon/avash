@@ -68,4 +68,14 @@ export default tseslint.config(
       "@typescript-eslint/no-confusing-void-expression": "off",
     },
   },
+  {
+    // Neutraliser un texte avant de l'écrire dans un terminal suppose de
+    // décrire la classe des caractères de contrôle : c'est l'objet même de
+    // `nettoyerPourTerminal` et de son test. `no-control-regex` sert à repérer
+    // un ESC entré par accident dans une expression rationnelle ; ici il est
+    // voulu, et écrit `\u001f`, jamais en octet brut. Surcharge limitée à ces
+    // deux fichiers pour que la règle continue de mordre partout ailleurs.
+    files: ["filters.ts", "filters.test.ts"],
+    rules: { "no-control-regex": "off" },
+  },
 );

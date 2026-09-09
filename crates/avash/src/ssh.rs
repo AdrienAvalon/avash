@@ -86,9 +86,38 @@ pub fn chemin_known_hosts() -> Option<std::path::PathBuf> {
     crate::repertoire_personnel().map(|h| h.join(".ssh").join("known_hosts"))
 }
 
+/// `chemin` est-il un fichier ORDINAIRE, sur lequel une lecture rend la main ?
+///
+/// Trouvé par l'audit du 9 septembre 2026. Le code se défendait déjà du
+/// `known_hosts` remplacé par un répertoire, dont la lecture échoue tout de
+/// suite ; il ne voyait pas venir le fichier spécial BLOQUANT. Sous Unix,
+/// ouvrir un tube nommé en lecture seule suspend l'appelant dans le noyau tant
+/// qu'aucun écrivain ne se présente, ce qui n'arrive jamais tout seul. Or ces
+/// lectures partent de `check_server_key`, un handler async : le fil du runtime
+/// tokio qui menait la négociation SSH restait figé là, sans erreur, sans
+/// délai, l'onglet de connexion bloqué pour toujours.
+///
+/// `metadata` (un `stat`) n'ouvre rien et ne peut donc pas se bloquer. Tout ce
+/// qui n'est pas un fichier ordinaire est écarté sans être ouvert : tube,
+/// socket, périphérique. Un `known_hosts` pointé sur `/dev/null` (la manière
+/// des uns de désactiver la vérification d'hôte) tombe avec, et la connexion
+/// est refusée plutôt que toute clé acceptée : pour un client SSH c'est le bon
+/// sens du doute.
+fn est_fichier_ordinaire(chemin: &std::path::Path) -> bool {
+    std::fs::metadata(chemin).is_ok_and(|infos| infos.is_file())
+}
+
 /// L'hôte porte-t-il un marqueur OpenSSH que nous ne savons pas traiter ?
+///
+/// Rend `None` sur un `known_hosts` qui n'est pas un fichier ordinaire : c'est
+/// alors à `known_hosts_illisible` de refuser la connexion, avec le verdict qui
+/// nomme la cause. Lire ici valait, sur un tube nommé, un gel silencieux.
 fn marqueur_bloquant(hote: &str) -> Option<String> {
-    let contenu = std::fs::read_to_string(chemin_known_hosts()?).ok()?;
+    let chemin = chemin_known_hosts()?;
+    if !est_fichier_ordinaire(&chemin) {
+        return None;
+    }
+    let contenu = std::fs::read_to_string(chemin).ok()?;
     marqueur_bloquant_dans(&contenu, hote)
 }
 
@@ -162,6 +191,11 @@ fn fichier_present_mais_illisible(chemin: &std::path::Path) -> bool {
     if !chemin.exists() {
         return false;
     }
+    // Écarté AVANT toute ouverture : un tube nommé sans écrivain bloquerait le
+    // `File::open` ci-dessous pour toujours (audit du 9 septembre 2026).
+    if !est_fichier_ordinaire(chemin) {
+        return true;
+    }
     std::fs::File::open(chemin)
         .and_then(|mut f| {
             use std::io::Read as _;
@@ -188,6 +222,65 @@ pub const PASSWORD_REQUIRED: &str = "[AVASH_PASSWORD_REQUIRED]";
 /// Marqueur place en tete du message quand la cle d'hote a CHANGE. L'interface
 /// le reconnait pour proposer d'oublier l'ancienne cle et reessayer.
 pub const HOST_KEY_CHANGED: &str = "[AVASH_HOST_KEY_CHANGED]";
+
+/// Longueur maximale d'un texte venu du réseau dans un message d'erreur.
+const TEXTE_DISTANT_MAX: usize = 200;
+
+/// Neutralise un texte fourni par la machine d'en face avant de l'insérer dans
+/// un message destiné à l'interface.
+///
+/// Trouvé par l'audit du 9 septembre 2026. Les marqueurs `[AVASH_…]` sont un
+/// canal de commande entre le cœur et l'interface : `[AVASH_HOST_KEY_CHANGED]`
+/// déclenche la proposition d'OUBLIER une clé d'hôte mémorisée. Le texte d'une
+/// invite `keyboard-interactive` était recopié tel quel dans un message qui
+/// porte parfois ces marqueurs, si bien qu'un serveur hostile pouvait en écrire
+/// un lui-même et faire effacer la confiance TOFU d'un hôte sain. Le même texte
+/// atteignait le terminal xterm.js sans filtre, séquences ANSI comprises.
+///
+/// On coupe donc les trois vecteurs à l'entrée, une seule fois, plutôt que de
+/// se fier à chaque affichage en aval : caractères de contrôle, marqueurs
+/// internes, longueur.
+#[must_use]
+pub fn texte_distant_sur(brut: &str) -> String {
+    let sans_controle: String = brut
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let sans_marqueur = sans_marqueurs_internes(&sans_controle);
+    let propre = sans_marqueur.trim();
+    if propre.chars().count() <= TEXTE_DISTANT_MAX {
+        return propre.to_string();
+    }
+    let garde: String = propre.chars().take(TEXTE_DISTANT_MAX).collect();
+    format!("{}…", garde.trim_end())
+}
+
+/// Retire toute séquence `[AVASH_…]`, y compris mal formée : le préfixe seul
+/// suffirait à un futur marqueur, on ne le laisse jamais repasser.
+fn sans_marqueurs_internes(texte: &str) -> String {
+    const DEBUT: &str = "[AVASH_";
+    let mut sortie = String::with_capacity(texte.len());
+    let mut reste = texte;
+    while let Some(i) = reste.find(DEBUT) {
+        sortie.push_str(&reste[..i]);
+        let apres = &reste[i + DEBUT.len()..];
+        // Un marqueur bien formé se referme sur `]` après des majuscules ; on
+        // avale alors le tout. Sinon on n'avale que le préfixe, mais on avance
+        // toujours, pour ne jamais boucler.
+        reste = match apres.find(']') {
+            Some(j)
+                if apres[..j]
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c == '_') =>
+            {
+                &apres[j + 1..]
+            }
+            _ => apres,
+        };
+    }
+    sortie.push_str(reste);
+    sortie
+}
 
 #[derive(Clone)]
 pub struct ClientAuth {
@@ -943,6 +1036,18 @@ impl AvashSession {
         ))
     }
 
+    /// Le message d'échec qui nomme l'invite à laquelle Avash ne sait pas
+    /// répondre. Extrait de `authenticate_clavier` pour être testable : le
+    /// texte de l'invite vient du SERVEUR, donc d'une source non fiable.
+    fn message_prompt_non_supporte(prompt: &str) -> String {
+        format!(
+            "Le serveur demande « {} », qui n'est pas un mot de passe \
+             (la réponse s'afficherait en clair). Avash ne sait pas \
+             encore répondre à une authentification à plusieurs facteurs.",
+            texte_distant_sur(prompt)
+        )
+    }
+
     /// Authentification `keyboard-interactive`, en répondant le mot de passe.
     ///
     /// C'est le mécanisme par lequel un serveur délègue la conversation à PAM :
@@ -977,12 +1082,7 @@ impl AvashSession {
                     // Un tour sans question : le serveur se contente d'afficher
                     // quelque chose (bannière PAM). On répond une liste vide.
                     if let Some(clair) = prompts.iter().find(|p| p.echo) {
-                        return Err(anyhow!(
-                            "Le serveur demande « {} », qui n'est pas un mot de passe \
-                             (la réponse s'afficherait en clair). Avash ne sait pas \
-                             encore répondre à une authentification à plusieurs facteurs.",
-                            clair.prompt.trim()
-                        ));
+                        return Err(anyhow!(Self::message_prompt_non_supporte(&clair.prompt)));
                     }
                     let reponses = vec![password.to_owned(); prompts.len()];
                     reponse = session
@@ -1051,6 +1151,10 @@ impl AvashSession {
     /// compris) + exit code. Le mélange est voulu — la sonde d'OS
     /// (`osinfo::parse_probe_output`) doit d'ailleurs tolérer le bruit de
     /// stderr d'un shell distant.
+    ///
+    /// Un code de sortie n'est rendu que si le serveur en a envoyé un : une
+    /// commande tuée par un signal, ou un canal fermé sans statut, rend une
+    /// erreur et non un `0` de complaisance (audit du 9 septembre 2026).
     pub async fn run(&mut self, command: &str) -> Result<(String, u32)> {
         self.executer_borne(command, None).await
     }
@@ -1090,6 +1194,8 @@ impl AvashSession {
         channel.exec(false, command).await?;
         let mut stdout = String::new();
         let mut exit_code = 0u32;
+        let mut statut_recu = false;
+        let mut signal_recu: Option<String> = None;
 
         // ⚠️ Ne PAS casser sur Eof : dans le protocole SSH, `exit-status`
         // arrive APRES l'EOF. Casser sur Eof renverrait donc toujours 0, quel
@@ -1118,7 +1224,20 @@ impl AvashSession {
                             }
                             stdout.push_str(&String::from_utf8_lossy(data));
                         }
-                        russh::ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status,
+                        russh::ChannelMsg::ExitStatus { exit_status } => {
+                            exit_code = exit_status;
+                            statut_recu = true;
+                        }
+                        // Commande tuée par un signal côté distant : le serveur
+                        // envoie `exit-signal` et JAMAIS `exit-status`
+                        // (RFC 4254 §6.10). On note le signal et on sort par le
+                        // bas, pour fermer le canal comme toute autre sortie.
+                        russh::ChannelMsg::ExitSignal {
+                            ref signal_name, ..
+                        } => {
+                            signal_recu = Some(format!("{signal_name:?}"));
+                            break;
+                        }
                         russh::ChannelMsg::Close => break,
                         _ => {}
                     }
@@ -1144,8 +1263,27 @@ impl AvashSession {
         if expire {
             anyhow::bail!("La commande distante n'a pas répondu dans le délai imparti.");
         }
+        if let Some(signal) = signal_recu {
+            anyhow::bail!("La commande distante a été interrompue par un signal ({signal}).");
+        }
         if tronquee {
+            // Au plafond on coupe la lecture avant tout statut : on rend ce
+            // qu'on a lu, la mention de troncature disant déjà l'issue.
             stdout.push_str("\n[sortie tronquée : plafond de 1 Mio atteint]\n");
+            return Ok((stdout, exit_code));
+        }
+        // Trouvé par l'audit du 9 septembre 2026 : `exit_code` valait 0 par
+        // défaut et n'était renseigné que par `ExitStatus`. Un canal fermé sans
+        // statut rendait donc 0, « réussi », alors que la commande avait été
+        // tuée ou le lien coupé : `key_deploy` annonçait un déploiement de clé
+        // abouti, et l'exécution de commande affichait « [exit 0] ». Le
+        // correctif existait pour `run_avec_agent` depuis le 7 septembre, il
+        // n'avait jamais été porté sur cette boucle-ci.
+        if !statut_recu {
+            anyhow::bail!(
+                "La commande distante s'est terminée sans code de sortie \
+                 (canal fermé prématurément) : issue inconnue."
+            );
         }
         Ok((stdout, exit_code))
     }
@@ -1231,6 +1369,7 @@ impl AvashSession {
         let mut sortie = String::new();
         let mut exit_code = 0u32;
         let mut statut_recu = false;
+        let mut signal_recu: Option<String> = None;
         let mut tronquee = false;
         let mut annule = false;
         loop {
@@ -1252,12 +1391,15 @@ impl AvashSession {
                         }
                         // Commande tuée par un signal : pas de code de sortie, mais un
                         // échec bien réel — surtout pour une copie directe (scp).
+                        // Trouvé par l'audit du 9 septembre 2026 : ce bras rendait
+                        // l'erreur par un `return` direct, seul chemin de sortie à
+                        // sauter la fermeture du canal promise plus bas. On note le
+                        // signal et on sort par le bas, comme toutes les autres.
                         russh::ChannelMsg::ExitSignal {
                             ref signal_name, ..
                         } => {
-                            return Err(anyhow!(
-                                "La commande distante a été interrompue par un signal ({signal_name:?})."
-                            ));
+                            signal_recu = Some(format!("{signal_name:?}"));
+                            break;
                         }
                         russh::ChannelMsg::Close => break,
                         _ => {}
@@ -1283,6 +1425,11 @@ impl AvashSession {
         let _ = channel.close().await;
         if annule {
             anyhow::bail!(crate::sftp::ANNULE);
+        }
+        if let Some(signal) = signal_recu {
+            return Err(anyhow!(
+                "La commande distante a été interrompue par un signal ({signal})."
+            ));
         }
         if tronquee {
             sortie.push_str("\n[sortie tronquée : plafond de 1 Mio atteint]\n");
@@ -1683,8 +1830,98 @@ mod tests_marqueurs {
 }
 
 #[cfg(test)]
+mod tests_texte_distant {
+    use super::{AvashSession, HOST_KEY_CHANGED, PASSWORD_REQUIRED};
+
+    /// Trouvé par l'audit du 9 septembre 2026 (constat critique). Le texte de
+    /// l'invite `keyboard-interactive` vient du SERVEUR et était recopié tel
+    /// quel dans le message d'erreur. Or l'interface décide d'un geste lourd,
+    /// proposer d'OUBLIER la clé d'hôte mémorisée, sur la simple présence de
+    /// `[AVASH_HOST_KEY_CHANGED]` quelque part dans ce message (`isHostKeyChanged`,
+    /// web/filters.ts). Un serveur hostile n'avait donc qu'à poser une invite
+    /// contenant ce marqueur pour faire proposer à l'utilisateur d'effacer la
+    /// confiance TOFU d'un hôte dont la clé n'avait pas changé, et ouvrir la
+    /// voie à une interception silencieuse à la connexion suivante. Le marqueur
+    /// est un canal de contrôle entre le cœur et l'interface : rien qui vienne
+    /// du réseau ne doit pouvoir l'écrire.
+    #[test]
+    fn une_invite_hostile_ne_peut_pas_forger_un_marqueur() {
+        for hostile in [
+            "[AVASH_HOST_KEY_CHANGED] Le service a migré, confirmez pour continuer",
+            "Code : [AVASH_PASSWORD_REQUIRED]",
+            "a[AVASH_ANNULE]b",
+        ] {
+            let message = AvashSession::message_prompt_non_supporte(hostile);
+            assert!(
+                !message.contains(HOST_KEY_CHANGED),
+                "une invite du serveur ne doit pas pouvoir forger {HOST_KEY_CHANGED} : {message}"
+            );
+            assert!(
+                !message.contains(PASSWORD_REQUIRED),
+                "une invite du serveur ne doit pas pouvoir forger {PASSWORD_REQUIRED} : {message}"
+            );
+            assert!(
+                !message.contains("[AVASH_"),
+                "aucun marqueur interne ne doit survivre à l'invite : {message}"
+            );
+        }
+    }
+
+    /// Même invite hostile, autre effet : les séquences d'échappement ANSI
+    /// atteignaient le terminal xterm.js par le message d'erreur (le front
+    /// écrit `why` tel quel). Un serveur pouvait donc repeindre l'écran de
+    /// l'utilisateur, effacer l'alerte affichée au-dessus ou imiter une invite
+    /// locale. On neutralise à la source, là où le texte entre.
+    #[test]
+    fn une_invite_hostile_ne_peut_pas_piloter_le_terminal() {
+        let message = AvashSession::message_prompt_non_supporte(
+            "\u{1b}[2J\u{1b}[HConnexion sûre\u{7}\r\nsuite",
+        );
+        assert!(
+            !message.contains('\u{1b}'),
+            "aucun ESC ne doit subsister : {message:?}"
+        );
+        assert!(
+            !message.contains('\u{7}'),
+            "aucun BEL ne doit subsister : {message:?}"
+        );
+        assert!(
+            !message.contains('\n') && !message.contains('\r'),
+            "l'invite ne doit pas pouvoir insérer de nouvelle ligne : {message:?}"
+        );
+    }
+
+    /// Une invite immense noierait le message utile et le journal. On borne,
+    /// en le disant plutôt qu'en tronquant en silence.
+    #[test]
+    fn une_invite_demesuree_est_bornee() {
+        let message = AvashSession::message_prompt_non_supporte(&"A".repeat(10_000));
+        assert!(
+            message.len() < 600,
+            "le message doit rester lisible, longueur {}",
+            message.len()
+        );
+        assert!(
+            message.contains('…'),
+            "la troncature doit se voir : {message}"
+        );
+    }
+
+    /// Le cas normal ne doit pas être abîmé : une invite ordinaire reste
+    /// lisible, accents compris.
+    #[test]
+    fn une_invite_ordinaire_reste_intacte() {
+        let message = AvashSession::message_prompt_non_supporte("  Code à usage unique :  ");
+        assert!(
+            message.contains("« Code à usage unique : »"),
+            "l'invite normale doit rester telle quelle : {message}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests_known_hosts_illisible {
-    use super::{apprendre_cle_hote, fichier_present_mais_illisible};
+    use super::{apprendre_cle_hote, fichier_present_mais_illisible, marqueur_bloquant};
 
     /// Trouvé par l'audit du 7 septembre 2026 : quand `~/.ssh` (ou
     /// `known_hosts`) n'est pas inscriptible, `learn_known_hosts_path` échoue en
@@ -1789,6 +2026,76 @@ mod tests_known_hosts_illisible {
             fichier_present_mais_illisible(&p),
             "un répertoire à la place du fichier doit être signalé"
         );
+    }
+
+    /// Trouvé par l'audit du 9 septembre 2026 : le code défendait déjà le cas
+    /// « `known_hosts` remplacé par un répertoire » (l'ouverture réussit, la
+    /// lecture échoue tout de suite) mais pas celui d'un fichier spécial
+    /// BLOQUANT. Sous Unix, ouvrir un tube nommé en lecture seule sans écrivain
+    /// suspend l'appelant dans le noyau, indéfiniment : `check_server_key` étant
+    /// un handler async exécuté sur le runtime tokio, un `~/.ssh/known_hosts`
+    /// devenu tube (répertoire personnel abîmé, script de sauvegarde qui laisse
+    /// un `mkfifo` là) gelait l'onglet de connexion sans erreur ni délai.
+    ///
+    /// Le fil séparé n'est pas de la décoration : sans lui, l'échec serait un
+    /// test qui ne rend jamais la main plutôt qu'un test rouge.
+    #[test]
+    #[cfg(unix)]
+    fn un_tube_nomme_a_la_place_du_fichier_est_signale_sans_bloquer() {
+        let dir = crate::testutil::temp_home();
+        let p = dir.dir().join("known_hosts");
+        creer_tube_nomme(&p);
+        assert!(p.exists(), "le tube nommé doit être vu comme présent");
+        let cible = p.clone();
+        let verdict = sous_delai(move || fichier_present_mais_illisible(&cible))
+            .expect("l'inspection d'un known_hosts en tube nommé ne doit pas se bloquer");
+        assert!(
+            verdict,
+            "un tube nommé à la place du fichier doit être signalé comme illisible"
+        );
+    }
+
+    /// Même cas, par l'autre porte : `marqueur_bloquant` est appelé AVANT
+    /// `known_hosts_illisible` dans `check_server_key`, et lisait le fichier
+    /// entier. C'est donc lui qui se bloquait le premier sur un tube nommé.
+    /// Trouvé par l'audit du 9 septembre 2026.
+    #[test]
+    #[cfg(unix)]
+    fn la_recherche_de_marqueur_ne_se_bloque_pas_sur_un_tube_nomme() {
+        let dir = crate::testutil::temp_home();
+        let ssh = dir.dir().join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        creer_tube_nomme(&ssh.join("known_hosts"));
+        let marqueur = sous_delai(|| marqueur_bloquant("srv.exemple.com"))
+            .expect("la recherche de marqueur ne doit pas se bloquer sur un tube nommé");
+        assert_eq!(
+            marqueur, None,
+            "un fichier illisible ne porte aucun marqueur : c'est le garde \
+             « illisible » qui doit refuser la connexion, pas celui-ci"
+        );
+    }
+
+    /// Rend le résultat de `travail`, ou `None` s'il n'a pas rendu la main dans
+    /// le délai. Le fil resté bloqué est abandonné : le processus de test
+    /// l'emportera en sortant.
+    #[cfg(unix)]
+    fn sous_delai<T: Send + 'static>(travail: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let (envoi, reception) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = envoi.send(travail());
+        });
+        reception
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .ok()
+    }
+
+    /// `mkfifo(3)` : il n'y a pas de tube nommé dans la bibliothèque standard.
+    #[cfg(unix)]
+    fn creer_tube_nomme(chemin: &std::path::Path) {
+        use std::os::unix::ffi::OsStrExt as _;
+        let brut = std::ffi::CString::new(chemin.as_os_str().as_bytes()).unwrap();
+        let code = unsafe { libc::mkfifo(brut.as_ptr(), 0o600) };
+        assert_eq!(code, 0, "mkfifo a échoué sur {}", chemin.display());
     }
 }
 

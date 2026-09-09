@@ -295,8 +295,12 @@ et Node 22, construction hors ligne), le `.desktop`, et les sources figées
 régénérer à chaque version par `scripts/flathub-sources.sh` (générateurs de
 flatpak-builder-tools). L'identifiant Flathub suit le dépôt GitHub, parce que
 la vérification d'un identifiant `dev.avash.app` demanderait de prouver la
-propriété du domaine `avash.dev` ; celui de Tauri reste `dev.avash.app` et
-l'application l'enregistre sur D-Bus (`--own-name`). À chaque version :
+propriété du domaine `avash.dev` ; celui de Tauri reste `dev.avash.app`, mais
+il ne sort pas de la webview et des métadonnées AppStream. La fenêtre, elle,
+n'en porte rien : sans `enableGTKAppId` dans `tauri.conf.json`, tauri passe
+`app_id: None` à tao et le WM_CLASS vaut le nom du binaire, d'où
+`StartupWMClass=avash-ui` dans le `.desktop` des deux canaux (garde
+`scripts/tests/flathub-startupwmclass-classe-reelle.sh`). À chaque version :
 
 ```bash
 scripts/flathub-sources.sh                          # régénère les trois JSON
@@ -314,8 +318,10 @@ la PR de soumission (dépôt `flathub/flathub`, branche `new-pr`, le manifeste
 et les JSON à la racine) : `--socket=ssh-auth` (l'agent SSH du poste, avec ses
 clés, et prêté le temps d'une copie directe), `--filesystem=home`
 (`~/.ssh/config`, clés, `known_hosts`, transferts SFTP et fichiers RDP dans
-les deux sens), `--own-name=dev.avash.app` (l'identifiant que Tauri
-enregistre sur D-Bus), `--socket=pulseaudio` (le son du bureau distant, joué
+les deux sens), `--own-name=dev.avash.app` (accordé en croyant que Tauri
+enregistrait cet identifiant sur D-Bus, ce que l'audit du 9 septembre 2026 a
+démenti : à retirer dès qu'une construction en bac à sable réel confirme que
+la fenêtre s'ouvre sans lui), `--socket=pulseaudio` (le son du bureau distant, joué
 par la webview via WebKitGTK/GStreamer, couvre aussi PipeWire) et
 `--device=all` (les consoles série sur `/dev/ttyUSB*` et `/dev/ttyACM*` :
 aucune option `--device=` plus étroite ne cible les tty, permission large que
@@ -334,5 +340,6 @@ agent IA ouvre la PR ou y réponde**. Il faut aussi joindre une vidéo de
 l'application en Flatpak sous Linux. La branche est prête sur le fork
 (`AdrienAvalon/flathub`, branche `io.github.AdrienAvalon.avash`, quatre
 fichiers) : ouvrir la PR contre `new-pr`, coller le modèle, cocher chaque
-point avec la déclaration ci-dessus, joindre la vidéo, demander les trois
-exceptions.
+point avec la déclaration ci-dessus, joindre la vidéo, demander les cinq
+exceptions énumérées plus haut, sans oublier les deux plus larges
+(`--socket=pulseaudio` et `--device=all`).

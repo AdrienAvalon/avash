@@ -157,6 +157,73 @@ describe("nettoyerMarqueurs", () => {
   });
 });
 
+import { nettoyerPourTerminal } from "./filters";
+
+describe("nettoyerPourTerminal", () => {
+  // Trouvé par l'audit du 9 septembre 2026 : `markClosed` écrivait le message
+  // d'échec dans xterm.js tel quel. Ce message peut porter du texte venu du
+  // serveur (invite keyboard-interactive) : un serveur hostile repeignait donc
+  // l'écran, effaçait l'alerte affichée juste au-dessus, ou imitait une invite
+  // locale pour réclamer un mot de passe. Les échappements sont écrits `\x1b`
+  // et non en octets bruts : un ESC littéral dans un fichier source ne survit
+  // pas à un copier-coller ni à un formateur.
+  it("retire les séquences d'échappement ANSI", () => {
+    expect(nettoyerPourTerminal("\x1b[2J\x1b[HConnexion sûre")).toBe("[2J [HConnexion sûre");
+    expect(nettoyerPourTerminal("avant\x1b[31mrouge")).toBe("avant [31mrouge");
+  });
+  it("retire les autres caractères de contrôle, cloche et C1 compris", () => {
+    expect(nettoyerPourTerminal("ding\x07dong")).toBe("ding dong");
+    expect(nettoyerPourTerminal("a\x00b")).toBe("a b");
+    expect(nettoyerPourTerminal("a\u009bb")).toBe("a b");
+  });
+  it("empêche le texte distant de fabriquer ses propres lignes", () => {
+    expect(nettoyerPourTerminal("ligne1\r\nligne2")).toBe("ligne1 ligne2");
+  });
+  it("laisse intact un message ordinaire, accents et ponctuation compris", () => {
+    expect(nettoyerPourTerminal("Échec de la connexion : hôte injoignable (10.0.0.7:22)"))
+      .toBe("Échec de la connexion : hôte injoignable (10.0.0.7:22)");
+  });
+});
+
+import { etiquetteHote } from "./filters";
+
+describe("etiquetteHote", () => {
+  // Trouvé par la relecture de l'audit du 9 septembre 2026. Le durcissement
+  // initial ne protégeait que `avash list` (le CLI v0.1), alors que le produit
+  // réel est le Tauri : `connectByAlias` compose la MÊME chaîne
+  // « utilisateur@hôte:port » à partir des champs de ~/.ssh/config, puis
+  // l'écrit dans xterm.js et la met dans la modale de mot de passe. Un
+  // `HostName srv\x1b]0;PWNED\x07` posé par un autre outil rejouait donc sa
+  // séquence à chaque ouverture d'onglet : titre de fenêtre réécrit,
+  // presse-papiers manipulé par OSC 52. L'étiquette est composée ici, une
+  // seule fois, pour que ce nettoyage ne puisse plus être oublié.
+  const hote = (p: Partial<Host>): Host => ({
+    alias: "prod", hostname: null, user: null, port: null,
+    identity_file: null, proxy_jump: null, tags: [], folder: "", ...p,
+  });
+
+  it("neutralise une séquence ANSI venue de ~/.ssh/config", () => {
+    const etiquette = etiquetteHote(hote({ hostname: "srv\x1b]0;PWNED\x07", user: "root", port: 2222 }));
+    expect(/[\u0000-\u001f\u007f-\u009f]/.test(etiquette)).toBe(false);
+    // On neutralise, on ne censure pas : l'utilisateur doit voir que le champ
+    // est piégé plutôt que de lire une étiquette amputée.
+    expect(etiquette).toContain("PWNED");
+  });
+
+  it("neutralise aussi l'alias, l'utilisateur et un C1", () => {
+    expect(etiquetteHote(hote({ alias: "prod\x1b[2J", user: "root\x7f" })))
+      .toBe("root @prod [2J:22");
+    expect(etiquetteHote(hote({ hostname: "srv\u009b" }))).toBe("?@srv :22");
+  });
+
+  it("laisse intacte l'étiquette d'un hôte ordinaire", () => {
+    expect(etiquetteHote(hote({ hostname: "prod.exemple.com", user: "adrien", port: 2222 })))
+      .toBe("adrien@prod.exemple.com:2222");
+    // Sans utilisateur ni port : « ? » et 22, comme avant le durcissement.
+    expect(etiquetteHote(hote({ alias: "relais-été" }))).toBe("?@relais-été:22");
+  });
+});
+
 describe("stripHtml", () => {
   it("retire les caractères d'injection", () => {
     expect(stripHtml("<img onerror=x>")).toBe("img onerror=x");

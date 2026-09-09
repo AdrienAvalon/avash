@@ -7,6 +7,13 @@
 # autres cibles ; il a fallu les rejouer à la main pour savoir qu'elles étaient
 # saines. Une campagne doit dire l'état de toutes les cibles en une passe.
 #
+# Trouvé par l'audit du 9 septembre 2026 : la liste des cibles était écrite en
+# dur dans fuzz.sh et avait pris du retard sur `fuzz/Cargo.toml`. Deux cibles
+# sur neuf (`glob_match_pur`, `osinfo`) n'étaient donc jamais fuzzées, seulement
+# compilées sur les PR : un parseur couvert sur le papier, jamais secoué en
+# fait. Ce test compte désormais les cibles DÉCLARÉES et exige qu'elles soient
+# toutes jouées : ajouter une cible sans la jouer fait rougir la chaîne.
+#
 # On ne lance pas cargo-fuzz (nightly, minutes) : un faux `cargo` posé en tête du
 # PATH échoue sur deux cibles et réussit sur les autres. Contre l'ancien script
 # (sortie au premier échec), une seule cible aurait été jouée et une seule
@@ -20,8 +27,25 @@ bac="$(mktemp -d)"
 trap 'rm -rf "$bac"' EXIT
 mkdir -p "$bac/fuzz" "$bac/bin"
 cp "$script" "$bac/fuzz/fuzz.sh"
-for c in config_ssh putty_session reg_query mobaxterm_ini asciicast clearcodec vnc_serveur; do
+cp "$PWD/fuzz/Cargo.toml" "$bac/fuzz/Cargo.toml"
+
+# Source de vérité : les cibles déclarées dans fuzz/Cargo.toml.
+mapfile -t DECLAREES < <(sed -n '/^\[\[bin\]\]/,/^$/ s/^name = "\(.*\)"/\1/p' fuzz/Cargo.toml)
+ATTENDU="${#DECLAREES[@]}"
+if [ "$ATTENDU" -lt 2 ]; then
+  echo "✗ fuzz-continue-toutes-cibles : aucune cible lue dans fuzz/Cargo.toml" >&2
+  exit 1
+fi
+for c in "${DECLAREES[@]}"; do
   mkdir -p "$bac/fuzz/seeds/$c"
+done
+
+# Chaque cible déclarée a-t-elle bien ses graines commitées ?
+for c in "${DECLAREES[@]}"; do
+  if [ ! -d "fuzz/seeds/$c" ]; then
+    echo "  ✗ la cible « $c » est déclarée mais n'a aucune graine dans fuzz/seeds/" >&2
+    echec=1
+  fi
 done
 
 # Faux cargo : `cargo +nightly fuzz run <cible> …` ; $4 est la cible.
@@ -38,17 +62,26 @@ EOF
   chmod +x "$bac/bin/cargo"
 }
 
-# Cas 1 : deux cibles sur sept plantent, à des positions différentes.
-faux_cargo "config_ssh asciicast"
+# Cas 1 : deux cibles plantent, à des positions différentes (la première
+# déclarée et une du milieu), pour prouver que le script ne s'arrête pas.
+premiere="${DECLAREES[0]}"
+milieu="${DECLAREES[$((ATTENDU / 2))]}"
+faux_cargo "$premiere $milieu"
 sortie="$(cd "$bac" && PATH="$bac/bin:$PATH" DUREE=1 bash fuzz/fuzz.sh 2>&1)" && code=0 || code=$?
 if [ "$code" -eq 0 ]; then
   echo "  ✗ fuzz.sh est resté vert alors que deux cibles plantaient" >&2; echec=1
 fi
 jouees="$(grep -c '^▸ fuzz : ' <<<"$sortie" || true)"
-if [ "$jouees" -ne 7 ]; then
-  echo "  ✗ $jouees cible(s) jouée(s) sur 7 : le script s'arrête avant la fin" >&2; echec=1
+if [ "$jouees" -ne "$ATTENDU" ]; then
+  echo "  ✗ $jouees cible(s) jouée(s) sur $ATTENDU déclarée(s) dans fuzz/Cargo.toml" >&2; echec=1
 fi
-if ! grep -qE '2 cible\(s\) sur 7 en échec : config_ssh asciicast' <<<"$sortie"; then
+# Chaque cible déclarée doit apparaître nommément dans la campagne.
+for c in "${DECLAREES[@]}"; do
+  if ! grep -q "^▸ fuzz : $c " <<<"$sortie"; then
+    echo "  ✗ la cible « $c » est déclarée mais n'est jamais jouée" >&2; echec=1
+  fi
+done
+if ! grep -qE "2 cible\(s\) sur $ATTENDU en échec : $premiere $milieu" <<<"$sortie"; then
   echo "  ✗ le bilan final ne nomme pas les deux cibles tombées" >&2
   echo "$sortie" | tail -3 | sed 's/^/      /' >&2; echec=1
 fi
@@ -56,7 +89,7 @@ fi
 # Cas 2 : rien ne plante → vert, sept cibles.
 faux_cargo ""
 sortie="$(cd "$bac" && PATH="$bac/bin:$PATH" DUREE=1 bash fuzz/fuzz.sh 2>&1)" && code=0 || code=$?
-if [ "$code" -ne 0 ] || ! grep -q '✓ fuzz : 7 cibles' <<<"$sortie"; then
+if [ "$code" -ne 0 ] || ! grep -q "✓ fuzz : $ATTENDU cibles" <<<"$sortie"; then
   echo "  ✗ fuzz.sh doit rester vert quand aucune cible ne plante" >&2; echec=1
 fi
 
@@ -64,4 +97,4 @@ if [ "$echec" -ne 0 ]; then
   echo "✗ fuzz-continue-toutes-cibles : fuzz.sh ne joue pas toutes les cibles." >&2
   exit 1
 fi
-echo "✓ fuzz-continue-toutes-cibles : les 7 cibles sont jouées, les échecs nommés à la fin"
+echo "✓ fuzz-continue-toutes-cibles : les $ATTENDU cibles déclarées sont jouées, les échecs nommés à la fin"

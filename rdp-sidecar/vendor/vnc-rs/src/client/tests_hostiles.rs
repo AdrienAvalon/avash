@@ -23,8 +23,8 @@ async fn serveur(script: &[u8]) -> DuplexStream {
 }
 
 /// Même chose, mais le serveur lit `a_lire` octets du client puis raccroche :
-/// une raison d'échec se lit jusqu'à la fin du flux, et le client doit avoir
-/// pu écrire ses propres messages avant que le tuyau ne casse.
+/// le client doit avoir pu écrire ses propres messages avant que le tuyau ne
+/// casse, et une fin de flux au milieu d'une raison d'échec reste un refus.
 fn serveur_qui_raccroche(script: Vec<u8>, a_lire: usize) -> DuplexStream {
     let (client, mut serveur) = duplex(1 << 16);
     tokio::spawn(async move {
@@ -182,7 +182,7 @@ async fn un_serveur_sans_type_de_securite_donne_une_erreur() {
     s.extend_from_slice(&4u32.to_be_bytes());
     s.extend_from_slice(b"nope");
     // Le serveur lit la version du client (12 octets) puis raccroche : la
-    // raison se lit jusqu'à la fin du flux.
+    // raison vaut les quatre octets annoncés, la fermeture n'y change rien.
     let flux = serveur_qui_raccroche(s, 12);
     let Err(e) = connecteur(flux).try_start().await else {
         panic!("un serveur sans type de sécurité a été accepté")
@@ -247,7 +247,7 @@ async fn un_resultat_d_authentification_inconnu_est_un_echec() {
     s.extend_from_slice(&3u32.to_be_bytes());
     s.extend_from_slice(b"bad");
     // Version (12), choix du type (1), réponse au défi (16) : puis le serveur
-    // raccroche et la raison se lit jusqu'à la fin du flux.
+    // raccroche, après une raison qui vaut les trois octets annoncés.
     let flux = serveur_qui_raccroche(s, 12 + 1 + 16);
     let Err(e) = connecteur(flux).try_start().await else {
         panic!("un résultat d'authentification à 7 a été pris pour un succès")
@@ -663,5 +663,150 @@ async fn vencrypt_refuse_une_version_anterieure_a_0_2() {
     assert!(
         msg.contains("0.1") && msg.contains("non prise en charge"),
         "l'erreur doit nommer la version VeNCrypt refusée : {msg}"
+    );
+}
+
+/// Un serveur qui refuse le mot de passe puis NE RACCROCHE PAS : la 3.8
+/// (§7.1.2) fait suivre le résultat d'une longueur (u32) et d'autant d'octets
+/// de raison, mais le client lisait cette longueur pour la jeter
+/// (`read_u32().await.is_ok()`) et ramassait la suite avec `read_to_string`,
+/// qui n'a d'autre fin que la fermeture du flux. Le sidecar restait alors en
+/// lecture jusqu'au délai de connexion (25 s, posé par `rdp-sidecar/src/vnc.rs`)
+/// en empilant en mémoire tout ce que le serveur déversait (plusieurs
+/// centaines de mégaoctets sur un lien local) pour un simple mot de passe
+/// refusé. La raison annoncée doit être lue pour ce qu'elle annonce, rien de
+/// plus, et le refus rendu tout de suite.
+///
+/// Trouvé par l'audit du 9 septembre 2026 : les tests de cette voie ne
+/// s'appuyaient que sur des serveurs qui raccrochent volontairement
+/// (`serveur_qui_raccroche`), jamais sur un serveur qui garde la connexion
+/// ouverte : l'angle mort exact de `read_to_string`.
+#[tokio::test]
+async fn une_raison_de_refus_ne_se_lit_pas_au_dela_de_la_longueur_annoncee() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 2]); // un seul type : VncAuth
+    s.extend_from_slice(&[0x5a; 16]); // défi
+    s.extend_from_slice(&1u32.to_be_bytes()); // AuthResult : refusé
+    s.extend_from_slice(&3u32.to_be_bytes()); // reason-length
+    s.extend_from_slice(b"bad");
+    // ...puis le serveur déverse des octets sans jamais fermer : ils ne font
+    // pas partie de la raison et ne doivent pas être lus.
+    s.extend_from_slice(&[b'Z'; 8192]);
+    let flux = serveur(&s).await;
+    let issue = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        connecteur(flux).try_start(),
+    )
+    .await;
+    let Ok(issue) = issue else {
+        panic!(
+            "le client lit encore la raison d'échec : un serveur qui ne raccroche pas le tient \
+                jusqu'au délai de connexion"
+        )
+    };
+    let Err(e) = issue else {
+        panic!("un mot de passe refusé a été pris pour un succès")
+    };
+    assert!(
+        matches!(e, crate::VncError::WrongPassword),
+        "un refus d'authentification doit se présenter comme tel : {e}"
+    );
+}
+
+/// Même défaut sur la voie VeNCrypt (authentification VNC tunnelée sous TLS) :
+/// le premier contact TOFU accepte un certificat encore inconnu, et le serveur
+/// d'en face peut alors refuser le mot de passe puis retenir le sidecar en
+/// lecture sans fin. Trouvé par l'audit du 9 septembre 2026.
+#[tokio::test]
+async fn une_raison_de_refus_vencrypt_ne_se_lit_pas_au_dela_de_la_longueur_annoncee() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 19]); // VeNCrypt
+    s.extend_from_slice(&[0, 2]); // version 0.2
+    s.push(0); // ack de version
+    s.push(1); // un sous-type
+    s.extend_from_slice(&261u32.to_be_bytes()); // X509Vnc
+    s.push(1); // ack du sous-type choisi
+               // TLS (identité), puis défi VNC et refus.
+    s.extend_from_slice(&[0x5a; 16]); // défi
+    s.extend_from_slice(&1u32.to_be_bytes()); // AuthResult : refusé
+    s.extend_from_slice(&5u32.to_be_bytes()); // reason-length
+    s.extend_from_slice(b"refus");
+    s.extend_from_slice(&[b'Z'; 8192]); // et le flux reste ouvert
+    let flux = serveur(&s).await;
+    let issue = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        connecteur_avec_tls(flux).try_start(),
+    )
+    .await;
+    let Ok(issue) = issue else {
+        panic!("le client lit encore la raison d'échec VeNCrypt jusqu'à la fin du flux")
+    };
+    let Err(e) = issue else {
+        panic!("un mot de passe refusé sous VeNCrypt a été pris pour un succès")
+    };
+    assert!(
+        matches!(e, crate::VncError::WrongPassword),
+        "un refus d'authentification doit se présenter comme tel : {e}"
+    );
+}
+
+/// La raison d'un refus de connexion (aucun type de sécurité annoncé, §7.1.2)
+/// se lisait de la même façon, jusqu'à la fin du flux : c'est le même défaut,
+/// avant même que le mot de passe soit demandé. Trouvé par l'audit du
+/// 9 septembre 2026.
+#[tokio::test]
+async fn une_raison_de_refus_de_connexion_ne_se_lit_pas_au_dela_de_la_longueur_annoncee() {
+    let mut s = VERSION.to_vec();
+    s.push(0); // aucun type de sécurité : suivi d'une raison
+    s.extend_from_slice(&4u32.to_be_bytes());
+    s.extend_from_slice(b"nope");
+    s.extend_from_slice(&[b'Z'; 8192]); // et le flux reste ouvert
+    let flux = serveur(&s).await;
+    let issue = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        connecteur(flux).try_start(),
+    )
+    .await;
+    let Ok(issue) = issue else {
+        panic!("le client lit encore la raison du refus de connexion jusqu'à la fin du flux")
+    };
+    let Err(e) = issue else {
+        panic!("un serveur sans type de sécurité a été accepté")
+    };
+    let msg = e.to_string();
+    assert!(
+        msg.contains("nope") && !msg.contains('Z'),
+        "la raison doit valoir exactement les quatre octets annoncés : {msg}"
+    );
+}
+
+/// Une longueur de raison démesurée (0xFFFFFFFF) ne doit ni faire allouer, ni
+/// faire lire au-delà d'une borne : le client lit ce qu'il accepte de lire et
+/// rend le refus. Même principe que le nom de bureau de ServerInit, borné par
+/// l'audit du 7 septembre 2026 ; ce chemin d'authentification y avait échappé.
+/// Trouvé par l'audit du 9 septembre 2026.
+#[tokio::test]
+async fn une_raison_de_refus_demesuree_est_bornee() {
+    let mut s = VERSION.to_vec();
+    s.extend_from_slice(&[1, 2]); // VncAuth
+    s.extend_from_slice(&[0x5a; 16]); // défi
+    s.extend_from_slice(&1u32.to_be_bytes()); // AuthResult : refusé
+    s.extend_from_slice(&u32::MAX.to_be_bytes()); // reason-length : 4 Gio annoncés
+    s.extend_from_slice(&[b'Z'; 8192]); // de quoi rassasier la borne, sans fermer
+    let flux = serveur(&s).await;
+    let issue = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        connecteur(flux).try_start(),
+    )
+    .await;
+    let Ok(issue) = issue else {
+        panic!("une raison de 0xFFFFFFFF octets tient encore le client jusqu'au délai")
+    };
+    let Err(e) = issue else {
+        panic!("un mot de passe refusé a été pris pour un succès")
+    };
+    assert!(
+        matches!(e, crate::VncError::WrongPassword),
+        "un refus d'authentification doit se présenter comme tel : {e}"
     );
 }

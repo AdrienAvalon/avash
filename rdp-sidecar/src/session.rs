@@ -746,6 +746,17 @@ pub async fn executer(
                             send_svc!(msgs);
                         }
                     }
+                    ClipReq::RefuserContenu(reponse) => {
+                        // Le partage a été coupé entre-temps : le dos CLIPRDR a
+                        // préparé le refus, on le fait juste partir pour que le
+                        // distant ne reste pas suspendu à son flux.
+                        let msgs = active
+                            .get_svc_processor_mut::<CliprdrClient>()
+                            .and_then(|c| c.submit_file_contents(reponse).ok());
+                        if let Some(msgs) = msgs {
+                            send_svc!(msgs);
+                        }
+                    }
                     ClipReq::Verrou(id) => {
                         // Au plus cent copies : un distant qui verrouille sans fin
                         // ne fait pas grossir la mémoire.

@@ -1109,27 +1109,21 @@ impl SftpHandle {
         Ok(fait)
     }
 
-    /// Copie un fichier de ce serveur vers un autre, sans rien écrire sur le
-    /// poste : les octets ne font que le traverser, par bandes, chaque bande
-    /// avec son descripteur de lecture ici et son descripteur d'écriture
-    /// là-bas.
-    pub async fn relayer_vers(
+    /// Ce qu'il faut vérifier avant qu'un seul octet ne parte en relais, et le
+    /// partiel qui recevra la copie chez la cible (avec la taille de la source).
+    async fn preparer_relais(
         &self,
         remote: &str,
         cible: &SftpHandle,
         remote_cible: &str,
         refuser_ecrasement: bool,
-        annulation: Option<&Annulation>,
-        mut progress: impl FnMut(u64, u64),
-    ) -> Result<u64> {
-        use russh_sftp::protocol::OpenFlags;
-        use tokio::io::AsyncSeekExt as _;
+    ) -> Result<(u64, String)> {
         // Trouvé par l'audit du 7 septembre 2026 : `metadata` échouant (lien
         // symbolique cassé, fichier disparu) donnait `total = 0` ; la cible était
         // alors créée vide et la copie annoncée réussie. Et une source lisible par
         // `stat` mais pas par `open` (droits root) tronquait une cible existante
         // avant d'échouer. On lit d'abord les attributs — erreur propagée — et
-        // l'on s'assure que la source S'OUVRE, AVANT de créer ou tronquer la cible.
+        // l'on s'assure que la source S'OUVRE, sans rien créer chez la cible.
         let total = self
             .sftp
             .metadata(remote)
@@ -1144,6 +1138,7 @@ impl SftpHandle {
                 .with_context(|| format!("Ouverture distant {remote}"))?;
             drop(sonde); // les bandes rouvrent leur propre descripteur
         }
+        let partiel = format!("{remote_cible}.part");
         // Trouvé par l'audit du 7 septembre 2026 : `create(remote_cible)` TRONQUE
         // un fichier du même nom chez la cible — une copie de fichier vers un
         // autre hôte écrasait sans un mot. On refuse d'écraser une cible qui
@@ -1154,17 +1149,87 @@ impl SftpHandle {
                 "Le fichier « {remote_cible} » existe déjà chez la cible : copie refusée pour ne pas l'écraser."
             );
         }
+        // Relecture du 9 septembre 2026 : depuis que le relais passe par un
+        // partiel, le même garde-fou doit le couvrir. Le `create` ci-dessous
+        // TRONQUE le partiel comme n'importe quel fichier, et un `.part` n'est
+        // pas un déchet : quand la promotion échoue, on le conserve exprès parce
+        // qu'il porte les seuls octets complets. Une copie qui promet de ne rien
+        // écraser ne peut pas effacer cela au passage.
+        if refuser_ecrasement && cible.sftp.metadata(&partiel).await.is_ok() {
+            anyhow::bail!(
+                "Une copie interrompue de « {remote_cible} » attend encore chez la cible, dans « {partiel} » : copie refusée pour ne pas l'écraser."
+            );
+        }
+        // Trouvé par l'audit du 9 septembre 2026 : la cible était créée, donc
+        // TRONQUÉE, avant que les bandes ne partent, et rien n'était nettoyé si
+        // l'une d'elles échouait (annulation d'un clic, coupure réseau). Un
+        // relais interrompu laissait chez le second serveur un fragment troué
+        // (les bandes écrivent à des décalages disjoints) à la place du fichier
+        // valide, sans carte de reprise pour le rattraper ni rien pour signaler
+        // la perte, d'autant plus fâcheux que la copie de DOSSIER fusionne
+        // (`refuser_ecrasement = false`) et passe donc là-dessus à chaque
+        // resynchro. On écrit désormais dans un partiel qu'on ne promeut qu'une
+        // fois tous les octets arrivés.
         cible
             .sftp
-            .create(remote_cible)
+            .create(&partiel)
             .await
-            .with_context(|| format!("Création distant {remote_cible}"))?
+            .with_context(|| format!("Création distant {partiel}"))?
             .shutdown()
             .await
             .context("Fermeture distante")?;
+        Ok((total, partiel))
+    }
+
+    /// Promeut un partiel distant sur son nom définitif, chez le serveur qui le
+    /// porte. `SSH_FXP_RENAME` refuse une cible existante sur la plupart des
+    /// serveurs (OpenSSH), là où un `rename` POSIX remplace sans broncher : on
+    /// tente donc d'abord le renommage (atomique quand le serveur le veut
+    /// bien, sans le moindre instant où le fichier manque) et l'on n'écarte
+    /// celui en place qu'après son refus. Si le renommage échoue quand même,
+    /// on dit où sont les octets plutôt que de les jeter : ils sont complets
+    /// dans le partiel.
+    async fn promouvoir_distant(&self, partiel: &str, cible: &str) -> Result<()> {
+        if self.sftp.metadata(cible).await.is_ok() {
+            if self.sftp.rename(partiel, cible).await.is_ok() {
+                return Ok(());
+            }
+            self.sftp.remove_file(cible).await.with_context(|| {
+                format!("Remplacement de {cible} (la copie complète est dans {partiel})")
+            })?;
+        }
+        self.sftp.rename(partiel, cible).await.with_context(|| {
+            format!("Renommage vers {cible} (la copie complète est dans {partiel})")
+        })
+    }
+
+    /// Copie un fichier de ce serveur vers un autre, sans rien écrire sur le
+    /// poste : les octets ne font que le traverser, par bandes, chaque bande
+    /// avec son descripteur de lecture ici et son descripteur d'écriture
+    /// là-bas.
+    ///
+    /// Comme le téléchargement, la copie passe par un `.part` chez la cible :
+    /// interrompue, elle ne laisse rien, et le fichier qu'elle remplace reste
+    /// entier jusqu'au dernier octet reçu.
+    pub async fn relayer_vers(
+        &self,
+        remote: &str,
+        cible: &SftpHandle,
+        remote_cible: &str,
+        refuser_ecrasement: bool,
+        annulation: Option<&Annulation>,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<u64> {
+        use russh_sftp::protocol::OpenFlags;
+        use tokio::io::AsyncSeekExt as _;
+        let (total, partiel) = self
+            .preparer_relais(remote, cible, remote_cible, refuser_ecrasement)
+            .await?;
         if total == 0 {
+            cible.promouvoir_distant(&partiel, remote_cible).await?;
             return Ok(0);
         }
+        let partiel_ref: &str = &partiel;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
         let travaux: Vec<_> = bandes(total)
             .into_iter()
@@ -1182,9 +1247,9 @@ impl SftpHandle {
                         .context("Positionnement source")?;
                     let mut dest = cible
                         .sftp
-                        .open_with_flags(remote_cible, OpenFlags::WRITE)
+                        .open_with_flags(partiel_ref, OpenFlags::WRITE)
                         .await
-                        .with_context(|| format!("Ouverture distant {remote_cible}"))?;
+                        .with_context(|| format!("Ouverture distant {partiel_ref}"))?;
                     dest.seek(std::io::SeekFrom::Start(debut))
                         .await
                         .context("Positionnement cible")?;
@@ -1219,13 +1284,20 @@ impl SftpHandle {
             fait
         };
         let (issues, fait) = tokio::join!(futures::future::join_all(travaux), annonces);
-        for issue in issues {
-            issue?;
+        let souci = issues.into_iter().find_map(Result::err).or_else(|| {
+            (fait != total).then(|| {
+                anyhow!(
+                    "Copie incomplète : {fait} octets sur {total} (le fichier source a changé pendant la copie)."
+                )
+            })
+        });
+        if let Some(e) = souci {
+            // Rien ne doit rester qui puisse se faire passer pour une copie
+            // complète, ni encombrer la cible : le partiel s'en va avec l'échec.
+            let _ = cible.sftp.remove_file(&partiel).await;
+            return Err(e);
         }
-        anyhow::ensure!(
-            fait == total,
-            "Copie incomplète : {fait} octets sur {total} (le fichier source a changé pendant la copie)."
-        );
+        cible.promouvoir_distant(&partiel, remote_cible).await?;
         Ok(fait)
     }
 
@@ -1263,7 +1335,9 @@ impl SftpHandle {
                     &joindre(remote_dir, &e.chemin),
                     cible,
                     &chez_cible,
-                    // Fusion volontaire dans l'arborescence cible déjà là.
+                    // Fusion volontaire dans l'arborescence cible déjà là ; le
+                    // fichier homologue déjà présent n'est remplacé qu'une fois
+                    // sa relève complète (partiel promu), jamais avant.
                     false,
                     annulation,
                     |f, _| {

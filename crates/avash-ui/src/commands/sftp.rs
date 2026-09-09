@@ -80,9 +80,24 @@ pub(crate) async fn sftp_of(
 /// est couvert comme le cas fichier. La reprise n'en pâtit pas : elle s'appuie
 /// sur le `.part` dérivé de ce chemin, jamais sur la cible finale, et le nom est
 /// choisi une seule fois par téléchargement, ici, puis réutilisé.
+///
+/// Trouvé par l'audit du 9 septembre 2026 : un `local` fourni par l'appelant
+/// court-circuitait tout ce qui précède. Il était rendu tel quel, sans être
+/// absolu ni libre, alors que `download_reprise` termine par un `rename()`
+/// POSIX qui remplace sa cible sans un mot. Depuis la webview (dépendance front
+/// compromise, outils de développement) un `invoke("sftp_download", { local: "…/.bashrc" })`
+/// écrivait donc le contenu d'un serveur choisi par l'appelant par-dessus un
+/// fichier de l'utilisateur. Le chemin imposé passe désormais par les mêmes
+/// gardes que le chemin dérivé, comme toutes les commandes voisines qui
+/// touchent au disque local (`diagnostic_exporter`, `dossier_partage`,
+/// `rdp_ouvrir_dossier`).
 pub(crate) fn local_target(remote: &str, local: Option<String>) -> Result<String, String> {
     if let Some(l) = local {
-        return Ok(l);
+        let vise = std::path::Path::new(&l);
+        if !vise.is_absolute() {
+            return Err(format!("Le chemin local doit être absolu : {l}"));
+        }
+        return Ok(chemin_local_libre(vise).to_string_lossy().into_owned());
     }
     let name = std::path::Path::new(remote)
         .file_name()
@@ -118,6 +133,28 @@ fn chemin_local_libre(base: &std::path::Path) -> std::path::PathBuf {
         }
     }
     base.to_path_buf() // inatteignable : 2^32 homonymes déjà présents
+}
+
+/// Le fichier ou dossier local qu'un téléversement doit lire.
+///
+/// Trouvé par l'audit du 9 septembre 2026 : `sftp_upload` prenait son `local`
+/// sans la moindre garde, seule commande du fichier à toucher au disque local
+/// sans en poser. Un appel direct depuis la webview envoyait ainsi n'importe
+/// quel fichier lisible (`~/.ssh/id_ed25519`) vers un serveur choisi par
+/// l'appelant. On exige au minimum ce qu'exigent les voisines : un chemin
+/// absolu (un relatif viserait le répertoire courant de l'application, que
+/// l'utilisateur ne voit nulle part) et une cible qui existe, pour une erreur
+/// nette au lieu d'un échec de lecture au milieu du transfert. Le front n'envoie
+/// que des chemins venus de la boîte de sélection ou d'un glisser-déposer, donc
+/// déjà absolus et existants : la voie normale ne change pas.
+pub(crate) fn local_source(local: &str) -> Result<std::path::PathBuf, String> {
+    let chemin = std::path::Path::new(local);
+    if !chemin.is_absolute() || !chemin.exists() {
+        return Err(format!(
+            "Le fichier à envoyer n'existe pas ou n'est pas un chemin absolu : {local}"
+        ));
+    }
+    Ok(chemin.to_path_buf())
 }
 
 /// Résout un chemin distant en absolu (`.` → home). Certains serveurs SFTP
@@ -276,7 +313,7 @@ pub async fn sftp_upload(
     local: String,
     remote_dir: String,
 ) -> Result<String, String> {
-    let local_path = std::path::Path::new(&local);
+    let local_path = local_source(&local)?;
     let name = local_path
         .file_name()
         .ok_or_else(|| format!("Nom de fichier illisible : {local}"))?
@@ -287,14 +324,14 @@ pub async fn sftp_upload(
     let mut report = progress_reporter(&app, id, transfert, &name, "upload");
     let annulation = inscrire(&transferts, transfert);
     let issue = if local_path.is_dir() {
-        sftp.upload_dir_with(local_path, &remote, Some(&annulation), |a| {
+        sftp.upload_dir_with(&local_path, &remote, Some(&annulation), |a| {
             report(&a.fichier, a.fait, a.total, a.termines, a.nombre);
         })
         .await
     } else {
         // Envoi de fichier unitaire : on refuse d'écraser une cible du même nom
         // (audit du 7 septembre 2026), sauf reprise d'un envoi interrompu.
-        sftp.upload_reprise(local_path, &remote, true, Some(&annulation), |f, t| {
+        sftp.upload_reprise(&local_path, &remote, true, Some(&annulation), |f, t| {
             report(&name, f, t, 0, 1);
         })
         .await

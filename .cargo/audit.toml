@@ -7,8 +7,11 @@
 # et des deux CI, qui divergeaient de ce fichier mort). Les avis acceptés sont
 # désormais ICI, une seule fois, pour les deux appels (workspace et sidecar).
 #
-# Source autoritaire jumelle : deny.toml, dont le [advisories] ignore doit
-# lister exactement les deux mêmes avis (garde : scripts/tests/audit-config-centralise.sh).
+# Source jumelle : deny.toml, dont le [advisories] ignore ne peut rien accepter
+# qui ne soit ici, et qui doit expliquer en commentaire tout avis d'ici qu'il
+# n'ignore pas (garde : scripts/tests/audit-config-centralise.sh). Les deux
+# outils ne voient pas les mêmes avis : RUSTSEC-2024-0429 est rencontré par
+# cargo-audit et jamais par cargo-deny (audit du 9 septembre 2026).
 [advisories]
 ignore = [
     # RUSTSEC-2023-0071 — attaque Marvin sur le crate `rsa` (5.9 moyenne).
@@ -18,9 +21,11 @@ ignore = [
     # sshd : « Wrong server signature »). Arbitrage documenté dans
     # crates/avash/Cargo.toml.
     "RUSTSEC-2023-0071",
-    # RUSTSEC-2024-0429 — glib, itérateurs VariantStrIter non sûrs. Dépendance
+    # RUSTSEC-2024-0429 : glib, itérateurs VariantStrIter non sûrs. Dépendance
     # TRANSITIVE de la pile GTK de Tauri (avash-ui), pas de notre code ; on ne
     # peut ni la retirer ni la corriger, le correctif remontera par Tauri.
     # Absente de l'arbre du sidecar RDP (vérifié) : l'y ignorer est sans effet.
+    # Ignoré ICI SEULEMENT : cargo-deny ne rencontre pas cet avis « par
+    # fonction » et refuserait l'entrée comme fantôme (voir deny.toml).
     "RUSTSEC-2024-0429",
 ]

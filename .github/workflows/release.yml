@@ -191,7 +191,13 @@ jobs:
   publier:
     needs: [build, securite]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # L'événement autant que la référence. Trouvé par l'audit du 9 septembre
+    # 2026 : `workflow_dispatch` est là pour ESSAYER un build sans créer de tag,
+    # mais le bouton « Run workflow » laisse choisir n'importe quelle référence,
+    # tag compris. Sur la seule condition de référence, un essai manuel lancé
+    # sur un tag déjà publié republiait pour de bon : artefacts téléversés et
+    # `latest.json` signé réécrit sous les utilisateurs.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write     # créer la release et y joindre les binaires
       id-token: write     # jeton OIDC : prouve à Sigstore que la signature vient de ce workflow

@@ -7,6 +7,186 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Sécurité
+
+- **Une invite du serveur SSH ne peut plus forger un marqueur interne ni piloter
+  le terminal.** Le cœur et l'interface se parlent par des marqueurs `[AVASH_…]`
+  glissés dans les messages d'erreur : `[AVASH_HOST_KEY_CHANGED]` déclenche la
+  proposition d'oublier la clé d'hôte mémorisée. Or le texte d'une invite
+  `keyboard-interactive` à laquelle le cœur ne sait pas répondre était recopié
+  tel quel dans ce même message, et l'interface ne testait que la présence de la
+  sous-chaîne. Un serveur hostile pouvait donc écrire le marqueur lui-même et
+  faire effacer la confiance accordée à un hôte sain ; le même texte atteignait
+  xterm.js sans filtre, séquences ANSI comprises : effacer l'écran, remonter le
+  curseur sur l'alerte affichée juste au-dessus, imiter une invite locale de mot
+  de passe. Le cœur neutralise désormais tout texte venu d'en face à l'entrée
+  (`texte_distant_sur` : caractères de contrôle, marqueurs internes, longueur
+  bornée), et l'interface filtre une seconde fois avant d'écrire dans le
+  terminal ou dans une boîte de dialogue (`nettoyerPourTerminal`,
+  `nettoyerMarqueurs`). Le flux du PTY, lui, garde ses séquences : c'est du
+  terminal légitime. Un contrôle de bout en bout
+  (`scripts/tests/texte-distant-neutralise.sh`) vérifie les deux barrières.
+- **Un nom de fichier truqué venu du bureau distant est refusé, et ce qui
+  s'affiche ne ment plus.** Un serveur RDP pouvait copier sur son presse-papiers
+  un fichier nommé « malware\u202Etxt.exe » : le contrôle Unicode de direction
+  inverse ce qui le suit, si bien que la liste proposée avant acceptation
+  affichait « malwareexe.txt ». L'utilisateur croyait prendre un fichier texte,
+  et le nom écrit sur le disque gardait le piège, dans son gestionnaire de
+  fichiers comme partout ailleurs. Rien ne filtrait cela : ni nous, ni
+  `sanitize_file_path` d'IronRDP (qui ne voit que les octets nuls et les
+  séparateurs), ni le front. Un composant qui porte un contrôle bidirectionnel,
+  un invisible sans chasse ou un saut de ligne forcé (U+2028, U+2029, qu'une
+  webview ne replie pas contrairement à « \n », et qui coupaient en deux le
+  badge des fichiers en cours et la notification d'erreurs) fait désormais
+  refuser le fichier, et tout nom affiché neutralise ces caractères. L'antiliant
+  et le liant sans chasse restent permis : l'écriture persane et les séquences
+  emoji en dépendent.
+- **Un champ de `~/.ssh/config` ne peut plus rejouer une séquence de terminal.**
+  La validation d'écriture ne refusait que `\n`, `\r`, `\0` et le guillemet ; la
+  variante « sans espace » y ajoutait `char::is_whitespace`, qui ignore les
+  codes de contrôle C0. Aucun champ n'excluait donc ESC, BEL ni DEL : un export
+  PuTTY hostile portant `HostName=srv\x1b]0;PWNED\x07` passait l'import et
+  s'écrivait tel quel dans `~/.ssh/config` (`render_host_block` ne fait qu'un
+  `trim`). La séquence repartait ensuite vers le terminal sans que personne
+  ouvre le fichier : à chaque `avash list`, et à chaque ouverture d'onglet dans
+  l'application, qui écrivait l'étiquette « utilisateur@hôte:port » brute dans
+  xterm.js : titre de fenêtre réécrit, presse-papiers manipulé par OSC 52,
+  réponse d'une requête d'état réinjectée comme une frappe sur certains
+  émulateurs. `validate_config_value` et `validate_alias` refusent maintenant
+  tout caractère de contrôle, tabulation comprise ; les noms de dossiers suivent
+  la même règle. Et parce que durcir la seule écriture d'Avash ne protège pas
+  d'un fichier déjà piégé par un autre outil, tout ce qui est relu de
+  `~/.ssh/config` est neutralisé avant affichage, côté CLI comme côté
+  application. En contrepartie, une valeur jusqu'ici acceptée peut désormais
+  être refusée à l'enregistrement, avec le point de code fautif dans le message.
+  L'espace redevient au passage tolérée **entre** les maillons d'un `ProxyJump`
+  (« bastion, relais:2200 », la forme canonique) : la refuser sur la chaîne
+  entière rendait impossible de réenregistrer un hôte déjà noté ainsi, même
+  pour n'en changer qu'un tag.
+- **Un fichier reçu du bureau distant ne peut plus être écrit hors du dossier de
+  réception par un lien symbolique.** La réception CLIPRDR validait chaque
+  composant du chemin (pas de `..`, pas de séparateur, pas de nom réservé) puis
+  vérifiait, lexicalement, que le résultat restait sous le dossier de réception
+  : un contrôle toujours vrai, aveugle à un sous-dossier déjà remplacé par un
+  lien pointant ailleurs, ou à un nom de fichier qui était lui-même un lien
+  cassé vers un chemin choisi. `create_dir_all` traversait le lien sans
+  broncher, et un fichier au contenu choisi par le serveur se retrouvait par
+  exemple dans `~/.ssh`. Le parent est désormais créé composant par composant,
+  en refusant tout élément préexistant qui n'est pas un vrai dossier, et un nom
+  occupé par un lien, même cassé, compte comme pris. Le lecteur RDPDR s'en
+  protégeait déjà ; les deux chemins de réception sont maintenant au même
+  niveau.
+- **Un serveur VNC qui refuse le mot de passe ne peut plus faire gonfler la
+  mémoire du client.** Après un refus d'authentification, le client lisait la «
+  raison » jusqu'à la fermeture de la connexion, sans borne ni égard pour la
+  longueur que le protocole annonce : un serveur hostile pouvait garder la
+  connexion ouverte et déverser des centaines de mégaoctets, tous empilés en
+  mémoire pour un simple mot de passe faux. La raison se lit désormais sur la
+  longueur annoncée, plafonnée à 1 Kio, aux quatre endroits qui la reçoivent
+  (refus RFB en clair, refus sous VeNCrypt, et les deux refus de connexion émis
+  avant même la demande de mot de passe). Une fin de flux prématurée reste un
+  refus.
+- **Un chemin local fourni à un transfert SFTP passe par les mêmes gardes que
+  les autres accès au disque.** `sftp_download` acceptait un chemin de
+  destination imposé tel quel, sans exiger qu'il soit absolu ni qu'il soit
+  libre, alors que le téléchargement se termine par un `rename()` qui remplace
+  sa cible sans un mot : depuis la webview, un appel direct pouvait écrire le
+  contenu d'un serveur choisi par-dessus `~/.bashrc`. `sftp_upload` lisait de
+  même n'importe quel chemin. Le chemin de destination doit désormais être
+  absolu et reçoit un nom libre s'il est déjà pris, comme le chemin dérivé du
+  nom distant ; la source d'un envoi doit être absolue et exister. Rien ne
+  change à l'usage : l'application ne fournit jamais de destination imposée, et
+  les envois viennent de la boîte de sélection ou du glisser-déposer.
+- **Une commande de plus retirée de la surface offerte à la webview.**
+  `enregistrement_en_cours` livrait le chemin absolu du fichier d'enregistrement
+  de n'importe quel onglet, et aucun appel du front ne l'utilisait : le front
+  suit son état d'enregistrement par les retours de `enregistrement_demarrer` et
+  `enregistrement_arreter`. La règle « une commande qui ne sert pas ne
+  s'enregistre pas » était écrite en commentaire, mais rien ne la faisait
+  respecter ; un contrôle compare désormais la liste exposée aux appels du front
+  à chaque `check.sh`.
+
+### Corrigé
+
+- **Une copie d'hôte à hôte interrompue ne détruit plus le fichier qu'elle
+  remplace.** Le relais SFTP (« Copier vers un autre hôte », sans passer par le
+  disque du poste) créait le fichier chez la cible, donc le tronquait, avant
+  de lancer ses bandes de copie. Annulé d'un clic ou coupé par le réseau, il
+  laissait à la place de l'homologue déjà présent un fragment troué (les bandes
+  écrivent à des décalages disjoints), sans carte de reprise ni le moindre
+  avertissement ; la copie de dossier, qui fusionne volontairement, passait par
+  là à chaque resynchronisation. Comme le téléchargement et l'envoi, le relais
+  écrit désormais dans un `.part` chez la cible et ne le promeut sur le nom
+  définitif qu'une fois tous les octets arrivés : le fichier remplacé reste
+  entier jusque-là, et un relais interrompu ne laisse rien. Deux conséquences
+  visibles : un `.part` apparaît chez la cible pendant la copie, et une copie
+  unitaire (qui refuse d'écraser) refuse aussi de détruire un `.part` déjà
+  présent, car un tel fichier peut porter les seuls octets complets d'une copie
+  dont la promotion avait échoué.
+- **Une directive répétée dans un même bloc `Host` est lue comme `ssh` la lit :
+  la première l'emporte.** La règle « la première valeur obtenue est retenue »
+  d'OpenSSH n'était appliquée qu'ENTRE blocs. À l'intérieur d'un bloc, chaque
+  directive écrasait la précédente : un `Host prod` recollé à la main portant
+  `User adrien` puis `User root` faisait afficher, pré-remplir et connecter
+  Avash en « root », là où `ssh prod` se connecte en « adrien », et rien ne
+  signalait l'ambiguïté. `HostName`, `User`, `Port`, `IdentityFile`,
+  `ProxyJump` et les conventions `#Tags:` / `#Folder:` gardent désormais leur
+  première occurrence, à la liste comme à la résolution. Une valeur vide ne
+  compte pas pour une première valeur : un résidu de fusion (`HostName` sans
+  argument, `User ""`) est ignoré au profit de la ligne valide qui suit, comme
+  l'était déjà un `Port 0`. Conséquence visible : pour un bloc à directives
+  dupliquées, la valeur montrée et utilisée change, de la dernière à la
+  première.
+
+- **Couper le partage de presse-papiers en plein collage ne laisse plus
+  l'explorateur d'en face suspendu.** Quand le distant réclamait le morceau
+  suivant d'un fichier offert (`FileContentsRequest`) et que le partage venait
+  d'être désactivé depuis l'interface, la requête était purement abandonnée :
+  aucune réponse ne partait pour ce flux, ni les octets ni une erreur, et le
+  serveur RDP restait à attendre jusqu'à l'expiration de son propre délai. Le
+  chemin texte, lui, refermait déjà l'échange par une
+  `FormatDataResponse::new_error`. Le partage coupé répond désormais de la même
+  façon pour les fichiers, par une `FileContentsResponse` d'erreur sur le flux
+  demandé : le collage échoue tout de suite et proprement, au lieu de figer le
+  gestionnaire de fichiers distant.
+- **Renommer un hôte ne peut plus créer un doublon d'un alias déclaré dans un
+  fichier `Include`.** L'ajout vérifiait l'unicité de l'alias sur la
+  configuration complète, fichiers inclus résolus ; le renommage ne regardait
+  que `~/.ssh/config` lui-même. Un alias déjà défini dans un fichier inclus
+  passait donc, et `ssh` tranchait ensuite entre les deux blocs par sa règle du
+  premier trouvé, sans que rien ne signale l'ambiguïté. Les deux chemins
+  partagent maintenant le même contrôle.
+- **Une commande distante tuée par un signal n'est plus rapportée comme
+  réussie.** `run` et `run_borne` (déploiement de clé, sonde d'OS, commandes
+  rapides) ignoraient le message `exit-signal` et rendaient le code 0 par défaut
+  quand le canal se fermait sans statut : une commande tuée par l'OOM du serveur
+  ou un `kill -9` passait pour un succès, sortie tronquée comprise. Le correctif
+  déjà appliqué à la copie directe (0.10.0) est porté ici : un signal devient
+  une erreur nommée, un canal fermé sans statut aussi. La sonde d'OS, qui passe
+  par là, ignore désormais un serveur qui fermerait sans statut au lieu d'en
+  déduire un faux succès.
+- **La copie directe interrompue par un signal referme bien son canal.** Dans
+  `run_avec_agent`, le bras qui traitait `exit-signal` sortait de la fonction
+  avant la fermeture du canal, seul chemin de sortie à le faire : le serveur
+  gardait un canal ouvert et alimenté jusqu'à la fin de la session. Le signal
+  est maintenant noté, puis l'erreur rendue après la fermeture, comme partout
+  ailleurs ; l'annulation par l'utilisateur garde la priorité sur le signal pour
+  que l'interface reçoive son marqueur.
+- **Un `~/.ssh/known_hosts` qui n'est pas un fichier ordinaire ne gèle plus la
+  connexion.** La vérification de la clé d'hôte lisait le fichier de façon
+  synchrone depuis le fil qui mène la négociation ; un tube nommé à sa place
+  suspendait cette lecture dans le noyau jusqu'à ce qu'un écrivain se présente,
+  c'est-à-dire jamais : onglet figé, sans erreur ni délai. Un simple `stat`
+  écarte désormais tout ce qui n'est pas un fichier ordinaire avant de l'ouvrir,
+  et le refuse comme illisible. Conséquence assumée : un `known_hosts` pointé
+  sur `/dev/null`, manière de désactiver la vérification, passait pour un
+  fichier vide et acceptait toute clé ; il est maintenant refusé.
+- **L'affichage en biais sur xrdp est aussi corrigé en 8 bits.** Le correctif
+  qui retire le remplissage de fin de ligne d'un bitmap RLE plus large que son
+  rectangle couvrait les profondeurs 15, 16 et 24 bits, pas le chemin 8 bits à
+  palette. Les quatre formats passent désormais par la même fonction, qui ne
+  peut plus en oublier un.
+
 ### Chaîne d'intégration et garde-fous
 
 Trois durcissements tirés des deux ratés de la 0.10.0 (publiée pendant que le
@@ -29,6 +209,100 @@ oublié dans une source Rust attrapé de justesse).
 
 Chaque point a son contrôle reproductible dans `scripts/tests/`, branché dans
 `check.sh`, et vérifié en contrôle négatif.
+
+L'audit du 9 septembre 2026 en ajoute d'autres, du même genre : des contrôles
+qui existaient sur le papier sans mordre.
+
+- **Le fuzzing joue les neuf cibles, pas sept.** `fuzz/fuzz.sh` portait sa liste
+  en dur, en retard sur `fuzz/Cargo.toml` : `glob_match_pur` et `osinfo`
+  n'étaient que compilées sur les PR, jamais secouées. La liste se lit désormais
+  dans `Cargo.toml`, et un contrôle exige que chaque cible déclarée soit jouée.
+- **La cible ClearCodec peut atteindre le plafond anti-OOM.** Ses côtés étaient
+  tirés sur 7 bits, donc bornés à 128 pixels : la garde `MAX_DECODE_DIM` (8192
+  par axe, posée contre un serveur hostile) était hors d'atteinte de la
+  campagne, et sa disparition n'aurait fait rougir personne. Chaque côté se tire
+  sur 16 bits, et c'est la surface qui est bornée.
+- **La cible `reg_query` dit ce qu'elle couvre.** Les campagnes tournent sous
+  Linux, où le décodage des pages de code Windows prend son repli UTF-8 : la FFI
+  vers `MultiByteToWideChar`, la partie délicate, n'y est jamais exercée. Le
+  commentaire le dit désormais, et un test `cfg(windows)` joue à la main, dans
+  le job Windows de la chaîne, les cas limites que le fuzzing ne peut pas
+  atteindre (entrée longue, octet non attribué, octet nul).
+- **Un lancement manuel du workflow Release sur un tag ne publie plus.** Le job
+  `publier` ne testait que la référence : le bouton « Run workflow », prévu pour
+  essayer un build sans créer de tag, laissait choisir un tag déjà publié et
+  republiait pour de bon, artefacts et `latest.json` signé réécrits sous les
+  utilisateurs. L'événement est vérifié en plus de la référence.
+- **La garde Rust couvre `fuzz/fuzz_targets`.** Seul code Rust du dépôt que rien
+  ne relisait (hors espace de travail, compilé en nightly seulement), et
+  pourtant l'endroit même où l'on pose un `dbg!()` pour comprendre un plantage
+  trouvé par cargo-fuzz.
+- **L'allowlist gitleaks correspond à la valeur exacte.** La regex du jeton
+  factice de test n'était pas ancrée ; gitleaks l'évaluant en correspondance
+  libre, toute vraie clé contenant cette suite était blanchie. Mesuré avec le
+  vrai gitleaks : le jeton factice reste muet, une clé de trente-six caractères
+  qui contient le motif est de nouveau signalée.
+- **`secrets/` et `.sops.yaml` sont exclus par le `.gitignore` versionné**, plus
+  seulement par le `.git/info/exclude` propre à un clone : sur une machine
+  reconstruite, un `git add -A` n'aurait rencontré aucun garde-fou.
+- **L'aide d'identifiants sops échoue franchement.** Quand `sops -d` échouait
+  (clé age absente, clé rotée sans réencoder le fichier), elle rendait des
+  identifiants vides avec un code de sortie 0 : git les présentait à l'hébergeur
+  et l'utilisateur lisait « échec d'authentification » au lieu de « ta clé de
+  déchiffrement manque ». Le contrôle rejoue l'échec avec un faux `sops`, sans
+  aucun secret réel.
+- **`deny.toml` ne porte plus d'exception fantôme.** L'entrée `ignore` pour
+  RUSTSEC-2024-0429 (glib) ne correspondait à rien pour cargo-deny, qui ne
+  rapproche pas un avis « par fonction » de la version présente et répondait
+  `advisory-not-detected` : elle ne protégeait rien tout en laissant croire à
+  une vigilance. La vraie exception vit dans `.cargo/audit.toml`, où
+  cargo-audit, lui, rencontre l'avis ; un contrôle refuse désormais toute entrée
+  `ignore` que cargo-deny ne rencontre pas dans le graphe, et le contrôle de
+  centralisation du 8 septembre, qui exigeait l'égalité stricte des deux listes,
+  accepte un écart à condition qu'il soit écrit dans `deny.toml`.
+- **`serialport` passe en 4.10.1.** La 4.10.0 a été retirée de crates.io par son
+  auteur (compilation cassée sous Linux/PowerPC) ; `cargo audit` et `cargo deny`
+  le signalaient à chaque passage sans qu'aucune décision soit tracée, et un
+  `cargo update` de routine aurait basculé sans explication.
+- **Les compteurs de `docs/qualite.md` sont vérifiés jusqu'au détail.** La ligne
+  « Serveurs de test » annonçait 32 avec un détail (2 + 27) qui ne faisait ni 32
+  ni le compte réel (4 + 28) ; un contrôle recompte les `#[test]` des deux
+  serveurs et exige que le détail et le total concordent.
+
+### Paquets
+
+- **Le `.desktop` de Flathub annonce enfin la classe que la fenêtre émet.**
+  `StartupWMClass` y valait `dev.avash.app`, l'identifiant Tauri, alors que la
+  fenêtre s'enregistre sous `avash-ui` : sans `enableGTKAppId` (ni son alias
+  `enable-gtk-app-id`, tous deux absents de `tauri.conf.json`), tauri passe
+  `app_id: None` à tao et WM_CLASS retombe sur le nom du binaire. GNOME Shell
+  et Plasma ne reliaient donc pas la fenêtre à son entrée : icône générique,
+  épinglage de l'instance en cours cassé, regroupement perdu. Le `.desktop` de
+  l'AUR était juste depuis le début, pour le même exécutable ; les deux sont
+  maintenant tenus par le même contrôle, qui recalcule la classe attendue à
+  partir des deux orthographes du drapeau. Cela corrige aussi deux traces de la
+  même croyance : la note de la 0.8.0 ci-dessous, qui annonçait `dev.avash.app`
+  « pour GTK et D-Bus », et le commentaire de `--own-name` dans le manifeste.
+- **La fiche AppStream parle enfin du VNC.** Le résumé promettait « SSH, RDP et
+  VNC », mais le corps de la description ne citait que SSH, RDP et SFTP, et
+  `<keywords>` ignorait `vnc` : dans GNOME Logiciels, Discover et Flathub,
+  quelqu'un cherchant un client VNC ne trouvait pas Avash, ou pouvait croire le
+  mot décoratif, alors que le VNC est une fonction complète depuis la 0.3.x et
+  que winget la décrivait correctement. Les deux paragraphes citent maintenant
+  les bureaux VNC et le chiffrement VeNCrypt à certificat épinglé, le mot-clé
+  est posé, et un contrôle exige que le corps, les mots-clés et le manifeste
+  winget de la version courante couvrent tous les protocoles du résumé.
+- **Le compte des droits Flathub à justifier ne se contredit plus.** La section
+  Flathub de `RELEASE.md` annonçait « cinq droits qui demandent une exception »,
+  les énumérait bien tous les cinq, puis refermait sur « demander les trois
+  exceptions » ; le point Flathub de `docs/feuille-de-route.md` en annonçait
+  trois lui aussi, et nommait les trois d'avant l'ajout de `--socket=pulseaudio`
+  et `--device=all` par l'audit du 7 septembre. Le mainteneur qui suivait l'un
+  ou l'autre document pour ouvrir la PR chez `flathub/flathub` laissait sans
+  justification les deux droits les plus larges, ceux que le robot Flathub
+  signale. Les deux documents citent désormais les cinq mêmes droits, et un
+  contrôle exige que le nombre annoncé, le nombre énuméré, le nombre rappelé au
+  mainteneur et les finish-args du manifeste concordent, dans les deux fichiers.
 
 ## [0.10.1] - 2026-09-08
 

@@ -14,8 +14,12 @@
 # branche new-pr), avec les JSON.
 # L'identifiant Flathub suit le dépôt GitHub (io.github.<compte>.<dépôt>),
 # vérifiable sans posséder de domaine ; celui de Tauri (dev.avash.app,
-# tauri.conf.json) reste l'identifiant GTK de la fenêtre et le nom D-Bus que
-# l'application enregistre au démarrage, d'où --own-name et StartupWMClass.
+# tauri.conf.json) ne sert qu'aux chemins de configuration de la webview et aux
+# métadonnées AppStream. Il n'atteint pas la fenêtre : tauri ne le passe à GTK
+# que si `enableGTKAppId` vaut true, clé absente de tauri.conf.json, si bien que
+# tao reçoit `app_id: None` et que WM_CLASS retombe sur le nom du binaire
+# lancé, d'où StartupWMClass=avash-ui dans le .desktop, comme celui de l'AUR,
+# qui emballe le même exécutable (audit du 9 septembre 2026).
 id: io.github.AdrienAvalon.avash
 runtime: org.gnome.Platform
 runtime-version: '49'
@@ -46,8 +50,20 @@ finish-args:
   - --socket=ssh-auth
   # Les mots de passe vont dans le trousseau du système (Secret Service).
   - --talk-name=org.freedesktop.secrets
-  # GTK enregistre l'application sous l'identifiant de tauri.conf.json ; sans
-  # ce droit, le bac à sable refuse le nom et tao s'arrête avant la fenêtre.
+  # Droit conservé par prudence, mais sans justification vérifiée : il avait été
+  # accordé en croyant que GTK enregistrait l'application sous l'identifiant de
+  # tauri.conf.json. L'audit du 9 septembre 2026 a montré que non : sans
+  # `enableGTKAppId` (ni son alias `enable-gtk-app-id`, tous deux absents du
+  # fichier), tauri passe `app_id: None` à tao, et une GtkApplication sans
+  # identifiant ne réclame aucun nom D-Bus. Le bus est bien utilisé par
+  # ailleurs, zbus arrivant par keyring -> zbus-secret-service-keyring-store ->
+  # secret-service, mais seulement en client du Secret Service : un client
+  # reçoit un nom unique (:1.x) que le bac à sable donne d'office, et aucun
+  # code du dépôt n'appelle `request_name` pour réclamer un nom bien connu.
+  # C'est ce dernier point que tient le contrôle
+  # `scripts/tests/flathub-startupwmclass-classe-reelle.sh`. À retirer, avec sa
+  # ligne d'exception de RELEASE.md §8, dès qu'une construction en bac à sable
+  # réel confirme que la fenêtre s'ouvre sans lui.
   - --own-name=dev.avash.app
   # ~/.ssh/config, les clés, known_hosts, et les fichiers que l'on transfère
   # par SFTP ou par le presse-papiers RDP dans les deux sens : l'application

@@ -258,6 +258,32 @@ impl russh::server::Handler for TestSshSession {
             });
             return Ok(());
         }
+        // Marqueur de test « SIGNAL_SANS_CLOTURE » : le serveur annonce la mort
+        // du processus par `exit-signal` (RFC 4254 §6.10) puis GARDE le canal
+        // ouvert et continue d'émettre, comme un serveur dont le scp a été tué
+        // alors que le canal exec, lui, n'est pas refermé. Sert à vérifier que
+        // le client ferme le canal sur CE chemin de sortie aussi, et pas
+        // seulement au plafond ou à l'annulation. Audit du 9 septembre 2026.
+        if cmd.contains("SIGNAL_SANS_CLOTURE") {
+            let _ = session.exit_signal_request(channel_id, russh::Sig::KILL, false, "", "");
+            let handle = session.handle();
+            let etat = self.inondation.clone();
+            tokio::spawn(async move {
+                use std::sync::atomic::Ordering;
+                let bloc = bytes::Bytes::from(vec![b'Z'; 256]);
+                while !etat.close_recu.load(Ordering::SeqCst) {
+                    if handle.data(channel_id, bloc.clone()).await.is_err() {
+                        break; // session terminée
+                    }
+                    etat.octets.fetch_add(bloc.len() as u64, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                // Tant qu'on émet, le canal reste vivant : le lâcher enverrait
+                // CLOSE au client et masquerait ce qu'on veut observer.
+                drop(channel);
+            });
+            return Ok(());
+        }
         let output = format!("CMD:{cmd}\r\n");
         let _ = session.data(channel_id, bytes::Bytes::from(output.into_bytes()));
         let _ = session.extended_data(channel_id, 1, bytes::Bytes::from_static(b"stderr-ok"));
@@ -274,10 +300,17 @@ impl russh::server::Handler for TestSshSession {
         // close. Le code envoyait exit-status AVANT eof, ce qui masquait un
         // bug ou run() cassait sur Eof et renvoyait toujours 0.
         let _ = session.eof(channel_id);
+        // Marqueur de test : simule une commande tuée par un signal côté
+        // distant (OOM-killer, `kill -9`). RFC 4254 §6.10 : le serveur envoie
+        // alors `exit-signal` et JAMAIS `exit-status`. Sert à vérifier que
+        // `run`/`run_borne` ne prennent pas ce cas pour un succès.
+        if cmd.contains("TUE_PAR_SIGNAL") {
+            let _ = session.exit_signal_request(channel_id, russh::Sig::KILL, false, "", "");
+        }
         // Marqueur de test : simule une commande interrompue — canal fermé SANS
         // exit-status (lien coupé, processus tué). Sert à vérifier que
         // `run_avec_agent` ne prend pas ce silence pour un succès.
-        if !cmd.contains("SANS_STATUT") {
+        else if !cmd.contains("SANS_STATUT") {
             let _ = session.exit_status_request(channel_id, code);
         }
         let _ = session.close(channel_id);
@@ -900,6 +933,15 @@ impl russh_sftp::server::Handler for TestSftpSession {
         async move {
             if sous_fs(&oldpath) {
                 let mut g = fs_fichiers();
+                // Relecture de l'audit du 9 septembre 2026 : ce serveur renommait
+                // à la POSIX, donc il remplaçait une cible existante sans un mot.
+                // OpenSSH refuse `SSH_FXP_RENAME` dans ce cas, et c'est ce refus
+                // qui fait passer la promotion d'un `.part` par sa seconde
+                // branche, celle qu'empruntent les vrais serveurs, et qu'aucun
+                // test n'éprouvait tant que ce serveur-ci était complaisant.
+                if g.as_ref().unwrap().contains_key(&newpath) {
+                    return Err(StatusCode::Failure);
+                }
                 return match g.as_mut().unwrap().remove(&oldpath) {
                     Some(c) => {
                         g.as_mut().unwrap().insert(newpath, c);
@@ -3027,6 +3069,179 @@ async fn relayer_vers_ne_remplace_pas_une_cible_existante() {
     cible.close().await.unwrap();
 }
 
+/// Trouvé par l'audit du 9 septembre 2026 : le relais créait la cible par
+/// `create()`, donc la tronquait, AVANT de lancer ses bandes, sans jamais
+/// rien nettoyer ensuite. Annulé en route (bouton « Annuler » d'une ligne de
+/// transfert, coupure réseau), il laissait chez le second serveur un fichier
+/// tronqué et troué (les bandes écrivent à des décalages disjoints) à la place
+/// de l'homologue valide, sans carte de reprise ni le moindre avertissement.
+/// C'est le mode fusion (`refuser_ecrasement = false`) de la copie de DOSSIER
+/// qui rendait la perte réelle : une resynchro annulée détruisait le fichier
+/// déjà là. Le relais doit écrire dans un partiel chez la cible et ne toucher
+/// le fichier final qu'une fois tous les octets arrivés.
+#[tokio::test]
+async fn le_relais_annule_ne_laisse_pas_de_fichier_tronque() {
+    // Huit mégaoctets : huit bandes de seize blocs, chaque bande relit le
+    // drapeau avant chaque bloc, l'annulation est vue (voir le même dosage
+    // pour le téléchargement annulé, régression CI du 04/09/2026).
+    let gros = motif(8 * 1024 * 1024, 9);
+    fs_poser("/fs/relaispart/src.bin", &gros);
+    fs_poser("/fs/relaispart/deja.bin", b"la version deja chez la cible");
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+    let annulation: avash::sftp::Annulation = std::sync::Arc::default();
+    let a = annulation.clone();
+    let issue = source
+        .relayer_vers(
+            "/fs/relaispart/src.bin",
+            &cible,
+            "/fs/relaispart/deja.bin",
+            // Fusion, comme la copie de dossier : c'est ce mode-là qui perdait
+            // le fichier homologue déjà présent chez la cible.
+            false,
+            Some(&annulation),
+            move |fait, _| {
+                if fait >= 1024 * 1024 {
+                    a.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            },
+        )
+        .await;
+    let e = issue.expect_err("l'annulation doit se voir");
+    assert!(e.to_string().contains(avash::sftp::ANNULE), "{e:#}");
+    // Comparaison sans `assert_eq!` : la cible fautive porte des mégaoctets,
+    // que le vidage d'un `assert_eq!` déverserait dans le journal de la chaîne.
+    let apres = fs_lire("/fs/relaispart/deja.bin");
+    assert!(
+        apres.as_deref() == Some(&b"la version deja chez la cible"[..]),
+        "un relais annulé ne doit pas laisser la cible tronquée (elle porte {} octets)",
+        apres.map_or(0, |c| c.len())
+    );
+    assert!(
+        fs_lire("/fs/relaispart/deja.bin.part").is_none(),
+        "un relais annulé ne doit pas laisser de partiel chez la cible"
+    );
+
+    // Relancé sans annulation, le même relais remplace bien la cible, entière.
+    let n = source
+        .relayer_vers(
+            "/fs/relaispart/src.bin",
+            &cible,
+            "/fs/relaispart/deja.bin",
+            false,
+            None,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(n as usize, gros.len());
+    assert_eq!(fs_lire("/fs/relaispart/deja.bin").unwrap(), gros);
+    assert!(
+        fs_lire("/fs/relaispart/deja.bin.part").is_none(),
+        "le partiel disparaît quand le relais aboutit"
+    );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
+/// Relecture de l'audit du 9 septembre 2026 : la promotion du partiel chez la
+/// cible a deux branches et le serveur en mémoire n'en empruntait qu'une. Il
+/// renommait à la POSIX (`remove` puis `insert`, la cible existante écrasée
+/// sans un mot) alors qu'OpenSSH refuse `SSH_FXP_RENAME` dès que la cible
+/// existe. Chez un vrai serveur, la promotion passe donc TOUJOURS par « écarter
+/// la cible, puis renommer », branche qui restait verte quoi qu'elle contienne
+/// (une cible supprimée puis un renommage qui échoue, et l'utilisateur se
+/// retrouve sans fichier). Le serveur de test refuse désormais comme OpenSSH :
+/// on le vérifie d'abord, puis on exige que le relais promeuve quand même son
+/// partiel par-dessus l'homologue déjà présent.
+#[tokio::test]
+async fn le_relais_promeut_son_partiel_meme_quand_le_serveur_refuse_le_renommage() {
+    let gros = motif(300 * 1024 + 7, 11);
+    fs_poser("/fs/relaisrenom/src.bin", &gros);
+    fs_poser("/fs/relaisrenom/deja.bin", b"la version deja chez la cible");
+    fs_poser("/fs/relaisrenom/temoin.bin", b"temoin");
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+
+    // Sans ce refus, le relais sortirait par la première branche et la seconde
+    // (la seule qu'emprunte un vrai serveur) resterait sans épreuve.
+    assert!(
+        cible
+            .rename("/fs/relaisrenom/temoin.bin", "/fs/relaisrenom/deja.bin")
+            .await
+            .is_err(),
+        "le serveur de test doit refuser de renommer sur une cible existante, comme OpenSSH"
+    );
+
+    let n = source
+        .relayer_vers(
+            "/fs/relaisrenom/src.bin",
+            &cible,
+            "/fs/relaisrenom/deja.bin",
+            false,
+            None,
+            |_, _| {},
+        )
+        .await
+        .expect("le relais doit promouvoir son partiel malgré le refus de renommage");
+    assert_eq!(n as usize, gros.len());
+    assert_eq!(fs_lire("/fs/relaisrenom/deja.bin").unwrap(), gros);
+    assert!(
+        fs_lire("/fs/relaisrenom/deja.bin.part").is_none(),
+        "le partiel disparaît quand le relais aboutit"
+    );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
+/// Relecture de l'audit du 9 septembre 2026 : le passage par un partiel chez la
+/// cible a élargi l'ensemble des fichiers que le relais détruit sans étendre le
+/// garde-fou. `refuser_ecrasement` (le mode de la copie unitaire lancée depuis
+/// l'interface) ne regardait que le nom final, puis `create` du partiel le
+/// TRONQUAIT : copier « rapport.pdf » effaçait sans un mot un
+/// « rapport.pdf.part » présent chez la cible, là où ce mode promet précisément
+/// de ne rien écraser. Et un partiel n'est pas un déchet : quand la promotion
+/// échoue, on le conserve exprès parce qu'il porte les seuls octets complets.
+#[tokio::test]
+async fn le_relais_qui_refuse_d_ecraser_epargne_aussi_un_partiel_deja_present() {
+    fs_poser("/fs/relaisgarde/src.bin", &motif(200 * 1024, 13));
+    // Le partiel d'une copie précédente dont la promotion a échoué : ces octets
+    // sont la seule copie complète du fichier.
+    fs_poser(
+        "/fs/relaisgarde/deja.bin.part",
+        b"les seuls octets complets",
+    );
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+
+    let issue = source
+        .relayer_vers(
+            "/fs/relaisgarde/src.bin",
+            &cible,
+            "/fs/relaisgarde/deja.bin",
+            true,
+            None,
+            |_, _| {},
+        )
+        .await;
+    let e = issue.expect_err("la copie ne doit pas écraser un partiel déjà présent");
+    assert!(
+        e.to_string().contains("deja.bin.part"),
+        "le refus doit nommer le fichier épargné : {e:#}"
+    );
+    assert_eq!(
+        fs_lire("/fs/relaisgarde/deja.bin.part").as_deref(),
+        Some(&b"les seuls octets complets"[..]),
+        "le partiel déjà présent doit rester intact"
+    );
+    assert!(
+        fs_lire("/fs/relaisgarde/deja.bin").is_none(),
+        "aucun fichier final ne doit être créé quand la copie est refusée"
+    );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
 /// Un dossier passe d'un serveur à un autre par le poste sans rien y écrire :
 /// deux serveurs, deux sessions, et les octets identiques à l'arrivée.
 #[tokio::test]
@@ -3268,6 +3483,56 @@ async fn run_avec_agent_echoue_quand_le_canal_ferme_sans_statut() {
         .await
         .unwrap();
     assert_eq!(code, 3);
+}
+
+/// Trouvé par l'audit du 9 septembre 2026 : dans la boucle de `run_avec_agent`,
+/// tous les chemins de sortie (plafond de 1 Mio, `Close`, annulation) sortaient
+/// par le bas, là où `channel.close().await` referme le canal : le commentaire
+/// voisin promettait d'ailleurs une fermeture « sur TOUTE sortie de la boucle ».
+/// Tous sauf un : le bras `ExitSignal` faisait un `return Err(...)` direct, qui
+/// sautait cette fermeture. Or `russh::Channel` n'envoie PAS de `CHANNEL_CLOSE` à
+/// sa chute et le client réalimente sa fenêtre de réception quoi qu'il arrive :
+/// une copie directe (scp lancé chez la source) tuée par un signal laissait
+/// derrière elle un canal exec que le serveur pouvait continuer d'alimenter à
+/// plein débit toute la vie de la session. Exactement le défaut déjà corrigé le
+/// 7 septembre pour les autres sorties de cette même boucle, resté ici.
+///
+/// Le serveur de test émet `exit-signal` PUIS garde le canal ouvert en
+/// continuant d'émettre : seule la fermeture par le client peut l'arrêter, et
+/// `close_recu` en est la preuve (il n'est levé que par un vrai `CHANNEL_CLOSE`
+/// venu du client, pas par la chute silencieuse du canal).
+#[tokio::test]
+async fn run_avec_agent_ferme_le_canal_quand_la_commande_est_tuee_par_un_signal() {
+    use std::sync::atomic::Ordering;
+    let (port, etat) = spawn_test_sshd_inondation().await;
+    let auth = test_auth();
+    let session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+    // On repart de zéro : seule la fermeture du canal de CETTE commande compte.
+    etat.close_recu.store(false, Ordering::SeqCst);
+    let err = session
+        .run_avec_agent("echo SIGNAL_SANS_CLOTURE", None)
+        .await
+        .expect_err("une commande tuée par un signal ne doit pas passer pour un succès");
+    assert!(
+        err.to_string().contains("interrompue par un signal"),
+        "le message doit nommer le signal : {err}"
+    );
+    // La fermeture part juste avant que l'erreur ne remonte ; on laisse au
+    // serveur le temps de la constater plutôt que de courir après l'ordonnanceur.
+    for _ in 0..100 {
+        if etat.close_recu.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        etat.close_recu.load(Ordering::SeqCst),
+        "le canal exec doit être refermé même quand la commande meurt d'un signal : \
+         sans CHANNEL_CLOSE, le serveur continue d'alimenter la fenêtre ({} octets déjà remis)",
+        etat.octets.load(Ordering::SeqCst)
+    );
 }
 
 /// Trouvé par l'audit du 7 septembre 2026 : `run_avec_agent` faisait
@@ -3523,6 +3788,70 @@ async fn un_forwarded_tcpip_sur_un_port_non_enregistre_est_refuse() {
     assert!(
         out.contains("ChannelOpenFailure(ConnectFailed)"),
         "un forwarded-tcpip sur un port non enregistré doit être refusé : {out}"
+    );
+    session.disconnect().await.unwrap();
+}
+
+/// Trouvé par l'audit du 9 septembre 2026 : `executer_borne` (le corps commun
+/// de `run` et `run_borne`) ignorait `ChannelMsg::ExitSignal` dans son `_ => {}`
+/// et partait d'un code de sortie à 0. Une commande tuée par un signal côté
+/// distant (OOM-killer, `kill -9`, SIGPIPE) était donc rapportée `(sortie, 0)`,
+/// c'est-à-dire réussie : le déploiement de clé publique (`key_deploy`, qui
+/// teste `code == 0`) annonçait un succès pour un `ssh-copy-id` tué en route, et
+/// l'exécution de commande affichait « [exit 0] ». Le correctif existait déjà
+/// pour `run_avec_agent`, il n'avait jamais été porté ici.
+#[tokio::test]
+async fn run_echoue_quand_la_commande_est_tuee_par_un_signal() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+    // Le serveur de test répond exit-signal (et jamais exit-status) sur ce
+    // marqueur, comme le fait un vrai serveur pour un processus tué.
+    let err = session
+        .run("echo TUE_PAR_SIGNAL")
+        .await
+        .expect_err("une commande tuée par un signal ne doit pas passer pour un succès");
+    assert!(
+        err.to_string().contains("interrompue par un signal"),
+        "le message doit nommer le signal : {err}"
+    );
+    // Même verdict par le chemin borné, qui partage la même boucle.
+    let err = session
+        .run_borne("echo TUE_PAR_SIGNAL", std::time::Duration::from_secs(5))
+        .await
+        .expect_err("run_borne doit refuser tout autant");
+    assert!(
+        err.to_string().contains("interrompue par un signal"),
+        "le message doit nommer le signal : {err}"
+    );
+    // Une commande normale rend toujours sa sortie et son code.
+    let (out, code) = session.run("echo ok ; exit 4").await.expect("cas nominal");
+    assert_eq!(code, 4);
+    assert!(out.contains("CMD:echo"), "sortie inattendue : {out}");
+    session.disconnect().await.unwrap();
+}
+
+/// Trouvé par l'audit du 9 septembre 2026, même famille que le test précédent :
+/// `executer_borne` n'avait aucun équivalent du `statut_recu` de
+/// `run_avec_agent`. Un canal fermé sans le moindre `exit-status` (lien coupé,
+/// processus disparu) rendait donc 0, un succès inventé. Sans statut de sortie,
+/// on ne conclut pas au succès.
+#[tokio::test]
+async fn run_echoue_quand_le_canal_ferme_sans_statut() {
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+    let mut session = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("connexion");
+    let err = session
+        .run("echo SANS_STATUT")
+        .await
+        .expect_err("une fermeture sans statut doit échouer");
+    assert!(
+        err.to_string().contains("sans code de sortie"),
+        "message inattendu : {err}"
     );
     session.disconnect().await.unwrap();
 }

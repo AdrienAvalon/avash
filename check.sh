@@ -137,8 +137,41 @@ run "garde : dialogues natifs préfixés proscrits" "$ROOT" ./scripts/tests/guar
 # qui s'arrêtait à la première cible, une publication qui n'attendait pas la
 # sécurité — les trois causes des deux ratés de la 0.10.0.
 run "garde : marqueurs Rust proscrits" "$ROOT" ./scripts/tests/guard-marqueurs-rust.sh
+# Trouvé par l'audit du 9 septembre 2026 : une commande Tauri restait exposée à
+# la webview sans qu'aucun appel du front ne l'utilise, malgré la règle écrite
+# en commentaire dans lib.rs. La liste est désormais comparée aux appels.
+run "IPC : commandes exposées toutes appelées" "$ROOT" ./scripts/tests/ipc-commandes-appelees-par-le-front.sh
 run "fuzz : toutes les cibles jouées" "$ROOT" ./scripts/tests/fuzz-continue-toutes-cibles.sh
 run "release : publier attend la sécurité" "$ROOT" ./scripts/tests/release-publier-attend-securite.sh
+# Trouvé le 9 septembre 2026 : le texte d'une invite du serveur atteignait les
+# marqueurs internes (donc l'oubli d'une clé d'hôte) et le terminal (donc ses
+# séquences ANSI). Les deux barrières se vérifient de bout en bout.
+run "texte distant neutralisé" "$ROOT" ./scripts/tests/texte-distant-neutralise.sh
+run "secrets ignorés par le dépôt" "$ROOT" ./scripts/tests/secrets-ignores-par-le-depot.sh
+run "aide d'identifiants sops" "$ROOT" ./scripts/tests/credential-sops-echoue-franchement.sh
+run "allowlist gitleaks étroite" "$ROOT" ./scripts/tests/gitleaks-allowlist-etroite.sh
+run "deny.toml sans avis fantôme" "$ROOT" ./scripts/tests/deny-ignore-sans-avis-fantome.sh
+# Le résumé AppStream annonçait « SSH, RDP et VNC » mais le corps de la
+# description et les mots-clés ignoraient le VNC : la fiche lue par GNOME
+# Logiciels, Discover et Flathub sous-vendait une fonction complète, là où
+# winget la décrivait bien. Le contrôle exige que les deux canaux restent
+# d'accord sur la liste des protocoles.
+run "AppStream : la description couvre les protocoles annoncés" "$ROOT" ./scripts/tests/appstream-description-couvre-les-protocoles.sh
+# RELEASE.md §8 annonçait « cinq droits qui demandent une exception », les
+# énumérait bien tous, puis refermait la section sur « demander les trois
+# exceptions », et docs/feuille-de-route.md en annonçait trois elle aussi : le
+# compte d'avant l'ajout du son et du série. Le mainteneur qui suit l'un ou
+# l'autre document oublie de justifier les deux droits les plus larges dans la
+# PR de soumission, que le robot Flathub bloque alors. L'assertion est
+# textuelle, donc ce contrôle tourne sans PyYAML (il relit les finish-args à la
+# main quand la bibliothèque manque) : il reste hors du bloc ci-dessous.
+run "flathub : le compte des exceptions concorde" "$ROOT" ./scripts/tests/flathub-exceptions-nombre-coherent.sh
+# Le même point de la feuille de route annonçait le manifeste construit et lancé
+# sur le poste « depuis le tag v0.8.0 » alors qu'il pointe v0.10.1 depuis les
+# publications 0.9.x et 0.10.x : le lecteur croyait éprouvé le manifeste
+# d'aujourd'hui et n'avait aucune raison de rejouer flatpak-builder avant la PR.
+# Assertion textuelle elle aussi, donc hors du bloc PyYAML ci-dessous.
+run "flathub : tag cité par la feuille de route" "$ROOT" ./scripts/tests/flathub-tag-feuille-de-route.sh
 # Le manifeste de mise à jour (latest.json du workflow Release) doit proposer les
 # cibles deb/rpm : sans elles, une installation par paquet se rabat sur l'AppImage
 # et échoue à l'installer. Contrôle guardé par PyYAML (pas une dépendance du dépôt).
@@ -162,6 +195,11 @@ if python3 -c "import yaml" >/dev/null 2>&1; then
   # et /dev/ttyACM*) : sans eux, ces deux fonctions sont muettes/vides dans le bac à
   # sable, alors qu'elles marchent en AppImage. Les droits sont à justifier (§8).
   run "flathub : son et série accordés" "$ROOT" ./scripts/tests/flathub-permissions-audio-serie.sh
+  # Le .desktop Flathub annonçait `StartupWMClass=dev.avash.app`, l'identifiant
+  # Tauri, alors que la fenêtre émet le nom du binaire (`avash-ui`) faute de
+  # `enableGTKAppId` : le bureau ne reliait pas la fenêtre à l'entrée .desktop,
+  # d'où icône générique et épinglage cassé. L'AUR, même exécutable, avait juste.
+  run "flathub : StartupWMClass = classe réelle" "$ROOT" ./scripts/tests/flathub-startupwmclass-classe-reelle.sh
   # Le `zap trash` du cask ne listait que les répertoires `dev.avash.app` de la
   # webview Tauri, pas l'état du cœur sous `~/Library/Application Support/avash`
   # (config_dir macOS) : brew uninstall --zap laissait bureaux RDP, tunnels,
@@ -325,11 +363,18 @@ run "docs : feuille de route, import RDP MobaXterm décrit" "$ROOT" ./scripts/te
 # dans le même fichier. Le contrôle prend le décompte des `it(` et le relevé de
 # docs/qualite.md pour vérité et exige que les deux tableaux les citent tous deux.
 run "docs : feuille de route, tableaux chiffrés accordés" "$ROOT" ./scripts/tests/feuille-de-route-compteurs-coherents.sh
+# La ligne « Serveurs de test » de docs/qualite.md affichait le bon total (32)
+# mais un détail périmé : « serveur VNC (2) … RDPDR (27) », soit 29 pour le
+# lecteur qui fait l'addition annoncée. Le contrôle prend les `#[test]` des deux
+# fichiers pour vérité et exige que le total comme les sous-comptes les citent.
+run "docs : qualité, sous-comptes des serveurs de test" "$ROOT" ./scripts/tests/qualite-serveurs-de-test-sous-comptes.sh
 # `audit.toml` à la racine n'était lu par aucun outil : cargo-audit ne charge sa
 # config que depuis .cargo/audit.toml. Le fichier racine était mort et la liste
 # effective vivait dans les --ignore de check.sh et des deux CI, qui divergeaient
 # (RUSTSEC-2024-0429 y figurait, pas dans audit.toml). Le contrôle exige la config
-# centralisée dans .cargo/audit.toml, alignée sur deny.toml, sans --ignore résiduel.
+# centralisée dans .cargo/audit.toml, sans --ignore résiduel, et un deny.toml qui
+# n'accepte rien d'inconnu de cette liste ni ne s'en écarte sans l'écrire (les
+# deux outils ne rencontrent pas les mêmes avis, audit du 9 septembre 2026).
 run "audit : avis cargo-audit centralisés (.cargo/audit.toml)" "$ROOT" ./scripts/tests/audit-config-centralise.sh
 # deny.toml (racine) prétendait que rsa n'était pas employé pour du RSA privé,
 # alors qu'avash signe le défi SSH avec la clé id_rsa de l'utilisateur ; et

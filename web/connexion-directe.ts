@@ -5,7 +5,7 @@ import { $ } from "./etat";
 import { loadHosts, openManualSession, openSerie } from "./main";
 import { choisirDossierPartage, openRdp } from "./rdp";
 import { askConfirm } from "./dialogues";
-import { isHostKeyChanged, nettoyerMarqueurs } from "./filters";
+import { isHostKeyChanged, nettoyerMarqueurs, nettoyerPourTerminal } from "./filters";
 import { t } from "./i18n";
 
 type PortSerie = { chemin: string; description: string };
@@ -249,7 +249,10 @@ export async function manualSubmit(ev: Event) {
     // ce flux ici, puis on retire tout marqueur restant avant affichage.
     const msg = e instanceof Error ? e.message : String(e);
     if (isHostKeyChanged(msg)) {
-      const clean = nettoyerMarqueurs(msg);
+      // `nettoyerPourTerminal` en plus depuis l'audit du 9 septembre 2026 : le
+      // message peut porter du texte du serveur, dont des retours à la ligne en
+      // nombre qui repousseraient les boutons de la boîte hors de l'écran.
+      const clean = nettoyerPourTerminal(nettoyerMarqueurs(msg));
       const ok = await askConfirm(`${clean}\n\n${t("cle-hote-oublier-question")}`);
       if (!ok) {
         manualError().textContent = clean;

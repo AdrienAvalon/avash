@@ -929,6 +929,47 @@ mod tests {
         assert_eq!(page_de_code::decoder(b"", 1252), "");
     }
 
+    /// Les cas limites que le fuzzing ne peut PAS atteindre pour cette
+    /// fonction, et qu'il faut donc écrire à la main.
+    ///
+    /// Trouvé par l'audit du 9 septembre 2026 : la cible `fuzz/reg_query` ne
+    /// joue jamais ce code. Les campagnes tournent sur Linux, où
+    /// `decoder_nom_putty_windows` prend sa branche `cfg(not(windows))` (repli
+    /// UTF-8) ; la FFI, ses deux appels de dimensionnement et sa troncature
+    /// UTF-16 n'y sont donc pas exercés. Ce test-ci les exerce là où ils
+    /// existent, dans le job « Cœur — tests Windows » de la chaîne.
+    #[cfg(windows)]
+    #[test]
+    fn le_decodage_de_page_de_code_tient_les_cas_limites() {
+        // Une entrée longue : le premier appel dimensionne, le second remplit.
+        // Une erreur de capacité entre les deux se verrait ici, pas sur « café ».
+        let long = vec![b'\xe9'; 4096];
+        let decode = page_de_code::decoder(&long, 1252);
+        assert_eq!(
+            decode.chars().count(),
+            4096,
+            "chaque octet doit rendre un caractère, sans troncature"
+        );
+        assert!(
+            decode.chars().all(|c| c == 'é'),
+            "le contenu ne doit pas être abîmé sur une entrée longue"
+        );
+
+        // Un octet non attribué dans la page 1252 (0x81) : l'API échoue ou rend
+        // un caractère de remplacement, mais la fonction ne doit ni paniquer ni
+        // rendre une chaîne vide silencieuse.
+        let bizarre = page_de_code::decoder(b"a\x81b", 1252);
+        assert!(
+            bizarre.contains('a') && bizarre.contains('b'),
+            "les octets valides autour d'un octet douteux doivent survivre : {bizarre:?}"
+        );
+
+        // Un seul octet, et un octet nul au milieu : deux entrées que
+        // l'exploration aléatoire trouverait en premier.
+        assert_eq!(page_de_code::decoder(b"\xe9", 1252), "é");
+        assert_eq!(page_de_code::decoder(b"a\x00b", 1252).chars().count(), 3);
+    }
+
     const MOBA: &str = "[Bookmarks]\r\nSubRep=\r\nImgNum=42\r\nDeck=#109#0%192.168.137.40%22%deck%%0%0%%%%%0%0%0%%%-1%0%0%0%%1080%%0%0%1%#MobaFont%10%0%0%-1%15%236,236,236%30,30,30%180,180,192%0%-1%0%%xterm%-1%0%_Std_Colors_0_%80%24%0%1%-1%<none>%%0%0%-1%-1#0# #-1\r\nBureau=#91#4%10.0.0.9%3389%adrien%...\r\n\r\n[Bookmarks_1]\r\nSubRep=Clients\\Acme\r\nImgNum=41\r\nweb acme=#109#0%web.acme.fr%2222%%%-1%-1%%%%%0%0%0%_CurrentDrive_:\\Users\\a\\.ssh\\id_ed25519%%-1%0%0%0%%1080%%0%0%1%#MobaFont%10#0# #-1\r\n";
 
     #[test]

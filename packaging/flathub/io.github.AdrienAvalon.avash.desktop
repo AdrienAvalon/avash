@@ -9,4 +9,4 @@ Terminal=false
 Categories=Network;RemoteAccess;
 Keywords=ssh;rdp;vnc;sftp;terminal;remote desktop;
 Keywords[fr]=ssh;rdp;vnc;sftp;terminal;bureau distant;
-StartupWMClass=dev.avash.app
+StartupWMClass=avash-ui

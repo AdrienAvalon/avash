@@ -14,21 +14,23 @@
   <project_license>AGPL-3.0-or-later</project_license>
   <description>
     <p xml:lang="fr">
-      Avash réunit vos terminaux SSH, vos bureaux distants Windows (RDP) et vos
-      transferts de fichiers (SFTP) dans une seule application native. Il lit
-      et écrit votre ~/.ssh/config tel quel, garde les mots de passe dans le
-      trousseau du système, vérifie les clés d'hôte en SSH et en RDP avant le
-      moindre identifiant, et importe les sessions PuTTY et MobaXterm.
+      Avash réunit vos terminaux SSH, vos bureaux distants Windows (RDP), vos
+      bureaux VNC, vos consoles série et vos transferts de fichiers (SFTP) dans
+      une seule application native. Il lit et écrit votre ~/.ssh/config tel
+      quel, garde les mots de passe dans le trousseau du système, vérifie les
+      clés d'hôte en SSH et en RDP avant le moindre identifiant, et importe les
+      sessions PuTTY et MobaXterm.
     </p>
     <p>
-      Avash brings your SSH terminals, your Windows remote desktops (RDP) and
-      your file transfers (SFTP) into a single native application. It reads and
-      writes your ~/.ssh/config as it is, keeps passwords in the system keyring,
-      verifies host keys for SSH and RDP before any credential leaves, and
-      imports PuTTY and MobaXterm sessions.
+      Avash brings your SSH terminals, your Windows remote desktops (RDP), your
+      VNC desktops, your serial consoles and your file transfers (SFTP) into a
+      single native application. It reads and writes your ~/.ssh/config as it
+      is, keeps passwords in the system keyring, verifies host keys for SSH and
+      RDP before any credential leaves, and imports PuTTY and MobaXterm
+      sessions.
     </p>
-    <p xml:lang="fr">Tunnels SSH locaux, distants et SOCKS, dossiers, étiquettes, palette de commandes, snippets, santé des hôtes, enregistrement de session, interface en français et en anglais.</p>
-    <p>Local, remote and SOCKS tunnels, folders, tags, command palette, snippets, host health, session recording, interface in French and English.</p>
+    <p xml:lang="fr">Tunnels SSH locaux, distants et SOCKS, VNC chiffré par VeNCrypt quand le serveur l'offre, certificat épinglé au premier contact, dossiers, étiquettes, palette de commandes, snippets, santé des hôtes, enregistrement de session, interface en français et en anglais.</p>
+    <p>Local, remote and SOCKS tunnels, VNC encrypted with VeNCrypt when the server offers it, certificate pinned on first contact, folders, tags, command palette, snippets, host health, session recording, interface in French and English.</p>
   </description>
   <launchable type="desktop-id">avash.desktop</launchable>
   <url type="homepage">https://github.com/AdrienAvalon/avash</url>
@@ -59,6 +61,7 @@
   <keywords>
     <keyword>ssh</keyword>
     <keyword>rdp</keyword>
+    <keyword>vnc</keyword>
     <keyword>sftp</keyword>
     <keyword>terminal</keyword>
     <keyword xml:lang="fr">bureau distant</keyword>

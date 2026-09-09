@@ -23,11 +23,14 @@ ignore = [
   # mesure des milliers de signatures (trouvé par l'audit du 8 septembre 2026 :
   # l'ancien texte prétendait à tort que rsa n'était pas employé pour du privé).
   "RUSTSEC-2023-0071",
-  # RUSTSEC-2024-0429 : glib, itérateurs VariantStrIter non sûrs. Dépendance
-  # TRANSITIVE de la pile GTK de Tauri (avash-ui), pas de notre code ; on ne peut
-  # ni la retirer ni la corriger — le correctif remontera par Tauri. Nommée ici
-  # explicitement pour que le blocage « unsound » reste actif sur TOUT le reste.
-  "RUSTSEC-2024-0429",
+  # RUSTSEC-2024-0429 (glib, VariantStrIter non sûr) N'EST PLUS ignoré ici, et
+  # ce n'est pas un oubli. L'avis est porté par une FONCTION précise
+  # (`glib::VariantStrIter::next`, versions >=0.15 <0.20) : cargo-deny ne le
+  # rapproche jamais de glib 0.18.5, et répondait « advisory-not-detected » à
+  # cette entrée. Elle ne protégeait donc rien, tout en laissant croire à une
+  # vigilance. La vraie exception vit dans `.cargo/audit.toml`, où cargo-audit,
+  # lui, rencontre bel et bien l'avis. Trouvé par l'audit du 9 septembre 2026 ;
+  # contrôlé par scripts/tests/deny-ignore-sans-avis-fantome.sh.
 ]
 
 [licenses]

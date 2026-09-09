@@ -25,11 +25,11 @@ ignore = [
   # commentaire recopiait celui de la racine et nommait à tort une dépendance
   # SSH, hors-sujet dans un processus de bureau distant).
   "RUSTSEC-2023-0071",
-  # RUSTSEC-2024-0429 : glib, itérateurs VariantStrIter non sûrs. Dépendance
-  # TRANSITIVE de la pile GTK de Tauri (avash-ui), pas de notre code ; on ne peut
-  # ni la retirer ni la corriger — le correctif remontera par Tauri. Nommée ici
-  # explicitement pour que le blocage « unsound » reste actif sur TOUT le reste.
-  "RUSTSEC-2024-0429",
+  # RUSTSEC-2024-0429 (glib) n'a rien à faire ici : glib n'est même pas dans le
+  # graphe du processus de bureau distant (`cargo tree -i glib` ne trouve rien),
+  # cette entrée recopiait celle de la racine. Retirée par l'audit du
+  # 9 septembre 2026, comme le doublon de commentaire juste au-dessus l'avait
+  # été la veille.
 ]
 
 [licenses]

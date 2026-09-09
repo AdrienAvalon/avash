@@ -10,17 +10,33 @@ use ironrdp_graphics::clearcodec::ClearCodecDecoder;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    // [largeur − 1][hauteur − 1][longueur de la première image, u16] puis deux
+    // [largeur u16][hauteur u16][longueur de la première image, u16] puis deux
     // images décodées à la suite par le MÊME décodeur : la seconde exerce les
     // caches remplis par la première (glyphe réutilisé, barres verticales).
-    // Les côtés restent sous 128 pour que l'exploration aille vite.
-    if data.len() < 4 {
+    //
+    // Les côtés étaient tirés sur 7 bits, donc bornés à 128 quelle que soit
+    // l'entrée : le plafond anti-OOM du décodeur (`MAX_DECODE_DIM`, 8192
+    // pixels par axe, posé contre un serveur RDP hostile) était HORS
+    // D'ATTEINTE de la campagne, et une régression qui l'aurait supprimé
+    // n'aurait fait rougir personne. Trouvé par l'audit du 9 septembre 2026.
+    // On tire donc chaque côté sur un u16 entier, et c'est la SURFACE qu'on
+    // borne, pas les côtés : une image de 9000 × 1 atteint le plafond pour
+    // trois fois rien, là où 8192 × 8192 épuiserait la mémoire du fuzzeur
+    // avant même d'avoir décodé quoi que ce soit.
+    if data.len() < 6 {
         return;
     }
-    let largeur = u16::from(data[0] & 0x7F) + 1;
-    let hauteur = u16::from(data[1] & 0x7F) + 1;
-    let reste = &data[4..];
-    let coupe = usize::from(u16::from_le_bytes([data[2], data[3]])).min(reste.len());
+    let largeur = u16::from_le_bytes([data[0], data[1]]);
+    let hauteur = u16::from_le_bytes([data[2], data[3]]);
+    if largeur == 0 || hauteur == 0 {
+        return;
+    }
+    const SURFACE_MAX: usize = 1 << 22; // 4 Mpx, soit 16 Mio une fois en RGBA
+    if usize::from(largeur) * usize::from(hauteur) > SURFACE_MAX {
+        return;
+    }
+    let reste = &data[6..];
+    let coupe = usize::from(u16::from_le_bytes([data[4], data[5]])).min(reste.len());
     let (premiere, seconde) = reste.split_at(coupe);
     let mut decodeur = ClearCodecDecoder::new();
     for image in [premiere, seconde] {

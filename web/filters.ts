@@ -106,6 +106,50 @@ export function nettoyerMarqueurs(errorMessage: string): string {
 }
 
 /**
+ * Neutralise un texte avant de l'écrire dans un terminal xterm.js.
+ *
+ * Trouvé par l'audit du 9 septembre 2026. Un message d'échec de connexion peut
+ * contenir du texte venu du serveur (l'invite `keyboard-interactive` que le
+ * cœur recopie pour dire à quoi il ne sait pas répondre). Écrit tel quel dans
+ * le terminal, ce texte y injectait ses propres séquences ANSI : effacer
+ * l'écran, remonter le curseur sur l'alerte affichée juste au-dessus, imiter
+ * une invite locale de mot de passe. Le cœur neutralise déjà à la source
+ * (`texte_distant_sur`, crates/avash/src/ssh.rs) ; ce filtre est la seconde
+ * barrière, du côté qui écrit.
+ *
+ * À n'appliquer QUE sur des messages : le flux du PTY, lui, doit garder ses
+ * séquences, c'est du terminal légitime.
+ */
+export function nettoyerPourTerminal(text: string): string {
+  // C0 (dont ESC, BEL, CR, LF), DEL et C1 : remplacés par une espace pour ne
+  // pas coller les mots, puis les blancs répétés sont réduits.
+  return text
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Étiquette « utilisateur@hôte:port » d'un hôte, prête à être affichée.
+ *
+ * Trouvé par la relecture de l'audit du 9 septembre 2026. Le durcissement
+ * initial n'avait protégé que `avash list`, le CLI v0.1, alors que le produit
+ * réel est le Tauri : `connectByAlias` composait la même chaîne à partir des
+ * champs de `~/.ssh/config` et l'écrivait telle quelle dans xterm.js. Un
+ * `HostName srv\x1b]0;PWNED\x07` posé par un autre outil (import maison,
+ * éditeur, dotfiles partagés) rejouait donc sa séquence à chaque ouverture
+ * d'onglet. Le cœur refuse désormais d'écrire un caractère de contrôle, mais
+ * rien ne garantit que le fichier lu vienne de lui.
+ *
+ * La composition vit ici, en un seul endroit, parce que la même étiquette sert
+ * au terminal, à la modale de mot de passe et au titre d'onglet : le nettoyage
+ * ne peut donc plus être oublié sur l'un des trois.
+ */
+export function etiquetteHote(h: Pick<Host, "alias" | "hostname" | "user" | "port">): string {
+  return nettoyerPourTerminal(`${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`);
+}
+
+/**
  * Retire les caractères qui permettraient d'injecter du HTML.
  *
  * Utilisé partout où du texte non maîtrisé (filtre de recherche) est inséré

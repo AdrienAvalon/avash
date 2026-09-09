@@ -30,6 +30,12 @@ Le chemin **non compressé** retire déjà ce remplissage, avec un commentaire q
 cite la spécification. Les chemins **compressés** — RDP 6.0 en 32 bits et RLE
 entrelacé — ne le font pas. C'est là le défaut.
 
+Le correctif avait d'abord été recopié format par format, et la copie avait
+sauté le RLE **8 bits indexé** : une session négociée en profondeur 8 bits
+restait cisaillée. Repéré par l'audit du 9 septembre 2026. Les quatre formats
+RLE passent désormais par un seul point de décision, `appliquer_bitmap_rle`,
+pour que l'oubli ne puisse pas se reproduire.
+
 ## Constaté, pas supposé
 
 Mesuré contre un xrdp réel (SLED-15), en instrumentant le décodeur :
@@ -349,6 +355,15 @@ serveur entier scénarisé dans un tampon) :
   ne prend le verrou que pour écrire. `set_screen` suit la taille du cadre
   pour que les demandes de mise à jour couvrent tout le bureau après un
   agrandissement.
+- **Ce qu'un serveur fait lire.** La raison qui suit un refus (mot de passe
+  refusé, ou connexion refusée faute de type de sécurité, RFB 3.8 7.1.2) est
+  précédée de sa longueur ; le paquet lisait cette longueur pour la jeter et
+  ramassait la suite par `read_to_string`, qui n'a d'autre fin que la fermeture
+  du flux. Un serveur qui refuse puis garde la connexion ouverte tenait le
+  sidecar en lecture jusqu'au délai de connexion (25 s), à empiler en mémoire
+  tout ce qu'il y déversait. `auth::lire_raison` s'en tient désormais à la
+  longueur annoncée, bornée à 1024 octets, et une fin de flux y reste un refus.
+  Repéré par l'audit du 9 septembre 2026.
 
 Et un détail de protocole : le texte du presse-papiers voyage en Latin-1
 (RFC 6143, 7.5.6), un octet par caractère ; le paquet envoyait et lisait de

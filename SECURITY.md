@@ -87,12 +87,19 @@ répondent.
   exécution de code. Les **fichiers copiés sur le bureau distant** ne sont
   jamais téléchargés sans votre accord : Avash n'en demande que la liste, la
   montre, et n'écrit qu'après confirmation, dans le dossier annoncé, sous des
-  chemins assainis par IronRDP (jamais absolus, jamais de `..`), sans écraser
-  un fichier existant et sans rien exécuter. Dans l'autre sens, seuls les
-  fichiers que vous déposez ou choisissez sont offerts ; le distant n'en voit
-  ni le chemin absolu ni rien d'autre du poste. Un **serveur SFTP** qui nomme
-  une entrée « ../x » ou « a/b » dans un dossier que vous téléchargez ou
-  relayez est refusé : rien ne s'écrit hors du dossier choisi.
+  chemins assainis par IronRDP (jamais absolus, jamais de `..`) puis revalidés
+  composant par composant : une lettre de lecteur (« C:evil.exe »), un nom de
+  périphérique Windows réservé ou un caractère qui ment sur ce qu'on lit
+  (contrôle de direction bidirectionnelle, invisible sans chasse, saut de ligne
+  forcé) fait refuser le fichier, et ce que la liste affiche neutralise ces
+  caractères avant même que vous acceptiez. Rien n'écrase un fichier existant,
+  rien n'est exécuté. Dans l'autre sens, seuls les fichiers que vous déposez ou
+  choisissez sont offerts ; le distant n'en voit ni le chemin absolu ni rien
+  d'autre du poste. Un **serveur SFTP** qui nomme une entrée « ../x » ou
+  « a/b » dans un dossier que vous téléchargez ou relayez est refusé : rien ne
+  s'écrit hors du dossier choisi. Un chemin de destination imposé à un
+  téléchargement obéit aux mêmes règles que le nom dérivé : absolu, et jamais
+  un fichier déjà présent, qui vaut un nom libre à côté.
 - **L'agent SSH du poste, prêté à un serveur.** La copie directe d'un hôte à
   un autre (case à cocher dans « Copier vers un autre hôte… ») lance `scp`
   chez l'hôte source avec la redirection d'agent : pendant cette commande, et
@@ -380,14 +387,26 @@ Avash écrit et relit `~/.ssh/config`. Avant toute écriture, les champs d'un
 hôte sont validés (voir `validate_host` / `validate_config_value` dans
 `crates/avash/src/lib.rs`) :
 
-- tout caractère de saut de ligne (`\n`, `\r`) ou nul (`\0`) dans un champ est
-  **rejeté** — sans quoi une valeur piégée pourrait injecter une directive
-  arbitraire (par exemple `ProxyCommand`) ;
+- **tout caractère de contrôle** dans un champ est **rejeté**, tabulation
+  comprise. Le saut de ligne (`\n`, `\r`) ouvrirait une directive arbitraire,
+  `ProxyCommand` en tête. Le reste du plan de contrôle est tout aussi dangereux
+  une fois le fichier relu : `HostName srv\x1b]0;PWNED\x07` rejouait sa séquence
+  d'échappement dans le terminal de qui liste ses hôtes (titre de fenêtre
+  réécrit, presse-papiers manipulé par OSC 52). Le message d'erreur nomme le
+  point de code fautif ;
 - le nom d'hôte ne peut contenir ni espace, ni joker (`*`, `?`, `!`), qui
-  s'appliqueraient à d'autres connexions.
+  s'appliqueraient à d'autres connexions. `ProxyJump` tolère l'espace entre ses
+  maillons (« bastion, relais:2200 »), jamais à l'intérieur d'un maillon.
 
-Les noms de dossiers sont normalisés de la même façon (segments contenant un
-saut de ligne retirés — voir `crates/avash/src/folders.rs`).
+Les noms de dossiers sont normalisés de la même façon (segment portant un
+caractère de contrôle retiré, voir `crates/avash/src/folders.rs`).
+
+Durcir la seule écriture ne suffit pas : rien ne garantit que le
+`~/.ssh/config` relu vienne d'Avash (import maison, éditeur, dotfiles
+partagés). Tout champ relu du fichier est donc neutralisé avant affichage :
+`sans_controle` pour `avash list`, `etiquetteHote` et `nettoyerPourTerminal`
+(`web/filters.ts`) pour l'application, qui écrit dans un vrai terminal. Le flux
+du PTY, lui, garde ses séquences : c'est du terminal légitime.
 
 ### `AVASH_HOME` : où Avash cherche votre configuration
 

@@ -233,7 +233,9 @@ fn blocs_bruts(content: &str) -> Vec<SshHost> {
                 .strip_prefix("Tags:")
                 .or_else(|| rest.trim_start().strip_prefix("tags:"))
             {
-                if let Some(h) = current.as_mut() {
+                // Premier `#Tags:` du bloc gagne, comme les directives SSH
+                // ci-dessous : une liste vide ne compte pas, la suivante sert.
+                if let Some(h) = current.as_mut().filter(|h| h.tags.is_empty()) {
                     h.tags = list
                         .split(',')
                         .map(|t| t.trim().to_string())
@@ -245,7 +247,8 @@ fn blocs_bruts(content: &str) -> Vec<SshHost> {
                 .strip_prefix("Folder:")
                 .or_else(|| rest.trim_start().strip_prefix("folder:"))
             {
-                if let Some(h) = current.as_mut() {
+                // Idem pour `#Folder:` : premier gagnant, valeur vide ignorée.
+                if let Some(h) = current.as_mut().filter(|h| h.folder.is_empty()) {
                     h.folder = path.trim().trim_matches('/').to_string();
                 }
             }
@@ -283,15 +286,43 @@ fn blocs_bruts(content: &str) -> Vec<SshHost> {
             }
             _ => {
                 if let Some(h) = current.as_mut() {
+                    // « La première valeur obtenue est retenue » vaut aussi
+                    // À L'INTÉRIEUR d'un bloc, pas seulement entre blocs.
+                    // Trouvé par l'audit du 9 septembre 2026 : chaque directive
+                    // écrasait la précédente, donc un bloc issu d'une fusion
+                    // manuelle (`User adrien` puis `User root`) faisait afficher
+                    // et connecter Avash en « root » là où `ssh prod` prend
+                    // « adrien ». On ne remplit donc qu'un champ encore `None`.
+                    //
+                    // Une valeur VIDE ne compte pas comme première valeur : la
+                    // même fusion manuelle laisse des résidus (`HostName` sans
+                    // argument, `User ""`) et les retenir aurait masqué la vraie
+                    // valeur écrite juste après. Avash aurait alors visé une
+                    // adresse vide, que rien ne rattrape en aval
+                    // (`hostname.unwrap_or(alias)` laisse passer `""`). Même
+                    // raison que pour `Port 0` ci-dessous.
+                    let valeur = dequote(&value);
                     match key.as_str() {
-                        "hostname" => h.hostname = Some(dequote(&value).to_string()),
-                        "user" => h.user = Some(dequote(&value).to_string()),
+                        "hostname" if h.hostname.is_none() && !valeur.is_empty() => {
+                            h.hostname = Some(valeur.to_string());
+                        }
+                        "user" if h.user.is_none() && !valeur.is_empty() => {
+                            h.user = Some(valeur.to_string());
+                        }
                         // OpenSSH refuse « Port 0 » (« Bad port ») : le lire
                         // comme un port menait à une connexion vouée à l'échec
-                        // sur un message opaque. Trouvé par le fuzzing.
-                        "port" => h.port = value.parse::<u16>().ok().filter(|p| *p != 0),
-                        "identityfile" => h.identity_file = Some(dequote(&value).to_string()),
-                        "proxyjump" => h.proxy_jump = Some(dequote(&value).to_string()),
+                        // sur un message opaque. Trouvé par le fuzzing. Un port
+                        // rejeté ne vaut pas première valeur : on laisse le
+                        // champ vide, une occurrence valide suivante servira.
+                        "port" if h.port.is_none() => {
+                            h.port = value.parse::<u16>().ok().filter(|p| *p != 0);
+                        }
+                        "identityfile" if h.identity_file.is_none() && !valeur.is_empty() => {
+                            h.identity_file = Some(valeur.to_string());
+                        }
+                        "proxyjump" if h.proxy_jump.is_none() && !valeur.is_empty() => {
+                            h.proxy_jump = Some(valeur.to_string());
+                        }
                         _ => {}
                     }
                 }
@@ -471,6 +502,131 @@ mod tests {
         // Un guillemet est refusé partout ; l'espace dans IdentityFile passe.
         assert!(avec(|h| h.hostname = Some("a\"b".into())).is_err());
         assert!(avec(|h| h.identity_file = Some("/home/u/ma clé".into())).is_ok());
+    }
+
+    #[test]
+    fn validate_host_accepte_un_rebond_a_plusieurs_sauts() {
+        // Trouvé par l'audit du 9 septembre 2026 : « bastion, relais:2200 »
+        // (virgule PUIS espace) est la forme que l'interface donne en exemple,
+        // celle que `split_proxy_jump` sait découper, et celle dont `ssh -vv`
+        // montre qu'OpenSSH enchaîne bien les deux sauts. La validation
+        // refusait pourtant tout espace : un hôte déjà enregistré ainsi ne
+        // pouvait plus être réenregistré, le seul fait de changer un tag
+        // faisait échouer l'enregistrement.
+        let avec_rebond = |v: &str| {
+            validate_host(&SshHost {
+                alias: "prod".into(),
+                proxy_jump: Some(v.into()),
+                ..Default::default()
+            })
+        };
+        for bon in [
+            "bastion, relais:2200",
+            "bastion,deploy@10.0.0.1:2222",
+            " bastion , relais ",
+            "u@[2001:db8::1]:2222, bastion",
+        ] {
+            assert!(avec_rebond(bon).is_ok(), "devrait passer : {bon}");
+        }
+        // L'espace à l'intérieur d'un maillon reste refusé, par prudence : ssh
+        // ne s'en plaint pas (mesuré avec OpenSSH_10.5p1), il le lit de
+        // travers, « saut un.invalid » devenant l'hôte « saut » suivi d'une
+        // commande distante « un.invalid ».
+        for mauvais in ["bastion relais", "bastion, un relais", "a b"] {
+            assert!(avec_rebond(mauvais).is_err(), "devrait échouer : {mauvais}");
+        }
+    }
+
+    #[test]
+    fn validate_host_refuse_les_caracteres_de_controle() {
+        // Trouvé par l'audit du 9 septembre 2026 : la validation ne refusait
+        // que `\n`, `\r`, `\0` et le guillemet, et la variante « sans espace »
+        // n'ajoutait que `char::is_whitespace`, qui ignore les codes de
+        // contrôle C0. Un `HostName srv\x1b]0;PWNED\x07` importé depuis un
+        // export PuTTY hostile passait donc jusque dans `~/.ssh/config`, où
+        // `render_host_block` l'écrit tel quel (il ne fait qu'un `.trim()`).
+        // La séquence repartait ensuite vers le terminal à chaque `avash list`,
+        // sans que personne ouvre le fichier : titre de fenêtre réécrit,
+        // presse-papiers manipulé par OSC 52, voire réponse d'une requête
+        // d'état réinjectée comme une frappe sur certains émulateurs.
+        let base = SshHost {
+            alias: "prod".into(),
+            ..Default::default()
+        };
+        let avec = |f: &dyn Fn(&mut SshHost)| {
+            let mut h = base.clone();
+            f(&mut h);
+            validate_host(&h)
+        };
+        // ESC (début de toute séquence ANSI), BEL (fin d'un OSC), DEL, un C1
+        // (0x9B, CSI sur un octet) et la tabulation, qui sépare la clé de la
+        // valeur pour OpenSSH : aucun n'a sa place dans un champ.
+        for c in ['\u{1b}', '\u{7}', '\u{7f}', '\u{9b}', '\t'] {
+            let charge = format!("srv{c}x");
+            assert!(
+                avec(&|h| h.hostname = Some(charge.clone())).is_err(),
+                "HostName devrait refuser U+{:04X}",
+                c as u32
+            );
+            assert!(
+                avec(&|h| h.user = Some(charge.clone())).is_err(),
+                "User devrait refuser U+{:04X}",
+                c as u32
+            );
+            assert!(
+                avec(&|h| h.proxy_jump = Some(charge.clone())).is_err(),
+                "ProxyJump devrait refuser U+{:04X}",
+                c as u32
+            );
+            assert!(
+                avec(&|h| h.identity_file = Some(format!("/home/u/{charge}"))).is_err(),
+                "IdentityFile devrait refuser U+{:04X}",
+                c as u32
+            );
+            assert!(
+                avec(&|h| h.tags = vec![charge.clone()]).is_err(),
+                "Tags devrait refuser U+{:04X}",
+                c as u32
+            );
+            assert!(
+                avec(&|h| h.folder = charge.clone()).is_err(),
+                "Folder devrait refuser U+{:04X}",
+                c as u32
+            );
+            // L'alias a sa propre validation, avec le même trou : il finit sur
+            // la ligne `Host`, tout aussi lue par le terminal.
+            assert!(
+                validate_host(&SshHost {
+                    alias: charge.clone(),
+                    ..Default::default()
+                })
+                .is_err(),
+                "l'alias devrait refuser U+{:04X}",
+                c as u32
+            );
+        }
+        // Rien de légitime ne doit être devenu invalide au passage.
+        assert!(avec(&|h| h.hostname = Some("prod.exemple.com".into())).is_ok());
+        assert!(avec(&|h| h.identity_file = Some("/home/u/ma clé".into())).is_ok());
+        assert!(avec(&|h| h.folder = "Prod/Bases".into()).is_ok());
+        assert!(avec(&|h| h.tags = vec!["été".into(), "bases".into()]).is_ok());
+    }
+
+    #[test]
+    fn sans_controle_neutralise_une_sequence_ansi_avant_affichage() {
+        // Trouvé par l'audit du 9 septembre 2026 : durcir la seule écriture
+        // d'Avash ne protège pas d'un `~/.ssh/config` déjà piégé par un autre
+        // outil. `avash list` imprimait alias, hôte et rebond bruts, donc
+        // chaque exécution rejouait la séquence dans le terminal.
+        let propre = sans_controle("srv\u{1b}]0;PWNED\u{7}");
+        assert!(
+            !propre.chars().any(char::is_control),
+            "il reste un caractère de contrôle : {propre:?}"
+        );
+        assert_eq!(propre, "srv ]0;PWNED ");
+        // Le texte inoffensif, accents compris, ne bouge pas.
+        assert_eq!(sans_controle("prod.exemple.com"), "prod.exemple.com");
+        assert_eq!(sans_controle("relais été"), "relais été");
     }
 
     #[test]
@@ -697,6 +853,109 @@ Host db bastion
     }
 
     #[test]
+    fn la_premiere_occurrence_dans_un_meme_bloc_est_retenue() {
+        // Trouvé par l'audit du 9 septembre 2026 : la règle « la première valeur
+        // obtenue est retenue » n'était appliquée qu'ENTRE blocs. À l'intérieur
+        // d'un même bloc, chaque directive écrasait la précédente, si bien qu'un
+        // bloc issu d'une fusion manuelle (`User adrien` puis `User root`) faisait
+        // afficher et connecter Avash en « root » là où `ssh prod` se connecte en
+        // « adrien ». Aucun message ne signalait l'ambiguïté.
+        let cfg = "Host prod\n  HostName 10.0.0.1\n  HostName 10.0.0.2\n  \
+                   User adrien\n  User root\n  Port 22\n  Port 2222\n  \
+                   IdentityFile ~/.ssh/premiere\n  IdentityFile ~/.ssh/seconde\n  \
+                   ProxyJump bastion\n  ProxyJump autre\n";
+
+        let liste = parse_config_str(cfg);
+        assert_eq!(liste.len(), 1);
+        let h = &liste[0];
+        assert_eq!(h.hostname.as_deref(), Some("10.0.0.1"), "HostName dupliqué");
+        assert_eq!(h.user.as_deref(), Some("adrien"), "User dupliqué");
+        assert_eq!(h.port, Some(22), "Port dupliqué");
+        assert_eq!(
+            h.identity_file.as_deref(),
+            Some("~/.ssh/premiere"),
+            "IdentityFile dupliqué"
+        );
+        assert_eq!(
+            h.proxy_jump.as_deref(),
+            Some("bastion"),
+            "ProxyJump dupliqué"
+        );
+
+        // Même règle à la résolution : les deux chemins partagent `blocs_bruts`.
+        let r = resoudre_hote_dans(cfg, "prod").unwrap();
+        assert_eq!(r.hostname.as_deref(), Some("10.0.0.1"));
+        assert_eq!(r.user.as_deref(), Some("adrien"));
+        assert_eq!(r.port, Some(22));
+        assert_eq!(r.identity_file.as_deref(), Some("~/.ssh/premiere"));
+        assert_eq!(r.proxy_jump.as_deref(), Some("bastion"));
+
+        // Un port refusé par OpenSSH (`Port 0`, « Bad port ») ne compte pas comme
+        // une première valeur : Avash l'ignore, et le port suivant valide sert.
+        // L'ordre inverse est le cas qui discrimine : sans la règle « premier
+        // gagnant », le `Port 0` final effaçait le 2222 déjà lu.
+        let cfg_port_nul = "Host prod\n  HostName 10.0.0.1\n  Port 0\n  Port 2222\n";
+        assert_eq!(
+            resoudre_hote_dans(cfg_port_nul, "prod").unwrap().port,
+            Some(2222)
+        );
+        let cfg_port_nul_apres = "Host prod\n  HostName 10.0.0.1\n  Port 2222\n  Port 0\n";
+        assert_eq!(
+            resoudre_hote_dans(cfg_port_nul_apres, "prod").unwrap().port,
+            Some(2222)
+        );
+    }
+
+    #[test]
+    fn une_valeur_vide_ne_compte_pas_comme_premiere_valeur() {
+        // Trouvé à la relecture de l'audit du 9 septembre 2026 : la règle
+        // « premier gagnant » posée juste au-dessus faisait, appliquée sans
+        // nuance, qu'un résidu de fusion manuelle (`HostName` sans argument,
+        // `User ""`) masquait la vraie valeur écrite juste en dessous. Avash
+        // aurait visé une adresse vide, que rien ne rattrape en aval : le
+        // binaire fait `hostname.unwrap_or(alias)`, qui laisse passer `""`.
+        let cfg = "Host prod\n  HostName\n  HostName 10.0.0.1\n  \
+                   User \"\"\n  User adrien\n  IdentityFile\n  \
+                   IdentityFile ~/.ssh/prod\n  ProxyJump \"\"\n  ProxyJump bastion\n";
+
+        let h = resoudre_hote_dans(cfg, "prod").unwrap();
+        assert_eq!(h.hostname.as_deref(), Some("10.0.0.1"), "HostName vide");
+        assert_eq!(h.user.as_deref(), Some("adrien"), "User vide");
+        assert_eq!(
+            h.identity_file.as_deref(),
+            Some("~/.ssh/prod"),
+            "IdentityFile vide"
+        );
+        assert_eq!(h.proxy_jump.as_deref(), Some("bastion"), "ProxyJump vide");
+
+        // Seule : une directive vide laisse le champ absent, jamais `Some("")`.
+        // Le repli sur l'alias peut alors jouer.
+        let seule = parse_config_str("Host prod\n  HostName\n  User \"\"\n");
+        assert_eq!(seule[0].hostname, None);
+        assert_eq!(seule[0].user, None);
+    }
+
+    #[test]
+    fn la_premiere_convention_avash_du_bloc_est_retenue() {
+        // Même audit : les conventions `#Tags:`/`#Folder:` restaient en
+        // dernier-gagne dans un bloc alors que la résolution leur applique le
+        // premier-gagne entre blocs. Un bloc recollé à la main affichait donc
+        // l'étiquette du morceau collé, pas celle d'origine.
+        let cfg = "Host prod\n  #Tags: prod, linux\n  #Tags: brouillon\n  \
+                   #Folder: Client/Prod\n  #Folder: Corbeille\n  HostName 10.0.0.1\n";
+        let h = &parse_config_str(cfg)[0];
+        assert_eq!(h.tags, vec!["prod".to_string(), "linux".to_string()]);
+        assert_eq!(h.folder, "Client/Prod");
+
+        // Une liste vide ne compte pas comme première valeur non plus.
+        let vide = "Host prod\n  #Tags:\n  #Tags: prod\n  #Folder:\n  \
+                    #Folder: Client\n  HostName 10.0.0.1\n";
+        let h = &parse_config_str(vide)[0];
+        assert_eq!(h.tags, vec!["prod".to_string()]);
+        assert_eq!(h.folder, "Client");
+    }
+
+    #[test]
     fn un_motif_de_negation_annule_le_bloc() {
         // `Host !prod *` : le `!prod` matche `prod` et annule tout le bloc, donc
         // `prod` n'hérite pas de son `User`. Un autre hôte, lui, en hérite.
@@ -828,6 +1087,23 @@ fn fin_de_ligne(content: &str) -> &'static str {
     }
 }
 
+/// Dit si `alias` est déjà déclaré dans la configuration SSH, `Include` résolus.
+///
+/// Trouvé par l'audit du 31 août 2026 pour `append_host` (commit 664d45e), puis
+/// par celui du 9 septembre 2026 pour `update_host` : la vérification faite sur
+/// le seul fichier principal ne voyait pas les alias d'un fichier inclus, si
+/// bien qu'on écrivait dans `~/.ssh/config` un second bloc pour un alias déjà
+/// pris. OpenSSH retenant la PREMIÈRE occurrence, l'hôte joint restait celui du
+/// fichier inclus et les modifications semblaient sans effet, deux entrées de
+/// même nom apparaissant dans la liste. La duplication du contrôle entre les
+/// deux fonctions est ce qui avait laissé `update_host` en arrière : il est
+/// désormais écrit une seule fois.
+/// `principal` sert de repli quand la configuration complète est illisible.
+fn alias_deja_declare(alias: &str, principal: &str) -> bool {
+    let pris = |hotes: &[SshHost]| hotes.iter().any(|h| h.alias.eq_ignore_ascii_case(alias));
+    parse_ssh_config().map_or_else(|_| pris(&parse_config_str(principal)), |hotes| pris(&hotes))
+}
+
 pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
     use std::io::Write as _;
 
@@ -859,20 +1135,9 @@ pub fn append_host(host: &SshHost) -> anyhow::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(anyhow::anyhow!("Lecture de {} : {e}", path.display())),
     };
-    // Unicité vérifiée sur la configuration COMPLÈTE, Include résolus : sinon on
-    // ajoutait un second bloc pour un alias déjà déclaré dans un fichier inclus.
-    // OpenSSH retenant la première occurrence, les modifications ultérieures
-    // semblaient sans effet, et deux entrées identiques apparaissaient dans la
-    // liste. On retombe sur le fichier principal si la résolution échoue.
-    let deja_declare = parse_ssh_config().map_or_else(
-        |_| {
-            parse_config_str(&existing)
-                .iter()
-                .any(|h| h.alias.eq_ignore_ascii_case(alias))
-        },
-        |hotes| hotes.iter().any(|h| h.alias.eq_ignore_ascii_case(alias)),
-    );
-    if deja_declare {
+    // Unicité vérifiée sur la configuration COMPLÈTE, Include résolus (voir
+    // `alias_deja_declare`), avec repli sur le fichier principal.
+    if alias_deja_declare(alias, &existing) {
         return Err(anyhow::anyhow!(
             "Un hôte « {alias} » est déjà déclaré dans votre configuration SSH."
         ));
@@ -1071,11 +1336,11 @@ pub fn update_host(old_alias: &str, host: &SshHost) -> anyhow::Result<()> {
     let content = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("Lecture de {} : {e}", path.display()))?;
 
-    // Renommage vers un alias existant (autre que celui qu'on modifie) : refus.
+    // Renommage vers un alias existant (autre que celui qu'on modifie) : refus,
+    // sur la configuration COMPLÈTE et non sur le seul fichier principal (voir
+    // `alias_deja_declare`, audit du 9 septembre 2026).
     if !host.alias.eq_ignore_ascii_case(old_alias)
-        && parse_config_str(&content)
-            .iter()
-            .any(|h| h.alias.eq_ignore_ascii_case(host.alias.trim()))
+        && alias_deja_declare(host.alias.trim(), &content)
     {
         return Err(anyhow::anyhow!(
             "Un hôte « {} » existe déjà.",
@@ -1530,12 +1795,6 @@ pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Re
     Ok(())
 }
 
-/// Un alias finit dans un fichier de configuration lu par OpenSSH.
-/// Refuse un saut de ligne (ou un octet nul) dans une valeur destinee a
-/// `~/.ssh/config`. Sans ce controle, `HostName`, `User` ou `IdentityFile`
-/// pourraient contenir un `\n` suivi d'une directive arbitraire — dont
-/// `ProxyCommand`, qu'OpenSSH executerait a la connexion (exec de commande).
-/// Seul l'alias etait protege ; ce trou concernait les trois autres champs.
 /// Restreint un fichier de configuration à son seul propriétaire.
 ///
 /// Ces fichiers ne contiennent pas de mot de passe — ceux-ci vivent dans le
@@ -1578,10 +1837,38 @@ fn est_un_repertoire_d_avash(dir: &std::path::Path) -> bool {
     ssh.is_some_and(|s| s == dir) || config.is_some_and(|c| dir.starts_with(c))
 }
 
+/// Remplace par une espace tout caractère de contrôle d'un texte avant de
+/// l'imprimer sur un terminal.
+///
+/// Pendant du refus à l'écriture, pour le chemin de lecture. Durcir la seule
+/// écriture d'Avash ne protège de rien si `~/.ssh/config` a été piégé par un
+/// autre outil (import maison, éditeur, dotfiles partagés) : `avash list`
+/// rejouerait la séquence à chaque exécution. Trouvé par l'audit du
+/// 9 septembre 2026.
+#[must_use]
+pub fn sans_controle(texte: &str) -> String {
+    texte
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+/// Refuse tout caractère de contrôle dans une valeur destinée à
+/// `~/.ssh/config`.
+///
+/// Le saut de ligne était le seul vrai danger connu (il ouvre une directive
+/// arbitraire, `ProxyCommand` compris). L'audit du 9 septembre 2026 a montré
+/// que la liste `\n \r \0` laissait passer tout le reste du plan C0 : un
+/// `HostName srv\x1b]0;PWNED\x07` venu d'un export `PuTTY` hostile était écrit
+/// tel quel par [`render_host_block`], qui ne fait qu'un `.trim()`, et la
+/// séquence repartait vers le terminal à chaque `avash list` sans que
+/// personne ouvre le fichier. La tabulation tombe avec le reste : elle sépare
+/// la clé de la valeur pour OpenSSH, aucun champ n'en a l'usage.
 fn validate_config_value(label: &str, value: &str) -> anyhow::Result<()> {
-    if value.contains(['\n', '\r', '\0']) {
+    if let Some(c) = value.chars().find(|c| c.is_control()) {
         return Err(anyhow::anyhow!(
-            "{label} contient un caractère interdit (saut de ligne)."
+            "{label} contient un caractère interdit (contrôle U+{:04X}).",
+            c as u32
         ));
     }
     // Un guillemet double casserait le round-trip : on s'en sert pour entourer
@@ -1608,6 +1895,40 @@ fn validate_config_value_sans_espace(label: &str, value: &str) -> anyhow::Result
     Ok(())
 }
 
+/// Valide une valeur `ProxyJump`, maillon par maillon.
+///
+/// La forme canonique d'une chaîne à plusieurs sauts s'écrit
+/// « bastion, relais:2200 » : virgule PUIS espace. C'est ce que
+/// [`split_proxy_jump`] découpe, c'est l'exemple que l'interface affiche dans
+/// son champ `ProxyJump`, et c'est la valeur du corpus dit « réaliste » des
+/// tests de mutation. Refuser l'espace sur la chaîne entière rendait un hôte
+/// déjà enregistré ainsi impossible à réenregistrer, même en ne changeant
+/// qu'un tag : trouvé par l'audit du 9 septembre 2026.
+///
+/// L'espace reste refusé à l'intérieur d'un maillon, mais par prudence
+/// d'Avash, pas parce qu'OpenSSH le rejetterait. Mesuré sur cette machine avec
+/// `OpenSSH_10.5p1` : `ProxyJump saut un.invalid` passe `ssh -G` sans un mot et
+/// en rc=0, parce que `oProxyJump` avale la fin de ligne, là où
+/// `HostName un hote` sort bien « keyword hostname extra arguments at end of
+/// line ». Le maillon est ensuite recollé tel quel dans la `ProxyCommand`
+/// implicite (`ssh … -W '[%h]:%p' saut un.invalid`), où l'espace redevient une
+/// frontière d'argument : ssh cherche alors à résoudre « saut » seul et prend
+/// « un.invalid » pour une commande distante. Se tromper en silence est pire
+/// qu'échouer franchement, d'où le refus ici.
+fn validate_proxy_jump(value: &str) -> anyhow::Result<()> {
+    validate_config_value("ProxyJump", value)?;
+    for maillon in value.split(',') {
+        let maillon = maillon.trim();
+        // Un maillon vide (« a,,b », ou la chaîne vide) ne vaut rien à écrire
+        // mais n'a rien de dangereux : `split_proxy_jump` l'ignore de son côté.
+        if maillon.is_empty() {
+            continue;
+        }
+        validate_config_value_sans_espace("ProxyJump", maillon)?;
+    }
+    Ok(())
+}
+
 /// Valide tous les champs d'un hote avant ecriture.
 fn validate_host(host: &SshHost) -> anyhow::Result<()> {
     validate_alias(host.alias.trim())?;
@@ -1619,12 +1940,12 @@ fn validate_host(host: &SshHost) -> anyhow::Result<()> {
     }
     if let Some(v) = &host.identity_file {
         // IdentityFile peut contenir une espace (chemin Windows) : on la
-        // guillemète à l'écriture. Seuls le saut de ligne et le guillemet sont
-        // refusés.
+        // guillemète à l'écriture. Restent refusés le guillemet et les
+        // caractères de contrôle.
         validate_config_value("IdentityFile", v)?;
     }
     if let Some(v) = &host.proxy_jump {
-        validate_config_value_sans_espace("ProxyJump", v)?;
+        validate_proxy_jump(v)?;
     }
     for t in &host.tags {
         validate_config_value("Tags", t)?;
@@ -1638,9 +1959,15 @@ fn validate_alias(alias: &str) -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("Le nom de l'hôte est vide."));
     }
     // Un saut de ligne permettrait d'injecter n'importe quelle directive
-    // dans la configuration SSH — y compris ProxyCommand.
-    if alias.contains(['\n', '\r', '\0']) {
-        return Err(anyhow::anyhow!("Nom d'hôte invalide : caractère interdit."));
+    // dans la configuration SSH, y compris ProxyCommand. Les autres codes de
+    // contrôle tombent avec lui depuis l'audit du 9 septembre 2026 : l'alias
+    // finit sur la ligne `Host`, que le terminal relit à chaque `avash list`
+    // au même titre que les autres champs.
+    if let Some(c) = alias.chars().find(|c| c.is_control()) {
+        return Err(anyhow::anyhow!(
+            "Nom d'hôte invalide : caractère interdit (contrôle U+{:04X}).",
+            c as u32
+        ));
     }
     if alias.contains(char::is_whitespace) {
         return Err(anyhow::anyhow!(
@@ -2035,6 +2362,23 @@ Host autre
         let relu = parse_ssh_config().unwrap();
         assert_eq!(relu.len(), 1);
         assert_eq!(relu[0].alias, "neuf");
+    }
+
+    #[test]
+    fn append_host_enregistre_un_rebond_a_plusieurs_sauts() {
+        // Trouvé par l'audit du 9 septembre 2026 : le scénario complet, celui
+        // que l'interface propose dans son propre exemple de champ ProxyJump.
+        // L'enregistrement échouait avant même d'écrire quoi que ce soit.
+        let _h = temp_home();
+        let mut h = host("prod");
+        h.proxy_jump = Some("bastion, relais:2200".into());
+        append_host(&h).unwrap();
+        let relu = parse_ssh_config().unwrap();
+        assert_eq!(
+            relu[0].proxy_jump.as_deref(),
+            Some("bastion, relais:2200"),
+            "le rebond doit se relire tel quel"
+        );
     }
 
     #[test]
@@ -2788,6 +3132,44 @@ Host autre
         collision.alias = "b".into();
         let e = update_host("a", &collision).unwrap_err().to_string();
         assert!(e.contains("existe déjà"), "{e}");
+    }
+
+    #[test]
+    fn update_host_voit_les_alias_declares_dans_un_include_lors_d_un_renommage() {
+        // Trouvé par l'audit du 9 septembre 2026 : `append_host` vérifiait déjà
+        // l'unicité sur la configuration COMPLÈTE (Include résolus), mais
+        // `update_host` n'avait jamais reçu le même traitement : il lisait le
+        // fichier principal brut. Renommer « ancien » en « backup » alors qu'un
+        // fichier inclus déclarait déjà « backup » passait sans erreur, et
+        // OpenSSH, qui retient la PREMIÈRE occurrence, continuait de joindre la
+        // machine du fichier inclus : la connexion partait vers le mauvais hôte.
+        let _h = crate::testutil::temp_home();
+        let ssh = repertoire_personnel().unwrap().join(".ssh");
+        std::fs::create_dir_all(ssh.join("conf.d")).unwrap();
+        std::fs::write(
+            ssh.join("conf.d").join("prod.conf"),
+            "Host backup\n    HostName 10.0.0.99\n",
+        )
+        .unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Include conf.d/*.conf\n\nHost ancien\n    HostName 10.0.0.1\n",
+        )
+        .unwrap();
+
+        let mut collision = host("ancien");
+        collision.alias = "backup".into();
+        let e = update_host("ancien", &collision).unwrap_err().to_string();
+        assert!(e.contains("existe déjà"), "{e}");
+        let principal = std::fs::read_to_string(ssh.join("config")).unwrap();
+        assert!(
+            principal.contains("Host ancien"),
+            "le bloc a été renommé malgré la collision : {principal}"
+        );
+        assert!(
+            !principal.contains("Host backup"),
+            "un second « backup » a été écrit dans le fichier principal : {principal}"
+        );
     }
 
     #[test]
