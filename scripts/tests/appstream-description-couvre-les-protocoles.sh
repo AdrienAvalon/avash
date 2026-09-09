@@ -139,23 +139,28 @@ for proto in sorted(attendus_toutes_langues):
         )
 
 # Winget décrit le même produit : une divergence de liste signale que l'un des
-# deux canaux a été mis à jour sans l'autre. Seul le dossier de la version
-# courante est contrôlé ; les dossiers des versions passées sont des archives
-# publiées telles quelles, que personne ne réécrit. Les entrées <releases> ne
-# sont pas garanties triées, on prend donc la plus haute version, pas la
-# première venue.
+# deux canaux a été mis à jour sans l'autre. Seul le manifeste le plus récent
+# est contrôlé ; les dossiers des versions passées sont des archives publiées
+# telles quelles, que personne ne réécrit. Le plus récent, et non celui de la
+# version annoncée par <releases> : le manifeste winget se génère depuis
+# l'installeur de la release GitHub (scripts/winget-manifeste.sh), donc APRÈS
+# le tag, alors que la version est portée dans metainfo AVANT lui (RELEASE.md
+# §7). Exiger le manifeste de la version courante bloquait le commit de version
+# lui-même (vu à la 0.11.0, le 9 septembre 2026) ; le commit des canaux qui suit
+# la publication le fait entrer dans le contrôle. Ce qui compte pour l'intention
+# de ce garde, c'est que le dernier texte winget publié dise la même chose que
+# la fiche AppStream.
 def cle_version(v):
     return tuple(int(n) for n in re.findall(r"\d+", v))
 
 
-versions = [r.get("version", "") for r in racine.findall("releases/release")]
-version = max((v for v in versions if v), key=cle_version, default="")
-courant = WINGET / version
-locales = sorted(courant.glob("*.locale.*.yaml")) if courant.is_dir() else []
-if not courant.is_dir():
+dossiers = [d for d in WINGET.iterdir() if d.is_dir()] if WINGET.is_dir() else []
+courant = max(dossiers, key=lambda d: cle_version(d.name), default=None)
+locales = sorted(courant.glob("*.locale.*.yaml")) if courant else []
+if courant is None:
     echecs.append(
-        f"{METAINFO} annonce la version {version or '(aucune)'} mais "
-        f"{courant} n'existe pas : le manifeste winget de cette version manque"
+        f"{WINGET} ne contient aucun dossier de version : aucun manifeste "
+        f"winget à comparer à {METAINFO}"
     )
 elif not locales:
     echecs.append(
