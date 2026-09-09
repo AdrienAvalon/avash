@@ -9,6 +9,25 @@ pub use commands::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// Un fichier déposé sur la fenêtre est un geste de l'utilisateur que le natif
+/// voit avant la webview : c'est ici qu'il est retenu comme chemin désigné
+/// (voir `commands::choix_locaux`), pas sur la foi du front.
+fn retenir_un_depot<R: tauri::Runtime>(fenetre: &tauri::Window<R>, evenement: &tauri::WindowEvent) {
+    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = evenement {
+        use tauri::Manager as _;
+        let app = fenetre.app_handle().clone();
+        let chemins = paths.clone();
+        tauri::async_runtime::spawn(async move {
+            commands::designer(
+                &app.state::<commands::ChoixLocaux>(),
+                &app.state::<rdp::RdpStore>(),
+                chemins,
+            )
+            .await;
+        });
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -28,6 +47,8 @@ pub fn run() {
         })
         .manage(rdp::RdpStore::default())
         .manage(commands::TransfertsStore::default())
+        .manage(commands::ChoixLocaux::default())
+        .on_window_event(retenir_un_depot)
         // Quatre commandes ont été retirées de cette liste : `run_command`,
         // `snippet_vars`, `password_known`, puis `enregistrement_en_cours`
         // (audit du 9 septembre 2026), qu'aucun appel du front n'utilisait.
@@ -66,6 +87,7 @@ pub fn run() {
             commands::sftp_list,
             commands::sftp_download,
             commands::sftp_upload,
+            commands::choisir_fichiers_locaux,
             commands::sftp_annuler,
             commands::sftp_copier_vers,
             commands::sftp_mkdir,

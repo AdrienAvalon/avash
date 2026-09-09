@@ -26,6 +26,19 @@ if ! git diff --quiet; then
   exit 1
 fi
 
+# Trouvé par l'audit du 9 septembre 2026 : la porte etait lente deux fois. Quand
+# check.sh vient d'etre vert sur cet arbre exactement (temoin ecrit par lui,
+# empreinte de scripts/temoin-arbre.sh : HEAD, differences suivies, fichiers
+# non suivis), rejouer clippy, tests, sidecar et front ne prouverait rien de
+# plus. Le moindre changement depuis donne une autre empreinte, et tout est
+# rejoue. La garde index/arbre ci-dessus reste premiere : le temoin decrit
+# l'arbre, et le commit doit etre l'arbre.
+if [ -f .git/avash-temoin-check ] && [ -x scripts/temoin-arbre.sh ] \
+   && [ "$(cat .git/avash-temoin-check)" = "$(scripts/temoin-arbre.sh)" ]; then
+  echo "✓ pre-commit : arbre identique a celui que check.sh vient de valider, rien a rejouer"
+  exit 0
+fi
+
 echo "▸ pre-commit : garde front"
 ./scripts/guard.sh
 echo "▸ pre-commit : format"

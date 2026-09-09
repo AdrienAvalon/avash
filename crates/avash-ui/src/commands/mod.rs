@@ -4,6 +4,7 @@
 // reste le chemin de chaque commande, et que chaque fichier voit ses voisins
 // par `use super::*`.
 
+mod choix_locaux;
 mod cles;
 mod diagnostic;
 mod dossiers;
@@ -22,6 +23,7 @@ mod tunnels;
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub use choix_locaux::*;
 pub use cles::*;
 pub use diagnostic::*;
 pub use dossiers::*;

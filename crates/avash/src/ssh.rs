@@ -62,11 +62,37 @@ pub fn juger_cle_hote(
 /// (droits retirés, remplacé par un répertoire, erreur d'E/S) — ce que le reste
 /// du code prendrait pour « hôte inconnu », et qui ferait accepter n'importe
 /// quelle clé. On préfère refuser.
-fn known_hosts_illisible() -> bool {
-    let Some(chemin) = chemin_known_hosts() else {
-        return false; // pas de répertoire personnel : signalé plus loin
-    };
-    fichier_present_mais_illisible(&chemin)
+fn known_hosts_illisible() -> Option<String> {
+    let chemin = chemin_known_hosts()?; // pas de répertoire personnel : signalé plus loin
+    verdict_known_hosts_illisible(&chemin)
+}
+
+/// Le verdict à opposer à un `known_hosts` présent mais inexploitable, en
+/// nommant la cause : le geste de réparation n'est pas le même pour un fichier
+/// aux droits retirés (`chmod`) et pour un tube nommé, un socket ou un
+/// `known_hosts` pointé sur `/dev/null` (retirer, recréer). Réserve de la
+/// relecture du 9 septembre 2026 : le message disait « n'est pas lisible »
+/// dans les deux cas. `None` pour un fichier absent (premier contact) ou
+/// lisible. Le `stat` seul décide du premier cas : rien n'est ouvert, donc
+/// rien ne peut se bloquer.
+fn verdict_known_hosts_illisible(chemin: &std::path::Path) -> Option<String> {
+    let infos = std::fs::metadata(chemin).ok()?;
+    if !infos.is_file() {
+        return Some(
+            "~/.ssh/known_hosts n'est pas un fichier ordinaire (tube nommé, socket, \
+             périphérique ou répertoire) : impossible de vérifier l'identité du \
+             serveur. Connexion refusée."
+                .into(),
+        );
+    }
+    if fichier_present_mais_illisible(chemin) {
+        return Some(
+            "~/.ssh/known_hosts existe mais n'est pas lisible (droits du fichier ?) : \
+             impossible de vérifier l'identité du serveur. Connexion refusée."
+                .into(),
+        );
+    }
+    None
 }
 
 /// Le fichier `known_hosts`, résolu une seule fois pour tout le monde.
@@ -524,12 +550,8 @@ impl russh::client::Handler for AvashAuth {
             ));
             return Err(russh::Error::UnknownKey);
         }
-        if known_hosts_illisible() {
-            *self.verdict.lock().unwrap() = Some(
-                "~/.ssh/known_hosts existe mais n'est pas lisible : impossible de \
-                 vérifier l'identité du serveur. Connexion refusée."
-                    .into(),
-            );
+        if let Some(verdict) = known_hosts_illisible() {
+            *self.verdict.lock().unwrap() = Some(verdict);
             return Err(russh::Error::UnknownKey);
         }
         let Some(chemin) = chemin_known_hosts() else {
@@ -1921,7 +1943,10 @@ mod tests_texte_distant {
 
 #[cfg(test)]
 mod tests_known_hosts_illisible {
-    use super::{apprendre_cle_hote, fichier_present_mais_illisible, marqueur_bloquant};
+    use super::{
+        apprendre_cle_hote, fichier_present_mais_illisible, marqueur_bloquant,
+        verdict_known_hosts_illisible,
+    };
 
     /// Trouvé par l'audit du 7 septembre 2026 : quand `~/.ssh` (ou
     /// `known_hosts`) n'est pas inscriptible, `learn_known_hosts_path` échoue en
@@ -2079,6 +2104,68 @@ mod tests_known_hosts_illisible {
     /// le délai. Le fil resté bloqué est abandonné : le processus de test
     /// l'emportera en sortant.
     #[cfg(unix)]
+    /// Réserve de la relecture du 9 septembre 2026 : le verdict disait « n'est
+    /// pas lisible » aussi bien pour un fichier aux droits retirés que pour un
+    /// tube nommé ou un `known_hosts` pointé sur `/dev/null`, alors que le geste
+    /// de réparation n'est pas le même. Le verdict nomme désormais la cause.
+    #[test]
+    #[cfg(unix)]
+    fn le_verdict_nomme_un_known_hosts_qui_n_est_pas_un_fichier_ordinaire() {
+        let dir = crate::testutil::temp_home();
+        let p = dir.dir().join("known_hosts");
+        creer_tube_nomme(&p);
+        let cible = p.clone();
+        let verdict = sous_delai(move || verdict_known_hosts_illisible(&cible))
+            .expect("le verdict d'un tube nommé ne doit pas se bloquer");
+        let message =
+            verdict.expect("un tube nommé à la place du fichier doit produire un verdict");
+        assert!(
+            message.contains("n'est pas un fichier ordinaire"),
+            "le verdict doit nommer la cause : {message}"
+        );
+    }
+
+    /// Même verdict, autre cause : un fichier ordinaire dont les droits ont été
+    /// retirés. Le message parle de droits, pas de fichier spécial.
+    #[test]
+    #[cfg(unix)]
+    fn le_verdict_distingue_un_fichier_ordinaire_aux_droits_retires() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::testutil::temp_home();
+        let p = dir.dir().join("known_hosts");
+        std::fs::write(&p, "srv ssh-ed25519 AAAA\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // En root (conteneur de CI), CAP_DAC_OVERRIDE ignore les droits : le cas
+        // n'existe pas pour lui, on le constate au lieu d'exiger l'impossible.
+        let droits_appliques = std::fs::File::open(&p).is_err();
+        let verdict = verdict_known_hosts_illisible(&p);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if !droits_appliques {
+            eprintln!("droits non appliqués (root ?) : cas sans objet ici");
+            return;
+        }
+        let message = verdict.expect("un fichier aux droits retirés doit produire un verdict");
+        assert!(
+            message.contains("droits"),
+            "le verdict doit parler des droits : {message}"
+        );
+        assert!(
+            !message.contains("fichier ordinaire"),
+            "un fichier ordinaire ne doit pas être décrit comme spécial : {message}"
+        );
+    }
+
+    /// Absent (premier contact) ou lisible : aucun verdict, la vérification
+    /// suit son cours.
+    #[test]
+    fn aucun_verdict_pour_un_known_hosts_absent_ou_lisible() {
+        let dir = crate::testutil::temp_home();
+        let p = dir.dir().join("known_hosts");
+        assert!(verdict_known_hosts_illisible(&p).is_none());
+        std::fs::write(&p, "").unwrap();
+        assert!(verdict_known_hosts_illisible(&p).is_none());
+    }
+
     fn sous_delai<T: Send + 'static>(travail: impl FnOnce() -> T + Send + 'static) -> Option<T> {
         let (envoi, reception) = std::sync::mpsc::channel();
         std::thread::spawn(move || {

@@ -823,6 +823,7 @@ fn app_de_test() -> tauri::App<tauri::test::MockRuntime> {
             en_cours: Mutex::new(std::collections::HashSet::new()),
         })
         .manage(TransfertsStore::default())
+        .manage(ChoixLocaux::default())
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("application factice")
 }
@@ -1434,4 +1435,57 @@ async fn une_copie_directe_terminee_ne_reste_pas_annulable() {
         !sftp_annuler(app.state::<TransfertsStore>(), 7),
         "le transfert terminé a été retiré du magasin"
     );
+}
+
+// ---------- ChoixLocaux : les chemins que l'utilisateur a désignés ----------
+
+/// Trouvé par l'audit du 9 septembre 2026 et laissé en réserve par sa
+/// relecture : exiger de `sftp_upload` un chemin absolu et existant ne fermait
+/// pas l'exfiltration, `~/.ssh/id_ed25519` étant absolu et existant. Ce que le
+/// front sait d'un fichier à envoyer, il le tient de la boîte de sélection ou
+/// d'un dépôt sur la fenêtre, deux gestes que le natif voit passer : il retient
+/// ces chemins, et n'envoie ensuite que ce qu'il a vu l'utilisateur désigner.
+#[test]
+fn seul_un_chemin_designe_par_l_utilisateur_peut_etre_envoye() {
+    let _g = with_ssh_config("");
+    let dir = avash::sftp::default_local_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let choisi = dir.join("rapport.pdf");
+    let voisin = dir.join("id_ed25519");
+    std::fs::write(&choisi, b"choisi").unwrap();
+    std::fs::write(&voisin, b"secret").unwrap();
+
+    let choix = ChoixLocaux::default();
+    assert!(
+        source_autorisee(&choix, &choisi.to_string_lossy()).is_err(),
+        "rien n'est envoyable tant que l'utilisateur n'a rien désigné"
+    );
+    choix.retenir([choisi.clone()]);
+    assert_eq!(
+        source_autorisee(&choix, &choisi.to_string_lossy()).unwrap(),
+        choisi,
+        "un chemin désigné est accepté tel quel"
+    );
+    let refus = source_autorisee(&choix, &voisin.to_string_lossy()).unwrap_err();
+    assert!(
+        refus.contains("désigné"),
+        "le refus doit dire que le chemin n'a pas été désigné : {refus}"
+    );
+}
+
+/// La désignation complète la garde d'existence, elle ne la remplace pas : un
+/// chemin choisi puis supprimé avant l'envoi reste refusé, avec le même
+/// message qu'avant.
+#[test]
+fn un_chemin_designe_mais_disparu_reste_refuse() {
+    let _g = with_ssh_config("");
+    let dir = avash::sftp::default_local_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let choisi = dir.join("ephemere.txt");
+    std::fs::write(&choisi, b"x").unwrap();
+    let choix = ChoixLocaux::default();
+    choix.retenir([choisi.clone()]);
+    std::fs::remove_file(&choisi).unwrap();
+    let refus = source_autorisee(&choix, &choisi.to_string_lossy()).unwrap_err();
+    assert!(refus.contains("n'existe pas"), "{refus}");
 }

@@ -95,7 +95,11 @@ répondent.
   caractères avant même que vous acceptiez. Rien n'écrase un fichier existant,
   rien n'est exécuté. Dans l'autre sens, seuls les fichiers que vous déposez ou
   choisissez sont offerts ; le distant n'en voit ni le chemin absolu ni rien
-  d'autre du poste. Un **serveur SFTP** qui nomme une entrée « ../x » ou
+  d'autre du poste. Cette règle est tenue par le natif, pas par la page : la
+  boîte de sélection est ouverte par lui, le dépôt sur la fenêtre lui est
+  signalé avant la webview, et rien d'autre ne part, ni par SFTP ni vers un
+  bureau distant, même à la demande d'un script qui aurait pris la main sur la
+  webview (audit du 9 septembre 2026). Un **serveur SFTP** qui nomme une entrée « ../x » ou
   « a/b » dans un dossier que vous téléchargez ou relayez est refusé : rien ne
   s'écrit hors du dossier choisi. Un chemin de destination imposé à un
   téléchargement obéit aux mêmes règles que le nom dérivé : absolu, et jamais

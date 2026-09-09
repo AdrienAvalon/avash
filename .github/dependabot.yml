@@ -25,6 +25,11 @@ updates:
     schedule: { interval: weekly, day: monday }
     groups:
       front-mineur: { update-types: [minor, patch] }
+      # vitest et ses greffons (@vitest/coverage-v8) exigent la même majeure :
+      # montés séparément, l'un des deux ne s'installe plus (ERESOLVE vu sur les
+      # PR #18 et #19 de la 5.0.0, toutes chaînes rouges). Un seul groupe, toutes
+      # versions confondues, pour qu'ils bougent ensemble.
+      vitest: { patterns: ["vitest", "@vitest/*"] }
     ignore:
       # typescript-eslint borne la version de TypeScript qu'il accepte : une
       # majeure de TypeScript casse l'installation tant qu'il ne l'a pas

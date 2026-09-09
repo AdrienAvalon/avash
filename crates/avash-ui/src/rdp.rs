@@ -13,6 +13,11 @@ use tokio::process::Child;
 #[derive(Default)]
 pub struct RdpStore {
     pub inner: Mutex<HashMap<u64, Child>>,
+    /// L'entrée standard de chaque sidecar, gardée ouverte après le mot de
+    /// passe : c'est par là que lui sont annoncés les chemins que l'utilisateur
+    /// désigne (voir `commands::choix_locaux`), seuls chemins qu'il acceptera
+    /// d'offrir au distant. Verrou tokio : on écrit dedans en asynchrone.
+    pub stdins: tokio::sync::Mutex<HashMap<u64, tokio::process::ChildStdin>>,
     /// Dernières lignes de diagnostic du sidecar, par session.
     pub journaux: Mutex<HashMap<u64, std::sync::Arc<Mutex<std::collections::VecDeque<String>>>>>,
 }
@@ -210,6 +215,9 @@ pub async fn rdp_open(
             ));
         }
     }
+    // Gardée ouverte : les désignations de fichiers passeront par là. Fermée
+    // ici, c'était interdire au sidecar toute offre au distant.
+    state.stdins.lock().await.insert(id, stdin);
 
     let (port, token) = match lire_annonce(stdout, &mut stderr).await {
         Ok(v) => v,
@@ -397,6 +405,11 @@ pub fn rdp_ouvrir_dossier(chemin: String) -> Result<(), String> {
 pub fn rdp_close(state: tauri::State<'_, RdpStore>, id: u64) -> Result<(), String> {
     if let Some(mut child) = state.inner.lock().unwrap().remove(&id) {
         let _ = child.start_kill();
+        // Commande synchrone : un « try » sur le verrou tokio suffit, l'entrée
+        // standard n'est tenue que le temps d'une annonce.
+        if let Ok(mut stdins) = state.stdins.try_lock() {
+            stdins.remove(&id);
+        }
     }
     state.journaux.lock().unwrap().remove(&id);
     Ok(())
@@ -444,6 +457,74 @@ fn drapeaux(sans_nla: bool, vnc: bool, sans_son: bool, partage: Option<&str>) ->
         v.push(p.to_owned());
     }
     v
+}
+
+/// Annonce des chemins désignés par l'utilisateur à un sidecar, une ligne
+/// `AUTORISE <chemin>` par chemin. Un chemin qui porte lui-même un saut de
+/// ligne ne peut pas s'écrire sur ce protocole ligne à ligne : il n'est pas
+/// annoncé, donc jamais offert, ce qui est le côté sûr.
+pub(crate) async fn annoncer_dans(
+    puits: &mut (impl tokio::io::AsyncWrite + Unpin),
+    chemins: &[std::path::PathBuf],
+) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt as _;
+    for chemin in chemins {
+        let texte = chemin.to_string_lossy();
+        if texte.contains(['\n', '\r']) {
+            continue;
+        }
+        puits
+            .write_all(format!("AUTORISE {texte}\n").as_bytes())
+            .await?;
+    }
+    puits.flush().await
+}
+
+/// Annonce des chemins désignés à tous les sidecars en cours. Un sidecar dont
+/// l'entrée standard ne répond plus est en train de mourir : son entrée est
+/// retirée, `rdp_close` fera le reste.
+pub(crate) async fn annoncer_designations(store: &RdpStore, chemins: &[std::path::PathBuf]) {
+    if chemins.is_empty() {
+        return;
+    }
+    let mut stdins = store.stdins.lock().await;
+    let mut morts = Vec::new();
+    for (id, stdin) in stdins.iter_mut() {
+        if annoncer_dans(stdin, chemins).await.is_err() {
+            morts.push(*id);
+        }
+    }
+    for id in morts {
+        stdins.remove(&id);
+    }
+}
+
+#[cfg(test)]
+mod tests_designations {
+    use super::annoncer_dans;
+    use std::path::PathBuf;
+
+    /// Le format que lit le sidecar (`fichiers::designation_depuis_ligne`) :
+    /// une ligne par chemin, préfixée. Un chemin qui contient un saut de ligne
+    /// casserait le protocole : il est tu, jamais tronqué ni découpé.
+    #[tokio::test]
+    async fn les_designations_partent_une_par_ligne() {
+        let mut puits: Vec<u8> = Vec::new();
+        annoncer_dans(
+            &mut puits,
+            &[
+                PathBuf::from("/home/a/rapport.pdf"),
+                PathBuf::from("/home/a/piège\nAUTORISE /etc/shadow"),
+                PathBuf::from("/home/a/photos"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(puits).unwrap(),
+            "AUTORISE /home/a/rapport.pdf\nAUTORISE /home/a/photos\n"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -313,7 +313,13 @@ pub async fn sftp_upload(
     local: String,
     remote_dir: String,
 ) -> Result<String, String> {
-    let local_path = local_source(&local)?;
+    // Désigné par l'utilisateur, absolu, existant : voir `choix_locaux`. Le
+    // registre est pris sur l'application plutôt qu'en paramètre : clippy borne
+    // les commandes à sept arguments, et celle-ci les a déjà.
+    let local_path = {
+        use tauri::Manager as _;
+        super::source_autorisee(&app.state::<super::ChoixLocaux>(), &local)?
+    };
     let name = local_path
         .file_name()
         .ok_or_else(|| format!("Nom de fichier illisible : {local}"))?

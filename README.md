@@ -20,7 +20,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1629%20verts-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1638%20verts-brightgreen.svg)](docs/qualite.md)
 [![Couverture](https://img.shields.io/badge/couverture-84%25%20des%20lignes-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20attrap%C3%A9s-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -210,14 +210,14 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1629 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
+**1638 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
 sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
 
 | Niveau | Tests | En un mot |
 |---|---:|---|
-| Cœur Rust et intégration contre un vrai sshd | 306 | parseurs, import, SFTP, tunnels, rebonds |
-| Interface Tauri | 118 | commandes, magasin de sessions, clavier |
-| Processus RDP | 199 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
+| Cœur Rust et intégration contre un vrai sshd | 310 | parseurs, import, SFTP, tunnels, rebonds |
+| Interface Tauri | 121 | commandes, magasin de sessions, clavier |
+| Processus RDP | 201 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
 | Serveurs de test | 32 | côté serveur RDPDR (décodeurs écrits à la main, automate du scénario, dialogue complet avec le canal client) et serveur VNC |
 | Paquets IronRDP et vnc-rs portés | 620 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
 | Front (Vitest) | 280 | logique pure, keysyms VNC, traductions |

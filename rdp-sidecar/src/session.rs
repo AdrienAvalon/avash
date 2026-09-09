@@ -460,7 +460,7 @@ pub async fn executer(
                                 .map(std::path::PathBuf::from)
                                 .filter(|p| p.is_absolute())
                                 .collect();
-                        match fichiers::preparer_offre(&chemins).await {
+                        match fichiers::preparer_offre(&chemins, &fichiers::DESIGNATIONS).await {
                             Ok(o) => {
                                 let o = std::sync::Arc::new(o);
                                 let msgs = active

@@ -105,6 +105,21 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   s'enregistre pas » était écrite en commentaire, mais rien ne la faisait
   respecter ; un contrôle compare désormais la liste exposée aux appels du front
   à chaque `check.sh`.
+- **Seuls les fichiers que l'utilisateur a désignés peuvent partir vers un
+  serveur.** Exiger d'un envoi SFTP un chemin absolu et existant (point
+  précédent) ne fermait pas la porte : `~/.ssh/id_ed25519` est absolu et
+  existant, et l'offre de fichiers au bureau distant recevait ses chemins du
+  front par le WebSocket du processus RDP, que tout script de la webview atteint
+  avec le jeton. Ce que le front sait d'un fichier à envoyer, il le tient de
+  deux gestes que le natif voit passer : la boîte de sélection, désormais
+  ouverte par le natif (`choisir_fichiers_locaux`), et le dépôt d'un fichier sur
+  la fenêtre, que tao signale au natif avant la webview. Les deux retiennent le
+  chemin ; `sftp_upload` n'accepte plus que ce qui a été retenu, et le processus
+  de bureau distant reçoit chaque désignation sur son entrée standard (`AUTORISE
+  <chemin>`) et refuse d'offrir tout autre chemin, sans même le lire. Un script
+  qui invente un chemin n'a jamais été vu le désigner. Le champ « dossier
+  partagé » d'un bureau RDP, que l'on peut aussi saisir à la main et qui reste
+  visible dans le formulaire, garde sa boîte JavaScript.
 
 ### Corrigé
 
@@ -186,6 +201,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   rectangle couvrait les profondeurs 15, 16 et 24 bits, pas le chemin 8 bits à
   palette. Les quatre formats passent désormais par la même fonction, qui ne
   peut plus en oublier un.
+- **Le verdict sur un `known_hosts` inexploitable nomme sa cause.** « existe
+  mais n'est pas lisible » couvrait aussi bien un fichier aux droits retirés
+  qu'un tube nommé, un socket ou un `known_hosts` pointé sur `/dev/null`, alors
+  que le geste de réparation diffère (`chmod` d'un côté, retirer et recréer de
+  l'autre). Le message distingue désormais « n'est pas un fichier ordinaire
+  (tube nommé, socket, périphérique ou répertoire) » de « n'est pas lisible
+  (droits du fichier ?) ».
 
 ### Chaîne d'intégration et garde-fous
 
@@ -268,6 +290,34 @@ qui existaient sur le papier sans mordre.
   « Serveurs de test » annonçait 32 avec un détail (2 + 27) qui ne faisait ni 32
   ni le compte réel (4 + 28) ; un contrôle recompte les `#[test]` des deux
   serveurs et exige que le détail et le total concordent.
+- **La porte n'est plus lente deux fois.** `check.sh` complet prend un quart
+  d'heure ; le hook de pré-commit rejouait ensuite clippy, tests, sidecar et
+  front sur le même arbre, huit minutes de plus. `check.sh` écrit désormais,
+  quand il est vert, un témoin portant l'empreinte de l'arbre validé (HEAD,
+  différences suivies, fichiers non suivis : `scripts/temoin-arbre.sh`), et le
+  hook accepte le commit sans rien rejouer tant que l'empreinte n'a pas bougé.
+  Le moindre octet changé depuis, et tout est rejoué. La garde index/arbre reste
+  première.
+- **Les compteurs de tests sont vérifiés aux six emplacements.** La vitrine
+  annonçait « 1233 tests » depuis des semaines ; seuls la feuille de route et
+  les sous-comptes de `docs/qualite.md` avaient un contrôle. README, README
+  anglais, feuille de route et les deux pages de la vitrine doivent désormais
+  dire ce que le tableau de `docs/qualite.md` compte, total et par niveau.
+- **La branche « renommage direct » de la promotion d'un partiel est éprouvée.**
+  Depuis que le serveur SFTP de test refuse le renommage sur une cible existante
+  comme OpenSSH, seule la branche « retirer puis renommer » l'était. Un segment
+  « posix » du chemin rend ce serveur complaisant, et un journal des
+  suppressions prouve que la cible n'est jamais retirée dans ce cas : pas un
+  instant sans fichier.
+- **Les tests du cœur ont quitté `lib.rs`.** Le fichier faisait 3400 lignes,
+  dont 1900 de tests en quatre modules ; ils vivent dans `src/tests_lib/`, sous
+  les mêmes noms de modules, et `lib.rs` revient à 1500 lignes de logique. Aucun
+  test déplacé n'a changé.
+- **Dependabot monte `vitest` et ses greffons ensemble.** Les PR séparées #18 et
+  #19 (vitest 5, `@vitest/coverage-v8` 5) ne s'installaient pas l'une sans
+  l'autre (`ERESOLVE`, toutes chaînes rouges) : un groupe `vitest` les réunit.
+  La montée est faite ici, avec eslint, knip, stylelint et typescript-eslint,
+  `russh` 0.63.3, `pageant` 0.2.3, `open` 5.4.3 et `claude-code-action` 1.0.216.
 
 ### Paquets
 

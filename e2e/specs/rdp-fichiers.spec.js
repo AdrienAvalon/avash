@@ -132,6 +132,10 @@ describe("RDP — fichiers par le presse-papiers", () => {
 
     // 2) Poste → distant. Le poste offre un fichier ; le serveur de test, qui
     //    joue l'utilisateur distant, en demande la liste puis le contenu.
+    //    Le parent Tauri annonce sur stdin les chemins que l'utilisateur a
+    //    désignés ; le sidecar n'offre rien d'autre (audit du 9 septembre 2026).
+    //    Ici le test joue ce parent.
+    sidecar.stdin.write(`AUTORISE ${offertParLePoste}\n`);
     const offre = attendre(MSG_TERMINE, 15000, "accusé de l'offre");
     envoyerJson(MSG_OFFRIR, [offertParLePoste]);
     const accuse = await offre;

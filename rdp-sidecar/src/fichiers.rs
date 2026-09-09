@@ -711,6 +711,57 @@ impl Reception {
     }
 }
 
+/// Les chemins que l'utilisateur a désignés, annoncés par le parent Tauri sur
+/// l'entrée standard (`AUTORISE <chemin>`, une ligne par chemin) : seuls ceux-là
+/// peuvent être offerts au distant.
+///
+/// Réserve de l'audit du 9 septembre 2026 : l'offre recevait ses chemins du
+/// front par le WebSocket, que tout script de la webview atteint avec le
+/// jeton. Rien ne distinguait un fichier que l'utilisateur venait de choisir
+/// d'un `~/.ssh/id_ed25519` désigné par un script hostile. Le parent, lui, voit
+/// passer la boîte de sélection et le dépôt sur la fenêtre : il annonce, ce
+/// processus retient, et une offre ne peut porter que de l'annoncé.
+#[derive(Debug, Default)]
+pub struct Designations {
+    inner: std::sync::Mutex<Vec<PathBuf>>,
+}
+
+impl Designations {
+    /// Constructible en `static` : pas de table de hachage, dont la
+    /// construction n'est pas constante ; la liste reste courte.
+    pub const fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Retient un chemin désigné par l'utilisateur.
+    pub fn designer(&self, chemin: PathBuf) {
+        let mut g = self.inner.lock().unwrap();
+        if !g.contains(&chemin) {
+            g.push(chemin);
+        }
+    }
+
+    /// Ce chemin a-t-il été désigné tel quel ?
+    pub fn est_designe(&self, chemin: &Path) -> bool {
+        self.inner.lock().unwrap().iter().any(|c| c == chemin)
+    }
+}
+
+/// Les désignations de ce processus, alimentées par la lecture de stdin.
+pub static DESIGNATIONS: Designations = Designations::new();
+
+/// Une ligne de stdin est-elle une désignation ? Le mot de passe occupe la
+/// première ligne et est consommé avant ; tout le reste suit ce format.
+#[must_use]
+pub fn designation_depuis_ligne(ligne: &str) -> Option<PathBuf> {
+    let chemin = ligne
+        .trim_end_matches(['\n', '\r'])
+        .strip_prefix("AUTORISE ")?;
+    (!chemin.is_empty()).then(|| PathBuf::from(chemin))
+}
+
 /// Un fichier offert au distant : son chemin sur le poste et ce qu'on en dit.
 #[derive(Debug, Clone)]
 pub(crate) struct Offre {
@@ -732,7 +783,17 @@ fn filetime(m: &std::fs::Metadata) -> Option<u64> {
 /// séparateur, taille et date pour les fichiers, attribut dossier pour les
 /// dossiers. Les liens symboliques ne sont pas suivis : une offre ne doit
 /// pas sortir de ce que l'utilisateur a désigné.
-pub(crate) async fn preparer_offre(chemins: &[PathBuf]) -> Result<Offre> {
+pub(crate) async fn preparer_offre(chemins: &[PathBuf], designes: &Designations) -> Result<Offre> {
+    // Avant toute lecture : un seul chemin non désigné fait refuser l'offre
+    // entière, sans rien parcourir. Un script hostile n'apprend même pas si le
+    // chemin existe.
+    for racine in chemins {
+        anyhow::ensure!(
+            designes.est_designe(racine),
+            "{} n'a pas été désigné par l'utilisateur (boîte de sélection ou dépôt sur la fenêtre) : offre refusée",
+            racine.display()
+        );
+    }
     let mut fichiers = Vec::new();
     for racine in chemins {
         let nom = racine
@@ -882,11 +943,36 @@ mod tests {
         assert_eq!(sous_downloads, foyer.join("Downloads"));
     }
 
-    use super::{annonce, chemin_local, preparer_offre, Reception, MORCEAU};
+    use super::{
+        annonce, chemin_local, designation_depuis_ligne, preparer_offre, Designations, Reception,
+        MORCEAU,
+    };
     use ironrdp::cliprdr::pdu::{
         ClipboardFileAttributes, FileContentsFlags, FileContentsRequest, FileDescriptor,
     };
     use std::path::PathBuf;
+
+    /// Des désignations qui couvrent les chemins donnés : le cas courant des
+    /// tests, où c'est l'offre elle-même qui est à l'épreuve.
+    fn designe_tout(chemins: &[PathBuf]) -> Designations {
+        let d = Designations::default();
+        for c in chemins {
+            d.designer(c.clone());
+        }
+        d
+    }
+
+    /// Le protocole d'annonce du parent : préfixe, chemin, fin de ligne.
+    #[test]
+    fn une_designation_se_lit_sur_une_ligne_prefixee() {
+        assert_eq!(
+            designation_depuis_ligne("AUTORISE /home/a/rapport.pdf\n"),
+            Some(PathBuf::from("/home/a/rapport.pdf"))
+        );
+        assert_eq!(designation_depuis_ligne("AUTORISE \n"), None);
+        assert_eq!(designation_depuis_ligne("/home/a/rapport.pdf\n"), None);
+        assert_eq!(designation_depuis_ligne("autorise /x\n"), None);
+    }
 
     fn temp(nom: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("avash-fichiers-{}-{nom}", std::process::id()));
@@ -1411,6 +1497,40 @@ mod tests {
         );
     }
 
+    /// Réserve de l'audit du 9 septembre 2026 : l'offre au distant recevait ses
+    /// chemins du front par le WebSocket, que tout script de la webview sait
+    /// atteindre avec le jeton. Rien ne distinguait un fichier que l'utilisateur
+    /// venait de choisir d'un `~/.ssh/id_ed25519` désigné par un script hostile.
+    /// Le parent Tauri, qui voit passer la boîte de sélection et le dépôt sur la
+    /// fenêtre, annonce désormais chaque chemin désigné sur stdin ; une offre ne
+    /// peut porter que des chemins ainsi annoncés.
+    #[tokio::test]
+    async fn une_offre_ne_porte_que_des_chemins_designes_par_l_utilisateur() {
+        let d = temp("offre-designee");
+        std::fs::create_dir_all(&d).unwrap();
+        let choisi = d.join("doc.txt");
+        let secret = d.join("id_ed25519");
+        std::fs::write(&choisi, b"doc").unwrap();
+        std::fs::write(&secret, b"secret").unwrap();
+        let designes = Designations::default();
+        assert!(
+            preparer_offre(std::slice::from_ref(&choisi), &designes)
+                .await
+                .is_err(),
+            "rien n'est offrable tant que rien n'a été désigné"
+        );
+        designes.designer(choisi.clone());
+        preparer_offre(std::slice::from_ref(&choisi), &designes)
+            .await
+            .expect("un chemin désigné s'offre");
+        let err = preparer_offre(&[choisi.clone(), secret.clone()], &designes)
+            .await
+            .expect_err("un chemin non désigné fait refuser l'offre entière");
+        assert!(
+            format!("{err:#}").contains("désigné"),
+            "le refus dit pourquoi : {err:#}"
+        );
+    }
     /// L'offre parcourt les dossiers et sert les plages ; une plage au-delà
     /// du fichier rend ce qui reste, un index inconnu une erreur.
     #[tokio::test]
@@ -1420,9 +1540,12 @@ mod tests {
         std::fs::write(d.join("doc").join("a.txt"), b"hello").unwrap();
         std::fs::write(d.join("doc").join("sous").join("b.txt"), b"world!").unwrap();
         std::fs::write(d.join("seul.bin"), b"xyz").unwrap();
-        let offre = preparer_offre(&[d.join("doc"), d.join("seul.bin")])
-            .await
-            .unwrap();
+        let offre = preparer_offre(
+            &[d.join("doc"), d.join("seul.bin")],
+            &designe_tout(&[d.join("doc"), d.join("seul.bin")]),
+        )
+        .await
+        .unwrap();
         let noms: Vec<String> = offre
             .descripteurs()
             .iter()

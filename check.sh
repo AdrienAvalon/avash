@@ -141,6 +141,9 @@ run "garde : marqueurs Rust proscrits" "$ROOT" ./scripts/tests/guard-marqueurs-r
 # la webview sans qu'aucun appel du front ne l'utilise, malgré la règle écrite
 # en commentaire dans lib.rs. La liste est désormais comparée aux appels.
 run "IPC : commandes exposées toutes appelées" "$ROOT" ./scripts/tests/ipc-commandes-appelees-par-le-front.sh
+# La vitrine annonçait « 1233 tests » depuis des semaines : les six emplacements
+# des compteurs doivent dire ce que docs/qualite.md compte (9 septembre 2026).
+run "docs : compteurs de tests partout" "$ROOT" ./scripts/tests/compteurs-tests-partout.sh
 run "fuzz : toutes les cibles jouées" "$ROOT" ./scripts/tests/fuzz-continue-toutes-cibles.sh
 run "release : publier attend la sécurité" "$ROOT" ./scripts/tests/release-publier-attend-securite.sh
 # Trouvé le 9 septembre 2026 : le texte d'une invite du serveur atteignait les
@@ -226,6 +229,9 @@ fi
 # et le verdict ne reflète pas le commit produit. Le contrôle exige que le hook
 # refuse la divergence au lieu de rendre un faux vert (ou un faux rouge).
 run "hook : refuse un index qui diverge de l'arbre" "$ROOT" ./scripts/tests/hook-pre-commit-isole-index.sh
+# La porte était lente deux fois : check.sh puis le hook sur le même arbre. Le
+# hook accepte le témoin de check.sh et rejoue tout dès que l'arbre a bougé.
+run "hook : accepte le témoin de check.sh" "$ROOT" ./scripts/tests/hook-pre-commit-temoin-check.sh
 # rdp-sidecar/verifier-portes.sh comptait les tests portés dans le tube même
 # (`n=$(cargo test | grep | awk)`) : un test porté en échec arrêtait le script
 # sans imprimer une seule ligne de cargo, la porte rougissait sans dire quel
@@ -449,6 +455,11 @@ fi
 
 printf '\n'
 if [ ${#FAILED[@]} -eq 0 ]; then
+  # Témoin pour le hook de pré-commit : cet arbre-ci vient d'être validé, le
+  # hook n'a pas à rejouer clippy, tests, sidecar et front tant qu'il n'a pas
+  # bougé d'un octet (empreinte par scripts/temoin-arbre.sh). Un --quick suffit,
+  # le hook ne construit pas la release non plus.
+  ./scripts/temoin-arbre.sh > .git/avash-temoin-check 2>/dev/null || true
   printf '\033[1;32m✓ Tout est vert.\033[0m\n'
   exit 0
 fi

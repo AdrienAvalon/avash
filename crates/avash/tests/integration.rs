@@ -534,6 +534,10 @@ impl russh::server::Handler for TestSshSession {
 
 /// Operations de modification recues par le simulacre SFTP.
 static SFTP_OPS: Mutex<Vec<String>> = Mutex::const_new(Vec::new());
+/// Fichiers retirés du système de fichiers en mémoire (`remove` sous `/fs`) :
+/// permet à un test d'affirmer qu'une cible n'a JAMAIS disparu, pas seulement
+/// qu'elle est là à la fin.
+static FS_SUPPRESSIONS: Mutex<Vec<String>> = Mutex::const_new(Vec::new());
 
 fn ok_status(id: u32) -> Status {
     Status {
@@ -887,6 +891,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         async move {
             if sous_fs(&filename) {
+                FS_SUPPRESSIONS.lock().await.push(filename.clone());
                 return match fs_fichiers().as_mut().unwrap().remove(&filename) {
                     Some(_) => Ok(ok_status(id)),
                     None => Err(StatusCode::NoSuchFile),
@@ -939,7 +944,12 @@ impl russh_sftp::server::Handler for TestSftpSession {
                 // qui fait passer la promotion d'un `.part` par sa seconde
                 // branche, celle qu'empruntent les vrais serveurs, et qu'aucun
                 // test n'éprouvait tant que ce serveur-ci était complaisant.
-                if g.as_ref().unwrap().contains_key(&newpath) {
+                // Sous un segment « posix », ce serveur remplace la cible comme
+                // un `rename(2)` : c'est l'autre branche de la promotion du
+                // partiel, celle du renommage direct, qu'il faut aussi éprouver.
+                if newpath.contains("/posix/") {
+                    g.as_mut().unwrap().remove(&newpath);
+                } else if g.as_ref().unwrap().contains_key(&newpath) {
                     return Err(StatusCode::Failure);
                 }
                 return match g.as_mut().unwrap().remove(&oldpath) {
@@ -3189,6 +3199,46 @@ async fn le_relais_promeut_son_partiel_meme_quand_le_serveur_refuse_le_renommage
     assert!(
         fs_lire("/fs/relaisrenom/deja.bin.part").is_none(),
         "le partiel disparaît quand le relais aboutit"
+    );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
+/// La promotion du partiel a deux branches : un `rename` direct, atomique, quand
+/// le serveur remplace une cible existante à la POSIX, sinon `remove` puis
+/// `rename`. Depuis que le serveur de test refuse le renommage sur une cible
+/// existante comme OpenSSH (relecture du 9 septembre 2026), la première branche
+/// n'était plus éprouvée. Un segment « posix » du chemin rend ce serveur
+/// complaisant, et le journal des suppressions prouve que la cible n'a jamais
+/// été retirée : pas un instant sans fichier chez la cible.
+#[tokio::test]
+async fn le_relais_promeut_par_renommage_direct_quand_le_serveur_le_permet() {
+    let gros = motif(64 * 1024 + 3, 17);
+    fs_poser("/fs/posix/src.bin", &gros);
+    fs_poser("/fs/posix/deja.bin", b"la version deja chez la cible");
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+    let n = source
+        .relayer_vers(
+            "/fs/posix/src.bin",
+            &cible,
+            "/fs/posix/deja.bin",
+            false,
+            None,
+            |_, _| {},
+        )
+        .await
+        .expect("le relais doit aboutir sur un serveur qui renomme à la POSIX");
+    assert_eq!(n as usize, gros.len());
+    assert_eq!(fs_lire("/fs/posix/deja.bin").unwrap(), gros);
+    assert!(
+        fs_lire("/fs/posix/deja.bin.part").is_none(),
+        "le partiel disparaît quand le relais aboutit"
+    );
+    let supprimes = FS_SUPPRESSIONS.lock().await.clone();
+    assert!(
+        !supprimes.iter().any(|c| c == "/fs/posix/deja.bin"),
+        "sur un serveur qui renomme à la POSIX, la cible ne doit jamais être retirée : {supprimes:?}"
     );
     source.close().await.unwrap();
     cible.close().await.unwrap();

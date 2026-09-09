@@ -1,10 +1,13 @@
 // Bureaux RDP : sessions (canvas), entrées, presse-papiers, bureaux enregistrés.
 
 import { invoke } from "@tauri-apps/api/core";
+// Boîte de sélection JavaScript : seulement pour le champ « dossier partagé » du
+// formulaire, que l'utilisateur peut aussi remplir à la main ; les fichiers
+// offerts au distant passent, eux, par la boîte native (`choisir_fichiers_locaux`).
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic } from "./icons";
 import { partageClipboard, sonBureau } from "./prefs";
 import { LecteurAudio } from "./audio";
@@ -140,15 +143,18 @@ function offrirFichiers(id: number, chemins: string[]): void {
 export async function choisirEtOffrirFichiers(): Promise<void> {
   const id = bureauActif();
   if (id === null) return;
-  let choisis: string[] | string | null;
+  // Boîte de sélection native : le parent retient les chemins et les annonce
+  // au processus de bureau distant, qui n'offre rien d'autre (audit du
+  // 9 septembre 2026, voir `commands::choix_locaux`).
+  let choisis: string[];
   try {
-    choisis = await openDialog({ multiple: true, directory: false, title: t("rdp-fichiers-a-envoyer") });
+    choisis = await invoke<string[]>("choisir_fichiers_locaux", { titre: t("rdp-fichiers-a-envoyer"), dossiers: false });
   } catch (e) {
     notifyErreur(t("selecteur-indisponible", { e: String(e) }));
     return;
   }
-  if (!choisis) return;
-  offrirFichiers(id, Array.isArray(choisis) ? choisis : [choisis]);
+  if (choisis.length === 0) return;
+  offrirFichiers(id, choisis);
 }
 
 /** Bilan d'une réception ou d'une offre (message [18]). */

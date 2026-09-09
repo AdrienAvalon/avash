@@ -3,7 +3,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ic, fileIconName } from "./icons";
 import { humanSize, remoteJoin, parentDir, sortSftpEntries, shortDate, shellQuote, validFileName, type SftpEntry } from "./filters";
 import { $, type Session, state, ciblesDeCopie } from "./etat";
@@ -559,15 +558,18 @@ window.addEventListener("keydown", (e) => {
 
 async function sftpPickAndUpload() {
   if (!sftpSession()) return;
-  let picked: string[] | string | null;
+  // La boîte de sélection est ouverte par le natif, qui retient les chemins
+  // choisis : seuls ceux-là sont ensuite acceptés à l'envoi (audit du
+  // 9 septembre 2026, voir `commands::choix_locaux`).
+  let picked: string[];
   try {
-    picked = await openDialog({ multiple: true, directory: false, title: t("sftp-fichiers-a-envoyer") });
+    picked = await invoke<string[]>("choisir_fichiers_locaux", { titre: t("sftp-fichiers-a-envoyer"), dossiers: false });
   } catch (e) {
     sftpStatus("⚠️ " + t("selecteur-indisponible", { e: String(e) }), "err");
     return;
   }
-  if (!picked) return;
-  sftpUploadPaths(Array.isArray(picked) ? picked : [picked]);
+  if (picked.length === 0) return;
+  sftpUploadPaths(picked);
 }
 
 async function sftpMkdir(dir: string) {

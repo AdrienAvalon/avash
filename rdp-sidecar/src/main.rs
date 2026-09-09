@@ -43,7 +43,7 @@ use avash_rdp::args::parse_args;
 use avash_rdp::connexion::{FermeeApresAuthentification, TOURS_MAX};
 use avash_rdp::empreintes::chemin_canal_graphique;
 use avash_rdp::session::{executer, Suite};
-use avash_rdp::{capture, egfx, magnetoscope, vnc};
+use avash_rdp::{capture, egfx, fichiers, magnetoscope, vnc};
 
 /// Sous cargo-llvm-cov (`cfg(coverage)`, posé par lui seul), le profil
 /// d'exécution est réécrit toutes les secondes. Le profil ne s'écrit
@@ -183,6 +183,19 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let args = parse_args()?;
+    // Le mot de passe consommé (première ligne), stdin porte ensuite les
+    // chemins que l'utilisateur désigne, annoncés par le parent : seuls ceux-là
+    // pourront être offerts au distant (voir `fichiers::Designations`). Un fil
+    // ordinaire, bloqué en lecture : ce flux ne presse jamais, et sa fin (parent
+    // disparu) ne fait que tarir les désignations.
+    std::thread::spawn(|| {
+        use std::io::BufRead as _;
+        for ligne in std::io::stdin().lock().lines().map_while(Result::ok) {
+            if let Some(chemin) = fichiers::designation_depuis_ligne(&ligne) {
+                fichiers::DESIGNATIONS.designer(chemin);
+            }
+        }
+    });
     // VNC : même poste local, même protocole avec l'interface, un autre
     // dialogue avec le serveur ; ni redirection ni canal graphique.
     if args.vnc {
