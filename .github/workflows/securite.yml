@@ -104,7 +104,7 @@ jobs:
       # porte `run_id` (donc toujours un nouvel enregistrement en fin de job) et
       # `restore-keys` retrouve par préfixe le corpus du run précédent. Inutile
       # sur PR, qui ne fait que compiler les cibles.
-      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: github.event_name != 'pull_request'
         with:
           path: fuzz/corpus
