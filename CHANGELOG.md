@@ -9,15 +9,25 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Chaîne d'intégration et garde-fous
 
-- **Huit montées de version Dependabot traitées en lot, majeures comprises.**
+- **Onze montées de version Dependabot traitées en lot, majeures comprises.**
   `actions/cache` et `actions/cache/restore` passent de 4.2.3 à 6.1.0 (exécution
   sur Node 24, exécuteur GitHub 2.327.1 au minimum : les exécuteurs hébergés le
-  sont ; aucune clé de cache ne change), `claude-code-action` 1.0.217, l'image
-  `rust:1-bookworm` de la chaîne GitLab sur son nouveau digest, `dirs` 7 dans le
-  cœur comme dans le processus RDP (les quatre fonctions employées, `home_dir`,
-  `config_dir`, `download_dir`, `document_dir`, gardent leur contrat),
-  `tauri-plugin-wdio-webdriver` 1.4.0, et `@wdio/cli` et `@wdio/local-runner`
-  9.31.6 pour la suite bout en bout, rejouée en entier.
+  sont ; aucune clé de cache ne change), `claude-code-action` 1.0.217,
+  `taiki-e/install-action` 2.87.7, l'image `rust:1-bookworm` de la chaîne GitLab
+  sur son nouveau digest, `dirs` 7 dans le cœur comme dans le processus RDP (sa
+  seule rupture, `preference_dir` sous Windows, n'est appelée nulle part),
+  `tauri-plugin-wdio-webdriver` 1.4.0, `tokio-rustls` 0.26.5, et `@wdio/cli`,
+  `@wdio/local-runner` et `@wdio/mocha-framework` 9.31.6 pour la suite bout en
+  bout, rejouée en entier à chaque fois.
+- **La chaîne GitLab est de nouveau verte.** Elle rougissait à chaque pipeline
+  depuis le 8 septembre sur un test du processus RDP : l'exécuteur y tourne en
+  root, que `CAP_DAC_OVERRIDE` laisse écrire un fichier en 0444, et l'assertion
+  « GENERIC_WRITE refusé sur un 0444 » ne portait pas la réserve que le cas 0000
+  voisin avait déjà. Elle a rougi une seconde fois sur un test du front qui
+  cherchait la règle `display: contents` par une expression rationnelle rejouée
+  à chaque accolade du fichier : une seconde ici, près de six sur cet exécuteur,
+  au-delà des cinq que vitest accorde. Le test parcourt désormais les blocs CSS
+  en temps linéaire (177 ms).
 
 ## [0.11.0] - 2026-09-09
 

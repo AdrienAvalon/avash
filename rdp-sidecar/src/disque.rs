@@ -1487,15 +1487,21 @@ mod tests {
         assert_eq!((sl, data), (NtStatus::SUCCESS, b"contenu".to_vec()));
         assert_eq!(fermer(&mut l, id), NtStatus::SUCCESS);
 
-        // Un droit d'écriture explicite sur ce même 0444 reste refusé.
-        let (s, id, _) = ouvrir_acces(
-            &mut l,
-            "\\lisible.txt",
-            DesiredAccess::GENERIC_READ | DesiredAccess::GENERIC_WRITE,
-            CreateDisposition::FILE_OPEN,
-        );
-        assert_eq!(s, NtStatus::ACCESS_DENIED, "GENERIC_WRITE sur un 0444");
-        assert_eq!(id, 0);
+        // Un droit d'écriture explicite sur ce même 0444 reste refusé. Pas
+        // pour root, que CAP_DAC_OVERRIDE laisse écrire un 0444 : l'exécuteur
+        // GitLab tourne en root dans son conteneur, et cette assertion y
+        // rougissait à chaque pipeline depuis le 8 septembre 2026 (le cas 0000
+        // ci-dessous portait déjà cette réserve, celui-ci l'avait oubliée).
+        if unsafe { libc::geteuid() } != 0 {
+            let (s, id, _) = ouvrir_acces(
+                &mut l,
+                "\\lisible.txt",
+                DesiredAccess::GENERIC_READ | DesiredAccess::GENERIC_WRITE,
+                CreateDisposition::FILE_OPEN,
+            );
+            assert_eq!(s, NtStatus::ACCESS_DENIED, "GENERIC_WRITE sur un 0444");
+            assert_eq!(id, 0);
+        }
 
         // Un 0000 : aucun accès, même MAXIMUM_ALLOWED n'ouvre rien. (root
         // outrepasse les droits Unix : on ne l'affirme que pour un compte

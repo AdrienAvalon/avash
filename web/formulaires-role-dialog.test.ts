@@ -54,9 +54,18 @@ describe("Aucun <form> ne porte role=\"dialog\"", () => {
     // On retire d'abord les commentaires CSS : celui de #manual-form contient
     // des « / * … * / » sans accolade que le sélecteur avalerait sinon.
     const sansCommentaires = indexHtml.replace(/\/\*[\s\S]*?\*\//g, "");
-    const re = /([^{}]*)\{\s*display:\s*contents;\s*\}/g;
+    // Bloc par bloc, en temps linéaire. La première écriture cherchait
+    // `([^{}]*)\{ … display: contents … \}` d'un seul motif sur tout le
+    // fichier : à chaque accolade qui n'ouvrait pas la bonne règle, le moteur
+    // rejouait le préfixe `[^{}]*` depuis chaque position, soit une seconde ici
+    // et près de six sur l'exécuteur GitLab, au-delà des cinq secondes que
+    // vitest accorde à un test (rougi le 10 septembre 2026).
     const couverts = new Set<string>();
-    for (const [, selecteurs] of sansCommentaires.matchAll(re)) {
+    for (const bloc of sansCommentaires.split("}")) {
+      const ouvrante = bloc.lastIndexOf("{");
+      if (ouvrante < 0) continue;
+      if (!/^\s*display:\s*contents;\s*$/.test(bloc.slice(ouvrante + 1))) continue;
+      const selecteurs = bloc.slice(0, ouvrante).split("}").pop() ?? "";
       for (const s of selecteurs.split(",")) {
         const m = s.trim().match(/^#([\w-]+)$/);
         if (m) couverts.add(m[1]);
