@@ -188,8 +188,11 @@ bout-en-bout:
   # la compilation release du sidecar et celle de tout l'espace de travail :
   # deux scénarios ont rougi sur des délais le 10 septembre 2026, verts partout
   # ailleurs. Le pipeline dure plus longtemps, mais ses rouges veulent dire
-  # quelque chose. Les caches cargo sont chauds au passage.
-  needs: ["rust", "processus-rdp"]
+  # quelque chose. Les caches cargo sont chauds au passage. `front` reste
+  # dans la liste pour son artefact : c'est par `needs` que GitLab livre
+  # `web/dist`, sans quoi `generate_context!` de Tauri n'a rien à embarquer et
+  # la compilation d'avash-ui s'arrête (vu dès le premier pipeline sans lui).
+  needs: ["front", "rust", "processus-rdp"]
   cache: [*cache-registre, *cache-cible, *cache-sidecar, *cache-npm]
   script:
     - cargo build --release --manifest-path rdp-sidecar/Cargo.toml

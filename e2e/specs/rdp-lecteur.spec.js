@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { startRdpServer, waitForPort, attendreBureauConnecte } from "./helpers.js";
 
-const PORT = 33896;
+const PORT = 33895;
 const CONTENU = "Bonjour depuis le poste.\nDeuxième ligne, avec des accents : é à ü.\n";
 
 /** Un dossier partagé neuf, avec bonjour.txt dedans. */

@@ -219,7 +219,14 @@ La porte qualité complète est le script `check.sh` à la racine :
 
 Le hook `pre-commit` reprend l'essentiel : garde, format, clippy, tests Rust,
 tests du processus RDP, et les vérifications rapides du front (`tsc`, ESLint,
-stylelint, knip, Vitest).
+stylelint, knip, Vitest). Il ne rejoue rien si `check.sh` vient d'être vert sur
+l'arbre exactement tel qu'il va être commité : `check.sh` laisse un témoin
+(`.git/avash-temoin-check`, empreinte de `scripts/temoin-arbre.sh`) que le hook
+compare à l'arbre ; le moindre octet changé depuis, et tout est rejoué. La
+boucle courte est donc `./check.sh --quick` puis `git commit`, sans attendre
+deux fois. Les paquets portés (`vendor/`) échappent à Dependabot :
+`scripts/portes-amont.sh` les compare à crates.io, et le workflow Qualité le
+joue chaque lundi.
 
 Trois regards extérieurs tournent sur GitHub, hors de `check.sh` : **CodeQL**
 (Rust et TypeScript, constats dans l'onglet Security), **gitleaks** sur tout
@@ -349,6 +356,11 @@ et le miroir avait pris cinquante commits de retard. La chaîne équivalente de
 `.gitlab-ci.yml` tourne depuis le 3 septembre 2026 sur un exécuteur enregistré
 sur le poste du mainteneur (`avalon-cachyos`, runner 18 du projet) : Docker
 privilégié, socket du démon monté dans les travaux, trois travaux en parallèle.
+Comme c'est un poste de travail et non une ferme, la suite bout en bout y
+attend la fin des deux jobs Rust (`needs`) pour ne pas mesurer ses délais
+pendant une compilation release, et un `check.sh` ou une suite E2E lancés
+localement pendant un pipeline ralentissent ce pipeline : un rouge GitLab se
+lit en regardant ce qui tournait sur le poste au même moment.
 Sa configuration vit dans `/etc/gitlab-runner/config.toml` (jeton
 d'enregistrement compris, lisible par personne d'autre), le service est
 `gitlab-runner.service`. Le poste éteint, les travaux attendent ; ils

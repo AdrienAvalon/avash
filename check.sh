@@ -244,6 +244,9 @@ run "hook : refuse un index qui diverge de l'arbre" "$ROOT" ./scripts/tests/hook
 # La porte était lente deux fois : check.sh puis le hook sur le même arbre. Le
 # hook accepte le témoin de check.sh et rejoue tout dès que l'arbre a bougé.
 run "hook : accepte le témoin de check.sh" "$ROOT" ./scripts/tests/hook-pre-commit-temoin-check.sh
+# Deux scénarios bout en bout sur le même port de serveur de test se volaient
+# le port à un SIGTERM près (10 septembre 2026) : un port par scénario.
+run "e2e : un port de serveur de test par scénario" "$ROOT" ./scripts/tests/e2e-ports-uniques.sh
 # rdp-sidecar/verifier-portes.sh comptait les tests portés dans le tube même
 # (`n=$(cargo test | grep | awk)`) : un test porté en échec arrêtait le script
 # sans imprimer une seule ligne de cargo, la porte rougissait sans dire quel

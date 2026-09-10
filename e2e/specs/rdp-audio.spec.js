@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { waitForPort } from "./helpers.js";
 
-const PORT = 33897;
+const PORT = 33894;
 const MSG_CONNECTE = 1;
 const MSG_SON = 20;
 

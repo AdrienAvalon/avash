@@ -57,9 +57,13 @@ reste** — un poste où `XDG_DATA_HOME` est exporté n'écrit jamais dans les
 données réelles de l'utilisateur. Seul le **sshd non-root** (port 2223, clé)
 est monté dans `onPrepare`, pour `ssh.spec.js` ; les serveurs RDP et VNC, eux,
 ne sont pas partagés : **chaque spec démarre son propre serveur dédié** dans son
-`before` (aucun couplage). RDP sur `33899` (`rdp.spec.js`, identifiants
-`test`/`test`), `33898` (`rdp-reconnect`), `33897` (`rdp-clipboard`,
-`rdp-audio`, `onglets-mixtes`) et `33896` (`rdp-fichiers`, `rdp-lecteur`) ;
+`before` (aucun couplage), **chacun sur son port** : deux specs sur le même
+port se le volaient à un SIGTERM près, le serveur du suivant sortait sur un
+port encore tenu (`scripts/tests/e2e-ports-uniques.sh` l'interdit depuis le
+10 septembre 2026). RDP sur `33899` (`rdp.spec.js`, identifiants
+`test`/`test`), `33898` (`rdp-reconnect`), `33897` (`rdp-clipboard`), `33896`
+(`rdp-fichiers`), `33895` (`rdp-lecteur`), `33894` (`rdp-audio`) et `33893`
+(`onglets-mixtes`) ;
 VNC sur `35900` (`vnc.spec.js`, mot de passe `test`, image connue qui réagit
 aux entrées) et `35903`/`35904` (`vnc-tls`, VeNCrypt derrière son terminateur
 TLS).

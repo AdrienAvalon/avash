@@ -70,6 +70,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   en retard sur crates.io, pour que la fusion des correctifs amont sur les
   nôtres soit une décision datée. Relevé du jour : les huit paquets portés sont
   à la version amont courante.
+- **Chaque scénario bout en bout a son port de serveur de test.** Deux scénarios
+  RDP lançaient leur serveur sur 33896, trois autres sur 33897, l'un juste après
+  l'autre ; le `after` du premier envoie SIGTERM sans attendre, le serveur
+  suivant trouvait le port encore pris et s'arrêtait, et le scénario expirait
+  sur « port pas prêt à temps ». Un port par scénario, et un contrôle interdit
+  le partage.
+- **Sur GitLab, la suite bout en bout attend les jobs Rust.** L'exécuteur est un
+  poste de travail, pas une ferme : lancée dès le front, la suite partageait le
+  processeur avec deux compilations release et rougissait sur des délais réels
+  (serveur prêt, session SSH vivante). Elle passe après `rust` et
+  `processus-rdp`, caches chauds, machine calme ; `front` reste requis pour son
+  artefact `web/dist`.
 
 ## [0.11.0] - 2026-09-09
 

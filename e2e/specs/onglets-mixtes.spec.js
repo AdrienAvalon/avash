@@ -4,7 +4,7 @@
 // on ferme le SSH, et le bureau devient inutilisable — il fallait fermer son
 // onglet et se reconnecter.
 import { startRdpServer, waitForPort, findHostRow, attendreBureauConnecte, doubleCliquer } from "./helpers.js";
-const RDP_PORT = 33897;
+const RDP_PORT = 33893;
 let srv;
 
 describe("Onglets mixtes SSH + RDP", () => {
