@@ -39,7 +39,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   cherchait la règle `display: contents` par une expression rationnelle rejouée
   à chaque accolade du fichier : une seconde ici, près de six sur cet exécuteur,
   au-delà des cinq que vitest accorde. Le test parcourt désormais les blocs CSS
-  en temps linéaire (177 ms).
+  en temps linéaire (177 ms). Une troisième fois enfin par le job Rust, tué à la
+  limite d'une heure alors que son script était vert en vingt-quatre minutes :
+  l'archivage du cache `target`, 83 000 fichiers gonflés d'artefacts
+  incrémentaux inutiles en intégration continue, dépassait les vingt-cinq
+  minutes. `CARGO_INCREMENTAL=0` sur toute la chaîne, et le job Rust dispose de
+  quatre-vingt-dix minutes.
 
 ## [0.11.0] - 2026-09-09
 

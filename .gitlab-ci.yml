@@ -33,6 +33,13 @@ workflow:
 
 variables:
   CARGO_TERM_COLOR: "always"
+  # Pas d'artefacts incrémentaux en intégration continue : personne n'y
+  # recompile deux fois le même arbre, et ils gonflent `target` que le job
+  # rust archive en fin de passage. Le 10 septembre 2026, après un lot de
+  # montées de dépendances, l'archivage de 83 000 fichiers a dépassé les
+  # 25 minutes et le job a été tué à la limite d'une heure, script pourtant
+  # vert en 24 minutes.
+  CARGO_INCREMENTAL: "0"
   # Registre cargo et cache npm dans le projet, pour être mis en cache.
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   npm_config_cache: "$CI_PROJECT_DIR/.npm"
@@ -104,6 +111,10 @@ front:
 rust:
   stage: verifier
   needs: ["front"]
+  # Une heure ne suffit pas quand les caches sont froids ou remaniés (26 à
+  # 27 minutes à chaud, plus la restauration et l'archivage de `target`) :
+  # voir CARGO_INCREMENTAL ci-dessus.
+  timeout: 90m
   cache: [*cache-registre, *cache-cible, *cache-sidecar]
   script:
     # Le processus RDP est déclaré en ressource embarquée : son binaire doit
