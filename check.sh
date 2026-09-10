@@ -15,16 +15,24 @@ QUICK=${1:-}
 FAILED=()
 
 step() { printf '\n\033[1;36m▸ %s\033[0m\n' "$1"; }
-ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
-bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; FAILED+=("$1"); }
+ok()   { printf '  \033[32m✓\033[0m %s\033[2m%s\033[0m\n' "$1" "$2"; }
+bad()  { printf '  \033[31m✗\033[0m %s\033[2m%s\033[0m\n' "$1" "$2"; FAILED+=("$1"); }
+
+# Durée d'une étape, affichée en gris quand elle dépasse la seconde : sans elle,
+# on savait que la porte prenait un quart d'heure sans savoir où (10 septembre
+# 2026). Le témoin du hook a retiré la seconde passe ; ceci dit où va la première.
+duree() { # <secondes> -> " (Ns)" ou rien
+  [ "$1" -ge 2 ] && printf ' (%ds)' "$1"
+}
 
 run() { # run <libellé> <répertoire> <commande...>
   local label="$1" dir="$2"; shift 2
   if [ ! -d "$dir" ]; then bad "$label (répertoire absent : $dir)"; return; fi
+  local debut=$SECONDS
   if (cd "$dir" && "$@" >/tmp/avash-check.$$ 2>&1); then
-    ok "$label"
+    ok "$label" "$(duree $((SECONDS - debut)))"
   else
-    bad "$label"
+    bad "$label" "$(duree $((SECONDS - debut)))"
     tail -25 /tmp/avash-check.$$ | sed 's/^/      /'
   fi
   rm -f /tmp/avash-check.$$
@@ -457,7 +465,7 @@ if [ "$QUICK" != "--quick" ]; then
   run "binaire Tauri"    "$ROOT" cargo build --release -p avash-ui
 fi
 
-printf '\n'
+printf '\n\033[2mdurée totale : %d min %02d s\033[0m\n' $((SECONDS / 60)) $((SECONDS % 60))
 if [ ${#FAILED[@]} -eq 0 ]; then
   # Témoin pour le hook de pré-commit : cet arbre-ci vient d'être validé, le
   # hook n'a pas à rejouer clippy, tests, sidecar et front tant qu'il n'a pas

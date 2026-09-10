@@ -172,6 +172,20 @@ sidecar attend est un **jeton aléatoire** de 64 bits généré à son démarrag
 toute connexion qui ne le présente pas est rejetée. Cela empêche un autre
 processus local de se brancher sur la session.
 
+Ce que ce canal protège, et ce qu'il ne prétend pas protéger. La page qui
+tourne dans la webview connaît le jeton : un script qui aurait pris la main sur
+elle (dépendance front compromise, outils de développement) peut donc envoyer
+au bureau distant ce que la page envoie, frappes, souris, presse-papiers, comme
+il peut écrire dans un terminal SSH par la commande `pty_write`. La page est la
+frontière de confiance de l'application, pas une menace contre laquelle le
+natif se défendrait. Ce qu'un tel script ne peut pas faire, c'est sortir des
+limites de ce que l'utilisateur a voulu : offrir un fichier du poste que
+l'utilisateur n'a pas désigné (le processus RDP n'accepte que les chemins que
+le natif lui a annoncés), envoyer un fichier par SFTP dans le même cas, ou
+écraser un fichier existant à l'arrivée. Un autre processus de la machine,
+même du même compte, n'atteint pas le canal sans le jeton, qui ne passe ni par
+la ligne de commande ni par un fichier.
+
 Le sidecar **boucle** sur les connexions entrantes plutôt que d'en accepter une
 seule — voir plus bas, « Le canal local du processus RDP n'est plus coupable
 d'un seul message ».

@@ -227,7 +227,12 @@ export function startVncServer(port, surLigne, options = {}) {
 // rdp-reconnect, qui passait seul) : il couvre le démarrage d'un serveur sur une
 // machine chargée.
 import { connect } from "node:net";
-export function waitForPort(port, timeout = 15000) {
+// Trente secondes : un serveur de test démarre en une seconde sur un poste au
+// repos, mais l'exécuteur GitLab partageait le processeur avec deux
+// compilations release le 10 septembre 2026 et le port 33898 n'était pas prêt
+// en quinze. Le délai ne coûte rien quand tout va bien : on résout dès la
+// première connexion réussie.
+export function waitForPort(port, timeout = 30000) {
   const deadline = Date.now() + timeout;
   const uneConnexion = () =>
     new Promise((ok, ko) => {

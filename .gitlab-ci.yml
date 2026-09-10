@@ -181,7 +181,15 @@ dependances:
 # --- Bout en bout : l'application réelle, sans affichage ------------------
 bout-en-bout:
   stage: eprouver
-  needs: ["front"]
+  # Après les deux jobs Rust, pas à côté d'eux : l'exécuteur GitLab est une
+  # seule machine (le poste du mainteneur), et la suite bout en bout mesure des
+  # délais réels (serveur de test prêt en quelques secondes, session SSH
+  # vivante en vingt). Lancée dès le front, elle partageait le processeur avec
+  # la compilation release du sidecar et celle de tout l'espace de travail :
+  # deux scénarios ont rougi sur des délais le 10 septembre 2026, verts partout
+  # ailleurs. Le pipeline dure plus longtemps, mais ses rouges veulent dire
+  # quelque chose. Les caches cargo sont chauds au passage.
+  needs: ["rust", "processus-rdp"]
   cache: [*cache-registre, *cache-cible, *cache-sidecar, *cache-npm]
   script:
     - cargo build --release --manifest-path rdp-sidecar/Cargo.toml

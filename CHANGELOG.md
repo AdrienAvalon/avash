@@ -61,6 +61,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   portait `test = false`, hérité de l'amont, comme les paquets du sidecar avant
   le 8 septembre : ses onze tests, dont ceux de l'autodétection réseau, ne
   tournaient nulle part. `check.sh` et les deux chaînes les jouent.
+- **`check.sh` dit où va son temps.** Chaque étape affiche sa durée dès qu'elle
+  dépasse la seconde, et la porte son total : on savait qu'elle prenait un quart
+  d'heure sans savoir où.
+- **Les paquets portés sont comparés à l'amont chaque semaine.** Dependabot ne
+  voit que les dépendances déclarées, jamais un répertoire `vendor/` : un job du
+  workflow Qualité (`scripts/portes-amont.sh`) rougit dès qu'un paquet porté est
+  en retard sur crates.io, pour que la fusion des correctifs amont sur les
+  nôtres soit une décision datée. Relevé du jour : les huit paquets portés sont
+  à la version amont courante.
 
 ## [0.11.0] - 2026-09-09
 
