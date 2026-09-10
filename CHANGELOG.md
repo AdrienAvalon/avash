@@ -7,6 +7,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- **Une offre de fichiers au bureau distant n'est plus refusée quand sa
+  désignation est encore en route.** Le parent annonce le chemin désigné sur
+  l'entrée standard du processus RDP juste avant que le front n'envoie l'offre
+  par le WebSocket ; les deux arrivent par des fils différents, et sur un
+  exécuteur chargé (chaîne GitLab, première exécution de la 0.11.0) l'offre a
+  été traitée la première et le fichier légitime refusé comme non désigné. Le
+  processus attend désormais jusqu'à deux secondes une désignation absente avant
+  de refuser : la ligne est déjà dans le tube et se lit en microsecondes, seul
+  un chemin inventé par un script attend ce délai pour rien.
+
 ### Chaîne d'intégration et garde-fous
 
 - **Onze montées de version Dependabot traitées en lot, majeures comprises.**

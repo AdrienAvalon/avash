@@ -783,16 +783,27 @@ fn filetime(m: &std::fs::Metadata) -> Option<u64> {
 /// séparateur, taille et date pour les fichiers, attribut dossier pour les
 /// dossiers. Les liens symboliques ne sont pas suivis : une offre ne doit
 /// pas sortir de ce que l'utilisateur a désigné.
+/// Ce qu'on accorde à une désignation encore en route. Le parent l'écrit sur
+/// stdin juste avant que le front n'envoie l'offre par le WebSocket ; les deux
+/// arrivent par des fils différents et rien n'ordonne leur traitement. Sur un
+/// exécuteur chargé (chaîne GitLab, 10 septembre 2026), l'offre est passée la
+/// première et le fichier légitime a été refusé. Deux secondes : la ligne est
+/// déjà dans le tube, elle se lit en microsecondes ; un script hostile qui
+/// invente un chemin attend ce délai pour rien.
+const DELAI_DESIGNATION: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub(crate) async fn preparer_offre(chemins: &[PathBuf], designes: &Designations) -> Result<Offre> {
     // Avant toute lecture : un seul chemin non désigné fait refuser l'offre
     // entière, sans rien parcourir. Un script hostile n'apprend même pas si le
-    // chemin existe.
-    for racine in chemins {
+    // chemin existe. Une désignation en route est attendue un court instant.
+    let debut = std::time::Instant::now();
+    while let Some(racine) = chemins.iter().find(|r| !designes.est_designe(r)) {
         anyhow::ensure!(
-            designes.est_designe(racine),
+            debut.elapsed() < DELAI_DESIGNATION,
             "{} n'a pas été désigné par l'utilisateur (boîte de sélection ou dépôt sur la fenêtre) : offre refusée",
             racine.display()
         );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     let mut fichiers = Vec::new();
     for racine in chemins {
@@ -1494,6 +1505,36 @@ mod tests {
         assert_eq!(
             (a[1].chemin.as_str(), a[1].taille, a[1].dossier),
             ("d/e/f", 9, false)
+        );
+    }
+
+    /// Trouvé par la chaîne GitLab le 10 septembre 2026, à sa première
+    /// exécution des désignations : le parent écrit `AUTORISE <chemin>` sur
+    /// stdin puis le front envoie l'offre par le WebSocket ; sur un exécuteur
+    /// chargé, l'offre a été traitée AVANT que le fil de lecture de stdin ait
+    /// enregistré la ligne, et le fichier légitime a été refusé comme non
+    /// désigné. La désignation est en route, pas absente : une offre attend
+    /// un court instant qu'elle arrive avant de refuser.
+    #[tokio::test]
+    async fn une_designation_en_route_n_est_pas_prise_pour_une_absence() {
+        let d = temp("offre-en-route");
+        std::fs::create_dir_all(&d).unwrap();
+        let choisi = d.join("doc.txt");
+        std::fs::write(&choisi, b"doc").unwrap();
+        let designes = std::sync::Arc::new(Designations::default());
+        let tardif = designes.clone();
+        let chemin = choisi.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            tardif.designer(chemin);
+        });
+        let debut = std::time::Instant::now();
+        preparer_offre(std::slice::from_ref(&choisi), &designes)
+            .await
+            .expect("une désignation qui arrive 150 ms après l'offre doit être acceptée");
+        assert!(
+            debut.elapsed() < std::time::Duration::from_secs(2),
+            "l'attente s'arrête dès que la désignation arrive"
         );
     }
 
