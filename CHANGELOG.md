@@ -7,6 +7,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Chaîne d'intégration et garde-fous
+
+- **Sur GitLab, la conformité passe après la suite bout en bout.** Depuis que la
+  suite attend les jobs Rust, elle se retrouvait à côté de la conformité, dont
+  les conteneurs xrdp saturent le poste qui sert d'exécuteur : une session SSH
+  « jamais live » en vingt secondes, deux fois sur quatre pipelines, jamais sur
+  GitHub ni sur le poste au repos. Les deux jobs se suivent désormais.
+
 ## [0.11.1] - 2026-09-10
 
 ### Corrigé

@@ -251,7 +251,8 @@ qui est en place, et ce qui attend :
   cargo et npm figées), construit, installé et lancé sur le poste par
   `flatpak-builder` du temps où il pointait le tag v0.8.0, passé à v0.10.1 sans
   que cette construction soit rejouée, puis rejouée le 9 septembre 2026 sur le
-  tag v0.11.0 (construite, installée, lancée sous Xvfb : la fenêtre tient ; le
+  tag v0.11.0 et le 10 septembre 2026 sur le tag v0.11.1 (construite,
+  installée, lancée sous Xvfb à chaque fois : la fenêtre tient ; le
   lancement sans `--own-name` reste à éprouver, `flatpak run` ne sachant pas
   retirer ce droit à l'essai ; garde
   `scripts/tests/flathub-tag-feuille-de-route.sh`) ; le

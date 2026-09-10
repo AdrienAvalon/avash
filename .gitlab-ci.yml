@@ -230,7 +230,11 @@ conformite:
   # des dépendances compris : le pipeline #3381 l'a sauté pour une panne du
   # registre npm. Il ne dépend que du binaire du sidecar, que « rust » vient
   # de construire et de mettre en cache.
-  needs: ["rust"]
+  # Après la suite bout en bout, pas à côté : ses conteneurs xrdp saturent le
+  # poste qui sert d'exécuteur, et la suite mesure des délais réels (une
+  # session SSH « jamais live » en vingt secondes, deux fois sur quatre
+  # pipelines quand les deux jobs se chevauchaient, 10 septembre 2026).
+  needs: ["rust", "bout-en-bout"]
   cache:
     - *cache-registre
     - <<: *cache-sidecar

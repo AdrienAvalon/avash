@@ -125,10 +125,10 @@ modules:
     sources:
       - type: git
         url: https://github.com/AdrienAvalon/avash.git
-        tag: v0.11.0
+        tag: v0.11.1
         # Le commit du tag, posé à la publication (RELEASE.md, section 8) ;
         # entre guillemets, sinon YAML peut le lire comme un nombre.
-        commit: "bef533aa6c7f04e6fdb278ed2e2c730169d8ff4d"
+        commit: "2f2971bad51b7ab1a3aeb2fb282197b1259253ad"
       - cargo-sources.json
       - cargo-sources-rdp.json
       - node-sources.json
