@@ -14,6 +14,21 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   les conteneurs xrdp saturent le poste qui sert d'exécuteur : une session SSH
   « jamais live » en vingt secondes, deux fois sur quatre pipelines, jamais sur
   GitHub ni sur le poste au repos. Les deux jobs se suivent désormais.
+- **Les caches GitLab maigrissent et cessent de s'écraser.** Le job rust
+  passait 21 minutes à archiver un `target` de 19 Go pour 5 minutes de
+  vérifications, la suite bout en bout 24 minutes à réarchiver le même sans y
+  avoir rien ajouté, et deux jobs qui archivaient la même clé en parallèle se
+  l'écrasaient tour à tour : le processus RDP repartait à froid à chaque
+  pipeline. Chaque clé n'a plus qu'un job qui l'archive, les autres ne font que
+  restaurer, les archives sont au niveau de compression le plus rapide (le
+  disque l'est déjà), les trois emplacements parallèles de l'exécuteur
+  partagent un seul cache, et `scripts/balayer-cibles.sh` retire d'un `target`
+  les unités que cargo n'énumère plus (47 Go sur le poste le jour même).
+- **Les paquets portés construisent dans un seul répertoire.** Les sept paquets
+  IronRDP et vnc-rs du processus RDP avaient chacun leur `target`, jamais mis en
+  cache (sept constructions à froid par pipeline) ; ils construisent dans
+  `rdp-sidecar/target/portes`, l'ironrdp-server porté dans
+  `test-rdp-server/target/portes`, avec le cache de leur hôte.
 
 ## [0.11.1] - 2026-09-10
 

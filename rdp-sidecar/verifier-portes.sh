@@ -12,6 +12,12 @@
 # quand la commande vient de l'extérieur.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vendor"
+# Un seul répertoire de construction pour les sept paquets, sous celui du
+# processus RDP : chacun avait le sien (3,2 Go en tout sur le poste, et sept
+# constructions à froid par pipeline GitLab, qui ne met en cache que
+# rdp-sidecar/target). Ici il est mis en cache et balayé avec le reste
+# (scripts/balayer-cibles.sh).
+export CARGO_TARGET_DIR="$(cd .. && pwd)/target/portes"
 for p in ironrdp-session ironrdp-connector ironrdp-pdu ironrdp-graphics ironrdp-rdpdr ironrdp-svc vnc-rs; do
   # Trouvé par l'audit du 8 septembre 2026 : compter directement dans le tube
   # (`n=$(cargo test | grep | awk)`) engloutissait toute la sortie de cargo, et

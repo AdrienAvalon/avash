@@ -40,6 +40,11 @@ variables:
   # 25 minutes et le job a été tué à la limite d'une heure, script pourtant
   # vert en 24 minutes.
   CARGO_INCREMENTAL: "0"
+  # Archives de cache et d'artefacts au niveau de compression le plus rapide :
+  # l'archivage dominait chaque job (21 minutes pour 11 Go dans le job rust,
+  # 10 septembre 2026) et le disque de l'exécuteur compresse déjà (btrfs, zstd).
+  CACHE_COMPRESSION_LEVEL: "fastest"
+  ARTIFACT_COMPRESSION_LEVEL: "fastest"
   # Registre cargo et cache npm dans le projet, pour être mis en cache.
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   npm_config_cache: "$CI_PROJECT_DIR/.npm"
@@ -48,25 +53,39 @@ variables:
 # --- Caches, découpés par usage ------------------------------------------
 # Un seul cache pour tout le monde archivait plusieurs gigaoctets à la fin de
 # CHAQUE job — quatre minutes pour le job front, qui n'en touche pas un octet.
-# Chaque job ne restaure et ne réarchive que ce qu'il utilise, et un job qui ne
-# produit rien de neuf ne réarchive pas (policy: pull). Toute autre référence
-# que main part du cache de main plutôt que de zéro.
-.cache-registre: &cache-registre
+# Chaque clé n'a qu'UN job qui l'archive, celui qui produit son contenu ; les
+# autres ne font que la restaurer (policy: pull). Mesuré le 10 septembre 2026 :
+# deux jobs qui archivaient la même clé en parallèle se l'écrasaient tour à
+# tour (rust, release seul, sur processus-rdp, debug et tests : le processus
+# RDP repartait à froid à chaque pipeline), et la suite bout en bout passait
+# 24 minutes à réarchiver un `target` auquel elle n'ajoutait rien, pour 5
+# minutes de suite. Le job qui archive un `target` le balaie d'abord
+# (scripts/balayer-cibles.sh) : sans cela il ne fait que grossir (64 Go sur
+# l'exécuteur, 19 Go d'archive, 21 minutes d'archivage dans le job rust pour
+# 5 de vérifications). Toute autre référence que main part du cache de main
+# plutôt que de zéro.
+.cache-registre: &cache-registre   # sources des crates : rust les télécharge toutes
   key: "registre-$CI_COMMIT_REF_SLUG"
   fallback_keys: ["registre-main-protected", "registre-main"]
-  paths: [".cargo/registry", ".cargo/git", ".cargo/advisory-db", ".cargo/advisory-dbs"]
-.cache-cible: &cache-cible
+  paths: [".cargo/registry", ".cargo/git"]
+.cache-avis: &cache-avis           # bases d'avis de cargo-audit et cargo-deny : dependances
+  key: "avis-$CI_COMMIT_REF_SLUG"
+  fallback_keys: ["avis-main-protected", "avis-main"]
+  paths: [".cargo/advisory-db", ".cargo/advisory-dbs"]
+.cache-cible: &cache-cible         # target de l'espace de travail : rust
   key: "cible-$CI_COMMIT_REF_SLUG"
   fallback_keys: ["cible-main-protected", "cible-main"]
-  paths: ["target", "test-rdp-server/target", "test-vnc-server/target"]
-.cache-sidecar: &cache-sidecar
-  key: "sidecar-$CI_COMMIT_REF_SLUG"
-  fallback_keys: ["sidecar-main-protected", "sidecar-main"]
-  paths: ["rdp-sidecar/target"]
-.cache-npm: &cache-npm
+  paths: ["target"]
+.cache-hors-workspace: &cache-hors-workspace   # processus RDP (paquets portés compris) et serveurs de test : processus-rdp
+  key: "hors-workspace-$CI_COMMIT_REF_SLUG"
+  fallback_keys: ["hors-workspace-main-protected", "hors-workspace-main"]
+  paths: ["rdp-sidecar/target", "test-rdp-server/target", "test-vnc-server/target"]
+.cache-npm: &cache-npm             # cache npm de web et de e2e : dependances
   key: "npm-$CI_COMMIT_REF_SLUG"
   fallback_keys: ["npm-main-protected", "npm-main"]
   paths: [".npm"]
+.pull: &pull                       # restaurer sans réarchiver
+  policy: pull
 
 default:
   image:
@@ -91,7 +110,7 @@ image-ci:
 # --- Front d'abord : la compilation de avash-ui exige web/dist ------------
 front:
   stage: verifier
-  cache: [*cache-npm]
+  cache: [{<<: [*cache-npm, *pull]}]
   script:
     - ./scripts/guard.sh          # restes de mise au point
     - cd web && npm ci
@@ -115,7 +134,7 @@ rust:
   # 27 minutes à chaud, plus la restauration et l'archivage de `target`) :
   # voir CARGO_INCREMENTAL ci-dessus.
   timeout: 90m
-  cache: [*cache-registre, *cache-cible, *cache-sidecar]
+  cache: [*cache-registre, *cache-cible, {<<: [*cache-hors-workspace, *pull]}]
   script:
     # Le processus RDP est déclaré en ressource embarquée : son binaire doit
     # exister AVANT toute compilation de avash-ui.
@@ -129,16 +148,21 @@ rust:
     - cargo clippy --workspace --release -- -D warnings
     - cargo test --workspace --all-targets
     - cargo build --release -p avash-ui
+    # Seul job à archiver `target` : il ne garde que ce qu'il vient d'utiliser.
+    - scripts/balayer-cibles.sh workspace
 
 # --- Processus RDP : hors espace de travail, donc invisible de --workspace --
 processus-rdp:
   stage: verifier
-  cache: [*cache-registre, *cache-sidecar]
+  cache: [{<<: [*cache-registre, *pull]}, *cache-hors-workspace]
   script:
     - cd rdp-sidecar
     - cargo fmt --check
     - cargo clippy --all-targets -- -D warnings
     - cargo test
+    # Le binaire release que rust, bout-en-bout et conformite reprennent du
+    # cache : ce job est le seul à archiver les targets hors espace de travail.
+    - cargo build --release
     # Les correctifs portés sur IronRDP ont leurs propres tests. Ces lignes
     # existaient déjà et ne lançaient RIEN : les manifestes vendorisés portaient
     # « test = false », hérité de l'amont, et quatorze tests passaient pour verts
@@ -147,19 +171,26 @@ processus-rdp:
     # Les serveurs de test, hors espace de travail eux aussi, n'étaient que
     # compilés : le côté serveur RDPDR a vingt-sept tests, qu'on joue ici.
     - cd ..
+    # Les binaires release aussi : la suite bout en bout les reprend du cache,
+    # que ce job est le seul à archiver.
     - for s in test-rdp-server test-vnc-server; do
         cargo fmt --check --manifest-path "$s/Cargo.toml" &&
         cargo clippy --all-targets --manifest-path "$s/Cargo.toml" -- -D warnings &&
-        cargo test --manifest-path "$s/Cargo.toml" || exit 1;
+        cargo test --manifest-path "$s/Cargo.toml" &&
+        cargo build --release --manifest-path "$s/Cargo.toml" || exit 1;
       done
     # Le paquet ironrdp-server porté : ses tests seuls (test = false retiré le
-    # 10 septembre 2026 ; style et lints de l'amont restent les siens).
-    - cargo test --manifest-path test-rdp-server/vendor/ironrdp-server/Cargo.toml
+    # 10 septembre 2026 ; style et lints de l'amont restent les siens), dans un
+    # répertoire de construction sous celui du serveur, mis en cache avec lui.
+    - CARGO_TARGET_DIR="$CI_PROJECT_DIR/test-rdp-server/target/portes"
+        cargo test --manifest-path test-rdp-server/vendor/ironrdp-server/Cargo.toml
+    # Seul job à archiver ces targets : ils ne gardent que ce qu'il a utilisé.
+    - scripts/balayer-cibles.sh sidecar serveurs
 
 # --- Chaîne d'approvisionnement ------------------------------------------
 dependances:
   stage: verifier
-  cache: [*cache-registre, *cache-npm]
+  cache: [{<<: [*cache-registre, *pull]}, *cache-avis, *cache-npm]
   script:
     # Les avis acceptés sont dans .cargo/audit.toml, lu automatiquement par
     # cargo-audit (audit du 8 septembre 2026 : plus de --ignore à synchroniser).
@@ -193,7 +224,15 @@ bout-en-bout:
   # `web/dist`, sans quoi `generate_context!` de Tauri n'a rien à embarquer et
   # la compilation d'avash-ui s'arrête (vu dès le premier pipeline sans lui).
   needs: ["front", "rust", "processus-rdp"]
-  cache: [*cache-registre, *cache-cible, *cache-sidecar, *cache-npm]
+  # Ne fait que restaurer : tout ce qu'il construit, rust et processus-rdp
+  # viennent de l'archiver (24 minutes à réarchiver `target` pour 5 de suite,
+  # job 32414 du 10 septembre 2026). Quatre caches au plus par job : c'est
+  # pour lui que les targets hors espace de travail partagent une clé.
+  cache:
+    - <<: [*cache-registre, *pull]
+    - <<: [*cache-cible, *pull]
+    - <<: [*cache-hors-workspace, *pull]
+    - <<: [*cache-npm, *pull]
   script:
     - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
     - mkdir -p crates/avash-ui/binaries
@@ -228,17 +267,16 @@ conformite:
   stage: eprouver
   # Sans `needs`, un job de cette étape attend TOUTE l'étape précédente, audit
   # des dépendances compris : le pipeline #3381 l'a sauté pour une panne du
-  # registre npm. Il ne dépend que du binaire du sidecar, que « rust » vient
-  # de construire et de mettre en cache.
+  # registre npm. Il ne dépend que du binaire du sidecar, que « processus-rdp »
+  # vient de construire et de mettre en cache.
   # Après la suite bout en bout, pas à côté : ses conteneurs xrdp saturent le
   # poste qui sert d'exécuteur, et la suite mesure des délais réels (une
   # session SSH « jamais live » en vingt secondes, deux fois sur quatre
   # pipelines quand les deux jobs se chevauchaient, 10 septembre 2026).
   needs: ["rust", "bout-en-bout"]
   cache:
-    - *cache-registre
-    - <<: *cache-sidecar
-      policy: pull   # le job rust vient de construire le même binaire release
+    - <<: [*cache-registre, *pull]
+    - <<: [*cache-hors-workspace, *pull]
   variables:
     PARC_RESEAU: "avash-parc"
     # Un conteneur n'a pas de disposition clavier (ni localectl ni session) :

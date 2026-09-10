@@ -161,7 +161,8 @@ jobs:
           # Le paquet ironrdp-server porté (`test = false` hérité de l'amont,
           # retiré le 10 septembre 2026) : ses tests seuls, le style et les lints
           # de l'amont restant les siens.
-          cargo test --manifest-path test-rdp-server/vendor/ironrdp-server/Cargo.toml
+          CARGO_TARGET_DIR="$PWD/test-rdp-server/target/portes" \
+            cargo test --manifest-path test-rdp-server/vendor/ironrdp-server/Cargo.toml
 
       # Absent jusqu'ici du CI, et le sidecar RDP n'était audité nulle part
       # alors qu'il est compilé et livré dans le bundle.

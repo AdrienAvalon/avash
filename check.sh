@@ -93,7 +93,7 @@ run "tests serveur RDP"  "$SERVEUR_RDP" cargo test
 # Le paquet ironrdp-server porté avait `test = false` hérité de l'amont : ses
 # onze tests ne tournaient nulle part (10 septembre 2026), comme ceux du
 # sidecar avant le 8. Joués depuis leur répertoire, hors espace de travail.
-run "tests ironrdp-server porté" "$SERVEUR_RDP/vendor/ironrdp-server" cargo test
+run "tests ironrdp-server porté" "$SERVEUR_RDP/vendor/ironrdp-server" env CARGO_TARGET_DIR="$SERVEUR_RDP/target/portes" cargo test
 run "format serveur RDP" "$SERVEUR_RDP" cargo fmt --check
 run "clippy serveur RDP" "$SERVEUR_RDP" cargo clippy --all-targets -- -D warnings
 run "tests serveur VNC"  "$SERVEUR_VNC" cargo test
@@ -247,6 +247,10 @@ run "hook : accepte le témoin de check.sh" "$ROOT" ./scripts/tests/hook-pre-com
 # Deux scénarios bout en bout sur le même port de serveur de test se volaient
 # le port à un SIGTERM près (10 septembre 2026) : un port par scénario.
 run "e2e : un port de serveur de test par scénario" "$ROOT" ./scripts/tests/e2e-ports-uniques.sh
+# Un `target` ne maigrit jamais : 64 Go et 21 minutes d'archivage par job sur
+# l'exécuteur GitLab (10 septembre 2026). Le balayage ne retire que ce que
+# cargo n'énumère plus, et refuse de toucher à quoi que ce soit sans énumération.
+run "target : le balayage ne retire que les unités périmées" "$ROOT" ./scripts/tests/balayer-target.sh
 # rdp-sidecar/verifier-portes.sh comptait les tests portés dans le tube même
 # (`n=$(cargo test | grep | awk)`) : un test porté en échec arrêtait le script
 # sans imprimer une seule ligne de cargo, la porte rougissait sans dire quel

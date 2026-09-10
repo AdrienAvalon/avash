@@ -366,6 +366,17 @@ d'enregistrement compris, lisible par personne d'autre), le service est
 `gitlab-runner.service`. Le poste éteint, les travaux attendent ; ils
 reprennent au démarrage suivant.
 
+Les trois travaux parallèles partagent un seul cache sur l'hôte
+(`/var/lib/gitlab-runner/cache`, monté sur `/cache` dans chaque conteneur) :
+sans ce montage, l'exécuteur Docker donne un volume de cache à chaque
+emplacement parallèle, et un travail restaurait au hasard l'un de trois caches
+qui divergeaient (6, 11 et 19 Go pour la même clé, 10 septembre 2026). Chaque
+clé de cache n'a qu'un travail qui l'archive (`.gitlab-ci.yml`, section
+« Caches »), et celui qui archive un `target` le balaie d'abord :
+`scripts/balayer-cibles.sh` ne garde que les unités que les commandes du travail
+énumèrent encore. Le même script s'emploie sur le poste quand `target` enfle
+(47 Go retirés le jour où il a été écrit).
+
 Les travaux tournent dans une image de base, `avash-ci:bookworm`, décrite par
 `ci/Dockerfile` : paquets système, Node 22, rustfmt, clippy, les outils cargo et
 le client Docker y sont figés, au lieu d'être réinstallés par chaque travail à
@@ -395,7 +406,7 @@ sudo gitlab-runner register \
   --executor docker \
   --docker-image rust:1-bookworm \
   --docker-privileged \
-  --docker-volumes /cache \
+  --docker-volumes /var/lib/gitlab-runner/cache:/cache \
   --docker-volumes /var/run/docker.sock:/var/run/docker.sock
 # Puis, dans /etc/gitlab-runner/config.toml : concurrent = 3 en tête, et
 # allowed_pull_policies = ["always", "if-not-present"] sous [runners.docker].
