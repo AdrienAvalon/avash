@@ -82,6 +82,10 @@ run "clippy"             "$SIDECAR" cargo clippy --all-targets -- -D warnings
 # que le processus RDP, même remède.
 step "Serveurs de test (hors workspace)"
 run "tests serveur RDP"  "$SERVEUR_RDP" cargo test
+# Le paquet ironrdp-server porté avait `test = false` hérité de l'amont : ses
+# onze tests ne tournaient nulle part (10 septembre 2026), comme ceux du
+# sidecar avant le 8. Joués depuis leur répertoire, hors espace de travail.
+run "tests ironrdp-server porté" "$SERVEUR_RDP/vendor/ironrdp-server" cargo test
 run "format serveur RDP" "$SERVEUR_RDP" cargo fmt --check
 run "clippy serveur RDP" "$SERVEUR_RDP" cargo clippy --all-targets -- -D warnings
 run "tests serveur VNC"  "$SERVEUR_VNC" cargo test

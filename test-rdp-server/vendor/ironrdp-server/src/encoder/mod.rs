@@ -566,11 +566,17 @@ impl RemoteFxHandler {
 impl BitmapUpdateHandler for RemoteFxHandler {
     fn handle(&mut self, bitmap: &BitmapUpdate) -> Result<UpdateFragmenter> {
         let mut buffer = vec![0; bitmap.data.len()];
+        // Pris UNE fois, hors de la boucle : les en-têtes (Sync, Context,
+        // Channels) ne sont dus qu'à la première mise à jour, mais ils sont dus
+        // à celle qui PART. Pris à chaque essai, ils se perdaient dès que le
+        // premier manquait de tampon (une petite région pavée en tuiles de
+        // 64 × 64 encode plus gros que ses pixels bruts), et la reprise avec un
+        // tampon doublé repartait sans eux : le client n'a jamais connu les
+        // canaux et ne décodait plus rien (« no RFX channel found », suite bout
+        // en bout en rouge par intermittence, 10 septembre 2026).
+        let en_tetes = self.desktop_size.take();
         let len = loop {
-            match self
-                .remotefx
-                .encode(bitmap, buffer.as_mut_slice(), self.desktop_size.take())
-            {
+            match self.remotefx.encode(bitmap, buffer.as_mut_slice(), en_tetes) {
                 Err(e) => match e.kind() {
                     ironrdp_core::EncodeErrorKind::NotEnoughBytes { .. } => {
                         buffer.resize(buffer.len() * 2, 0);
@@ -760,4 +766,62 @@ fn set_surface(bitmap: &BitmapUpdate, codec_id: u8, data: &[u8]) -> Result<Updat
     };
     let cmd = SurfaceCommand::SetSurfaceBits(pdu);
     Ok(UpdateFragmenter::new(UpdateCode::SurfaceCommands, encode_vec(&cmd)?))
+}
+
+#[cfg(test)]
+mod tests_en_tetes_remotefx {
+    use core::num::{NonZeroU16, NonZeroUsize};
+
+    use bytes::Bytes;
+    use ironrdp_acceptor::DesktopSize;
+    use ironrdp_graphics::image_processing::PixelFormat;
+    use ironrdp_pdu::rdp::capability_sets::EntropyBits;
+
+    use super::{BitmapUpdateHandler as _, RemoteFxHandler};
+    use crate::BitmapUpdate;
+
+    /// Le nombre magique du bloc Sync (TS_RFX_SYNC, MS-RDPRFX 2.2.2.2.1),
+    /// tel qu'il s'écrit sur le fil, en petit-boutiste.
+    const MAGIE_SYNC: [u8; 4] = [0xCA, 0xAC, 0xCC, 0xCA];
+
+    /// Trouvé le 10 septembre 2026 par la suite bout en bout, qui rougissait
+    /// par intermittence sur « no RFX channel found » côté client : le
+    /// premier essai d'encodage prend un tampon de la taille des pixels
+    /// bruts, et RemoteFX pave en tuiles de 64 × 64. Pour une petite région,
+    /// l'encodé dépasse le brut, l'essai échoue faute de place, et la reprise
+    /// avec un tampon doublé repartait SANS les en-têtes (Sync, Context,
+    /// Channels), consommés par `desktop_size.take()` au premier essai. Le
+    /// client, qui n'avait jamais reçu la liste des canaux, ne décodait plus
+    /// rien de la session. Ce test prend une région d'un pixel, dont l'encodé
+    /// dépasse forcément les quatre octets bruts.
+    #[test]
+    fn les_en_tetes_remotefx_survivent_a_un_tampon_trop_petit() {
+        let mut encodeur = RemoteFxHandler::new(EntropyBits::Rlgr3, 3, DesktopSize { width: 64, height: 64 });
+        let bitmap = BitmapUpdate {
+            x: 0,
+            y: 0,
+            width: NonZeroU16::new(1).unwrap(),
+            height: NonZeroU16::new(1).unwrap(),
+            format: PixelFormat::RgbA32,
+            data: Bytes::from(vec![0x12, 0x34, 0x56, 0xFF]),
+            stride: NonZeroUsize::new(4).unwrap(),
+        };
+        let fragments = encodeur.handle(&bitmap).expect("l'encodage d'un pixel aboutit");
+        assert!(
+            fragments.data.len() > bitmap.data.len(),
+            "le cas doit forcer la reprise avec un tampon plus grand : {} octets encodés pour {} bruts",
+            fragments.data.len(),
+            bitmap.data.len()
+        );
+        assert!(
+            fragments.data.windows(4).any(|w| w == MAGIE_SYNC),
+            "la première mise à jour doit porter le bloc Sync des en-têtes RemoteFX, sinon le client ne décodera jamais rien"
+        );
+        // La suivante, elle, ne les répète pas : ils ne sont dus qu'une fois.
+        let suite = encodeur.handle(&bitmap).expect("seconde mise à jour");
+        assert!(
+            !suite.data.windows(4).any(|w| w == MAGIE_SYNC),
+            "les en-têtes ne se répètent pas à chaque mise à jour"
+        );
+    }
 }

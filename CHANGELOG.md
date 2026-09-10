@@ -18,6 +18,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   processus attend désormais jusqu'à deux secondes une désignation absente avant
   de refuser : la ligne est déjà dans le tube et se lit en microsecondes, seul
   un chemin inventé par un script attend ce délai pour rien.
+- **Le serveur RDP de test ne perd plus ses en-têtes RemoteFX, et les scénarios
+  RDP cessent de rougir par intermittence.** Les aléas vus sur les deux chaînes
+  (« no RFX channel found » côté client, sur `rdp.spec`, `onglets-mixtes`,
+  `rdp-reconnect`) n'étaient pas des aléas : dans le paquet `ironrdp-server`
+  porté, l'encodeur RemoteFX consommait ses en-têtes (Sync, Context, Channels)
+  au premier essai d'encodage, et repartait sans eux quand ce premier essai
+  manquait de tampon, ce qu'une petite région suffit à provoquer (pavage en
+  tuiles de 64 × 64). Le client n'ayant jamais reçu la liste des canaux, la
+  session mourait à sa première trame. Reproduit hors de l'application par un
+  harnais qui enchaîne les connexions sous charge, corrigé à la source, et le
+  message du client nomme désormais la cause au lieu de « no RFX channel found
+  ».
 
 ### Chaîne d'intégration et garde-fous
 
@@ -45,6 +57,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   incrémentaux inutiles en intégration continue, dépassait les vingt-cinq
   minutes. `CARGO_INCREMENTAL=0` sur toute la chaîne, et le job Rust dispose de
   quatre-vingt-dix minutes.
+- **Les tests du paquet `ironrdp-server` porté s'exécutent enfin.** Son `[lib]`
+  portait `test = false`, hérité de l'amont, comme les paquets du sidecar avant
+  le 8 septembre : ses onze tests, dont ceux de l'autodétection réseau, ne
+  tournaient nulle part. `check.sh` et les deux chaînes les jouent.
 
 ## [0.11.0] - 2026-09-09
 

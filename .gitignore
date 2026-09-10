@@ -54,3 +54,8 @@ couverture/
 # Trouvé par l'audit du 9 septembre 2026.
 secrets/
 .sops.yaml
+
+# Le paquet ironrdp-server porté se teste depuis son répertoire (check.sh, CI) :
+# ses artefacts restent chez lui ; son verrou, lui, est suivi comme ceux des
+# paquets portés du sidecar (10 septembre 2026).
+test-rdp-server/vendor/ironrdp-server/target/

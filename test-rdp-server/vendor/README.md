@@ -38,6 +38,30 @@ une fois le serveur construit. La réception, elle, est déjà générique :
 Le canal lui-même (poignée de main, scénario, décodeurs des réponses du
 client) vit dans `test-rdp-server/src/rdpdr/`, pas ici.
 
+## Les en-têtes RemoteFX se perdaient au premier essai
+
+Trouvé le 10 septembre 2026 par la suite bout en bout, qui rougissait par
+intermittence sur « no RFX channel found » côté client, sur les scénarios RDP de
+la chaîne GitHub comme de la chaîne GitLab. `RemoteFxHandler::handle`
+(`src/encoder/mod.rs`) encode dans un tampon de la taille des pixels bruts et
+double ce tampon tant que l'encodeur réclame plus de place. Or il passait
+`self.desktop_size.take()` à CHAQUE essai : les en-têtes RemoteFX (Sync,
+Context, Channels, CodecVersions), dus à la première mise à jour de la session
+et à la première après un redimensionnement, étaient consommés par un premier
+essai qui échouait, et la reprise partait sans eux. Une petite région suffit à
+provoquer l'échec : RemoteFX pave en tuiles de 64 × 64 et l'encodé d'une région
+d'un pixel dépasse ses quatre octets bruts. Le client n'ayant jamais reçu la
+liste des canaux, il ne décodait plus rien de la session.
+
+Les en-têtes sont désormais pris une fois, hors de la boucle, et joints à
+l'essai qui aboutit. Le test
+`les_en_tetes_remotefx_survivent_a_un_tampon_trop_petit` encode une région d'un
+pixel et vérifie le bloc Sync dans la première mise à jour, et son absence dans
+la seconde. Au passage, `test = false` a été retiré du `[lib]` de ce paquet :
+ses tests, dont ceux de l'autodétection réseau portés ici, ne s'exécutaient
+nulle part, comme ceux du sidecar avant le 8 septembre ; `check.sh` et les deux
+chaînes les jouent maintenant.
+
 ## `rustfmt.toml`
 
 IronRDP formate à 120 colonnes avec le style de l'édition 2024 ; un rustfmt

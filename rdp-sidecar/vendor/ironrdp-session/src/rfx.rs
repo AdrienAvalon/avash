@@ -112,7 +112,13 @@ impl DecodingContext {
             .channels
             .0
             .first()
-            .ok_or_else(|| general_err!("no RFX channel found"))?;
+            .ok_or_else(|| {
+                // Une trame RemoteFX sans qu'aucun en-tête (Sync, Context,
+                // Channels) n'ait été reçu avant : le serveur a perdu ses
+                // en-têtes, ce que faisait ironrdp-server quand son premier
+                // essai d'encodage manquait de tampon (10 septembre 2026).
+                general_err!("RemoteFX frame received before any Sync/Channels header (the server dropped its RemoteFX headers)")
+            })?;
         let width = channel.width.try_into().map_err(|_| general_err!("invalid width"))?;
         let height = channel.height.try_into().map_err(|_| general_err!("invalid height"))?;
         let entropy_algorithm = self.context.entropy_algorithm;

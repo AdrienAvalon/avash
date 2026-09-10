@@ -152,6 +152,9 @@ processus-rdp:
         cargo clippy --all-targets --manifest-path "$s/Cargo.toml" -- -D warnings &&
         cargo test --manifest-path "$s/Cargo.toml" || exit 1;
       done
+    # Le paquet ironrdp-server porté : ses tests seuls (test = false retiré le
+    # 10 septembre 2026 ; style et lints de l'amont restent les siens).
+    - cargo test --manifest-path test-rdp-server/vendor/ironrdp-server/Cargo.toml
 
 # --- Chaîne d'approvisionnement ------------------------------------------
 dependances:
