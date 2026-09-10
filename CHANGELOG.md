@@ -7,6 +7,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Chaîne d'intégration et garde-fous
+
+- **Huit montées de version Dependabot traitées en lot, majeures comprises.**
+  `actions/cache` et `actions/cache/restore` passent de 4.2.3 à 6.1.0 (exécution
+  sur Node 24, exécuteur GitHub 2.327.1 au minimum : les exécuteurs hébergés le
+  sont ; aucune clé de cache ne change), `claude-code-action` 1.0.217, l'image
+  `rust:1-bookworm` de la chaîne GitLab sur son nouveau digest, `dirs` 7 dans le
+  cœur comme dans le processus RDP (les quatre fonctions employées, `home_dir`,
+  `config_dir`, `download_dir`, `document_dir`, gardent leur contrat),
+  `tauri-plugin-wdio-webdriver` 1.4.0, et `@wdio/cli` et `@wdio/local-runner`
+  9.31.6 pour la suite bout en bout, rejouée en entier.
+
 ## [0.11.0] - 2026-09-09
 
 ### Sécurité

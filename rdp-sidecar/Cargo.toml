@@ -36,7 +36,7 @@ tokio-tungstenite = "0.30"
 futures-util = "0.3.34"
 rand = "0.10.2"
 sha2 = "0.11"
-dirs = "6"
+dirs = "7"
 # Client VNC (RFB 3.8, ZRLE, CopyRect, Raw) : copie portée, voir vendor/README.md.
 vnc-rs = "0.5.3"
 # Les listes de fichiers du presse-papiers voyagent en JSON vers l'interface.

@@ -16,7 +16,7 @@
 # Épinglée par empreinte : l'étiquette « 1-bookworm » bouge à chaque version
 # de Rust, l'empreinte non. Dependabot (écosystème docker, répertoire ci/)
 # propose la suivante ; le Scorecard de l'OpenSSF compte l'épinglage.
-FROM rust:1-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
+FROM rust:1-bookworm@sha256:9a73a5088750b4c95158ab26629c854c3d6fc4b173cb7bc8079ad252d8ed7bfa
 
 # Paquets système : Tauri (WebKitGTK, GTK, indicateur, rsvg, patchelf), le
 # pilote WebDriver et Xvfb pour la suite bout en bout, sshd et openssl pour ses
