@@ -29,6 +29,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   cache (sept constructions à froid par pipeline) ; ils construisent dans
   `rdp-sidecar/target/portes`, l'ironrdp-server porté dans
   `test-rdp-server/target/portes`, avec le cache de leur hôte.
+- **L'aléa E2E `vue-partagee` (« session 2 jamais live ») est corrigé à la
+  source.** La liste des hôtes se reconstruit entièrement (`innerHTML = ""`) à
+  chaque changement d'état de session, à l'arrivée du logo d'OS distant et au
+  changement d'onglet : trois rendus se pressent autour d'une ouverture. Le
+  second double-clic du scénario tombait sur une ligne détachée par un de ces
+  rendus, et sous WebKitWebDriver un double-clic sur un nœud détaché ne lève pas
+  et n'ouvre rien : la seconde session ne démarrait jamais. Reproduit dans un
+  conteneur identique à l'exécuteur (un échec sur quatre passages) et prouvé par
+  une trace instrumentée du binaire (aucun `openSession` pour la seconde
+  session). `doubleCliquerHote` vérifie désormais l'effet du geste, un onglet de
+  plus, et re-trouve la ligne puis recommence si le clic est tombé dans le vide,
+  comme le faisait déjà le chemin embarqué.
 
 ## [0.11.1] - 2026-09-10
 

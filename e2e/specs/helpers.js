@@ -60,13 +60,24 @@ export async function doubleCliquer(el) {
 
 /** Ouvre un hôte de la barre latérale par double-clic sur sa ligne.
  *
- *  La liste se reconstruit à chaque changement d'état d'une session (le voyant
- *  de la ligne) : une référence prise pendant la reconstruction est caduque, et
- *  un double-clic dessus tombe dans le vide sans erreur sous WebKitWebDriver.
- *  Vu sur le miroir GitLab, dans vue-partagee : le second double-clic suivait
- *  immédiatement le premier « live », et « session 2 jamais live », sans onglet
- *  mort ni sortie. On attend donc que la même ligne soit rendue deux fois de
- *  suite avant de cliquer : un état, pas une durée. */
+ *  `renderHosts` refait tout le `#host-list` (`innerHTML = ""`) à chaque
+ *  changement d'état d'une session, à l'arrivée du logo d'OS distant et au
+ *  changement d'onglet actif : trois rendus se pressent autour d'une ouverture.
+ *  Une référence de ligne prise juste avant un de ces rendus est détachée, et un
+ *  double-clic dessus tombe dans le vide SANS erreur sous WebKitWebDriver — le
+ *  gestionnaire n'est jamais appelé, aucune session ne s'ouvre. Vu dans
+ *  vue-partagee sur l'exécuteur chargé : le second double-clic suivait le
+ *  premier « live » (donc un `renderHosts`), « session 2 jamais live », sans
+ *  onglet mort ni sortie. Confirmé le 10 septembre 2026 par une trace
+ *  instrumentée du binaire : dans l'instance en échec, `openSession` ne part
+ *  qu'une fois, jamais pour la seconde session.
+ *
+ *  Attendre une ligne « stable » avant de cliquer laissait une fenêtre entre le
+ *  contrôle et le clic. On vérifie donc l'EFFET du double-clic — un onglet de
+ *  plus — et, s'il est tombé dans le vide, on re-trouve la ligne et on
+ *  recommence, exactement comme le fait déjà le chemin embarqué. Tous les
+ *  appelants ouvrent une session SSH, donc un onglet supplémentaire est le
+ *  signe fiable et commun que le clic a porté. */
 export async function doubleCliquerHote(alias) {
   // Le serveur embarqué rend un identifiant neuf à chaque recherche, même
   // pour le même nœud : l'attente de stabilité n'y aboutirait jamais (vu sur
@@ -82,14 +93,42 @@ export async function doubleCliquerHote(alias) {
       }
     }
   }
-  let ligne = await findHostRow(alias);
-  await browser.waitUntil(async () => {
-    const encore = await findHostRow(alias);
-    const stable = encore.elementId === ligne.elementId;
-    ligne = encore;
-    return stable;
-  }, { timeout: 5000, interval: 200, timeoutMsg: `la ligne « ${alias} » ne cesse d'être reconstruite` });
-  await doubleCliquer(ligne);
+  const onglets = async () => (await $$(".tab")).length;
+  const avant = await onglets();
+  for (let essai = 0; essai < 6; essai++) {
+    // 1. Cliquer sur une ligne posée. On attend qu'une même ligne soit rendue
+    //    deux fois de suite (elementId stable) : on vise un moment sans rendu
+    //    en cours, pour ne pas cliquer un nœud qu'on détache dans la foulée.
+    let ligne = await findHostRow(alias);
+    try {
+      await browser.waitUntil(async () => {
+        const encore = await findHostRow(alias);
+        const stable = encore.elementId === ligne.elementId;
+        ligne = encore;
+        return stable;
+      }, { timeout: 3000, interval: 120 });
+    } catch {
+      /* la ligne ne cesse de se reconstruire : on clique la dernière vue */
+    }
+    try {
+      await doubleCliquer(ligne);
+    } catch {
+      /* ligne devenue caduque juste avant le clic : on refait un tour */
+    }
+    // 2. Vérifier l'EFFET, pas seulement le geste : un onglet de plus prouve que
+    //    `openSession` a bien été appelé. Sous WebKitWebDriver, un double-clic
+    //    sur un nœud détaché par un rendu concurrent ne lève pas et n'ouvre
+    //    rien ; sans ce contrôle, l'appelant attendait une session qui ne
+    //    venait jamais (« session … jamais live »). Un onglet apparaît dès
+    //    `newSessionShell`, avant la connexion : ce délai est large.
+    try {
+      await browser.waitUntil(async () => (await onglets()) > avant, { timeout: 4000, interval: 100 });
+      return;
+    } catch {
+      /* rien ne s'est ouvert : le clic est tombé dans le vide, on recommence */
+    }
+  }
+  throw new Error(`double-clic sur « ${alias} » : aucun onglet ouvert après plusieurs essais (liste sans cesse reconstruite ?)`);
 }
 export async function findFolderRow(name) {
   const r = await trouverLigne("#host-list .folder-row", ".fname", name);
