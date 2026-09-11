@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.12.2] - 2026-09-12
+
 ### Bureau distant
 
 - **La pastille verte de la barre latérale s'allume dès la connexion d'un
