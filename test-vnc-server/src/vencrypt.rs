@@ -49,7 +49,11 @@ pub async fn ecouter(
     cle: &Path,
 ) -> anyhow::Result<()> {
     let acc = accepteur(cert, cle)?;
-    let ecoute = TcpListener::bind(("0.0.0.0", port_tls))
+    // Boucle locale seulement : le harnais se connecte à 127.0.0.1, et un
+    // serveur de test n'a rien à faire sur le réseau. Trouvé le 11 septembre
+    // 2026 dans une machine virtuelle Windows 11 : écouter sur 0.0.0.0 faisait
+    // surgir l'invite du pare-feu Windows au milieu de la suite bout en bout.
+    let ecoute = TcpListener::bind(("127.0.0.1", port_tls))
         .await
         .with_context(|| format!("écoute VeNCrypt sur le port {port_tls}"))?;
     println!("vencrypt : port {port_tls} vers le serveur interne {port_interne}");

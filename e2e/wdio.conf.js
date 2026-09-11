@@ -211,6 +211,17 @@ function startSshd() {
 // autant que la préparation.
 const powershell = (script) => execSync(`powershell -NoProfile -NonInteractive -Command "${script.replace(/"/g, '\\"')}"`, { stdio: "pipe" }).toString();
 
+// Droits qu'OpenSSH pour Windows exige sur administrators_authorized_keys :
+// SYSTEM et le groupe des administrateurs, rien d'autre. Par SID et non par
+// nom : trouvé le 11 septembre 2026 sur un Windows 11 en français, où
+// « Administrators » n'existe pas (le groupe s'appelle « Administrateurs »),
+// icacls répondait « le mappage entre les noms de compte et les ID de sécurité
+// n'a pas été effectué » et la suite s'arrêtait avant le premier scénario. Les
+// exécuteurs GitHub sont en anglais : ils ne pouvaient pas le voir. S-1-5-18
+// est SYSTEM, S-1-5-32-544 le groupe BUILTIN des administrateurs, quelle que
+// soit la langue du système.
+const ACL_SSHD_ADMIN = "/inheritance:r /grant '*S-1-5-18:F' /grant '*S-1-5-32-544:F'";
+
 // État de restauration du sshd SYSTÈME : renseigné par preparerSshdWindows,
 // consommé par restaurerSshdWindows dans onComplete. onPrepare et onComplete
 // tournent dans le même processus lanceur, donc ces variables de module font le
@@ -256,7 +267,7 @@ export function preparerSshdWindows(clePublique) {
     writeFileSync(autorisees, `${copierCle(clePublique)}\n`);
   }
   sshdWindowsARestaurer = true;
-  powershell(`icacls '${autorisees}' /inheritance:r /grant 'SYSTEM:F' /grant 'Administrators:F' /grant 'BUILTIN\\Administrators:F'`);
+  powershell(`icacls '${autorisees}' ${ACL_SSHD_ADMIN}`);
   powershell("Restart-Service sshd");
   return null;
 }
@@ -274,7 +285,7 @@ function restaurerSshdWindows() {
     rmSync(cheminAutorisees, { force: true });
   }
   if (cheminAutorisees && existsSync(cheminAutorisees)) {
-    powershell(`icacls '${cheminAutorisees}' /inheritance:r /grant 'SYSTEM:F' /grant 'Administrators:F' /grant 'BUILTIN\\Administrators:F'`);
+    powershell(`icacls '${cheminAutorisees}' ${ACL_SSHD_ADMIN}`);
   }
   powershell("Restart-Service sshd");
   sshdWindowsARestaurer = false;

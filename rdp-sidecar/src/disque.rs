@@ -1423,6 +1423,8 @@ mod tests {
 
     /// Ouvre avec un `DesiredAccess` précis (le helper `ouvrir` ne connaît que
     /// lecture / lecture-écriture) ; rend (statut, `file_id`, information).
+    /// Seul le test `#[cfg(unix)]` des droits POSIX s'en sert.
+    #[cfg(unix)]
     fn ouvrir_acces(
         l: &mut Lecteur,
         chemin: &str,

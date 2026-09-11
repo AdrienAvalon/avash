@@ -247,6 +247,7 @@ run "hook : accepte le témoin de check.sh" "$ROOT" ./scripts/tests/hook-pre-com
 # Deux scénarios bout en bout sur le même port de serveur de test se volaient
 # le port à un SIGTERM près (10 septembre 2026) : un port par scénario.
 run "e2e : un port de serveur de test par scénario" "$ROOT" ./scripts/tests/e2e-ports-uniques.sh
+run "e2e : droits du sshd Windows par SID" "$ROOT" ./scripts/tests/e2e-sshd-windows-acl-par-sid.sh
 # Un `target` ne maigrit jamais : 64 Go et 21 minutes d'archivage par job sur
 # l'exécuteur GitLab (10 septembre 2026). Le balayage ne retire que ce que
 # cargo n'énumère plus, et refuse de toucher à quoi que ce soit sans énumération.

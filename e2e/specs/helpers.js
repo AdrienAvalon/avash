@@ -266,6 +266,36 @@ export function startVncServer(port, surLigne, options = {}) {
 // rdp-reconnect, qui passait seul) : il couvre le démarrage d'un serveur sur une
 // machine chargée.
 import { connect } from "node:net";
+
+// `openssl` tel que le trouve un poste : dans le PATH, sinon celui de Git for
+// Windows, qui l'embarque. Trouvé le 11 septembre 2026 dans une machine
+// virtuelle Windows 11 : le scénario VNC du certificat qui change appelait
+// `openssl` à cru ; sans OpenSSL dans le PATH (les exécuteurs GitHub l'ont,
+// un poste ordinaire non), `execFileSync` levait une erreur ENOENT dont la
+// propriété `error` se référence elle-même, que WebdriverIO n'arrivait pas à
+// sérialiser : « Converting circular structure to JSON », sans jamais nommer
+// la cause. Ici l'échec dit ce qui manque, et le poste Windows courant passe.
+import { execFileSync as execFileSyncNode } from "node:child_process";
+import { existsSync as existsSyncNode } from "node:fs";
+export function openssl(args) {
+  const candidats = [
+    "openssl",
+    ...(process.platform === "win32"
+      ? ["C:\\Program Files\\Git\\usr\\bin\\openssl.exe", "C:\\Program Files\\Git\\mingw64\\bin\\openssl.exe"]
+      : []),
+  ];
+  for (const bin of candidats) {
+    if (bin !== "openssl" && !existsSyncNode(bin)) continue;
+    try {
+      return execFileSyncNode(bin, args, { stdio: "ignore" });
+    } catch (e) {
+      if (e?.code === "ENOENT") continue;
+      throw new Error(`openssl ${args.slice(0, 2).join(" ")} a échoué (${bin}) : ${e?.message ?? e}`);
+    }
+  }
+  throw new Error(`openssl introuvable : ni dans le PATH ni dans Git for Windows (${candidats.slice(1).join(", ") || "aucun repli sur ce système"})`);
+}
+
 // Trente secondes : un serveur de test démarre en une seconde sur un poste au
 // repos, mais l'exécuteur GitLab partageait le processeur avec deux
 // compilations release le 10 septembre 2026 et le port 33898 n'était pas prêt

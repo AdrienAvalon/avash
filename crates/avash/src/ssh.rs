@@ -1943,10 +1943,12 @@ mod tests_texte_distant {
 
 #[cfg(test)]
 mod tests_known_hosts_illisible {
-    use super::{
-        apprendre_cle_hote, fichier_present_mais_illisible, marqueur_bloquant,
-        verdict_known_hosts_illisible,
-    };
+    use super::{fichier_present_mais_illisible, verdict_known_hosts_illisible};
+    // Ces deux-là ne servent qu'aux tests `#[cfg(unix)]` ci-dessous (tube nommé,
+    // répertoire en lecture seule) : sous Windows, l'import était un
+    // avertissement de plus à chaque `cargo check`.
+    #[cfg(unix)]
+    use super::{apprendre_cle_hote, marqueur_bloquant};
 
     /// Trouvé par l'audit du 7 septembre 2026 : quand `~/.ssh` (ou
     /// `known_hosts`) n'est pas inscriptible, `learn_known_hosts_path` échoue en
@@ -2166,6 +2168,9 @@ mod tests_known_hosts_illisible {
         assert!(verdict_known_hosts_illisible(&p).is_none());
     }
 
+    /// Borne un appel qui pourrait bloquer (tube nommé, fichier illisible) ;
+    /// n'a de sens que pour les tests `#[cfg(unix)]` qui l'appellent.
+    #[cfg(unix)]
     fn sous_delai<T: Send + 'static>(travail: impl FnOnce() -> T + Send + 'static) -> Option<T> {
         let (envoi, reception) = std::sync::mpsc::channel();
         std::thread::spawn(move || {

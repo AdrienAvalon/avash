@@ -4,11 +4,11 @@
 // mêmes pixels qu'en clair. Le certificat est épinglé au premier contact
 // (fichier des empreintes du bac à sable, clé « vnc:hôte:port ») ; relancé
 // avec un autre certificat, le serveur est refusé, et la raison le dit.
-import { execFileSync } from "node:child_process";
+
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { startVncServer, waitForPort, attendreBureauConnecte } from "./helpers.js";
+import { startVncServer, waitForPort, attendreBureauConnecte, openssl } from "./helpers.js";
 
 const VNC_PORT = 35903;
 const TLS_PORT = 35904;
@@ -84,8 +84,8 @@ describe("VNC — VeNCrypt, TLS et certificat épinglé", () => {
     // c'est elle qui est épinglée.
     const d = mkdtempSync(join(tmpdir(), "avash-vnc-cert-"));
     dossierCert = d; // l'after le supprimera
-    execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=localhost",
-      "-keyout", join(d, "key.pem"), "-out", join(d, "cert.pem")], { stdio: "ignore" });
+    openssl(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=localhost",
+      "-keyout", join(d, "key.pem"), "-out", join(d, "cert.pem")]);
     journal = "";
     srv = startVncServer(VNC_PORT, (l) => { journal += l; }, { tlsPort: TLS_PORT, cert: join(d, "cert.pem"), key: join(d, "key.pem") });
     await waitForPort(TLS_PORT);
