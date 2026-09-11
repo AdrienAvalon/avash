@@ -59,6 +59,12 @@ pub struct RdpHost {
     /// version antérieure : on ne relâche jamais une garde en silence.
     #[serde(default)]
     pub sans_nla: bool,
+    /// L'utilisateur a accepté les suites TLS héritées du système pour ce
+    /// serveur (Windows Server 2012 R2 et antérieurs, sans suite AES-GCM avec
+    /// ECDHE). Faux par défaut, fichier antérieur compris : même règle que
+    /// `sans_nla`, aucune garde ne se relâche en silence.
+    #[serde(default)]
+    pub tls_herite: bool,
     /// RDP sauf mention contraire : un fichier antérieur n'a pas ce champ.
     #[serde(default)]
     pub protocole: Protocole,
@@ -93,6 +99,7 @@ impl RdpHost {
             height,
             folder: String::new(),
             sans_nla: false,
+            tls_herite: false,
             protocole: Protocole::Rdp,
             partage: None,
         }

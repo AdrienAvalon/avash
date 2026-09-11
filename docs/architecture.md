@@ -398,6 +398,7 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Sidecar RDP — connexion, négociation NLA/RDSTLS, redirections, coupures | `rdp-sidecar/src/connexion.rs` |
 | Sidecar RDP — session établie (boucle, cadencement, redimensionnement, statistiques) | `rdp-sidecar/src/session.rs` |
 | Sidecar RDP — confiance au serveur (TOFU), fichier des empreintes | `rdp-sidecar/src/empreintes.rs` |
+| Sidecar RDP — chemin TLS hérité (`--tls-herite`, pile du système, sous consentement) | `rdp-sidecar/src/tls_herite.rs` |
 | Sidecar RDP — canal local (jeton, origine du WebSocket) | `rdp-sidecar/src/acces_local.rs` |
 | Sidecar RDP — entrées (souris, clavier, verrous) | `rdp-sidecar/src/entrees.rs` |
 | Sidecar RDP — trames vers l'interface (zone sale, format binaire) | `rdp-sidecar/src/trames.rs` |

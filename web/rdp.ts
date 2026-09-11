@@ -31,7 +31,7 @@ import { t } from "./i18n";
 // ---------- RDP (bureau distant, via le sidecar avash-rdp) ----------
 
 
-type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string; sansNla?: boolean; vnc?: boolean; partage?: string };
+type RdpTarget = { host: string; port: number | null; user: string; password: string; width?: number; height?: number; hostId?: string; name?: string; sansNla?: boolean; tlsHerite?: boolean; vnc?: boolean; partage?: string };
 
 /** Le protocole d'un bureau enregistré, tel que le cœur le nomme. */
 const protocoleDe = (h: RdpHostT): "rdp" | "vnc" => (h.protocole === "vnc" ? "vnc" : "rdp");
@@ -39,6 +39,9 @@ const protocoleDe = (h: RdpHostT): "rdp" | "vnc" => (h.protocole === "vnc" ? "vn
 /** Serveurs pour lesquels on a accepté de se passer de NLA, le temps de la
  *  session. Un bureau enregistré, lui, retient ce choix dans son fichier. */
 const sansNlaAccepte = new Set<string>();
+/** Serveurs pour lesquels on a accepté les suites TLS héritées du système,
+ *  le temps de la session (un bureau enregistré retient le choix, lui). */
+const tlsHeriteAccepte = new Set<string>();
 
 const RDP_ACK = new Uint8Array([6]); // accusé de rendu (cadencement adaptatif)
 
@@ -528,9 +531,14 @@ export async function openRdp(cible: RdpTarget) {
       // interface plus grande, comme mstsc. Sans cela le texte distant serait net
       // mais deux fois plus petit à 200 %. VNC ignore ce champ (pas d'équivalent).
       desktopScaleFactor: Math.round(window.devicePixelRatio * 100),
-      sansNla: cible.sansNla === true || sansNlaAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
-      vnc: cible.vnc === true,
-      sansSon: !sonBureau(),
+      // Les quatre choix indépendants voyagent groupés (`Options` côté Rust) :
+      // aucun ne peut prendre la place d'un autre.
+      options: {
+        sansNla: cible.sansNla === true || sansNlaAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
+        tlsHerite: cible.tlsHerite === true || tlsHeriteAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
+        vnc: cible.vnc === true,
+        sansSon: !sonBureau(),
+      },
       partage: cible.partage ?? null,
     });
     // L'onglet a pu être fermé pendant la connexion (TLS + NLA prennent du
@@ -712,6 +720,14 @@ export async function openRdp(cible: RdpTarget) {
     // marqueur. Rien à afficher, l'onglet n'existe déjà plus.
     if (String(e).includes("[AVASH_RDP_ANNULE]")) return;
     if (!rdpSessions.has(id)) return;
+    // Le serveur a coupé pendant la poignée TLS : il n'a aucune suite moderne
+    // en commun avec rustls (Windows Server 2012 R2 et antérieurs). La pile du
+    // système sait lui parler, mais c'est à l'utilisateur d'en décider.
+    if (String(e).includes("[AVASH_RDP_TLS_HERITE]") && (await proposerTlsHerite(cible, String(e)))) {
+      closeRdp(id);
+      await openRdp({ ...cible, tlsHerite: true });
+      return;
+    }
     // Le serveur ne sait pas faire d'authentification réseau. Ce n'est pas
     // forcément une attaque — un xrdp dont le module PAM n'est pas configuré
     // est dans ce cas —, mais ce n'est pas à nous d'en décider en silence.
@@ -752,6 +768,31 @@ async function proposerSansNla(cible: RdpTarget, erreur: string): Promise<boolea
   // pour cette session.
   if (cible.hostId) {
     await invoke("rdp_host_set_sans_nla", { id: cible.hostId, valeur: true }).catch(() => {});
+  }
+  return true;
+}
+
+/** Demande s'il faut parler à un serveur avec les suites TLS héritées du système.
+ *
+ *  Même contrat que pour NLA : dire ce qu'on perd et ce qu'on garde. On perd les
+ *  suites modernes (AES-GCM, ChaCha20) au profit d'AES-CBC ou d'un échange de
+ *  clé RSA sans confidentialité persistante, celles d'un Windows d'avant 2016.
+ *  On garde tout le reste : le canal chiffré, NLA, et l'empreinte du serveur
+ *  épinglée dès ce premier contact. Un attaquant sur le chemin ne peut pas
+ *  forcer une suite plus faible que celles du serveur — la négociation est
+ *  authentifiée —, le risque est donc celui du serveur lui-même, et il faut le
+ *  nommer plutôt que d'agiter un avertissement vague.
+ */
+async function proposerTlsHerite(cible: RdpTarget, erreur: string): Promise<boolean> {
+  const raison = erreur.replace(/^.*\[AVASH_RDP_TLS_HERITE\]\s*/s, "").trim();
+  const ok = await askConfirm(
+    `${cible.name ?? cible.host} — ${raison}\n\n` + t("rdp-tls-herite-explication"),
+    { ok: t("rdp-se-connecter-tls-herite") },
+  );
+  if (!ok) return false;
+  tlsHeriteAccepte.add(`${cible.host}:${cible.port ?? 3389}`);
+  if (cible.hostId) {
+    await invoke("rdp_host_set_tls_herite", { id: cible.hostId, valeur: true }).catch(() => {});
   }
   return true;
 }
@@ -987,6 +1028,7 @@ export async function connectRdpSaved(h: RdpHostT) {
     hostId: h.id, name: h.name,
     // Choix déjà donné pour ce bureau : on ne le redemande pas à chaque fois.
     sansNla: h.sans_nla === true,
+    tlsHerite: h.tls_herite === true,
     vnc: protocole === "vnc",
     partage: h.partage,
   });

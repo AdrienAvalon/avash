@@ -60,7 +60,7 @@ export function ciblesDeCopie(s: Session, sessions: Map<number, Session>): Sessi
 }
 
 /** Bureau RDP enregistré (`~/.config/avash/rdp.yaml`). */
-export type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string; sans_nla?: boolean; protocole?: "rdp" | "vnc"; partage?: string };
+export type RdpHostT = { id: string; name: string; host: string; port: number; user: string; width: number; height: number; folder: string; sans_nla?: boolean; tls_herite?: boolean; protocole?: "rdp" | "vnc"; partage?: string };
 
 export const FONT_MIN = 9;
 export const FONT_MAX = 28;

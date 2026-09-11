@@ -22,7 +22,7 @@
 //!                      [15]FICHIERS_DISTANTS, [17]FICHIERS_PROGRESSION,
 //!                      [18]FICHIERS_TERMINE, en JSON)
 //!
-//! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png] [--layout fr]
+//! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png] [--layout fr] [--sans-nla] [--tls-herite]
 //!         avash-rdp --vnc --host H [--port 5900] [-u USER] (mot de passe sur stdin)
 
 // Lints stylistiques assumés pour ce petit binaire d'orchestration :

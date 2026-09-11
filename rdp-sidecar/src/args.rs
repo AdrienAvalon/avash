@@ -1,5 +1,7 @@
 //! Ligne de commande : options, mot de passe lu sur l'entrée standard, découpage domaine/utilisateur, disposition clavier, résolution.
 
+// Ne sert qu'à la détection de la disposition clavier sous Unix (kxkbrc de KDE).
+#[cfg(unix)]
 use crate::empreintes::repertoire_configuration;
 use anyhow::{Context, Result};
 use std::io::BufRead as _;
@@ -12,6 +14,9 @@ pub struct Args {
     pub(crate) domain: Option<String>,
     /// L'utilisateur a accepté de se passer de NLA pour ce serveur.
     pub(crate) sans_nla: bool,
+    /// L'utilisateur a accepté les suites TLS héritées du système pour ce
+    /// serveur (voir `tls_herite`).
+    pub(crate) tls_herite: bool,
     pub(crate) layout: u32,
     /// Fichier du magnétoscope (`--enregistrer`, ou `AVASH_RDP_ENREGISTRER`
     /// dans l'environnement : l'interface ne passe pas cette option, la
@@ -115,6 +120,7 @@ fn parse_args_de_pa(a: &Pa, pass: String, detecter: impl FnOnce() -> u32) -> Res
         pass,
         domain: a.opt("--domain"),
         sans_nla: a.drapeau("--sans-nla"),
+        tls_herite: a.drapeau("--tls-herite"),
         sans_son: a.drapeau("--sans-son"),
         lecteur: a.opt("--lecteur").filter(|l| !l.trim().is_empty()),
         layout: a

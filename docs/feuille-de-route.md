@@ -4,7 +4,7 @@ Ce document fixe le cap d'avash et sert de point de reprise entre les sessions d
 travail. Il est volontairement **fondé sur des constats mesurés**, pas sur des
 intentions : chaque objectif est vérifiable.
 
-Dernière révision : 8 septembre 2026, après la publication de la version 0.10.0
+Dernière révision : 11 septembre 2026, après la publication de la version 0.12.0
 (un audit multi-agents complet du dépôt, deux cent constats vérifiés et corrigés
 par vagues de gravité, dont plusieurs de sécurité), après la 0.9.2.
 Le lot de la 0.7 à la 0.9.2 a apporté les bureaux VNC (dont VeNCrypt à
@@ -39,15 +39,15 @@ défaut n'est pas livrée, même terminée.
 
 ## Où nous en sommes (mesuré)
 
-| Indicateur | Valeur au 06/09/2026 |
+| Indicateur | Valeur au 11/09/2026 |
 |---|---|
-| Tests | 664 Rust (238 cœur, 72 intégration, 121 interface, 201 processus RDP, 32 serveurs de test) · 631 dans les paquets IronRDP et vnc-rs portés · 280 front · 74 scénarios bout en bout dans 36 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
+| Tests | 666 Rust (238 cœur, 72 intégration, 121 interface, 203 processus RDP, 32 serveurs de test) · 631 dans les paquets IronRDP et vnc-rs portés · 280 front · 76 scénarios bout en bout dans 37 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
 | Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 172 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Couverture | 84 % des lignes de l'espace de travail (cœur 91 %, interface 70 %), 81 % du processus RDP, tests unitaires et suite bout en bout confondus sur des binaires instrumentés (`scripts/couverture.sh`, 06/09/2026) ; 201 mutants sur 264 attrapés sur les modules de sécurité |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.10.1 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
+| Version publiée | 0.12.0 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
@@ -168,6 +168,20 @@ enregistrements de référence de plus, un quatrième paquet porté, et la
 méthode consignée dans `CONTRIBUTING.md` : mesurer les pixels, comparer à
 FreeRDP. Vérifié sur le parc, avash dans avash, après ouverture,
 maximisation et restauration.
+
+### 1.6 Windows Server 2012 R2 et antérieurs — **fait** (11/09/2026)
+
+Depuis des semaines, un RDP vers un Windows Server 2012 R2 tombait en
+« os error 10054 » sous Windows et « rompu pendant l'établissement du canal
+chiffré » sous Linux, sans cause nommée. Trouvé contre une machine 2012 R2
+réelle, par une matrice de suites TLS après une négociation X.224 correcte :
+ce système n'a aucune suite ECDHE avec AES-GCM, rustls n'offre que celles-là,
+et Schannel coupe par un RST sans alerte. Avash propose désormais, une fois
+par serveur et sur décision explicite, les suites TLS héritées de la pile du
+système (comme il le fait pour NLA), retient le choix par bureau, et garde
+tout le reste : canal chiffré, NLA, empreinte épinglée. Éprouvé contre la
+2012 R2 depuis Linux et depuis un Windows 11 ; un scénario bout en bout rejoue
+le cas avec un faux serveur qui coupe au premier octet TLS.
 
 ### 1.4 Le panneau SFTP sur la session du terminal — **fait**
 
@@ -515,7 +529,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 74 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 76 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 84 % des lignes (cœur + interface), 81 % (processus RDP), unitaires et bout en bout confondus | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |

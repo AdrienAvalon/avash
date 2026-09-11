@@ -1,6 +1,6 @@
 [package]
 name = "avash-rdp"
-version = "0.11.1"
+version = "0.12.0"
 edition = "2021"
 # Application, pas bibliothèque : rien n'est publié sur crates.io. Le dire
 # empêche une publication par mégarde, et lève l'avertissement de cargo-deny
@@ -26,6 +26,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr", "rdpsnd", "rdpdr", "pdu", "core"] }
 ironrdp-tokio = { version = "0.10", features = ["reqwest"] }
 ironrdp-tls = { version = "0.2", features = ["rustls"] }
+# Chemin TLS hérité (`--tls-herite`, voir tls_herite.rs) : la pile du système
+# pour les serveurs sans suite moderne (Windows Server 2012 R2 et antérieurs).
+# Sous Linux, `vendored` embarque OpenSSL : l'AppImage et le Flatpak ne
+# dépendent d'aucune libssl du poste.
+tokio-native-tls = "0.3"
+native-tls = { version = "0.2", features = ["vendored"] }
 # VeNCrypt (VNC sous TLS) : le même rustls qu'ironrdp-tls, même fournisseur.
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "tls12"] }
 tokio = { version = "1", features = ["full"] }

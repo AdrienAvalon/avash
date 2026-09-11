@@ -35,6 +35,7 @@ pub mod progressif;
 pub mod session;
 pub mod son;
 pub mod surface;
+pub mod tls_herite;
 pub mod trames;
 pub mod vnc;
 pub mod vnc_tls;

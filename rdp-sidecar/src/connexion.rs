@@ -398,7 +398,7 @@ pub(crate) async fn connect(
     graphique: egfx::Politique,
 ) -> Result<(
     connector::ConnectionResult,
-    ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
+    ironrdp_tokio::TokioFramed<crate::tls_herite::Flux>,
     egfx::CanalPartage,
     egfx::FilePartagee,
 )> {
@@ -487,26 +487,33 @@ pub(crate) async fn connect(
         Err(e) => return Err(e).context("début de connexion"),
     };
     let initial = framed.into_inner_no_leftover();
-    let (mut upgraded_stream, cert) =
-        ironrdp_tls::upgrade(initial, &a.host).await.map_err(|e| {
-            // Le serveur a accepté la négociation, puis rompu pendant TLS.
-            // Sous Windows cela remonte en « os error 10054 », un code brut que
-            // rien ne permet d'interpréter — signalé par Adrien sur un Windows
-            // Server. Renoncer à NLA n'y changerait rien : ce repli passe lui
-            // aussi par TLS. Le message doit donc envoyer chercher ailleurs.
-            if est_coupure(&chaine_des_causes(&e)) {
-                anyhow::anyhow!(
-                    "Ce serveur a accepté la négociation puis a rompu la connexion \
-                     pendant l'établissement du canal chiffré. C'est le plus souvent \
-                     un certificat RDP absent ou abîmé côté serveur, ou une couche \
-                     de sécurité réglée sur « RDP » au lieu de « SSL ». Renoncer à \
-                     l'authentification réseau n'y changerait rien : ce repli passe \
-                     lui aussi par TLS."
-                )
-            } else {
-                anyhow::Error::new(e).context("passage TLS")
+    // Deux piles pour monter le canal chiffré. rustls par défaut ; celle du
+    // système sur `--tls-herite`, décision explicite de l'utilisateur pour un
+    // serveur sans suite moderne (Windows Server 2012 R2 et antérieurs, voir
+    // `tls_herite`). Le serveur a accepté la négociation, puis rompu pendant
+    // TLS : sous Windows cela remontait en « os error 10054 », un code brut que
+    // rien ne permettait d'interpréter, signalé par Adrien sur un Windows
+    // Server. Renoncer à NLA n'y changerait rien : ce repli passe lui aussi
+    // par TLS. Le message doit donc dire ce qu'il reste à essayer.
+    let (mut upgraded_stream, cert) = if a.tls_herite {
+        crate::tls_herite::monter(initial, &a.host)
+            .await
+            .map_err(|e| {
+                if est_coupure(&format!("{e:#}")) {
+                    anyhow::anyhow!("{}", crate::tls_herite::message_coupure(true))
+                } else {
+                    e.context("passage TLS hérité")
+                }
+            })?
+    } else {
+        match ironrdp_tls::upgrade(initial, &a.host).await {
+            Ok((flux, cert)) => (crate::tls_herite::Flux::Moderne(Box::new(flux)), cert),
+            Err(e) if est_coupure(&chaine_des_causes(&e)) => {
+                anyhow::bail!("{}", crate::tls_herite::message_coupure(false));
             }
-        })?;
+            Err(e) => return Err(anyhow::Error::new(e).context("passage TLS")),
+        }
+    };
     let pubkey = server_public_key(&cert)?;
 
     // TOFU sur le certificat, AVANT CredSSP : c'est CredSSP qui transmet les

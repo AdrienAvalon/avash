@@ -90,6 +90,11 @@ pub(crate) fn sidecar_path() -> Option<std::path::PathBuf> {
 /// pour ce serveur. Refusé par défaut — c'est une décision qui lui appartient,
 /// pas un repli silencieux.
 ///
+/// `tls_herite` : l'utilisateur a accepté les suites TLS héritées du système
+/// pour ce serveur (Windows Server 2012 R2 et antérieurs, voir le module
+/// `tls_herite` du processus RDP). Même règle : refusé par défaut, décision
+/// explicite, retenue par serveur.
+///
 /// `vnc` : le serveur parle RFB. Même processus, même canal local ; le port
 /// par défaut devient 5900 et l'utilisateur peut être vide.
 #[tauri::command]
@@ -106,12 +111,13 @@ pub async fn rdp_open(
     // définition est négociée en pixels physiques (HiDPI). Transmise telle
     // quelle au sidecar par `--scale`. Ajouté par l'audit du 7 septembre 2026.
     desktop_scale_factor: u32,
-    sans_nla: bool,
-    vnc: bool,
-    sans_son: bool,
+    options: Options,
     partage: Option<String>,
 ) -> Result<RdpConn, String> {
     use std::process::Stdio;
+    // Seul le protocole se décide ici ; les autres choix partent tels quels au
+    // processus (`drapeaux`).
+    let vnc = options.vnc;
     // Le dossier partagé doit exister ici, avant de lancer quoi que ce soit :
     // le sidecar le refuserait aussi, mais après la connexion, et l'utilisateur
     // verrait un bureau qui se ferme au lieu d'un message.
@@ -163,7 +169,7 @@ pub async fn rdp_open(
     ])
     // Le son du bureau distant se coupe dans la palette : le processus
     // n'annonce alors pas le canal, plutôt que de recevoir pour rien.
-    .args(drapeaux(sans_nla, vnc, sans_son, partage.as_deref()))
+    .args(drapeaux(options, partage.as_deref()))
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
@@ -440,11 +446,40 @@ fn compte_encore_utilise(hosts: &[RdpHost], id_exclu: &str, compte: &str) -> boo
         .any(|h| h.compte_trousseau() == compte)
 }
 
+/// Les choix indépendants transmis au processus RDP, chacun sous décision de
+/// l'utilisateur ou de la palette. Un seul objet plutôt que quatre booléens
+/// positionnels : deux d'entre eux ne peuvent plus s'intervertir sans que ça
+/// se voie, ni dans l'appel ni dans le JSON venu du front (`options`).
+// Quatre choix binaires réellement indépendants, chacun nommé : un type par
+// choix n'apporterait qu'une couche, et un jeu de drapeaux resterait des bools.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Options {
+    /// L'utilisateur a accepté de se passer d'authentification réseau.
+    pub sans_nla: bool,
+    /// L'utilisateur a accepté les suites TLS héritées du système.
+    pub tls_herite: bool,
+    /// Le serveur parle RFB (VNC) plutôt que RDP.
+    pub vnc: bool,
+    /// Le son du bureau distant est coupé dans la palette.
+    pub sans_son: bool,
+}
+
 /// Les options du sidecar, dans l'ordre : chacune n'apparaît que demandée.
-fn drapeaux(sans_nla: bool, vnc: bool, sans_son: bool, partage: Option<&str>) -> Vec<String> {
+fn drapeaux(options: Options, partage: Option<&str>) -> Vec<String> {
+    let Options {
+        sans_nla,
+        tls_herite,
+        vnc,
+        sans_son,
+    } = options;
     let mut v = Vec::new();
     if sans_nla {
         v.push("--sans-nla".to_owned());
+    }
+    if tls_herite {
+        v.push("--tls-herite".to_owned());
     }
     if vnc {
         v.push("--vnc".to_owned());
@@ -529,24 +564,41 @@ mod tests_designations {
 
 #[cfg(test)]
 mod tests_drapeaux {
-    use super::drapeaux;
+    use super::{drapeaux, Options};
 
     /// Rien de demandé, rien de passé ; tout demandé, tout passé, le dossier
     /// après son drapeau.
     #[test]
     fn les_drapeaux_du_sidecar_suivent_les_options() {
-        assert!(drapeaux(false, false, false, None).is_empty());
+        assert!(drapeaux(Options::default(), None).is_empty());
+        let tout = Options {
+            sans_nla: true,
+            tls_herite: true,
+            vnc: true,
+            sans_son: true,
+        };
         assert_eq!(
-            drapeaux(true, true, true, Some("/srv/partage")),
+            drapeaux(tout, Some("/srv/partage")),
             [
                 "--sans-nla",
+                "--tls-herite",
                 "--vnc",
                 "--sans-son",
                 "--lecteur",
                 "/srv/partage"
             ]
         );
-        assert_eq!(drapeaux(false, false, true, None), ["--sans-son"]);
+        let sans_son = Options {
+            sans_son: true,
+            ..Options::default()
+        };
+        assert_eq!(drapeaux(sans_son, None), ["--sans-son"]);
+        // Le TLS hérité seul, sans renoncer à NLA : les deux choix sont distincts.
+        let herite = Options {
+            tls_herite: true,
+            ..Options::default()
+        };
+        assert_eq!(drapeaux(herite, None), ["--tls-herite"]);
     }
 }
 
@@ -739,6 +791,20 @@ pub fn rdp_host_set_sans_nla(id: String, valeur: bool) -> Result<(), String> {
     avash::rdphost::save_hosts_to(&chemin, &tous).map_err(|e| format!("{e:#}"))
 }
 
+/// Retient qu'un serveur n'a que des suites TLS héritées, après accord de
+/// l'utilisateur. Même règle que `rdp_host_set_sans_nla` : par serveur, jamais
+/// global, et sans effacer les autres entrées du fichier.
+#[tauri::command]
+pub fn rdp_host_set_tls_herite(id: String, valeur: bool) -> Result<(), String> {
+    let chemin = avash::rdphost::hosts_path();
+    let mut tous = avash::rdphost::load_hosts_brut_from(&chemin).map_err(|e| format!("{e:#}"))?;
+    let Some(h) = tous.iter_mut().find(|h| h.id == id) else {
+        return Err(format!("Bureau RDP inconnu : {id}"));
+    };
+    h.tls_herite = valeur;
+    avash::rdphost::save_hosts_to(&chemin, &tous).map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 pub fn rdp_password_forget(
     host: String,
@@ -810,9 +876,7 @@ mod tests_ouverture {
             800,
             600,
             100,
-            false,
-            false,
-            false,
+            super::Options::default(),
             None,
         )
         .await;
@@ -840,9 +904,7 @@ mod tests_ouverture {
                 800,
                 600,
                 100,
-                false,
-                false,
-                false,
+                super::Options::default(),
                 Some(dossier.to_owned()),
             )
             .await;
@@ -869,9 +931,10 @@ mod tests_ouverture {
             800,
             600,
             100,
-            false,
-            true,
-            false,
+            super::Options {
+                vnc: true,
+                ..super::Options::default()
+            },
             None,
         )
         .await;

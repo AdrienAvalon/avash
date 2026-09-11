@@ -66,7 +66,17 @@ répondent.
   d'hôte SSH et de l'empreinte du certificat RDP dès le premier contact, avec
   refus explicite au changement ; NLA exigé en RDP, sans repli silencieux vers
   TLS seul ; aucun secret ne quitte la machine autrement que par le protocole
-  chiffré négocié. **VNC : chiffré quand le serveur le permet.** Un serveur
+  chiffré négocié. **Suites TLS héritées, sur décision explicite seulement :**
+  un serveur sans suite moderne (Windows Server 2012 R2 et antérieurs, qui
+  n'ont aucune suite ECDHE avec AES-GCM) coupe la connexion dès le ClientHello
+  de rustls. Avash le dit, nomme la cause, et propose une fois par serveur de
+  passer par la pile TLS du système (Schannel, SecureTransport, OpenSSL
+  embarquée) ; le choix est retenu pour ce serveur seulement. Ce chemin ne
+  relâche que le choix des suites (AES-CBC, échange de clé RSA sans
+  confidentialité persistante) : le canal reste chiffré, NLA reste exigé,
+  l'empreinte reste épinglée. Un adversaire sur le chemin ne peut pas forcer
+  une suite plus faible que celles du serveur, la négociation étant
+  authentifiée par les messages Finished. **VNC : chiffré quand le serveur le permet.** Un serveur
   qui offre VeNCrypt (TigerVNC, x11vnc avec certificat) est joint sous TLS,
   et son certificat est épinglé comme celui d'un serveur RDP : clé publique
   mémorisée au premier contact (`vnc:<hôte>:<port>` dans `rdp_known_hosts`),

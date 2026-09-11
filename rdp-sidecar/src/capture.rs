@@ -8,7 +8,6 @@ use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageOutput};
 use ironrdp_tokio::FramedWrite as _;
 use std::time::Duration;
-use tokio::net::TcpStream;
 
 /// Ce qu'il faut savoir du canal graphique pendant une session.
 pub(crate) struct Graphique<'a> {
@@ -22,7 +21,7 @@ pub(crate) struct Graphique<'a> {
 pub(crate) async fn run_shot(
     active: &mut ActiveStage,
     image: &mut DecodedImage,
-    framed: &mut ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>,
+    framed: &mut ironrdp_tokio::TokioFramed<crate::tls_herite::Flux>,
     path: &str,
     mut magneto: Option<&mut magnetoscope::Enregistreur>,
     g: &Graphique<'_>,

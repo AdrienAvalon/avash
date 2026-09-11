@@ -68,7 +68,7 @@ VNC sur `35900` (`vnc.spec.js`, mot de passe `test`, image connue qui réagit
 aux entrées) et `35903`/`35904` (`vnc-tls`, VeNCrypt derrière son terminateur
 TLS).
 
-## Couverture (74 scénarios, 36 fichiers)
+## Couverture (76 scénarios, 37 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -93,6 +93,7 @@ TLS).
 | `vnc.spec.js`         | **connexion VNC réelle** (serveur dédié, ZRLE) : pixels rouge et bleu, carré magenta au clic, bureau vert après « g », keysym 0xe9 pour « é », mauvais mot de passe refusé avec sa raison |
 | `rdp-lecteur.spec.js` | **lecteur partagé (RDPDR)** : le dossier donné dans le formulaire est servi au serveur de test, qui annonce le lecteur « Avash », lit le volume, énumère, lit `bonjour.txt` (taille et SHA-256 exacts) et écrit `ecrit.txt` ; puis le sidecar seul avec `--sans-son`, où le canal audio muet garde le lecteur vivant |
 | `vnc-tls.spec.js`     | **VeNCrypt** : le serveur de test derrière son terminateur TLS ; type 19, sous-type X509Vnc, TLS, authentification sous TLS, pixels, empreinte épinglée sous `vnc:hôte:port` ; relancé avec un autre certificat, refus avec la raison |
+| `rdp-tls-herite.spec.js` | **serveur sans suite TLS moderne** (faux serveur : négociation acceptée, RST au premier octet TLS, comme Windows Server 2012 R2) : proposition des suites héritées avec la cause nommée, refus respecté, réessai par la pile du système, explication si le serveur coupe encore |
 | `clavier.spec.js`     | palette aux flèches, `Ctrl+K` bloqué par-dessus une boîte, Échap ne ferme qu'une boîte à la fois |
 | `liste-clavier.spec.js` | **barre latérale au clavier** : un seul arrêt de tabulation, flèches et Origine/Fin, focus qui vaut sélection, `Maj+F10` et navigation dans le menu |
 | `prefs.spec.js`       | réglage du **partage de presse-papiers** : présent à la palette, bascule, retenu, libellé qui annonce l'état courant |

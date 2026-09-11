@@ -149,7 +149,11 @@ fn bureaux() -> String {
                 .filter(|h| matches!(h.protocole, avash::rdphost::Protocole::Vnc))
                 .count();
             let sans_nla = hs.iter().filter(|h| h.sans_nla).count();
-            format!("{} RDP ({sans_nla} sans NLA), {vnc} VNC", hs.len() - vnc)
+            let tls_herite = hs.iter().filter(|h| h.tls_herite).count();
+            format!(
+                "{} RDP ({sans_nla} sans NLA, {tls_herite} en TLS hérité), {vnc} VNC",
+                hs.len() - vnc
+            )
         }
         Err(e) => format!("illisibles : {e}"),
     }
