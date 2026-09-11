@@ -71,13 +71,14 @@ application, which reads your `~/.ssh/config` as it is.
 ## Install
 
 Binaries are on the [releases page](https://github.com/AdrienAvalon/avash/releases/latest),
-signed for the automatic updater and shipped with their checksums.
+signed for the automatic updater and shipped with their checksums. In the
+commands below, `x.y.z` is the number of the version you downloaded.
 
 ### Linux
 
 ```bash
-chmod +x Avash_0.10.1_amd64.AppImage
-./Avash_0.10.1_amd64.AppImage
+chmod +x Avash_x.y.z_amd64.AppImage
+./Avash_x.y.z_amd64.AppImage
 ```
 
 The AppImage bundles everything, WebKitGTK included: nothing to install.
@@ -85,8 +86,8 @@ For a package-manager install, each release also carries a `.deb` (Debian,
 Ubuntu) and an `.rpm` (Fedora, openSUSE):
 
 ```bash
-sudo apt install ./Avash_0.10.1_amd64.deb      # Debian, Ubuntu
-sudo dnf install ./Avash-0.10.1-1.x86_64.rpm    # Fedora
+sudo apt install ./Avash_x.y.z_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./Avash-x.y.z-1.x86_64.rpm    # Fedora
 ```
 
 Arch Linux: `packaging/aur/avash/PKGBUILD` builds the package from source
@@ -118,7 +119,7 @@ tested in CI but has not been tried on a real machine yet: feedback welcome.
 
 ```bash
 sha256sum -c SHA256SUMS                                             # integrity
-gh attestation verify Avash_0.10.1_amd64.AppImage --repo AdrienAvalon/avash   # provenance
+gh attestation verify Avash_x.y.z_amd64.AppImage --repo AdrienAvalon/avash   # provenance
 ```
 
 The second check proves the file comes from this repository, at this commit,
@@ -276,11 +277,22 @@ and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). French or English, as you prefer.
 
 ## License
 
-avash is distributed under the **[AGPL-3.0-or-later](LICENSE)** license: free
-to use, study, modify and redistribute, provided any modified version is
-published under the same license, including when offered as a network
-service. A commercial license is available to embed it in a proprietary
-product: adrien.cros@outlook.com.
+avash is distributed under the **[AGPL-3.0-or-later](LICENSE)** license. This
+license allows commercial use and the sale of copies, provided the sources are
+shared under the same terms, including when offered as a network service. It
+creates no royalty and forbids neither resale nor forks.
+
+For a use that needs other permissions, such as embedding avash in a proprietary
+product without the AGPL's share-alike obligation, a separate commercial license
+can be negotiated with the author:
+[avalon-network.com/contact](https://avalon-network.com/contact). It adds to the
+AGPL without removing rights already granted to published versions.
+
+Third-party components keep their own licenses and attributions: the vendored
+IronRDP and vnc-rs crates (MIT, Apache-2.0) are documented in
+[rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md), and the Meslo Nerd
+Font in
+[web/public/fonts/LICENSE-MesloLGS-NerdFont.txt](web/public/fonts/LICENSE-MesloLGS-NerdFont.txt).
 
 © 2026 Adrien Cros.
 
