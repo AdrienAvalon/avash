@@ -20,7 +20,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1653%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1655%20passing-brightgreen.svg)](docs/qualite.md)
 [![Coverage](https://img.shields.io/badge/coverage-84%25%20of%20lines-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20caught-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -211,7 +211,7 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1653 tests** on every commit, on two independent pipelines (GitHub Actions on
+**1655 tests** on every commit, on two independent pipelines (GitHub Actions on
 Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 
 | Level | Tests | In a word |
@@ -222,7 +222,7 @@ Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
 | Test servers | 32 | server-side RDPDR (hand-written decoders, scenario state machine, full dialogue with the client channel) and the VNC server |
 | Vendored IronRDP and vnc-rs crates | 631 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
 | Front (Vitest) | 280 | pure logic, VNC keysyms, translations |
-| End to end (WebdriverIO) | 76 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
+| End to end (WebdriverIO) | 78 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, the OpenSSF Scorecard, nine

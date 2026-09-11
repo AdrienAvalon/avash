@@ -68,7 +68,7 @@ VNC sur `35900` (`vnc.spec.js`, mot de passe `test`, image connue qui réagit
 aux entrées) et `35903`/`35904` (`vnc-tls`, VeNCrypt derrière son terminateur
 TLS).
 
-## Couverture (76 scénarios, 37 fichiers)
+## Couverture (78 scénarios, 37 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -99,7 +99,7 @@ TLS).
 | `prefs.spec.js`       | réglage du **partage de presse-papiers** : présent à la palette, bascule, retenu, libellé qui annonce l'état courant |
 | `resize.spec.js`      | l'application reste répondante après une rafale de redimensionnements |
 | `onglets-mixtes.spec.js` | SSH et RDP côte à côte : bascule d'onglets, fermeture, l'autre survit |
-| `enregistrer-et-connecter.spec.js` | « Enregistrer et connecter » depuis la modale de connexion directe |
+| `enregistrer-et-connecter.spec.js` | « Enregistrer et connecter » depuis la modale de connexion directe, pour un hôte SSH, un bureau RDP et un bureau VNC : l'onglet porte le nom saisi et la ligne de la barre a sa pastille verte dès l'ouverture (serveurs RDP et VNC de test sur 33902 et 35905) |
 | `enregistrement.spec.js` | **enregistrement asciicast** sur la session SSH réelle : l'écran initial, la sortie, le fichier ; la liste dans la palette |
 | `sante.spec.js`       | **santé des hôtes** : voyant vert sur le sshd local, rouge sur une adresse sans route, résultat retenu |
 | `import.spec.js`      | **import PuTTY** : sessions semées dans `.putty/sessions`, aperçu, application (hors Windows) |

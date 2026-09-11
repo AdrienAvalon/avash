@@ -1,7 +1,7 @@
 // Connexion directe (sans `~/.ssh/config`) : formulaire SSH ou RDP.
 
 import { invoke } from "@tauri-apps/api/core";
-import { $ } from "./etat";
+import { $, RdpHostT } from "./etat";
 import { loadHosts, openManualSession, openSerie } from "./main";
 import { choisirDossierPartage, openRdp } from "./rdp";
 import { askConfirm } from "./dialogues";
@@ -166,9 +166,16 @@ export async function manualSubmit(ev: Event) {
     submit.disabled = true;
     const libelleRdp = submit.textContent;
     submit.textContent = t("cd-connexion-en-cours");
+    // Le bureau tel qu'il vient d'être enregistré : l'onglet doit porter son
+    // nom et la ligne de la barre latérale sa pastille verte, sans avoir à
+    // fermer l'onglet et rouvrir depuis la liste. Signalé le 11 septembre 2026
+    // en usage réel : `openRdp` partait sans `hostId` ni `name`, l'onglet
+    // s'intitulait « utilisateur@adresse » et la session n'était rattachée à
+    // aucune ligne, la pastille (calculée par identifiant) restait éteinte.
+    let enregistre: RdpHostT | null = null;
     try {
       if (enregistrer) {
-        await invoke("rdp_host_save", {
+        enregistre = await invoke<RdpHostT>("rdp_host_save", {
           id: null, name: nomRdp,
           host: addr, port: rport, user, width: 0, height: 0, protocole: proto,
           partage: partage || null,
@@ -190,7 +197,10 @@ export async function manualSubmit(ev: Event) {
       submit.textContent = libelleRdp;
     }
     manualClose();
-    await openRdp({ host: addr, port: rport, user, password, vnc, partage: partage || undefined });
+    await openRdp({
+      host: addr, port: rport, user, password, vnc, partage: partage || undefined,
+      hostId: enregistre?.id, name: enregistre?.name,
+    });
     return;
   }
   const target = manualReadForm();

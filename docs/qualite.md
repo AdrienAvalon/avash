@@ -6,7 +6,7 @@ preuves (juge d'accessibilité extérieur, rejeu d'enregistrements réels,
 conformité RDP contre de vrais serveurs).
 
 
-**1653 tests** couvrent le projet, tous exécutés à chaque commit :
+**1655 tests** couvrent le projet, tous exécutés à chaque commit :
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
@@ -17,7 +17,7 @@ conformité RDP contre de vrais serveurs).
 | Serveurs de test | 32 | serveur VNC (4) et côté serveur RDPDR (`test-rdp-server/src/rdpdr/`, 28) : décodeurs des PDU client écrits à la main (aller-retour contre les encodeurs du paquet, préfixes tronqués sans panique), automate du scénario contre des complétions simulées, dialogue complet avec le canal client d'`ironrdp-rdpdr` sur un dossier temporaire |
 | Paquets IronRDP et vnc-rs portés | 631 | nos correctifs — remplissage des tuiles, bande passante, redirection de serveur, capacités précoces, **ordre des champs de ClearCodec**, RLEX à une couleur, **sous-codec NSCodec**, et pour le client VNC un serveur hostile scénarisé (allocations bornées, résultat d'authentification, rectangle hors cadre, refus sans raison) — les tests amont de `ironrdp-pdu` et `ironrdp-graphics`, qui ne s'exécutaient nulle part (voir [rdp-sidecar/vendor](../rdp-sidecar/vendor/README.md)), et les onze de l'`ironrdp-server` porté par le serveur de test (en-têtes RemoteFX conservés au premier essai, autodétection réseau ; voir [test-rdp-server/vendor](../test-rdp-server/vendor/README.md)) |
 | Front (Vitest) | 280 | logique pure : arborescence, chemins de dossiers, filtres, scancodes, keysyms VNC, mappage souris, réglages, collage sûr, traductions (couverture des deux dictionnaires, variables, page) |
-| Bout en bout (WebdriverIO) | 76 | l'application réelle : connexions SSH, RDP et VNC effectives, SFTP, enregistrement asciicast, santé des hôtes, presse-papiers RDP, dossiers, import PuTTY, langue, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
+| Bout en bout (WebdriverIO) | 78 | l'application réelle : connexions SSH, RDP et VNC effectives, SFTP, enregistrement asciicast, santé des hôtes, presse-papiers RDP, dossiers, import PuTTY, langue, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
 qui ne voient pas le même code — ESLint typé, stylelint, knip (code mort),

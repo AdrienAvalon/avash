@@ -298,7 +298,7 @@ accommodent. La fonctionnalité `webdriver` n'entre jamais dans un binaire
 publié.
 
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
-et le détail des 76 scénarios.
+et le détail des 78 scénarios.
 
 ### Claude sur les issues et les PR
 

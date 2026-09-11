@@ -4,7 +4,7 @@
 // de l'alias saisi, et la session n'était rattachée à aucune ligne de la barre
 // latérale. Il fallait fermer l'onglet et se reconnecter depuis la liste pour
 // retrouver le bon nom.
-import { findHostRow } from "./helpers.js";
+import { findHostRow, startRdpServer, startVncServer, waitForPort, attendreBureauConnecte } from "./helpers.js";
 import { SSH_PORT, CLE_CLIENTE } from "../wdio.conf.js";
 import { userInfo } from "node:os";
 
@@ -46,12 +46,100 @@ describe("Enregistrer un hôte puis se connecter", () => {
     // Windows a été vu mettre plus de huit secondes à l'afficher (chaîne du
     // 05/09/2026, un passage sur deux) : on attend plus longtemps, et l'échec
     // nomme ce que la barre montrait.
+    let ligne;
     try {
-      await findHostRow(ALIAS, 20000);
+      ligne = await findHostRow(ALIAS, 20000);
     } catch (e) {
       const presents = await browser.execute(() =>
         [...document.querySelectorAll("#host-list .host .alias")].map((a) => a.textContent));
       throw new Error(`hôte « ${ALIAS} » absent de la barre ; présents : ${JSON.stringify(presents)}`, { cause: e });
     }
+    // Et sa pastille doit être verte : la session ouverte est rattachée à la
+    // ligne, sans fermer l'onglet et se reconnecter depuis la liste.
+    await browser.waitUntil(async () => (await ligne.$(".dot.live")).isExisting(),
+      { timeout: 20000, timeoutMsg: "pastille verte absente sur l'hôte SSH tout juste enregistré" });
+  });
+});
+
+// Même exigence pour un bureau RDP enregistré depuis la connexion directe.
+// Signalé le 11 septembre 2026 en usage réel : l'onglet s'intitulait
+// « utilisateur@adresse » et la ligne de la barre restait sans pastille ; il
+// fallait fermer l'onglet et rouvrir depuis la liste pour que tout soit normal.
+describe("Enregistrer un bureau RDP puis se connecter", () => {
+  const RDP_PORT = 33902;
+  const NOM = "bureau-nomme";
+  let srv;
+  before(async () => { srv = startRdpServer(RDP_PORT); await waitForPort(RDP_PORT); });
+  after(() => { if (srv) srv.kill(); });
+
+  it("l'onglet porte le nom saisi et la ligne de la barre a sa pastille verte", async () => {
+    await $("#manual-btn").click();
+    await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
+    await browser.execute(() => {
+      const r = document.querySelector('input[name="proto"][value="rdp"]');
+      r.checked = true;
+      r.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await $("#m-addr").setValue("127.0.0.1");
+    await $("#m-port").setValue(String(RDP_PORT));
+    await $("#m-user").setValue("test");
+    await $("#m-password").setValue("test");
+    await browser.execute((nom) => {
+      const c = document.getElementById("m-rdp-save");
+      c.checked = true;
+      c.dispatchEvent(new Event("change", { bubbles: true }));
+      document.getElementById("m-rdp-name").value = nom;
+    }, NOM);
+    await $("#m-submit").click();
+
+    await attendreBureauConnecte();
+    const libelle = await browser.execute(() =>
+      document.querySelector(".tab.active .label")?.textContent ?? null);
+    expect(libelle).toBe(NOM);
+
+    const ligne = await findHostRow(NOM, 20000);
+    await browser.waitUntil(async () => (await ligne.$(".dot.live")).isExisting(),
+      { timeout: 20000, timeoutMsg: "pastille verte absente sur le bureau RDP tout juste enregistré" });
+  });
+});
+
+// Et pour un bureau VNC : même volet de la connexion directe, même exigence.
+// Le port série n'a pas d'enregistrement depuis ce volet ; l'hôte SSH est
+// couvert plus haut, et son alias part à l'ouverture quel que soit le mode
+// d'authentification.
+describe("Enregistrer un bureau VNC puis se connecter", () => {
+  const VNC_PORT = 35905;
+  const NOM = "vnc-nomme";
+  let srv;
+  before(async () => { srv = startVncServer(VNC_PORT); await waitForPort(VNC_PORT); });
+  after(() => { if (srv) srv.kill(); });
+
+  it("l'onglet porte le nom saisi et la ligne de la barre a sa pastille verte", async () => {
+    await $("#manual-btn").click();
+    await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
+    await browser.execute(() => {
+      const r = document.querySelector('input[name="proto"][value="vnc"]');
+      r.checked = true;
+      r.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await $("#m-addr").setValue("127.0.0.1");
+    await $("#m-port").setValue(String(VNC_PORT));
+    await $("#m-password").setValue("test");
+    await browser.execute((nom) => {
+      const c = document.getElementById("m-rdp-save");
+      c.checked = true;
+      c.dispatchEvent(new Event("change", { bubbles: true }));
+      document.getElementById("m-rdp-name").value = nom;
+    }, NOM);
+    await $("#m-submit").click();
+
+    await attendreBureauConnecte("le bureau VNC");
+    const libelle = await browser.execute(() =>
+      document.querySelector(".tab.active .label")?.textContent ?? null);
+    expect(libelle).toBe(NOM);
+
+    const ligne = await findHostRow(NOM, 20000);
+    await browser.waitUntil(async () => (await ligne.$(".dot.live")).isExisting(),
+      { timeout: 20000, timeoutMsg: "pastille verte absente sur le bureau VNC tout juste enregistré" });
   });
 });

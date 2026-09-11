@@ -7,6 +7,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Bureau distant
+
+- **Un bureau RDP enregistré depuis la connexion directe est reconnu dès
+  l'ouverture.** L'onglet s'intitulait « utilisateur@adresse » au lieu du nom
+  saisi, et la ligne de la barre latérale restait sans pastille verte ; il
+  fallait fermer l'onglet et rouvrir depuis la liste. L'ouverture partait sans
+  l'identifiant ni le nom du bureau que l'enregistrement venait de rendre. Le
+  scénario bout en bout « enregistrer puis se connecter » couvre désormais les
+  bureaux RDP et VNC, et exige la pastille pour l'hôte SSH aussi ; le port
+  série n'a pas d'enregistrement depuis ce volet.
+
 ## [0.12.0] - 2026-09-11
 
 ### Bureau distant
