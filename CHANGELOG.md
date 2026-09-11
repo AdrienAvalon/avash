@@ -7,6 +7,22 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Bureau distant
+
+- **La pastille verte de la barre latérale s'allume dès la connexion d'un
+  bureau RDP ou VNC.** Le correctif de la 0.12.1 posait le bon nom d'onglet
+  mais la pastille restait éteinte : le message « connecté » du processus RDP
+  mettait à jour la pastille de l'onglet sans redessiner la barre, qui la
+  calcule depuis les sessions ouvertes. Il fallait encore fermer l'onglet et
+  rouvrir depuis la liste. La barre est désormais redessinée à la connexion.
+- **Le repli TLS hérité est proposé aussi quand macOS signale la coupure à sa
+  façon.** La détection de coupure ne connaissait pas l'`os error 54` de macOS ;
+  contre un serveur qui coupe pendant la poignée TLS, le marqueur ne partait
+  pas et l'interface ne proposait rien. Trouvé sur le job macOS de la chaîne, que le
+  scénario bout en bout couvre désormais de façon robuste à la segmentation
+  TCP (le faux serveur accumule la requête avant de répondre).
+
+
 ## [0.12.1] - 2026-09-11
 
 ### Bureau distant

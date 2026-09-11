@@ -619,6 +619,13 @@ export async function openRdp(cible: RdpTarget) {
         canvas.height = rdpH;
         if (snap) ctx.drawImage(snap, 0, 0, rdpW, rdpH);
         tab.querySelector(".state")!.className = "state live";
+        // Allumer la pastille verte de l'hôte dans la barre latérale : elle se
+        // calcule depuis les sessions RDP ouvertes (rdpHostElement), et sans ce
+        // rendu elle restait éteinte jusqu'à ce qu'un autre événement rafraîchisse
+        // la liste — il fallait fermer l'onglet et rouvrir depuis la liste
+        // (signalé par Adrien le 11 septembre 2026). Le nom de l'onglet, lui,
+        // était déjà bon depuis 0.12.1 ; c'était la pastille qui manquait.
+        renderHosts();
         // Aligner les verrous du bureau distant sur ceux du poste.
         void currentLocks().then((l) => { if (l !== null) send([10, l]); });
         // Renégociation terminée : si la fenêtre a encore bougé entre-temps, on

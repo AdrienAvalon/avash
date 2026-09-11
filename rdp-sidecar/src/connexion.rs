@@ -207,12 +207,17 @@ fn chaine_des_causes(e: &(dyn std::error::Error + 'static)) -> String {
 
 /// Le pair a-t-il coupé sans rien dire ?
 ///
-/// Windows remonte `os error 10054` (WSAECONNRESET), Unix `os error 104`. Ces
-/// codes bruts ne disent rien à qui les reçoit — c'est exactement ce qu'Adrien a
-/// vu en tentant un RDP vers un Windows.
+/// Windows remonte `os error 10054` (WSAECONNRESET), Linux `os error 104`,
+/// macOS `os error 54` — trois codes pour un même événement, une coupure du
+/// pair sans un mot. Trouvé le 12 septembre 2026 sur le job macOS de la chaîne :
+/// le serveur 2012 R2 de test coupait pendant la poignée TLS, mais `os error 54`
+/// n'était pas reconnu, donc le marqueur du chemin TLS hérité ne partait pas et
+/// l'interface ne proposait rien. Ces codes bruts ne disent rien à qui les
+/// reçoit — c'est exactement ce qu'Adrien a vu en tentant un RDP vers un Windows.
 fn est_coupure(texte: &str) -> bool {
     texte.contains("os error 10054")
         || texte.contains("os error 104")
+        || texte.contains("os error 54")
         || texte.contains("connection reset")
         || texte.contains("Connection reset")
         || texte.contains("unexpected end of file")
@@ -688,6 +693,8 @@ mod tests_coupure {
     #[test]
     fn le_code_unix_et_la_fin_de_flux_sont_reconnus() {
         assert!(est_coupure("Connection reset by peer (os error 104)"));
+        // macOS : errno 54, même événement, longtemps non reconnu.
+        assert!(est_coupure("Connection reset by peer (os error 54)"));
         assert!(est_coupure("unexpected end of file"));
     }
 

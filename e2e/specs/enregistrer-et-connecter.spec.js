@@ -8,6 +8,19 @@ import { findHostRow, startRdpServer, startVncServer, waitForPort, attendreBurea
 import { SSH_PORT, CLE_CLIENTE } from "../wdio.conf.js";
 import { userInfo } from "node:os";
 
+// La pastille verte vit sur la ligne de l'hôte, que renderHosts() reconstruit
+// entièrement quand une session devient vivante. Un handle capturé avant ce
+// rendu pointe alors un noeud détaché — inerte sous le pilote WebDriver
+// embarqué (Windows, macOS) : on re-cherche la ligne à chaque tour plutôt que
+// d'interroger un handle figé (même piège que l'aléa « vue-partagee »).
+async function attendrePastilleVerte(chercher, quoi) {
+  await browser.waitUntil(async () => {
+    const ligne = await chercher();
+    if (!ligne) return false;
+    return (await ligne.$(".dot.live")).isExisting();
+  }, { timeout: 20000, timeoutMsg: `pastille verte absente sur ${quoi} tout juste enregistré` });
+}
+
 describe("Enregistrer un hôte puis se connecter", () => {
   const ALIAS = "hote-nomme";
 
@@ -46,9 +59,8 @@ describe("Enregistrer un hôte puis se connecter", () => {
     // Windows a été vu mettre plus de huit secondes à l'afficher (chaîne du
     // 05/09/2026, un passage sur deux) : on attend plus longtemps, et l'échec
     // nomme ce que la barre montrait.
-    let ligne;
     try {
-      ligne = await findHostRow(ALIAS, 20000);
+      await findHostRow(ALIAS, 20000);
     } catch (e) {
       const presents = await browser.execute(() =>
         [...document.querySelectorAll("#host-list .host .alias")].map((a) => a.textContent));
@@ -56,8 +68,7 @@ describe("Enregistrer un hôte puis se connecter", () => {
     }
     // Et sa pastille doit être verte : la session ouverte est rattachée à la
     // ligne, sans fermer l'onglet et se reconnecter depuis la liste.
-    await browser.waitUntil(async () => (await ligne.$(".dot.live")).isExisting(),
-      { timeout: 20000, timeoutMsg: "pastille verte absente sur l'hôte SSH tout juste enregistré" });
+    await attendrePastilleVerte(() => findHostRow(ALIAS, 5000).catch(() => null), "l'hôte SSH");
   });
 });
 
@@ -97,9 +108,8 @@ describe("Enregistrer un bureau RDP puis se connecter", () => {
       document.querySelector(".tab.active .label")?.textContent ?? null);
     expect(libelle).toBe(NOM);
 
-    const ligne = await findHostRow(NOM, 20000);
-    await browser.waitUntil(async () => (await ligne.$(".dot.live")).isExisting(),
-      { timeout: 20000, timeoutMsg: "pastille verte absente sur le bureau RDP tout juste enregistré" });
+    await findHostRow(NOM, 20000);
+    await attendrePastilleVerte(() => findHostRow(NOM, 5000).catch(() => null), "le bureau RDP");
   });
 });
 
@@ -138,8 +148,7 @@ describe("Enregistrer un bureau VNC puis se connecter", () => {
       document.querySelector(".tab.active .label")?.textContent ?? null);
     expect(libelle).toBe(NOM);
 
-    const ligne = await findHostRow(NOM, 20000);
-    await browser.waitUntil(async () => (await ligne.$(".dot.live")).isExisting(),
-      { timeout: 20000, timeoutMsg: "pastille verte absente sur le bureau VNC tout juste enregistré" });
+    await findHostRow(NOM, 20000);
+    await attendrePastilleVerte(() => findHostRow(NOM, 5000).catch(() => null), "le bureau VNC");
   });
 });

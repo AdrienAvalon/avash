@@ -20,15 +20,28 @@ const NEGOCIATION_ACCEPTEE = Buffer.from("030000130ed000001234000200080002000000
 
 function demarrerFauxServeur(port) {
   const s = createServer((sock) => {
-    let etape = 0;
-    sock.on("data", () => {
-      if (etape === 0) {
-        etape = 1;
-        sock.write(NEGOCIATION_ACCEPTEE);
-      } else {
-        // Le ClientHello : un RST, pas une alerte TLS, comme Schannel 2012 R2.
+    // On accumule les octets plutôt que de compter les événements « data » :
+    // TCP peut livrer la requête X.224 en plusieurs morceaux (segmentation
+    // observée sur le job macOS de la chaîne, pas sous Linux). On répond quand
+    // le TPKT est complet — sa longueur est aux octets 2-3 — puis on coupe par
+    // un RST au premier octet suivant (le début du ClientHello), comme le fait
+    // Schannel d'un Windows Server 2012 R2.
+    let tampon = Buffer.alloc(0);
+    let negocie = false;
+    sock.on("data", (bloc) => {
+      if (negocie) {
+        // Le ClientHello arrive : un RST, pas une alerte TLS.
         sock.resetAndDestroy();
+        return;
       }
+      tampon = Buffer.concat([tampon, bloc]);
+      if (tampon.length < 4) return; // en-tête TPKT incomplet
+      const longueur = tampon.readUInt16BE(2);
+      if (tampon.length < longueur) return; // requête X.224 incomplète
+      negocie = true;
+      const reste = tampon.subarray(longueur); // au cas où le ClientHello suit déjà
+      sock.write(NEGOCIATION_ACCEPTEE);
+      if (reste.length > 0) sock.resetAndDestroy();
     });
     sock.on("error", () => {});
   });
