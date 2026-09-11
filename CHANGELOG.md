@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.12.1] - 2026-09-11
+
 ### Bureau distant
 
 - **Un bureau RDP enregistré depuis la connexion directe est reconnu dès
