@@ -7,8 +7,58 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.12.0] - 2026-09-11
+
+### Bureau distant
+
+- **Les Windows Server 2012 R2 et antérieurs sont joignables.** Ces systèmes
+  n'ont aucune suite TLS ECDHE avec AES-GCM ; rustls, la pile du processus
+  RDP, n'offre que celles-là, et Schannel coupait la connexion par un RST dès le
+  ClientHello, sans alerte : « os error 10054 » sous Windows, « rompu pendant
+  l'établissement du canal chiffré » sous Linux, depuis des semaines et sans
+  cause nommée. Trouvé le 11 septembre 2026 contre une machine 2012 R2 réelle,
+  par une matrice de suites après une négociation X.224 correcte. Avash nomme
+  désormais la cause et propose, une fois par serveur et sur décision
+  explicite, les suites TLS héritées de la pile du système (Schannel,
+  SecureTransport, OpenSSL embarquée sous Linux), comme il le fait pour NLA ;
+  le choix est retenu par bureau (`tls_herite`). Le canal reste chiffré, NLA
+  reste exigé, l'empreinte reste épinglée : seul le choix des suites change.
+  Si le serveur coupe aussi avec ces suites, le message renvoie au certificat
+  côté serveur au lieu de proposer encore. Un scénario bout en bout rejoue le
+  cas avec un faux serveur qui coupe au premier octet TLS.
+
 ### Chaîne d'intégration et garde-fous
 
+- **La suite bout en bout tourne sur un Windows dans une autre langue que
+  l'anglais.** Le harnais posait les droits du fichier de clés d'administrateur
+  du sshd système par nom de compte (`Administrators`) ; sur un Windows 11 en
+  français, où le groupe s'appelle « Administrateurs », icacls ne le résolvait
+  pas et la suite s'arrêtait avant le premier scénario. Les droits sont posés
+  par SID (S-1-5-18 pour SYSTEM, S-1-5-32-544 pour les administrateurs), les
+  mêmes dans toutes les langues, et une garde interdit le retour des noms.
+  Trouvé le 11 septembre 2026 en rejouant la chaîne dans une machine virtuelle
+  Windows 11 française ; les exécuteurs GitHub, en anglais, ne pouvaient pas
+  le voir.
+- **Le scénario VNC du certificat qui change dit ce qui lui manque.** Il
+  appelait `openssl` à cru ; sur un poste sans OpenSSL dans le PATH (les
+  exécuteurs GitHub l'ont, un Windows ordinaire non), l'erreur ENOENT portait
+  une propriété qui se référence elle-même et WebdriverIO n'arrivait pas à la
+  sérialiser : « Converting circular structure to JSON », sans nommer la cause.
+  Une aide du harnais cherche `openssl` dans le PATH puis dans Git for
+  Windows, et nomme l'outil absent sinon.
+- **Le terminateur VeNCrypt du serveur VNC de test n'écoute plus que sur la
+  boucle locale.** Il s'ouvrait sur toutes les interfaces : sur un Windows, la
+  suite bout en bout faisait surgir l'invite du pare-feu au milieu des
+  scénarios, et un serveur de test n'a rien à faire sur le réseau. Le port RFB
+  en clair, lui, reste sur toutes les interfaces : `rustvncserver` ne permet pas
+  de choisir l'adresse (son `listen` la fige et sa boucle d'acceptation est
+  privée) ; à porter le jour où cela gêne.
+- **Plus d'avertissement à la compilation sous Windows.** Trois symboles de
+  test du cœur et du processus RDP (`apprendre_cle_hote`, `marqueur_bloquant`,
+  `sous_delai`, `ouvrir_acces`) et un import de `args.rs` ne servaient qu'à des
+  tests ou du code `#[cfg(unix)]` : `cargo check` sous Windows les signalait
+  inutilisés à chaque passage. Ils sont conditionnés à Unix comme leurs
+  usages.
 - **Sur GitLab, la conformité passe après la suite bout en bout.** Depuis que la
   suite attend les jobs Rust, elle se retrouvait à côté de la conformité, dont
   les conteneurs xrdp saturent le poste qui sert d'exécuteur : une session SSH

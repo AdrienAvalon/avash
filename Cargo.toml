@@ -8,7 +8,7 @@ exclude = ["rdp-sidecar", "test-rdp-server", "test-vnc-server", "fuzz"]
 # espace de travail (exclude ci-dessus) et garde sa propre version ; tauri.conf.json
 # et web/package.json aussi. Les emplacements restants sont listes dans RELEASE.md.
 [workspace.package]
-version = "0.11.1"
+version = "0.12.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 authors = ["Adrien Cros <adrien.cros@outlook.com>"]
