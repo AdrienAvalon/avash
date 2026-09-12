@@ -12,9 +12,9 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 - Le job macOS construit et embarque le vrai processus RDP avant l'interface :
   le scénario de TLS hérité ne reçoit plus un fichier vide à la place du
   programme qu'il doit lancer. Les deux scénarios restent exécutés.
-- La vérification Clippy locale fonctionne aussi avec Rust 1.97 : la durée du
-  test d'enregistrement s'exprime en heures et l'exemption d'un lint inexistant
-  est retirée, sans relâcher les contrôles des méthodes asynchrones.
+- La durée du test d'enregistrement s'exprime en heures pour passer Clippy 1.97.
+  L'exemption ciblée `unused_async_trait_impl`, nécessaire aux signatures de trait
+  imposées depuis Clippy 1.98, est conservée ; le contrôle des clés SSH ne change pas.
 
 ### Distribution
 
