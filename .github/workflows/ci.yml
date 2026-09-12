@@ -413,10 +413,15 @@ jobs:
         run: |
           cargo check --all-targets
           cargo test
+          # Le scénario TLS hérité lance ce vrai processus, même sans sshd local.
+          cargo build --release
       - name: Interface — compilation et tests
         run: |
           mkdir -p crates/avash-ui/binaries
-          touch crates/avash-ui/binaries/avash-rdp-aarch64-apple-darwin
+          cp rdp-sidecar/target/release/avash-rdp \
+             crates/avash-ui/binaries/avash-rdp-aarch64-apple-darwin
+          test -s crates/avash-ui/binaries/avash-rdp-aarch64-apple-darwin
+          test -x crates/avash-ui/binaries/avash-rdp-aarch64-apple-darwin
           cargo check -p avash-ui --all-targets
           cargo test -p avash-ui --lib --bin avash-ui
       # Scénarios bout en bout sur WKWebView : macOS n'a aucun pilote WebDriver,

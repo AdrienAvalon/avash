@@ -1,0 +1,73 @@
+{
+  "scope": "Original upstream notices retained for components used in the two Avash Meslo Nerd Font subsets. This inventory does not relicense Avash or the font components.",
+  "nerd_fonts_version": "3.5.1",
+  "nerd_fonts_commit": "b894ea7803af6aade63d60a4381e006098ec9c4d",
+  "notices": [
+    {
+      "notice": "APACHE-2.0.txt",
+      "upstream_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "NERD-FONTS.txt",
+      "upstream_url": "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/b894ea7803af6aade63d60a4381e006098ec9c4d/LICENSE",
+      "sha256": "1f6ad4edae6479aaace3112ede5279a23284ae54b2a34db66357aef5f64df160",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "FONT-AWESOME.txt",
+      "upstream_url": "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/b894ea7803af6aade63d60a4381e006098ec9c4d/src/glyphs/font-awesome/LICENSE.txt",
+      "sha256": "de784a808496d49f5f80dd9d1d6e9a51cff712cfbc339e7c25155631ae3cdb5d",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "OCTICONS.txt",
+      "upstream_url": "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/b894ea7803af6aade63d60a4381e006098ec9c4d/src/glyphs/octicons/LICENSE",
+      "sha256": "4f886642f9e8d99eeadd484acdac011c3fde8a338faf52f5ca1408c13b9a9b63",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "POMICONS.txt",
+      "upstream_url": "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/b894ea7803af6aade63d60a4381e006098ec9c4d/src/glyphs/pomicons/LICENSE",
+      "sha256": "cb4797a9745683f287c28833db596e9d68ec43082d59359b3a49c504f0f610ce",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "POWERLINE-EXTRA.txt",
+      "upstream_url": "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/b894ea7803af6aade63d60a4381e006098ec9c4d/src/glyphs/powerline-extra/LICENSE",
+      "sha256": "544307a58e6826c24145b2af1c3578b53e2e21ae0e6c67ab4c6abd544304d26a",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "POWERLINE-SYMBOLS.txt",
+      "upstream_url": "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/b894ea7803af6aade63d60a4381e006098ec9c4d/src/glyphs/powerline-symbols/LICENSE.txt",
+      "sha256": "46d5355e4734468135d8e4a30d0916292cc4df2b3ec30aa68c866f82497933be",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "DEVICON.txt",
+      "upstream_url": "https://raw.githubusercontent.com/devicons/devicon/54cfe13ac10eaa1ef817a343ab0a9437eb3c2e08/LICENSE",
+      "sha256": "121194741d4a915b9f5890fdd6dd95121f9b1f816517c792358d72d7c838d664",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "FONT-AWESOME-EXTENSION.txt",
+      "upstream_url": "https://raw.githubusercontent.com/AndreLZGava/font-awesome-extension/09d80249058ee8018a45da30add4339289dbb466/LICENCE",
+      "sha256": "b47b15d771c4507a75ff65beca3a78168d6af4cca9b45177a1aa817139c64ba5",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "FONT-LOGOS.txt",
+      "upstream_url": "https://raw.githubusercontent.com/Lukas-W/font-logos/2db3df547108b28bd4972e685e2b682092d78498/LICENSE",
+      "sha256": "88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd",
+      "copy": "verbatim"
+    },
+    {
+      "notice": "UNICODE-IEC.txt",
+      "upstream_url": "https://raw.githubusercontent.com/jloughry/Unicode/805536fb6f93604da985d80e0c6b099f98f8b4d9/LICENSE.txt",
+      "sha256": "11aef1cdf2d58d822e6857e2574870ccc59d4900052bf5c098e319d750e7ac3d",
+      "copy": "verbatim"
+    }
+  ]
+}

@@ -7,6 +7,21 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Validation
+
+- Le job macOS construit et embarque le vrai processus RDP avant l'interface :
+  le scénario de TLS hérité ne reçoit plus un fichier vide à la place du
+  programme qu'il doit lancer. Les deux scénarios restent exécutés.
+- La vérification Clippy locale fonctionne aussi avec Rust 1.97 : la durée du
+  test d'enregistrement s'exprime en heures et l'exemption d'un lint inexistant
+  est retirée, sans relâcher les contrôles des méthodes asynchrones.
+
+### Distribution
+
+- Les ressources des polices embarquées incluent les notices des jeux de glyphes
+  Nerd Fonts réellement conservés et leurs sources épinglées. La notice Meslo
+  seule ne décrivait pas ces composants ; les deux fichiers WOFF2 restent identiques.
+
 ## [0.12.2] - 2026-09-12
 
 ### Bureau distant

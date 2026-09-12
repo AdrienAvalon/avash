@@ -1,7 +1,9 @@
 # Police embarquée
 
 `avash-mono-{regular,bold}.woff2` — **MesloLGS Nerd Font Mono** (Nerd Fonts 3.5.1),
-sous licence **Apache-2.0** (voir `LICENSE-MesloLGS-NerdFont.txt`).
+associe la base Meslo sous **Apache-2.0** et des jeux de glyphes sous leurs licences propres.
+Les [notices des composants](THIRD-PARTY-NOTICES.md) conservent les textes et attributions
+applicables, ainsi que les sources épinglées des copies.
 Source : https://github.com/ryanoasis/nerd-fonts
 
 ## Pourquoi l'embarquer

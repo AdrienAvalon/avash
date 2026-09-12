@@ -554,7 +554,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("ancien.cast"), "{}\n").unwrap();
         std::fs::write(dir.join("notes.txt"), "pas un enregistrement").unwrap();
-        let vieux = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let vieux = std::time::SystemTime::now() - std::time::Duration::from_hours(1);
         // En écriture : sous Windows, changer la date d'un fichier ouvert en
         // lecture seule est refusé (« accès refusé »), et le test rougissait là-bas.
         std::fs::OpenOptions::new()
