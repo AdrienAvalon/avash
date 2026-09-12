@@ -500,23 +500,26 @@ pub(crate) async fn connect(
     // rien ne permettait d'interpréter, signalé par Adrien sur un Windows
     // Server. Renoncer à NLA n'y changerait rien : ce repli passe lui aussi
     // par TLS. Le message doit donc dire ce qu'il reste à essayer.
+    //
+    // On est ICI seulement après une négociation X.224 acceptée : le serveur
+    // parle donc RDP. Un échec de la poignée TLS, à ce stade, est presque
+    // toujours l'absence d'une suite commune (le cas 2012 R2) ou un certificat
+    // serveur cassé. Dans les deux cas la voie est le repli hérité (ou son
+    // message final). On ne classe donc plus l'erreur par sa graphie : la
+    // détection par sous-chaîne ratait le code macOS de la pile native (le
+    // second essai, sur SecureTransport, ne montrait pas son message ; job
+    // macOS de la chaîne, 12 septembre 2026). Tout échec de montée mène
+    // désormais au repli, quel que soit le texte de l'erreur.
     let (mut upgraded_stream, cert) = if a.tls_herite {
-        crate::tls_herite::monter(initial, &a.host)
-            .await
-            .map_err(|e| {
-                if est_coupure(&format!("{e:#}")) {
-                    anyhow::anyhow!("{}", crate::tls_herite::message_coupure(true))
-                } else {
-                    e.context("passage TLS hérité")
-                }
-            })?
+        // Déjà sur la pile du système et ça coupe encore : c'est le certificat.
+        match crate::tls_herite::monter(initial, &a.host).await {
+            Ok(v) => v,
+            Err(_) => anyhow::bail!("{}", crate::tls_herite::message_coupure(true)),
+        }
     } else {
         match ironrdp_tls::upgrade(initial, &a.host).await {
             Ok((flux, cert)) => (crate::tls_herite::Flux::Moderne(Box::new(flux)), cert),
-            Err(e) if est_coupure(&chaine_des_causes(&e)) => {
-                anyhow::bail!("{}", crate::tls_herite::message_coupure(false));
-            }
-            Err(e) => return Err(anyhow::Error::new(e).context("passage TLS")),
+            Err(_) => anyhow::bail!("{}", crate::tls_herite::message_coupure(false)),
         }
     };
     let pubkey = server_public_key(&cert)?;
