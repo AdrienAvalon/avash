@@ -38,26 +38,36 @@ describe("Régression visuelle", () => {
     expect(await browser.checkScreen("accueil-sombre")).toBeLessThanOrEqual(seuil);
   });
 
+  // Chaque test remet l'interface en état AVANT de juger sa capture. Trouvé
+  // par la CI du 12 septembre 2026 : un écart attendu sur l'accueil clair
+  // (ligne des raccourcis plus longue) arrêtait le test avant le retour au
+  // thème sombre ; la palette était alors capturée en clair (96 % d'écart),
+  // restait ouverte faute d'Échap, et interceptait le clic du test suivant.
+  // Une seule vraie différence en faisait quatre.
   it("accueil, thème clair", async () => {
     await theme("light");
     await browser.pause(200);
-    expect(await browser.checkScreen("accueil-clair")).toBeLessThanOrEqual(seuil);
+    const ecart = await browser.checkScreen("accueil-clair");
     await theme("dark");
+    expect(ecart).toBeLessThanOrEqual(seuil);
   });
 
   it("palette ouverte", async () => {
     await browser.keys(["Control", "k"]);
     await $("#palette").waitForDisplayed({ timeout: 5000 });
     await browser.pause(200);
-    expect(await browser.checkScreen("palette")).toBeLessThanOrEqual(seuil);
+    const ecart = await browser.checkScreen("palette");
     await browser.keys("Escape");
+    await $("#palette").waitForDisplayed({ reverse: true, timeout: 5000 });
+    expect(ecart).toBeLessThanOrEqual(seuil);
   });
 
   it("modale « Connexion directe »", async () => {
     await $("#manual-btn").click();
     await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
     await browser.pause(200);
-    expect(await browser.checkScreen("connexion-directe")).toBeLessThanOrEqual(seuil);
+    const ecart = await browser.checkScreen("connexion-directe");
     await browser.keys("Escape");
+    expect(ecart).toBeLessThanOrEqual(seuil);
   });
 });
