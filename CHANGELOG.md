@@ -7,18 +7,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
-### Bureau distant
-
-- **Le repli TLS hérité montre son échec final sur toutes les plateformes.** Une
-  fois le vrai processus RDP embarqué sous macOS, le second essai (la pile TLS
-  du système, SecureTransport) échouait sans message : la coupure était classée
-  par la graphie de l'erreur, et le code macOS n'y figurait pas. Puisqu'on
-  n'atteint la poignée TLS qu'après une négociation acceptée, tout échec à ce
-  stade mène désormais au repli, ou à son message de certificat, sans dépendre
-  du texte de l'erreur. Trouvé sur le job macOS de la chaîne.
-
 ### Validation
 
+- Après acceptation du TLS hérité, une coupure remontée par SecureTransport
+  sous macOS reçoit le diagnostic de la seconde tentative, même si son message
+  système est traduit. Le code Apple est reconnu uniquement dans une erreur
+  native-tls ; certificat, NLA et accord utilisateur conservent leurs contrôles.
+  Un test local au backend macOS exerce cette coupure réelle ; le scénario E2E
+  conserve ses assertions et affiche désormais le dernier texte reçu en cas d'échec.
 - Le job macOS construit et embarque le vrai processus RDP avant l'interface :
   le scénario de TLS hérité ne reçoit plus un fichier vide à la place du
   programme qu'il doit lancer. Les deux scénarios restent exécutés.

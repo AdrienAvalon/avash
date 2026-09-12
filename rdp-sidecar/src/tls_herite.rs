@@ -114,6 +114,22 @@ pub async fn monter(tcp: TcpStream, hote: &str) -> Result<(Flux, x509_cert::Cert
 /// Marqueur que l'interface reconnaît pour proposer le chemin hérité.
 pub const TLS_HERITE_INDISPONIBLE: &str = "[AVASH_RDP_TLS_HERITE]";
 
+/// SecureTransport traduit un reset TCP en `errSSLClosedAbort` (-9806).
+/// `native-tls` masque le code et sa cause typée ; son Display peut être
+/// traduit et omettre le code. Son Debug conserve celui de security-framework.
+/// On ne lit cette représentation que sur une vraie erreur native-tls, après
+/// accord pour le chemin hérité, jamais dans un message arbitraire du serveur.
+pub(crate) fn coupure_de_la_pile_systeme(erreur: &anyhow::Error) -> bool {
+    erreur
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<native_tls::Error>())
+        .any(|cause| fermeture_secure_transport(&format!("{cause:?}")))
+}
+
+fn fermeture_secure_transport(debug: &str) -> bool {
+    debug.starts_with("Error { code: -9806,") || debug == "Error { code: -9806 }"
+}
+
 /// La phrase à afficher quand le serveur coupe pendant la poignée TLS.
 ///
 /// Sans le chemin hérité, on propose de l'essayer, marqueur en tête : c'est
@@ -142,7 +158,68 @@ pub fn message_coupure(tls_herite: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{message_coupure, TLS_HERITE_INDISPONIBLE};
+    use super::{
+        coupure_de_la_pile_systeme, fermeture_secure_transport, message_coupure,
+        TLS_HERITE_INDISPONIBLE,
+    };
+
+    #[test]
+    fn la_coupure_apple_ne_depend_pas_du_message_traduit() {
+        for debug in [
+            "Error { code: -9806, message: \"connection closed via error\" }",
+            "Error { code: -9806, message: \"Connexion fermée à cause d'une erreur\" }",
+            "Error { code: -9806 }",
+        ] {
+            assert!(fermeture_secure_transport(debug), "{debug}");
+        }
+    }
+
+    #[test]
+    fn les_autres_erreurs_apple_ne_sont_pas_des_coupures() {
+        for debug in [
+            "Error { code: -9807, message: \"bad certificate\" }",
+            "Error { code: -9801, message: \"invalid protocol\" }",
+            "Error { code: -98060 }",
+            "STATUS_LOGON_FAILURE",
+        ] {
+            assert!(!fermeture_secure_transport(debug), "{debug}");
+        }
+    }
+
+    #[test]
+    fn un_texte_imitant_native_tls_ne_suffit_pas() {
+        let erreur = anyhow::anyhow!("Error {{ code: -9806 }}").context("poignée TLS héritée");
+        assert!(!coupure_de_la_pile_systeme(&erreur));
+    }
+
+    // Exerce le format réel du backend Apple verrouillé, pas seulement ses
+    // exemples textuels : une évolution de native-tls doit rougir en CI macOS.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn un_reset_reel_de_secure_transport_est_reconnu() {
+        use std::time::Duration;
+        use tokio::net::{TcpListener, TcpStream};
+
+        let ecouteur = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("écouteur local");
+        let adresse = ecouteur.local_addr().expect("adresse locale");
+        let serveur = tokio::spawn(async move {
+            let (flux, _) = ecouteur.accept().await.expect("client local");
+            let mut debut = [0_u8; 1];
+            assert!(flux.peek(&mut debut).await.expect("ClientHello") > 0);
+            // Fermer avec des données reçues mais non lues provoque un RST.
+            drop(flux);
+        });
+        let tcp = TcpStream::connect(adresse).await.expect("connexion locale");
+        let resultat =
+            tokio::time::timeout(Duration::from_secs(5), super::monter(tcp, "127.0.0.1"))
+                .await
+                .expect("la poignée doit échouer rapidement");
+        serveur.await.expect("serveur terminé");
+        let erreur = resultat.err().expect("la coupure doit refuser TLS");
+        assert!(coupure_de_la_pile_systeme(&erreur), "{erreur:?}");
+    }
 
     /// Sans le chemin hérité, le marqueur ouvre la porte au repli ; avec lui,
     /// plus de marqueur : l'interface n'a rien de plus à proposer.

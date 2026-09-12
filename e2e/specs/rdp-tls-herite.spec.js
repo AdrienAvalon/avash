@@ -92,10 +92,15 @@ describe("RDP — serveur sans suite TLS moderne (Windows Server 2012 R2)", () =
     await $("#confirm-modal").waitForDisplayed({ timeout: 20000, timeoutMsg: "aucune proposition de TLS hérité" });
     await $("#confirm-ok").click();
     let texte = "";
-    await browser.waitUntil(async () => {
-      texte = await texteAffiche();
-      return texte.includes("suites TLS héritées");
-    }, { timeout: 20000, timeoutMsg: `la seconde tentative n'a pas expliqué son échec ; à l'écran : ${texte}` });
+    try {
+      await browser.waitUntil(async () => {
+        texte = await texteAffiche();
+        return texte.includes("suites TLS héritées");
+      }, { timeout: 20000, timeoutMsg: "la seconde tentative n'a pas expliqué son échec" });
+    } catch (cause) {
+      // Interpoler après les tentatives : avant waitUntil, texte vaut encore "".
+      throw new Error(`la seconde tentative n'a pas expliqué son échec ; à l'écran : ${texte}`, { cause });
+    }
     // Plus rien à proposer : la boîte ne revient pas, la cause est nommée.
     expect(await $("#confirm-modal").isDisplayed()).toBe(false);
     expect(texte).toMatch(/certificat/);
