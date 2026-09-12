@@ -45,8 +45,11 @@ eprouver() { # nom
   # 1. La connexion aboutit, et on mesure en combien de temps.
   local t0 t1
   t0=$(date +%s%N)
-  if AVASH_RDP_TRACE=ironrdp_connector=debug timeout "$DELAI" "$RDP" \
-       --host "$hote" --port "$port" -u "$COMPTE" -p "$MDP" --sans-nla \
+  # Audit du 12 septembre 2026 (C-secrets-3) : le sidecar ne lit plus le mot
+  # de passe en argument (visible dans /proc/<pid>/cmdline), seulement sur
+  # l'entrée standard, première ligne.
+  if printf '%s\n' "$MDP" | AVASH_RDP_TRACE=ironrdp_connector=debug timeout "$DELAI" "$RDP" \
+       --host "$hote" --port "$port" -u "$COMPTE" --sans-nla \
        --width 1024 --height 768 --shot "$img" >"$journal" 2>&1; then
     t1=$(date +%s%N)
     vert "connexion aboutie en $(( (t1 - t0) / 1000000 )) ms"

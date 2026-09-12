@@ -1360,6 +1360,12 @@ impl AvashSession {
         }
         #[cfg(windows)]
         {
+            // Trouvé par la CI Windows du 12 septembre 2026 : cette branche a
+            // toujours vécu à côté d'une autre déjà `#[cfg(unix)]`, jamais
+            // compilée sur ce poste de développement (Linux) ; `authenticate_agent`
+            // juste en dessous a le même besoin et importe en tête de fonction,
+            // avant le `cfg`, précisément pour que les deux branches le voient.
+            use russh::keys::agent::client::AgentClient;
             if let Ok(mut agent) = AgentClient::connect_named_pipe(OPENSSH_AGENT_PIPE).await {
                 if agent_porte_une_identite(&mut agent).await {
                     return true;

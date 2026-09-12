@@ -299,11 +299,17 @@ mod tests {
 
     /// Audit du 12 septembre 2026 (C-secrets-2) : le secret relu est un type
     /// qui s'efface à sa libération. Ce test ne compile plus si `charger`
-    /// revient à une `String` nue.
+    /// revient à une `String` nue : c'est là son seul objet.
+    ///
+    /// Trouvé par la CI Linux du 12 septembre 2026 : un exécuteur sans session
+    /// D-Bus ni trousseau système (headless) fait légitimement échouer l'appel
+    /// réel (K1 : un service injoignable est une erreur, pas une entrée
+    /// absente) ; on ne juge donc pas le verdict, seulement l'absence de
+    /// panique.
     #[test]
     fn le_secret_relu_est_un_type_qui_s_efface() {
         let signature: fn(&str) -> Result<Option<zeroize::Zeroizing<String>>> = charger;
-        assert!(signature("absent@exemple:22").is_ok() || cfg!(not(unix)));
+        let _ = signature("absent@exemple:22");
     }
 
     /// Audit du 12 septembre 2026 (C-secrets-1) : le protocole stdin du
