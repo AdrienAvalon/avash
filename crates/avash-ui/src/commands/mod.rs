@@ -22,7 +22,12 @@ mod tunnels;
 
 #[cfg(test)]
 pub(crate) mod tests;
+// Unix seulement : la fonctionnalité `outils-de-test` du cœur (serveur SSH+SFTP
+// en mémoire) n'est tirée que par `[target.'cfg(unix)'.dev-dependencies]`
+// dans Cargo.toml. Trouvé par la CI Windows du 12 septembre 2026 : le module
+// était compilé partout et cherchait `avash::testutil`, absent sous Windows.
 #[cfg(test)]
+#[cfg(unix)]
 mod tests_reseau;
 
 pub use choix_locaux::*;

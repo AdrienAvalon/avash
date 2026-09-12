@@ -63,12 +63,18 @@ async def mesurer(port, token, secondes):
 
 async def main():
     port_rdp, secondes = sys.argv[1], float(sys.argv[2])
+    # Audit du 12 septembre 2026 (C-secrets-3) : le processus RDP ne lit plus
+    # le mot de passe en argument, seulement sur l'entrée standard (première
+    # ligne). L'entrée reste ouverte ensuite : sa fin signifie « l'interface a
+    # disparu » et fait sortir le processus (C-sidecar-1).
     p = subprocess.Popen(
         ["rdp-sidecar/target/release/avash-rdp", "--host", os.environ.get("PARC_HOTE", "127.0.0.1"),
          "--port", port_rdp,
-         "-u", "essai", "-p", "essai-mot-de-passe", "--sans-nla",
+         "-u", "essai", "--sans-nla",
          "--width", "1280", "--height", "800"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    p.stdin.write("essai-mot-de-passe\n")
+    p.stdin.flush()
     annonce = (p.stdout.readline() or "").split()
     if len(annonce) != 2:
         print("  le processus n'a annoncé aucun point de connexion", file=sys.stderr)

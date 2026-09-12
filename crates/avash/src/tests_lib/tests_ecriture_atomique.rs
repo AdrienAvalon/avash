@@ -1,4 +1,9 @@
-use super::{ecrire_atomiquement, ecrire_atomiquement_tire, nom_temporaire};
+use super::ecrire_atomiquement;
+// Seul le test du lien symbolique préposé (Unix) s'en sert : importées sans
+// condition, elles étaient inutilisées sous Windows (compilation croisée du
+// 12 septembre 2026).
+#[cfg(unix)]
+use super::{ecrire_atomiquement_tire, nom_temporaire};
 use crate::testutil::temp_home;
 
 /// Le contenu doit être intégralement lisible, et le fichier ne doit jamais

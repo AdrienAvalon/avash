@@ -2689,7 +2689,12 @@ mod tests_garde_agent {
 
 #[cfg(test)]
 mod tests_delai {
-    use super::{borne_agent, delai_depuis, AvashSession, ClientAuth, DELAI_CONNEXION_SSH};
+    // `borne_agent` ne sert qu'au test de l'agent muet, qui est Unix seulement
+    // (socket de SSH_AUTH_SOCK) : importé sans condition, il était inutilisé
+    // sous Windows (avertissement vu en compilation croisée, 12 septembre 2026).
+    #[cfg(unix)]
+    use super::borne_agent;
+    use super::{delai_depuis, AvashSession, ClientAuth, DELAI_CONNEXION_SSH};
     use std::time::{Duration, Instant};
 
     #[test]
