@@ -1,6 +1,13 @@
 //! Tests d'intégration avash : serveur SSH+SFTP embarqué (russh server),
 //! client avash réel dessus. Valide connect/auth/exec/PTY/SFTP bout-en-bout.
 
+// Le faux serveur implémente les traits `Handler` de russh et russh-sftp, dont
+// beaucoup de méthodes sont `async` par signature sans que ce mock ait rien à
+// attendre. Le lint pédant `unused_async_trait_impl` (clippy du 12 septembre
+// 2026) voudrait retirer l'`async` de chacune : impossible, la signature vient
+// du trait. On le tait pour tout le fichier de test.
+#![allow(clippy::unused_async_trait_impl)]
+
 use russh::keys::PrivateKey;
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};

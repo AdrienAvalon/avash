@@ -510,6 +510,11 @@ async fn ouvrir_agent_local() -> Option<Box<dyn FluxAgent>> {
 impl russh::client::Handler for AvashAuth {
     type Error = russh::Error;
 
+    // `async` imposé par le trait `Handler` de russh, mais ce corps ne fait
+    // aucun `.await` : il juge une clé lue en mémoire. Le lint pédant
+    // `unused_async_trait_impl`, arrivé avec le clippy du 12 septembre 2026,
+    // voudrait retirer l'`async` — impossible, la signature est celle du trait.
+    #[allow(clippy::unused_async_trait_impl)]
     async fn check_server_key(
         &mut self,
         server_public_key: &russh::keys::PublicKeyOrCertificate,

@@ -7,6 +7,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Chaîne d'intégration et garde-fous
+
+- **Le lint pédant `unused_async_trait_impl` du clippy du 12 septembre 2026 est
+  tu là où il n'a pas de sens.** Ce nouveau lint voudrait retirer l'`async` des
+  méthodes de trait `Handler` (russh, russh-sftp) dont le corps n'attend rien,
+  alors que la signature vient du trait et n'est pas la nôtre. Il faisait rougir
+  le job Linux de la chaîne dès que son exécuteur a basculé sur la nouvelle
+  version stable de la chaîne d'outils. Exception ciblée sur
+  `check_server_key` et sur le faux serveur du test d'intégration.
+
+
 ### Validation
 
 - Le job macOS construit et embarque le vrai processus RDP avant l'interface :
