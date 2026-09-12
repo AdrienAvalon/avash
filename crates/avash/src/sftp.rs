@@ -144,9 +144,28 @@ impl SftpHandle {
         &self,
         remote: &str,
         local: &Path,
-        mut progress: impl FnMut(u64, u64),
+        progress: impl FnMut(u64, u64),
     ) -> Result<u64> {
         let total = self.sftp.metadata(remote).await.map_or(0, |m| m.len());
+        self.telecharger_connu(remote, local, total, None, progress)
+            .await
+    }
+
+    /// [`download_with`](Self::download_with) sur un fichier dont la taille
+    /// est déjà lue (0 : inconnue), annulable entre deux blocs.
+    ///
+    /// Audit du 12 septembre 2026 (C-perf-3 a) : `download_reprise` lisait les
+    /// attributs puis renvoyait les petits fichiers vers `download_with`, qui
+    /// les relisait : un aller-retour de plus par fichier, le plus coûteux des
+    /// cinq sur un dossier de petits fichiers à distance.
+    async fn telecharger_connu(
+        &self,
+        remote: &str,
+        local: &Path,
+        total: u64,
+        annulation: Option<&Annulation>,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<u64> {
         let partiel = chemin_partiel(local);
         // Taille connue et fichier assez gros : on lit en bandes parallèles.
         if total > (2 * CHUNK) as u64 {
@@ -179,6 +198,7 @@ impl SftpHandle {
         let mut done = 0u64;
         let issue = async {
             loop {
+                verifier(annulation)?;
                 let n = remote_file
                     .read(&mut buf)
                     .await
@@ -490,6 +510,168 @@ const ENTREES_MAX: usize = 100_000;
 /// Message de l'erreur d'annulation, que l'interface reconnaît.
 pub const ANNULE: &str = "Transfert annulé.";
 
+/// Fichiers d'un dossier transférés à la fois.
+///
+/// Audit du 12 septembre 2026 (C-perf-3 b) : un dossier passait un fichier
+/// après l'autre, et un petit fichier coûte cinq allers-retours strictement
+/// séquentiels (une dizaine en relais) : mille petits fichiers à 30 ms
+/// d'aller-retour, 2 min 30 en téléchargement quel que soit le débit du lien.
+/// Quatre en vol : sous les huit bandes d'un gros fichier, bien sous la limite
+/// de descripteurs de tout serveur.
+const FICHIERS_EN_VOL: usize = 4;
+
+/// Ce qu'un fichier en vol rapporte à la boucle qui tient la progression.
+enum Nouvelle {
+    /// Octets de plus pour ce fichier, depuis sa dernière annonce.
+    Octets(String, u64),
+    /// Fichier terminé ; porte le reliquat entre les annonces et le total rendu.
+    Fini(String, u64),
+}
+
+/// Traduit l'avancement cumulé d'un fichier (ce que rapportent les transferts
+/// d'un fichier) en écarts pour la boucle commune du dossier.
+struct Rapporteur {
+    nom: String,
+    vu: std::sync::atomic::AtomicU64,
+    tx: tokio::sync::mpsc::UnboundedSender<Nouvelle>,
+}
+
+impl Rapporteur {
+    fn nouveau(nom: String, tx: tokio::sync::mpsc::UnboundedSender<Nouvelle>) -> Self {
+        Self {
+            nom,
+            vu: std::sync::atomic::AtomicU64::new(0),
+            tx,
+        }
+    }
+
+    fn avance(&self, cumul: u64) {
+        let avant = self
+            .vu
+            .fetch_max(cumul, std::sync::atomic::Ordering::Relaxed);
+        if cumul > avant {
+            let _ = self
+                .tx
+                .send(Nouvelle::Octets(self.nom.clone(), cumul - avant));
+        }
+    }
+
+    fn fini(&self, n: u64) {
+        let vu = self.vu.load(std::sync::atomic::Ordering::Relaxed);
+        let _ = self
+            .tx
+            .send(Nouvelle::Fini(self.nom.clone(), n.saturating_sub(vu)));
+    }
+}
+
+/// L'erreur est-elle (au fond) une annulation ?
+fn est_annule(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.to_string() == ANNULE)
+}
+
+/// Ce qu'un fichier en vol rend en erreur : l'annulation telle quelle (que
+/// l'interface reconnaît), toute autre erreur avec le nom du fichier.
+fn avec_le_fichier(e: anyhow::Error, nom: &str) -> anyhow::Error {
+    if est_annule(&e) {
+        anyhow!(ANNULE)
+    } else {
+        e.context(nom.to_owned())
+    }
+}
+
+/// Transfère les `fichiers` d'un dossier, `FICHIERS_EN_VOL` à la fois, et tient
+/// la progression commune.
+///
+/// Chaque fichier reçoit un drapeau d'arrêt levé à la première erreur, ou dès
+/// que l'utilisateur annule : ceux qui sont en vol s'arrêtent à leur prochain
+/// bloc et nettoient derrière eux (partiel retiré, ou gardé avec sa carte de
+/// reprise pour un gros fichier), ceux qui n'étaient pas partis ne partent pas.
+/// On attend qu'ils aient tous rendu la main avant de répondre, et l'erreur
+/// rendue est la vraie cause, pas l'« annulé » des fichiers qu'elle a arrêtés.
+async fn en_vol<T, F, Fut>(
+    fichiers: Vec<T>,
+    total: u64,
+    annulation: Option<&Annulation>,
+    mut progress: impl FnMut(Avancement),
+    un_fichier: F,
+) -> Result<u64>
+where
+    F: Fn(T, Annulation, tokio::sync::mpsc::UnboundedSender<Nouvelle>) -> Fut,
+    Fut: std::future::Future<Output = Result<u64>>,
+{
+    use futures::StreamExt as _;
+    use std::sync::atomic::Ordering::Relaxed;
+    verifier(annulation)?;
+    let nombre = fichiers.len();
+    let arret: Annulation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fini = std::sync::atomic::AtomicBool::new(false);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Nouvelle>();
+    let arret_des_fichiers = arret.clone();
+    let travaux = futures::stream::iter(fichiers)
+        .map(move |f| un_fichier(f, arret_des_fichiers.clone(), tx.clone()))
+        .buffer_unordered(FICHIERS_EN_VOL);
+    let consommer = async {
+        // Le flux (et le dernier émetteur d'annonces qu'il tient) meurt à la
+        // fin de ce bloc : la boucle d'annonces peut alors s'arrêter.
+        let mut travaux = std::pin::pin!(travaux);
+        let mut cause: Option<anyhow::Error> = None;
+        while let Some(issue) = travaux.next().await {
+            if let Err(e) = issue {
+                arret.store(true, Relaxed);
+                let remplacer = match &cause {
+                    None => true,
+                    Some(c) => est_annule(c) && !est_annule(&e),
+                };
+                if remplacer {
+                    cause = Some(e);
+                }
+            }
+        }
+        fini.store(true, Relaxed);
+        cause
+    };
+    let annonces = async {
+        let (mut fait, mut termines) = (0u64, 0usize);
+        while let Some(nouvelle) = rx.recv().await {
+            let fichier = match nouvelle {
+                Nouvelle::Octets(nom, n) => {
+                    fait += n;
+                    nom
+                }
+                Nouvelle::Fini(nom, reliquat) => {
+                    fait += reliquat;
+                    termines += 1;
+                    nom
+                }
+            };
+            progress(Avancement {
+                fichier,
+                fait,
+                total,
+                termines,
+                nombre,
+            });
+        }
+        fait
+    };
+    // L'annulation de l'utilisateur, recopiée sur le drapeau des fichiers.
+    let miroir = async {
+        let Some(a) = annulation else { return };
+        while !fini.load(Relaxed) {
+            if a.load(Relaxed) {
+                arret.store(true, Relaxed);
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    let (cause, fait, ()) = tokio::join!(consommer, annonces, miroir);
+    match cause {
+        Some(e) => Err(e),
+        None => Ok(fait),
+    }
+}
+
 fn verifier(annulation: Option<&Annulation>) -> Result<()> {
     if annulation.is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed)) {
         anyhow::bail!(ANNULE);
@@ -523,9 +705,20 @@ impl Reprise {
     fn lire(chemin: &Path) -> Option<Self> {
         serde_json::from_slice(&std::fs::read(chemin).ok()?).ok()
     }
+    /// Écrit la carte. Un échec n'arrête pas le transfert (il n'y perd rien
+    /// grâce à `vaut_pour` et à `part_assez_long`), mais n'est plus avalé :
+    /// audit du 12 septembre 2026 (C-SIL-13), la relance repartait de zéro sans
+    /// que rien ne dise pourquoi. Le journal le dit.
     fn ecrire(&self, chemin: &Path) {
-        if let Ok(json) = serde_json::to_vec(self) {
-            let _ = crate::ecrire_atomiquement(chemin, &json);
+        let ecrit = serde_json::to_vec(self)
+            .map_err(anyhow::Error::from)
+            .and_then(|json| crate::ecrire_atomiquement(chemin, &json));
+        if let Err(e) = ecrit {
+            tracing::warn!(
+                "Carte de reprise {} non écrite : {e:#}. Une relance repartira de zéro \
+                 pour ce fichier.",
+                chemin.display()
+            );
         }
     }
     /// Cette carte vaut-elle pour un fichier de cette taille et de cette date ?
@@ -644,55 +837,46 @@ impl SftpHandle {
         remote_dir: &str,
         local: &Path,
         annulation: Option<&Annulation>,
-        mut progress: impl FnMut(Avancement),
+        progress: impl FnMut(Avancement),
     ) -> Result<u64> {
         let entrees = self.parcourir(remote_dir).await?;
         let total: u64 = entrees.iter().map(|e| e.taille).sum();
-        let nombre = entrees.iter().filter(|e| !e.dossier).count();
         tokio::fs::create_dir_all(local)
             .await
             .with_context(|| format!("Création de {}", local.display()))?;
-        let mut fait = 0u64;
-        let mut termines = 0usize;
-        for e in &entrees {
+        // Les dossiers d'abord, dans l'ordre du parcours (chacun avant ce qu'il
+        // contient) ; les fichiers ensuite, plusieurs à la fois (C-perf-3 b).
+        for e in entrees.iter().filter(|e| e.dossier) {
             verifier(annulation)?;
             let cible = local.join(e.chemin.replace('/', std::path::MAIN_SEPARATOR_STR));
-            if e.dossier {
-                tokio::fs::create_dir_all(&cible)
-                    .await
-                    .with_context(|| format!("Création de {}", cible.display()))?;
-                continue;
-            }
-            let base = fait;
-            let nom = e.chemin.clone();
-            let n = self
-                .download_reprise(
-                    &joindre(remote_dir, &e.chemin),
-                    &cible,
-                    annulation,
-                    |f, _| {
-                        progress(Avancement {
-                            fichier: nom.clone(),
-                            fait: base + f,
-                            total,
-                            termines,
-                            nombre,
-                        });
-                    },
-                )
+            tokio::fs::create_dir_all(&cible)
                 .await
-                .with_context(|| e.chemin.clone())?;
-            fait += n;
-            termines += 1;
-            progress(Avancement {
-                fichier: e.chemin.clone(),
-                fait,
-                total,
-                termines,
-                nombre,
-            });
+                .with_context(|| format!("Création de {}", cible.display()))?;
         }
-        Ok(fait)
+        let fichiers: Vec<&EntreeDistante> = entrees.iter().filter(|e| !e.dossier).collect();
+        en_vol(
+            fichiers,
+            total,
+            annulation,
+            progress,
+            move |e, arret, tx| async move {
+                verifier(Some(&arret))?;
+                let cible = local.join(e.chemin.replace('/', std::path::MAIN_SEPARATOR_STR));
+                let suivi = Rapporteur::nouveau(e.chemin.clone(), tx);
+                let n = self
+                    .download_reprise(
+                        &joindre(remote_dir, &e.chemin),
+                        &cible,
+                        Some(&arret),
+                        |f, _| suivi.avance(f),
+                    )
+                    .await
+                    .map_err(|err| avec_le_fichier(err, &e.chemin))?;
+                suivi.fini(n);
+                Ok(n)
+            },
+        )
+        .await
     }
 
     /// Téléverse un dossier local entier sous `remote_dir` (créé), fichier par
@@ -702,7 +886,7 @@ impl SftpHandle {
         local: &Path,
         remote_dir: &str,
         annulation: Option<&Annulation>,
-        mut progress: impl FnMut(Avancement),
+        progress: impl FnMut(Avancement),
     ) -> Result<u64> {
         // Parcours local : dossiers d'abord, fichiers ensuite, chemins relatifs.
         let mut dossiers: Vec<PathBuf> = vec![PathBuf::new()];
@@ -732,7 +916,6 @@ impl SftpHandle {
         dossiers.sort();
         fichiers.sort();
         let total: u64 = fichiers.iter().map(|(_, t)| *t).sum();
-        let nombre = fichiers.len();
         for d in &dossiers {
             verifier(annulation)?;
             let chemin = joindre(remote_dir, &rel_texte(d));
@@ -741,42 +924,35 @@ impl SftpHandle {
                 self.mkdir(&chemin).await?;
             }
         }
-        let mut fait = 0u64;
-        for (termines, (rel, _)) in fichiers.iter().enumerate() {
-            verifier(annulation)?;
-            let nom = rel_texte(rel);
-            let base = fait;
-            let nom_prog = nom.clone();
-            let n = self
-                .upload_reprise(
-                    &local.join(rel),
-                    &joindre(remote_dir, &nom),
-                    // Fusion volontaire : un fichier déjà présent est remplacé,
-                    // comme une resynchronisation de dossier l'attend.
-                    false,
-                    annulation,
-                    |f, _| {
-                        progress(Avancement {
-                            fichier: nom_prog.clone(),
-                            fait: base + f,
-                            total,
-                            termines,
-                            nombre,
-                        });
-                    },
-                )
-                .await
-                .with_context(|| nom.clone())?;
-            fait += n;
-            progress(Avancement {
-                fichier: nom,
-                fait,
-                total,
-                termines: termines + 1,
-                nombre,
-            });
-        }
-        Ok(fait)
+        // Les dossiers sont créés ci-dessus, dans l'ordre ; les fichiers
+        // partent plusieurs à la fois (C-perf-3 b).
+        en_vol(
+            fichiers.iter().collect(),
+            total,
+            annulation,
+            progress,
+            move |(rel, _): &(PathBuf, u64), arret, tx| async move {
+                verifier(Some(&arret))?;
+                let nom = rel_texte(rel);
+                let suivi = Rapporteur::nouveau(nom.clone(), tx);
+                let n = self
+                    .upload_reprise(
+                        &local.join(rel),
+                        &joindre(remote_dir, &nom),
+                        // Fusion volontaire : un fichier déjà présent est
+                        // remplacé, comme une resynchronisation de dossier
+                        // l'attend.
+                        false,
+                        Some(&arret),
+                        |f, _| suivi.avance(f),
+                    )
+                    .await
+                    .map_err(|err| avec_le_fichier(err, &nom))?;
+                suivi.fini(n);
+                Ok(n)
+            },
+        )
+        .await
     }
 
     /// Téléchargement d'un fichier, annulable et repris là où il s'était
@@ -797,7 +973,10 @@ impl SftpHandle {
         let mtime = meta.as_ref().and_then(|m| m.mtime).map(u64::from);
         if total <= (2 * CHUNK) as u64 {
             verifier(annulation)?;
-            return self.download_with(remote, local, progress).await;
+            // La taille lue ci-dessus sert telle quelle (C-perf-3 a).
+            return self
+                .telecharger_connu(remote, local, total, annulation, progress)
+                .await;
         }
         let partiel = chemin_partiel(local);
         let carte = chemin_reprise(&partiel);
@@ -1309,60 +1488,51 @@ impl SftpHandle {
         cible: &SftpHandle,
         remote_cible: &str,
         annulation: Option<&Annulation>,
-        mut progress: impl FnMut(Avancement),
+        progress: impl FnMut(Avancement),
     ) -> Result<u64> {
         let entrees = self.parcourir(remote_dir).await?;
         let total: u64 = entrees.iter().map(|e| e.taille).sum();
-        let nombre = entrees.iter().filter(|e| !e.dossier).count();
         if cible.sftp.metadata(remote_cible).await.is_err() {
             cible.mkdir(remote_cible).await?;
         }
-        let mut fait = 0u64;
-        let mut termines = 0usize;
-        for e in &entrees {
+        // Les dossiers d'abord, dans l'ordre ; les fichiers ensuite, plusieurs
+        // à la fois (C-perf-3 b).
+        for e in entrees.iter().filter(|e| e.dossier) {
             verifier(annulation)?;
             let chez_cible = joindre(remote_cible, &e.chemin);
-            if e.dossier {
-                if cible.sftp.metadata(&chez_cible).await.is_err() {
-                    cible.mkdir(&chez_cible).await?;
-                }
-                continue;
+            if cible.sftp.metadata(&chez_cible).await.is_err() {
+                cible.mkdir(&chez_cible).await?;
             }
-            let base = fait;
-            let nom = e.chemin.clone();
-            let n = self
-                .relayer_vers(
-                    &joindre(remote_dir, &e.chemin),
-                    cible,
-                    &chez_cible,
-                    // Fusion volontaire dans l'arborescence cible déjà là ; le
-                    // fichier homologue déjà présent n'est remplacé qu'une fois
-                    // sa relève complète (partiel promu), jamais avant.
-                    false,
-                    annulation,
-                    |f, _| {
-                        progress(Avancement {
-                            fichier: nom.clone(),
-                            fait: base + f,
-                            total,
-                            termines,
-                            nombre,
-                        });
-                    },
-                )
-                .await
-                .with_context(|| e.chemin.clone())?;
-            fait += n;
-            termines += 1;
-            progress(Avancement {
-                fichier: e.chemin.clone(),
-                fait,
-                total,
-                termines,
-                nombre,
-            });
         }
-        Ok(fait)
+        let fichiers: Vec<&EntreeDistante> = entrees.iter().filter(|e| !e.dossier).collect();
+        en_vol(
+            fichiers,
+            total,
+            annulation,
+            progress,
+            move |e, arret, tx| async move {
+                verifier(Some(&arret))?;
+                let suivi = Rapporteur::nouveau(e.chemin.clone(), tx);
+                let n = self
+                    .relayer_vers(
+                        &joindre(remote_dir, &e.chemin),
+                        cible,
+                        &joindre(remote_cible, &e.chemin),
+                        // Fusion volontaire dans l'arborescence cible déjà là ;
+                        // le fichier homologue déjà présent n'est remplacé
+                        // qu'une fois sa relève complète (partiel promu),
+                        // jamais avant.
+                        false,
+                        Some(&arret),
+                        |f, _| suivi.avance(f),
+                    )
+                    .await
+                    .map_err(|err| avec_le_fichier(err, &e.chemin))?;
+                suivi.fini(n);
+                Ok(n)
+            },
+        )
+        .await
     }
 }
 
@@ -1457,6 +1627,26 @@ pub fn default_local_dir() -> PathBuf {
 #[cfg(test)]
 mod tests_bandes {
     use super::{bandes, joindre, rel_texte, Reprise, CHUNK};
+
+    /// Audit du 12 septembre 2026 (C-SIL-13) : une carte de reprise qui ne
+    /// s'écrit pas (répertoire devenu fichier, disque plein) était avalée ;
+    /// le journal la nomme désormais.
+    #[test]
+    fn une_carte_de_reprise_non_ecrite_est_signalee_au_journal() {
+        let dir = std::env::temp_dir().join(format!("avash-carte-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("fichier"), b"x").unwrap();
+        // Le parent de la carte est un fichier : impossible d'y écrire.
+        let carte = dir.join("fichier").join("x.part.reprise");
+        let ((), journal) =
+            crate::testutil::avertissements_pendant(|| Reprise::default().ecrire(&carte));
+        assert!(
+            journal.iter().any(|l| l.contains("x.part.reprise")),
+            "le journal nomme la carte : {journal:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Les bandes couvrent exactement le fichier, sans trou ni recouvrement,
     /// et il n'y en a jamais plus de huit.

@@ -77,6 +77,10 @@ function boutons(): { toggle: HTMLButtonElement; edit: HTMLButtonElement; del: H
   };
 }
 
+function boutonAnnuler(): HTMLButtonElement {
+  return document.querySelector('#tunnel-list .tunnel-row [data-act="annuler"]') as HTMLButtonElement;
+}
+
 beforeAll(async () => {
   shimsNavigateur();
   document.body.innerHTML = corpsIndex();
@@ -108,21 +112,25 @@ describe("renderTunnels : geler la ligne d'un tunnel en cours de démarrage", ()
     expect(del.disabled).toBe(false);
   });
 
-  it("busy contenant l'id désactive toggle, Modifier ET Supprimer", () => {
+  // Audit du 12 septembre 2026 (C-SIL-5) : « Démarrer » devenait « … »
+  // désactivé, sans aucune issue face à un hôte muet. Il devient « Annuler »,
+  // actif ; Modifier et Supprimer restent gelés pour la raison ci-dessus.
+  it("busy contenant l'id désactive Modifier ET Supprimer et remplace Démarrer par « Annuler », actif", () => {
     tunnels.busy.add("t1");
     renderTunnels();
     const { toggle, edit, del } = boutons();
-    expect(toggle.disabled).toBe(true);
+    expect(toggle).toBeNull();
+    expect(boutonAnnuler().disabled).toBe(false);
     expect(edit.disabled).toBe(true);
     expect(del.disabled).toBe(true);
   });
 
-  it("un redessin (timer à 1,5 s) ne réactive pas les boutons tant que busy tient l'id", () => {
+  it("un redessin (timer à 1,5 s) ne réactive pas Modifier ni Supprimer tant que busy tient l'id", () => {
     tunnels.busy.add("t1");
     renderTunnels();
     renderTunnels();
-    const { toggle, edit, del } = boutons();
-    expect(toggle.disabled).toBe(true);
+    const { edit, del } = boutons();
+    expect(boutonAnnuler().disabled).toBe(false);
     expect(edit.disabled).toBe(true);
     expect(del.disabled).toBe(true);
   });
@@ -148,5 +156,19 @@ describe("renderTunnels : le focus survit à un redessin", () => {
     const actif = document.activeElement as HTMLElement;
     expect(actif.closest<HTMLElement>("[data-id]")?.dataset.id).toBe("t2");
     expect(actif.dataset.act).toBe("edit");
+  });
+
+  // Audit du 12 septembre 2026 (C-SIL-5) : « Annuler » prend la place de
+  // « Démarrer » pendant l'ouverture. Celui qui vient de valider « Démarrer » au
+  // clavier doit pouvoir annuler aussitôt, sans chercher le bouton.
+  it("le focus passe de « Démarrer » à « Annuler » quand l'ouverture commence, et revient", () => {
+    renderTunnels();
+    document.querySelector<HTMLButtonElement>('#tunnel-list [data-id="t1"] [data-act="toggle"]')!.focus();
+    tunnels.busy.add("t1");
+    renderTunnels();
+    expect(document.activeElement).toBe(boutonAnnuler());
+    tunnels.busy.delete("t1");
+    renderTunnels();
+    expect((document.activeElement as HTMLElement).dataset.act).toBe("toggle");
   });
 });

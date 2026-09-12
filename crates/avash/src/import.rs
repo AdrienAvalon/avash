@@ -329,6 +329,9 @@ mod page_de_code {
             return String::new();
         }
         // Premier appel : longueur nécessaire en unités UTF-16.
+        // SAFETY: octets est une tranche valide de n octets (n vérifié non nul
+        // et représentable en i32 juste au-dessus) ; avec un tampon NULL et une
+        // capacité 0, l'API ne fait que compter et n'écrit rien.
         let besoin =
             unsafe { MultiByteToWideChar(page, 0, octets.as_ptr(), n, std::ptr::null_mut(), 0) };
         let Ok(besoin) = usize::try_from(besoin) else {
@@ -341,6 +344,10 @@ mod page_de_code {
         let Ok(cap) = i32::try_from(besoin) else {
             return String::from_utf8_lossy(octets).into_owned();
         };
+        // SAFETY: même entrée et mêmes drapeaux que l'appel de comptage, donc
+        // même besoin ; tampon contient exactement cap == besoin unités u16
+        // initialisées, et l'API n'écrit jamais au-delà de cap (d'où la
+        // troncature à `ecrits`, toujours <= cap).
         let ecrits =
             unsafe { MultiByteToWideChar(page, 0, octets.as_ptr(), n, tampon.as_mut_ptr(), cap) };
         match usize::try_from(ecrits) {

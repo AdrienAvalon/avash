@@ -15,6 +15,7 @@
 //! chemin désigné ; un envoi n'accepte ensuite que ce qui a été retenu. Un
 //! script qui invente un chemin n'a jamais été vu le désigner : refus.
 
+use avash::Verrou as _;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -30,7 +31,7 @@ pub struct ChoixLocaux {
 impl ChoixLocaux {
     /// Retient des chemins désignés par l'utilisateur.
     pub fn retenir(&self, chemins: impl IntoIterator<Item = PathBuf>) {
-        self.inner.lock().unwrap().extend(chemins);
+        self.inner.verrou().extend(chemins);
     }
 
     /// Ce chemin a-t-il été désigné, tel quel, par l'utilisateur ? L'égalité
@@ -38,7 +39,7 @@ impl ChoixLocaux {
     /// absolus et canoniques, que le front repasse sans les toucher.
     #[must_use]
     pub fn designe(&self, chemin: &Path) -> bool {
-        self.inner.lock().unwrap().contains(chemin)
+        self.inner.verrou().contains(chemin)
     }
 }
 

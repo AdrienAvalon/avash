@@ -3,10 +3,12 @@
 use super::{find_host, Target};
 use avash::ssh::AvashSession;
 use avash::tunnel::{Tunnel, TunnelDef, TunnelKind, TunnelSnapshot};
+use avash::Verrou as _;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// Tunnels ouverts, par identifiant de definition. Independants des onglets.
+#[derive(Default)]
 pub struct TunnelStore {
     pub inner: Mutex<HashMap<String, Tunnel>>,
     /// Tunnels dont l'ouverture est en cours, et ceux qu'on a arrêtés pendant.
@@ -40,14 +42,14 @@ pub(crate) fn parse_kind(kind: &str) -> Result<TunnelKind, String> {
 }
 
 /// Definitions enregistrees, tous hotes confondus.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn tunnel_defs() -> Result<Vec<TunnelDef>, String> {
     avash::tunnel::load_defs().map_err(|e| e.to_string())
 }
 
 /// Cree (`id` absent) ou modifie une definition.
 #[allow(clippy::too_many_arguments)]
-#[tauri::command]
+#[tauri::command(async)]
 pub fn tunnel_def_save(
     id: Option<String>,
     alias: String,
@@ -83,7 +85,7 @@ pub async fn tunnel_def_delete(
     tunnels: tauri::State<'_, TunnelStore>,
     id: String,
 ) -> Result<(), String> {
-    let running = tunnels.inner.lock().unwrap().remove(&id);
+    let running = tunnels.inner.verrou().remove(&id);
     if let Some(t) = running {
         t.close().await;
     }
@@ -95,24 +97,34 @@ pub async fn tunnel_def_delete(
 /// marqueur `PASSWORD_REQUIRED` dans l'erreur invite l'interface a le
 /// demander puis a reessayer.
 #[tauri::command]
-pub async fn tunnel_start(
+pub async fn tunnel_start<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     tunnels: tauri::State<'_, TunnelStore>,
     id: String,
     password: Option<String>,
 ) -> Result<TunnelStatus, String> {
-    let def = avash::tunnel::load_defs()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|d| d.id == id)
-        .ok_or_else(|| format!("Tunnel inconnu : {id}"))?;
-    let mut target = Target::from_alias(&def.alias)?;
+    // Définitions (disque) et cible (trousseau) hors des fils du runtime.
+    let cherche = id.clone();
+    let (def, mut target, panne) = super::bloquant(move || {
+        let def = avash::tunnel::load_defs()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|d| d.id == cherche)
+            .ok_or_else(|| format!("Tunnel inconnu : {cherche}"))?;
+        let (target, panne) = Target::depuis_alias(&def.alias)?;
+        Ok((def, target, panne))
+    })
+    .await?;
+    if let Some(m) = panne {
+        super::signaler_trousseau_indisponible(&app, &m);
+    }
     target.override_password(password);
     // Un tunnel deja ouvert (ou mort) sous cet id est remplace : c'est le
     // geste « relancer » de l'interface.
     let previous = {
-        let mut inner = tunnels.inner.lock().unwrap();
-        tunnels.en_cours.lock().unwrap().insert(id.clone());
-        tunnels.annules.lock().unwrap().remove(&id);
+        let mut inner = tunnels.inner.verrou();
+        tunnels.en_cours.verrou().insert(id.clone());
+        tunnels.annules.verrou().remove(&id);
         inner.remove(&id)
     };
     if let Some(t) = previous {
@@ -133,9 +145,9 @@ pub async fn tunnel_start(
     // plutôt que de l'installer contre la volonté de l'utilisateur. Et un
     // évincé — deux « relancer » simultanés — est fermé, pas seulement lâché.
     let evince = {
-        let mut inner = tunnels.inner.lock().unwrap();
-        tunnels.en_cours.lock().unwrap().remove(&id);
-        if tunnels.annules.lock().unwrap().remove(&id) {
+        let mut inner = tunnels.inner.verrou();
+        tunnels.en_cours.verrou().remove(&id);
+        if tunnels.annules.verrou().remove(&id) {
             Some(tunnel) // arrêté entre-temps : à fermer, pas à installer
         } else {
             inner.insert(id.clone(), tunnel)
@@ -143,7 +155,7 @@ pub async fn tunnel_start(
     };
     if let Some(t) = evince {
         t.close().await;
-        if !tunnels.inner.lock().unwrap().contains_key(&id) {
+        if !tunnels.inner.verrou().contains_key(&id) {
             return Err("Tunnel arrêté pendant l'ouverture.".to_owned());
         }
     }
@@ -153,13 +165,13 @@ pub async fn tunnel_start(
 #[tauri::command]
 pub async fn tunnel_stop(tunnels: tauri::State<'_, TunnelStore>, id: String) -> Result<(), String> {
     let t = {
-        let mut inner = tunnels.inner.lock().unwrap();
+        let mut inner = tunnels.inner.verrou();
         let t = inner.remove(&id);
         // Rien à retirer alors qu'une ouverture est en cours : on note l'arrêt
         // pour que `tunnel_start` le voie en arrivant, au lieu d'installer un
         // tunnel que l'utilisateur vient d'arrêter.
-        if t.is_none() && tunnels.en_cours.lock().unwrap().contains(&id) {
-            tunnels.annules.lock().unwrap().insert(id.clone());
+        if t.is_none() && tunnels.en_cours.verrou().contains(&id) {
+            tunnels.annules.verrou().insert(id.clone());
         }
         t
     };
@@ -176,8 +188,7 @@ pub async fn tunnel_stop(tunnels: tauri::State<'_, TunnelStore>, id: String) -> 
 pub fn tunnel_status(tunnels: tauri::State<'_, TunnelStore>) -> Vec<TunnelStatus> {
     tunnels
         .inner
-        .lock()
-        .unwrap()
+        .verrou()
         .iter()
         .map(|(id, t)| TunnelStatus {
             id: id.clone(),

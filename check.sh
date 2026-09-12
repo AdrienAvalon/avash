@@ -49,7 +49,7 @@ run() { # run <libellé> <répertoire> <commande...>
 # deja front puis sidecar avant sa section Rust : on aligne check.sh sur cet ordre.
 step "Prerequis (front dist + sidecar)"
 run "front (dist)"       "$WEB" npx vite build
-run "processus RDP"      "$SIDECAR" cargo build --release
+run "processus RDP"      "$SIDECAR" cargo build --locked --release
 cible="$ROOT/crates/avash-ui/binaries/avash-rdp-$(rustc -vV | sed -n 's/^host: //p')"
 mkdir -p "$(dirname "$cible")"
 # Sans `|| true` : un echec de copie du sidecar doit rougir ici, sinon la section
@@ -57,16 +57,20 @@ mkdir -p "$(dirname "$cible")"
 run "depot du sidecar"   "$SIDECAR" cp "target/release/avash-rdp" "$cible"
 
 # Le workspace valide les deux crates Rust d'un seul appel : dependances
-# communes compilees une fois, target partage.
+# communes compilees une fois, target partage. Toute commande cargo porte
+# --locked : un manifeste modifié sans son Cargo.lock rougit ici, au lieu d'un
+# verrou réécrit en silence que le commit oublierait (les builds --frozen de
+# l'AUR et de Flathub, puis le SBOM de la release, s'y cassaient ou mentaient ;
+# audit du 12 septembre 2026, C-chaine-4).
 step "Rust (workspace : avash + avash-ui)"
-run "compilation"        "$ROOT" cargo check --workspace --all-targets
-run "tests"              "$ROOT" cargo test --workspace --all-targets
+run "compilation"        "$ROOT" cargo check --locked --workspace --all-targets
+run "tests"              "$ROOT" cargo test --locked --workspace --all-targets
 run "format"             "$ROOT" cargo fmt --all --check
-run "clippy"             "$ROOT" cargo clippy --workspace --all-targets -- -D warnings
+run "clippy"             "$ROOT" cargo clippy --locked --workspace --all-targets -- -D warnings
 # Clippy ne compile qu'en debug : un bloc sous `cfg(debug_assertions)` peut
 # laisser une variable inutilisée en release sans que rien ne le signale — c'est
 # arrive. Ce passage-ci ne coute presque rien, le cache etant deja chaud.
-run "clippy (release)"   "$ROOT" cargo clippy --workspace --release -- -D warnings
+run "clippy (release)"   "$ROOT" cargo clippy --locked --workspace --release -- -D warnings
 
 # Le sidecar RDP est HORS du workspace (conflit de versions pre-publication
 # entre IronRDP et russh) : `--workspace` ne le voit pas. Ses tests — dont ceux
@@ -75,32 +79,32 @@ run "clippy (release)"   "$ROOT" cargo clippy --workspace --release -- -D warnin
 # contentait de le compiler. Ils passaient, mais personne ne l'aurait su s'ils
 # avaient cesse de passer.
 step "Processus RDP (hors workspace)"
-run "compilation"        "$SIDECAR" cargo check --all-targets
-run "tests"              "$SIDECAR" cargo test
+run "compilation"        "$SIDECAR" cargo check --locked --all-targets
+run "tests"              "$SIDECAR" cargo test --locked
 # Les correctifs portés (cf. rdp-sidecar/vendor/README.md) ont leurs propres
 # tests. Le script compte ceux qui s'exécutent : ces commandes ont longtemps
 # réussi sans rien lancer, les manifestes vendorisés portant « test = false ».
 run "correctifs portés"  "$SIDECAR" ./verifier-portes.sh
 run "format"             "$SIDECAR" cargo fmt --check
-run "clippy"             "$SIDECAR" cargo clippy --all-targets -- -D warnings
+run "clippy"             "$SIDECAR" cargo clippy --locked --all-targets -- -D warnings
 
 # Les serveurs de test sont eux aussi hors de l'espace de travail, et la chaîne
 # ne faisait que les compiler : les 27 tests du côté serveur RDPDR (décodeurs
 # écrits à la main, automate du scénario) ne tournaient nulle part. Même leçon
 # que le processus RDP, même remède.
 step "Serveurs de test (hors workspace)"
-run "tests serveur RDP"  "$SERVEUR_RDP" cargo test
+run "tests serveur RDP"  "$SERVEUR_RDP" cargo test --locked
 # Le paquet ironrdp-server porté avait `test = false` hérité de l'amont : ses
 # onze tests ne tournaient nulle part (10 septembre 2026), comme ceux du
 # sidecar avant le 8. Joués depuis leur répertoire, hors espace de travail.
-run "tests ironrdp-server porté" "$SERVEUR_RDP/vendor/ironrdp-server" env CARGO_TARGET_DIR="$SERVEUR_RDP/target/portes" cargo test
+run "tests ironrdp-server porté" "$SERVEUR_RDP/vendor/ironrdp-server" env CARGO_TARGET_DIR="$SERVEUR_RDP/target/portes" cargo test --locked
 run "format serveur RDP" "$SERVEUR_RDP" cargo fmt --check
-run "clippy serveur RDP" "$SERVEUR_RDP" cargo clippy --all-targets -- -D warnings
-run "tests serveur VNC"  "$SERVEUR_VNC" cargo test
+run "clippy serveur RDP" "$SERVEUR_RDP" cargo clippy --locked --all-targets -- -D warnings
+run "tests serveur VNC"  "$SERVEUR_VNC" cargo test --locked
 run "format serveur VNC" "$SERVEUR_VNC" cargo fmt --check
-run "clippy serveur VNC" "$SERVEUR_VNC" cargo clippy --all-targets -- -D warnings
+run "clippy serveur VNC" "$SERVEUR_VNC" cargo clippy --locked --all-targets -- -D warnings
 # Vulnerabilites connues des dependances. cargo-audit s'installe avec
-#   cargo install cargo-audit --locked
+#   cargo install cargo-audit --version 0.22.2 --locked
 if cargo audit --version >/dev/null 2>&1; then
   # On echoue sur les vulnerabilites, pas sur les avertissements
   # « unmaintained » : ils viennent tous de la pile GTK que Tauri embarque,
@@ -111,8 +115,10 @@ if cargo audit --version >/dev/null 2>&1; then
   # Le sidecar RDP est hors du workspace (conflit de versions pre-publication
   # entre IronRDP et russh) mais il est COMPILE ET LIVRE : son Cargo.lock doit
   # etre audite lui aussi, sans quoi ses dependances ne sont jamais regardees.
-  # Lance depuis $ROOT, il lit le meme .cargo/audit.toml.
-  run "audit sidecar RDP"  "$ROOT" cargo audit --deny unsound --file rdp-sidecar/Cargo.lock
+  # Lancé depuis son dossier, il lit sa propre liste (rdp-sidecar/.cargo/
+  # audit.toml) : lancé d'ici avec --file, il passait sous celle de l'espace de
+  # travail, et le verdict dépendait du répertoire (audit du 12 septembre 2026).
+  run "audit sidecar RDP"  "$SIDECAR" cargo audit --deny unsound
 else
   printf '  \033[33m~\033[0m %s\n' "audit securite (cargo-audit absent)"
 fi
@@ -121,10 +127,10 @@ fi
 # autres portes, qu'aucun outil ne surveillait : une licence inattendue arrivant
 # par une dependance transitive, une dependance en joker qui rend la
 # construction imprevisible, et une source hors du registre officiel.
-#   cargo install cargo-deny --locked
+#   cargo install cargo-deny --version 0.20.2 --locked
 if cargo deny --version >/dev/null 2>&1; then
-  run "licences et sources"  "$ROOT"    cargo deny check advisories licenses bans sources
-  run "licences (RDP)"       "$SIDECAR" cargo deny check advisories licenses bans sources
+  run "licences et sources"  "$ROOT"    cargo deny --locked check advisories licenses bans sources
+  run "licences (RDP)"       "$SIDECAR" cargo deny --locked check advisories licenses bans sources
 else
   printf '  \033[33m~\033[0m %s\n' "licences et sources (cargo-deny absent)"
 fi
@@ -235,6 +241,36 @@ if python3 -c "import yaml" >/dev/null 2>&1; then
   # deux prerequis soient fabriques AVANT le premier `cargo … --workspace` (comme
   # ci.yml) et que le depot du sidecar ne soit pas silence par `|| true`.
   run "check.sh : prerequis avant la section Rust" "$ROOT" ./scripts/tests/check-prerequis-avant-rust.sh
+  # Audit du 12 septembre 2026, chaîne de publication. La clé privée de la mise
+  # à jour automatique était dans l'environnement de `cargo tauri build` (vite,
+  # build.rs, macros procédurales) : une dépendance compromise la lisait et
+  # signait pour tout le parc installé. Elle ne sert plus que dans le job
+  # `signer`, qui ne compile ni n'installe rien, et release.sh signe après
+  # construction (C-chaine-1).
+  run "release : clé de signature hors du build" "$ROOT" ./scripts/tests/release-cle-signature-hors-build.sh
+  # Aucun humain n'approuvait avant que la clé serve et que `publier` réécrive
+  # latest.json : les jobs passent par l'environnement `release` (C-chaine-3).
+  run "release : environnement protégé" "$ROOT" ./scripts/tests/release-environnement-protege.sh
+  # `--version "^2"` : tauri-cli, qui assemble et signait les bundles, prenait
+  # la dernière version publiée au moment du run ; les autres outils aussi, et
+  # Dependabot ne voit pas ces lignes (C-chaine-5).
+  run "CI : outils en version exacte et cohérente" "$ROOT" ./scripts/tests/ci-outils-epingles.sh
+  # Mentionner @claude suffisait à démarrer le job, pour n'importe qui ; la
+  # revue démarrait sur les PR de fork, sans accès au secret (C-chaine-6).
+  run "Claude : auteurs du dépôt seulement" "$ROOT" ./scripts/tests/claude-workflows-auteur-autorise.sh
+  # Le GITHUB_TOKEN restait dans .git/config, lisible des actions tierces du
+  # job qui peut réécrire la release (C-chaine-7).
+  run "CI : checkouts sans jeton persistant" "$ROOT" ./scripts/tests/checkout-sans-jeton-persistant.sh
+  # Un verrou npm que rien n'installait ni n'auditait dans crates/avash-ui ;
+  # son package.json reste, simple marqueur du dossier front de tauri-cli
+  # (C-chaine-8).
+  run "Dependabot : chaque verrou surveillé ou exclu" "$ROOT" ./scripts/tests/dependabot-couvre-tous-les-verrous.sh
+  # L'empreinte du manifeste winget venait d'un SHA256SUMS ni signé ni attesté
+  # (C-chaine-10).
+  run "winget : provenance vérifiée avant l'empreinte" "$ROOT" ./scripts/tests/winget-manifeste-verifie-la-provenance.sh
+  # Le binaire gitleaks téléchargé par l'action suivait une valeur codée dans
+  # l'action, invisible ici (C-chaine-13).
+  run "gitleaks : version du binaire fixée" "$ROOT" ./scripts/tests/gitleaks-binaire-epingle.sh
 fi
 # Le hook de pré-commit vérifie l'arbre de travail : avec un ajout partiel
 # (git add -p, ou un fichier modifié après git add) l'index diverge de l'arbre,
@@ -402,6 +438,31 @@ run "docs : qualité, sous-comptes des serveurs de test" "$ROOT" ./scripts/tests
 # n'accepte rien d'inconnu de cette liste ni ne s'en écarte sans l'écrire (les
 # deux outils ne rencontrent pas les mêmes avis, audit du 9 septembre 2026).
 run "audit : avis cargo-audit centralisés (.cargo/audit.toml)" "$ROOT" ./scripts/tests/audit-config-centralise.sh
+# Aucune des 66 commandes cargo de build, test ou clippy ne portait --locked :
+# cargo réécrivait Cargo.lock sur l'exécuteur pendant que le SBOM attesté
+# décrivait le verrou commité (audit du 12 septembre 2026, C-chaine-4).
+run "CI : commandes cargo en --locked" "$ROOT" ./scripts/tests/ci-cargo-locked.sh
+# L'archive de mise à jour macOS n'est plus fabriquée par tauri-cli (build sans
+# clé) : le script qui la remplace doit rendre la structure que le greffon
+# updater installe (C-chaine-1).
+run "release : archive de mise à jour macOS conforme" "$ROOT" ./scripts/tests/release-archive-macos-structure.sh
+# flatpak-builder-tools était cloné sur sa branche principale et sa sortie
+# commitée sans contrôle : commit épinglé, sources confrontées aux verrous
+# (C-chaine-9).
+run "flathub : sources conformes aux verrous" "$ROOT" ./scripts/tests/flathub-sources-coherentes-avec-les-verrous.sh
+# Un avis dont le titre contenait « ECONNRESET » passait pour une panne du
+# registre, et la suite bout en bout le tolérait (C-chaine-11).
+run "npm audit : un avis n'est jamais une panne" "$ROOT" ./scripts/tests/npm-audit-avis-non-confondu-avec-panne.sh
+# Audit du 12 septembre 2026, voie interface. Une commande Tauri synchrone
+# s'exécute sur le fil principal : pendant que KWallet attendait son mot de
+# passe, la fenêtre ne se repeignait plus (C-SIL-7, C-perf-2, C-perf-10).
+run "IPC : trousseau hors du fil principal" "$ROOT" ./scripts/tests/commandes-trousseau-hors-fil-principal.sh
+# base-uri et form-action n'étaient pas posées, connect-src admettait tout
+# service WebSocket de localhost (FS-5, C-ipc-4).
+run "CSP : directives fermées" "$ROOT" ./scripts/tests/csp-directives-fermees.sh
+# Les permissions de la webview dépassaient ce que le front appelle (devtools,
+# messages natifs, sortie de l'application) (FS-6, C-ipc-5).
+run "capacités : permissions utilisées par le front" "$ROOT" ./scripts/tests/permissions-utilisees-par-le-front.sh
 # deny.toml (racine) prétendait que rsa n'était pas employé pour du RSA privé,
 # alors qu'avash signe le défi SSH avec la clé id_rsa de l'utilisateur ; et
 # rdp-sidecar/deny.toml recopiait ce texte en nommant russh, absent de l'arbre
@@ -470,7 +531,7 @@ if [ "$QUICK" != "--quick" ]; then
   step "Build release"
   # Le sidecar (externalBin) et web/dist (frontendDist) sont deja en place depuis
   # « Prerequis » : le build release final d'avash-ui n'a plus qu'a les embarquer.
-  run "binaire Tauri"    "$ROOT" cargo build --release -p avash-ui
+  run "binaire Tauri"    "$ROOT" cargo build --locked --release -p avash-ui
 fi
 
 printf '\n\033[2mdurée totale : %d min %02d s\033[0m\n' $((SECONDS / 60)) $((SECONDS % 60))

@@ -1,4 +1,4 @@
-use super::ecrire_atomiquement;
+use super::{ecrire_atomiquement, ecrire_atomiquement_tire, nom_temporaire};
 use crate::testutil::temp_home;
 
 /// Le contenu doit être intégralement lisible, et le fichier ne doit jamais
@@ -148,4 +148,37 @@ fn un_renommage_impossible_ne_laisse_pas_de_temporaire() {
         restants.iter().all(|n| !n.contains(".tmp")),
         "temporaire orphelin : {restants:?}"
     );
+}
+
+/// Audit du 12 septembre 2026 (C-fs-1) : le temporaire avait un nom
+/// prévisible et son ouverture suivait un lien symbolique déjà posé à ce nom.
+/// Un autre compte, dans un répertoire partagé, faisait ainsi écraser un
+/// fichier de la victime. Le lien d'autrui n'est ni suivi, ni écrasé, ni retiré.
+#[cfg(unix)]
+#[test]
+fn un_lien_symbolique_prepose_au_nom_du_temporaire_n_est_ni_suivi_ni_ecrase() {
+    let dir = std::env::temp_dir().join(format!("avash-lien-prepose-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let cible = dir.join("diagnostic.txt");
+    let temoin = dir.join("temoin");
+    std::fs::write(&temoin, "intact").unwrap();
+    let piege = nom_temporaire(&cible, 7);
+    std::os::unix::fs::symlink(&temoin, &piege).unwrap();
+    let mut tirages = [7u64, 8].into_iter();
+    ecrire_atomiquement_tire(&cible, b"contenu", &mut || tirages.next().unwrap()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&temoin).unwrap(),
+        "intact",
+        "témoin écrasé"
+    );
+    assert_eq!(std::fs::read_to_string(&cible).unwrap(), "contenu");
+    assert!(
+        std::fs::symlink_metadata(&piege)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "le lien d'autrui reste en place"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

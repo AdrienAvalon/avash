@@ -8,7 +8,8 @@
 // <details> (le bandeau #toasts et la ligne .terr), jamais #t-error.
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import indexHtml from "./index.html?raw";
-import type { TunnelDef } from "./filters";
+import type { Host, TunnelDef } from "./filters";
+import { state } from "./etat";
 
 const invoke = vi.hoisted(() => vi.fn());
 const askPassword = vi.hoisted(() => vi.fn());
@@ -162,5 +163,78 @@ describe("tunnelStart : rendre visible l'échec de démarrage", () => {
     expect(essais).toBe(3); // trois tentatives réelles, pas une quatrième jetée
     expect(askPassword).toHaveBeenCalledTimes(2); // redemandé après les 2 premiers échecs seulement
     expect(texteToasts()).toContain("Trois tentatives");
+  });
+});
+
+// Audit du 12 septembre 2026 (C-SIL-5) : pendant l'ouverture d'un tunnel, la
+// ligne montrait « … » et gelait ses trois boutons, sans aucune annulation. Face
+// à un hôte muet (pare-feu en DROP, tarpit), l'utilisateur n'avait plus qu'à
+// fermer l'application. `tunnel_stop` fonctionne pourtant pendant l'ouverture
+// (le cœur note l'arrêt et referme à l'arrivée) : la ligne propose « Annuler ».
+describe("tunnelStart : une ouverture en cours peut être annulée", () => {
+  it("la ligne en ouverture propose « Annuler », qui appelle tunnel_stop et libère la ligne", async () => {
+    let echouer: (e: Error) => void = () => {};
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "host_needs_password") return Promise.resolve(false);
+      // Hôte muet : l'ouverture ne rend la main qu'à la fin du test.
+      if (cmd === "tunnel_start") return new Promise((_, ko) => { echouer = ko; });
+      if (cmd === "tunnel_defs") return Promise.resolve(tunnels.defs);
+      if (cmd === "tunnel_status") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+
+    renderTunnels();
+    boutonToggle().click();
+    await attendre();
+
+    const annuler = document.querySelector('#tunnel-list .tunnel-row [data-act="annuler"]') as HTMLButtonElement | null;
+    expect(annuler).not.toBeNull();
+    expect(annuler!.disabled).toBe(false);
+    expect(annuler!.textContent).toContain("Annuler");
+    annuler!.click();
+    await attendre();
+
+    expect(invoke).toHaveBeenCalledWith("tunnel_stop", { id: "t1" });
+    // La ligne n'est plus gelée : « Démarrer » est de nouveau offert.
+    expect(tunnels.busy.has("t1")).toBe(false);
+    expect(boutonToggle().disabled).toBe(false);
+
+    // Le cœur finit par rendre l'échec de l'ouverture annulée : ce n'est pas une
+    // erreur à montrer, l'utilisateur a demandé l'arrêt.
+    echouer(new Error("Tunnel arrêté pendant l'ouverture."));
+    await attendre();
+    expect(texteToasts()).not.toContain("Démarrage impossible");
+    expect(tunnels.erreurs.has("t1")).toBe(false);
+    expect(tunnels.busy.has("t1")).toBe(false);
+  });
+});
+
+// Audit du 12 septembre 2026 (C-SIL-6) : l'échec de `password_save` après un
+// démarrage réussi était avalé (« facultatif »). L'utilisateur avait coché
+// « mémoriser », le trousseau refusait (Secret Service absent, portefeuille
+// verrouillé) et rien ne le disait : le mot de passe était redemandé à la
+// connexion suivante « sans raison ». Le chemin SSH et la fiche RDP le
+// signalaient déjà depuis l'audit du 7 septembre.
+describe("tunnelStart : un échec de mémorisation du mot de passe est signalé", () => {
+  it("un_echec_de_memorisation_du_mot_de_passe_du_tunnel_est_notifie", async () => {
+    state.hosts = [{ alias: "srv", hostname: "10.0.0.9", user: "root", port: 22 } as unknown as Host];
+    askPassword.mockResolvedValue({ password: "secret", remember: true });
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "host_needs_password") return Promise.resolve(true);
+      if (cmd === "tunnel_start") return Promise.resolve({ id: "t1" });
+      if (cmd === "password_save") return Promise.reject(new Error("Secret Service indisponible"));
+      if (cmd === "tunnel_defs") return Promise.resolve(tunnels.defs);
+      if (cmd === "tunnel_status") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+
+    renderTunnels();
+    boutonToggle().click();
+    await attendre();
+
+    expect(invoke).toHaveBeenCalledWith("password_save", expect.objectContaining({ addr: "10.0.0.9", password: "secret" }));
+    expect(texteToasts()).toContain("Mémorisation impossible");
+    expect(texteToasts()).toContain("Secret Service indisponible");
+    state.hosts = [];
   });
 });

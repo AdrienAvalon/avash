@@ -69,37 +69,52 @@ export const FONT_STACK =
  * arrive apres, il garde les metriques de la police de repli : colonnes
  * decalees, curseur mal place, cadres semi-graphiques disjoints. On attend
  * donc une fois, au demarrage, avant d'ouvrir le moindre terminal.
+ *
+ * Seule la graisse reguliere : l'audit du 12 septembre 2026 (C-front-8) a vu
+ * l'accueil payer, au lancement a froid, la lecture et le decodage des deux
+ * graisses (975 Ko), dont la grasse que seul le terminal emploie. Elle vient
+ * avec le premier terminal (`ensureGrasseChargee`).
  */
 let fontReady: Promise<void> | null = null;
+let grasseReady: Promise<void> | null = null;
 
 export function ensureFontLoaded(): Promise<void> {
-  if (!fontReady) {
-    fontReady = (async () => {
-      try {
-        await Promise.all([
-          document.fonts.load('400 14px "Avash Mono"'),
-          document.fonts.load('600 14px "Avash Mono"'),
-        ]);
-        await document.fonts.ready;
-      } catch {
-        // Police indisponible : on continue avec la pile de repli plutot
-        // que de bloquer l'ouverture d'un terminal.
-      }
-    })();
-  }
+  fontReady ??= (async () => {
+    try {
+      await document.fonts.load('400 14px "Avash Mono"');
+      await document.fonts.ready;
+    } catch {
+      // Police indisponible : on continue avec la pile de repli plutot
+      // que de bloquer l'ouverture d'un terminal.
+    }
+  })();
   return fontReady;
 }
 
-/** Etat agrege des sessions d'un hote, pour la pastille de la liste. */
-export function hostSessionState(alias: string): "" | "live" | "connecting" {
-  let st: "" | "live" | "connecting" = "";
+/** La graisse grasse, attendue par le premier terminal avant de s'ouvrir : le
+ *  rendu WebGL met les glyphes en cache, un gras dessine avec la police de
+ *  repli le resterait. */
+export function ensureGrasseChargee(): Promise<void> {
+  grasseReady ??= document.fonts.load('600 14px "Avash Mono"').then(
+    () => undefined,
+    () => undefined, // repli : le gras sera synthetise, le terminal s'ouvre
+  );
+  return grasseReady;
+}
+
+/** État agrégé des sessions par hôte, pour les pastilles de la liste : `live`
+ *  prime sur `connecting`, une session close ne compte pas. Calculé une fois
+ *  par passage, depuis le champ `etat` des sessions : chaque ligne relisait
+ *  auparavant les classes CSS de tous les onglets, soit 200 `querySelector`
+ *  par session à chaque rendu (audit du 12 septembre 2026, C-front-1). */
+export function etatsSessionsParHote(): Map<string, "live" | "connecting"> {
+  const etats = new Map<string, "live" | "connecting">();
   for (const s of state.sessions.values()) {
-    if (s.alias !== alias || s.closed) continue;
-    const dot = s.tab.querySelector(".state");
-    if (dot?.classList.contains("live")) return "live";
-    if (dot?.classList.contains("connecting")) st = "connecting";
+    if (s.closed || s.etat === "closed") continue;
+    if (s.etat === "live") etats.set(s.alias, "live");
+    else if (etats.get(s.alias) !== "live") etats.set(s.alias, "connecting");
   }
-  return st;
+  return etats;
 }
 
 /** Barre de filtres par tag, sous l'en-tete « Hôtes ». */

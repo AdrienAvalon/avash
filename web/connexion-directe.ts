@@ -34,7 +34,19 @@ export function manualOpen() {
 /** Les ports série du poste, proposés dans la liste du champ. */
 async function listerPortsSerie(): Promise<void> {
   const liste = $("m-serie-ports") as HTMLDataListElement;
-  const ports = await invoke<PortSerie[]>("serie_ports").catch(() => [] as PortSerie[]);
+  let ports: PortSerie[];
+  try {
+    ports = await invoke<PortSerie[]>("serie_ports");
+  } catch (e) {
+    // Audit du 12 septembre 2026 (C-SIL-12, contrat K2) : l'échec de
+    // l'énumération (droits sur /dev, libudev absent, erreur de `serialport`)
+    // était pris pour une liste vide et affiché « aucun port série » ;
+    // l'utilisateur débranchait son adaptateur pour rien. Le chemin reste
+    // saisissable à la main.
+    liste.textContent = "";
+    $("m-serie-hint").textContent = t("serie-enumeration-impossible", { e: String(e) });
+    return;
+  }
   liste.textContent = "";
   for (const p of ports) {
     const o = document.createElement("option");

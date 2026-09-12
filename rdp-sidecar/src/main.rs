@@ -7,7 +7,15 @@
 //!
 //! Messages WebSocket (binaires, auto-délimités) :
 //!   sidecar -> app : [1]=CONNECTED w:u16 h:u16 · [2]=FRAME x,y,w,h:u16 + RGBA
+//!                     · [13]=FRAMES n:u8 puis n × (x,y,w,h:u16 + RGBA)
 //!                     · [7]=STATS fps:u16 kbps:u32 lat:u16 · [8]=CLIPBOARD utf8
+//!                     · [14]=PRESSE-PAPIERS DISTANT VIDÉ (sans charge)
+//!                     · [15]/[17]/[18] fichiers du presse-papiers (JSON, voir plus bas)
+//!                     · [20]=SON (onde PCM, voir son.rs) · [21]=VOLUME
+//!                     · [23]=REPRISE (sans charge) : un tour de redirection ou
+//!                       de reprise avec le canal graphique commence après un
+//!                       premier [1] ; l'onglet repasse en « connexion » jusqu'au
+//!                       [1] suivant (audit du 12 septembre 2026, C-SIL-10)
 //!                     ([3]=ERROR est réservé et géré côté front, mais nous ne
 //!                      l'émettons pas : un échec avant connexion sort sur
 //!                      stderr, un échec en session ferme le WebSocket et le
@@ -17,13 +25,18 @@
 //!                     · [9]REFRESH · [10]LOCKS bits:u8 · [11]PAUSE pause:u8
 //!                     · [12]CLIPBOARD_AUTORISE autorise:u8
 //!                     · [14]KEYSYM keysym:u32,down (VNC seulement)
+//!                     · [22]COLLER (VNC seulement : pousse le presse-papiers mémorisé)
 //!                     · [16]RECEVOIR json {dossier?} · [19]OFFRIR json [chemins]
 //!                     (fichiers par le presse-papiers ; en retour
 //!                      [15]FICHIERS_DISTANTS, [17]FICHIERS_PROGRESSION,
 //!                      [18]FICHIERS_TERMINE, en JSON)
 //!
-//! Usage : avash-rdp --host H [--port 3389] -u USER -p PASS [--width W --height H] [--domain D] [--shot out.png] [--layout fr] [--sans-nla] [--tls-herite]
-//!         avash-rdp --vnc --host H [--port 5900] [-u USER] (mot de passe sur stdin)
+//! Usage : avash-rdp --host H [--port 3389] -u USER [--width W --height H] [--domain D] [--shot out.png] [--layout fr] [--sans-nla] [--tls-herite]
+//!         avash-rdp --vnc --host H [--port 5900] [-u USER]
+//!         Le mot de passe se lit toujours sur la première ligne de l'entrée
+//!         standard, jamais en argument (audit du 12 septembre 2026). Hors
+//!         `--shot`, la fin de l'entrée standard (le parent a disparu) met fin
+//!         au processus.
 
 // Lints stylistiques assumés pour ce petit binaire d'orchestration :
 // noms de produits en prose (doc_markdown), main() qui séquence tout le
@@ -59,7 +72,7 @@ fn ecrire_le_profil_en_continu() {
     }
     std::thread::spawn(|| loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        // SAFETY : fonction du runtime de profilage, liée dès que le binaire
+        // SAFETY: fonction du runtime de profilage, liée dès que le binaire
         // est instrumenté ; sans argument ni état partagé avec nous.
         let _ = unsafe { __llvm_profile_write_file() };
     });
@@ -131,14 +144,15 @@ async fn main() -> Result<()> {
                      part sans les avoir relues.",
                     chemin.display()
                 );
+                // Un seul descripteur, partagé sous verrou. Trouvé par l'audit du
+                // 12 septembre 2026 (C-panique-8) : la fermeture dupliquait le
+                // descripteur à CHAQUE événement et paniquait si la duplication
+                // échouait (descripteurs épuisés), tuant le processus au moment
+                // même où l'on cherchait à comprendre un défaut.
                 tracing_subscriber::fmt()
                     .with_env_filter(tracing_subscriber::EnvFilter::new(filtre))
                     .with_ansi(false)
-                    .with_writer(move || {
-                        fichier
-                            .try_clone()
-                            .expect("clonage du descripteur de trace")
-                    })
+                    .with_writer(std::sync::Mutex::new(fichier))
                     .init();
             }
             Err(e) => {
@@ -186,14 +200,29 @@ async fn main() -> Result<()> {
     // Le mot de passe consommé (première ligne), stdin porte ensuite les
     // chemins que l'utilisateur désigne, annoncés par le parent : seuls ceux-là
     // pourront être offerts au distant (voir `fichiers::Designations`). Un fil
-    // ordinaire, bloqué en lecture : ce flux ne presse jamais, et sa fin (parent
-    // disparu) ne fait que tarir les désignations.
-    std::thread::spawn(|| {
+    // ordinaire, bloqué en lecture : ce flux ne presse jamais.
+    //
+    // Sa fin veut dire que le parent a disparu, et le processus avec lui. Trouvé
+    // par l'audit du 12 septembre 2026 (C-sidecar-1) : elle ne faisait que tarir
+    // les désignations, si bien qu'une application tombée entre le lancement et
+    // la connexion de sa WebSocket laissait une session RDP authentifiée ouverte
+    // sur le serveur, sans personne. Sauf en capture d'écran (`--shot`), lancée
+    // à la main ou par un script qui ferme stdin juste après le mot de passe
+    // (scripts/conformite.sh, scripts/tracer-rdp.sh) : là, rien ne l'attend
+    // sur stdin et le délai de connexion borne déjà le processus.
+    let lie_au_parent = args.lie_au_parent();
+    std::thread::spawn(move || {
         use std::io::BufRead as _;
         for ligne in std::io::stdin().lock().lines().map_while(Result::ok) {
             if let Some(chemin) = fichiers::designation_depuis_ligne(&ligne) {
                 fichiers::DESIGNATIONS.designer(chemin);
             }
+        }
+        if lie_au_parent {
+            eprintln!(
+                "avash-rdp : entrée standard fermée, l'application a disparu : fin du processus."
+            );
+            std::process::exit(0);
         }
     });
     // VNC : même poste local, même protocole avec l'interface, un autre

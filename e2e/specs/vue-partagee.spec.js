@@ -2,7 +2,7 @@
 // côte (deux conteneurs visibles, chacun dans son volet, de largeurs voisines),
 // fermer l'un des deux onglets ramène une seule vue, et la palette propose le
 // partage quand il y a deux onglets.
-import { attendreSessionLive, doubleCliquerHote } from "./helpers.js";
+import { attendreSessionLive, confirmerFermeture, doubleCliquerHote } from "./helpers.js";
 
 const visibles = () => browser.execute(() =>
   [...document.querySelectorAll("#terminal .xterm-container")]
@@ -29,6 +29,8 @@ describe("Vue partagée — deux onglets côte à côte", () => {
 
   it("fermer un des deux onglets referme le partage", async () => {
     await browser.keys(["Control", "w"]);
+    // Une session vivante : la fermeture se confirme (audit du 12 septembre 2026).
+    await confirmerFermeture();
     await browser.waitUntil(async () => (await visibles()).length === 1, { timeout: 5000, timeoutMsg: "le partage ne s'est pas refermé" });
     expect(await browser.execute(() => document.getElementById("terminal").classList.contains("partage"))).toBe(false);
     expect((await $$(".tab")).length).toBe(1);

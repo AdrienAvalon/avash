@@ -16,6 +16,10 @@
 //! Elle télécharge deux fois : par bandes (le chemin de production) puis
 //! séquentiellement (une lecture après l'autre), compare les octets et donne
 //! les deux débits.
+
+// Programme d'essai lancé à la main : un décor qui échoue doit s'arrêter net,
+// d'où les `unwrap` et `expect`, que le lint `unwrap_used` signalerait.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::time::Instant;
 use tokio::io::AsyncReadExt as _;
 
@@ -33,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         avash::ssh::ClientAuth {
             user,
             key_path: None,
-            password: Some(password),
+            password: Some(password.into()),
         }
     } else {
         avash::ssh::ClientAuth {

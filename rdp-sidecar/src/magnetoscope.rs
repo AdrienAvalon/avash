@@ -46,6 +46,7 @@
 //! Tout en petit-boutien. `message` vaut `0xFFFF` quand aucun canal de message
 //! n'a été négocié — un identifiant MCS valide ne prend jamais cette valeur.
 
+use crate::verrou::Verrou as _;
 use anyhow::{Context as _, Result};
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::pdu::Action;
@@ -356,7 +357,7 @@ pub fn rejouer_jusqu_a(
                         r.rectangles += 1;
                     }
                 }
-                let sortie = std::mem::take(&mut *file.lock().unwrap());
+                let sortie = std::mem::take(&mut *file.verrou());
                 // Un redimensionnement (ResetGraphics) : même geste que la
                 // session vivante, l'image repart à la nouvelle taille. Sans
                 // cela, un enregistrement pris pendant qu'on agrandit la

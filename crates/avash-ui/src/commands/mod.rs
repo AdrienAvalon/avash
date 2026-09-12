@@ -22,6 +22,8 @@ mod tunnels;
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod tests_reseau;
 
 pub use choix_locaux::*;
 pub use cles::*;

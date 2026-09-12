@@ -1,7 +1,11 @@
 //! Avash — parseur ~/.ssh/config v0.1, avec serialisation pour le front.
 
-#[cfg(test)]
-pub(crate) mod testutil;
+// Aides de test : pour les tests du crate (`cfg(test)`), et pour ceux
+// d'`avash-ui` par la fonctionnalité `outils-de-test`, que seules les
+// `[dev-dependencies]` posent. Caché de la documentation : ce n'est pas une API.
+#[cfg(any(test, feature = "outils-de-test"))]
+#[doc(hidden)]
+pub mod testutil;
 
 pub mod enregistrement;
 pub mod folders;
@@ -42,12 +46,57 @@ pub fn ssh_config_path() -> std::path::PathBuf {
         .join(".ssh/config")
 }
 
-pub fn parse_ssh_config() -> anyhow::Result<Vec<SshHost>> {
+/// Prend un verrou même empoisonné.
+///
+/// Contrat K15 de l'audit du 12 septembre 2026 (C-panique-4) : aucune section
+/// critique du code ne laisse ses données à moitié modifiées, et une panique
+/// survenue ailleurs sous un verrou ne doit pas condamner toutes les commandes
+/// qui le prennent ensuite (`.lock().unwrap()` paniquait à son tour, une panne
+/// locale devenait une panne de tout le magasin de sessions). Réexporté pour
+/// l'interface, qui s'en sert partout où elle prenait `lock().unwrap()`.
+pub trait Verrou<T: ?Sized> {
+    /// Le garde du verrou, empoisonné ou non.
+    fn verrou(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T: ?Sized> Verrou<T> for std::sync::Mutex<T> {
+    fn verrou(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Le contenu de `~/.ssh/config`, `Include` résolus, lu une fois.
+///
+/// Contrat K3 de l'audit du 12 septembre 2026 (C-perf-5) : les appelants qui
+/// résolvent plusieurs hôtes (sonde de santé, rebonds, secret encore utilisé)
+/// lisent ce contenu une fois puis appellent [`resoudre_hote_dans`], au lieu de
+/// relire et réanalyser le fichier et ses inclus une fois par hôte.
+///
+/// Contrat K5 (C-SIL-4) : un fichier absent est une configuration vide (le
+/// poste neuf), un fichier présent mais illisible est une erreur, pour que
+/// l'interface ne dise pas « aucun hôte » d'une configuration qu'elle n'a pas
+/// pu lire.
+pub fn configuration_resolue() -> anyhow::Result<String> {
     let path = ssh_config_path();
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| anyhow::anyhow!("Impossible de lire {}: {e}", path.display()))?;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Impossible de lire {} : {e}",
+                path.display()
+            ))
+        }
+    };
     let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    Ok(parse_config_str(&resolve_includes(&content, &base, 0)))
+    Ok(resolve_includes(&content, &base))
+}
+
+/// Les hôtes de `~/.ssh/config` (`Include` résolus). Absent : liste vide ;
+/// illisible : erreur (contrat K5, voir [`configuration_resolue`]).
+pub fn parse_ssh_config() -> anyhow::Result<Vec<SshHost>> {
+    configuration_resolue().map(|c| parse_config_str(&c))
 }
 
 /// Comme [`parse_ssh_config`], mais sur un chemin explicite (testable), en
@@ -63,7 +112,7 @@ pub(crate) fn parse_config_resolu_at(path: &Path) -> Vec<SshHost> {
         return Vec::new();
     };
     let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    parse_config_str(&resolve_includes(&content, &base, 0))
+    parse_config_str(&resolve_includes(&content, &base))
 }
 
 /// Profondeur maximale de resolution des `Include`.
@@ -72,13 +121,34 @@ pub(crate) fn parse_config_resolu_at(path: &Path) -> Vec<SshHost> {
 /// s'incluent mutuellement boucleraient indefiniment.
 const MAX_INCLUDE_DEPTH: usize = 16;
 
+/// Nombre total de fichiers qu'une résolution d'`Include` accepte de lire.
+///
+/// Audit du 12 septembre 2026 (C-panique-10) : la profondeur seule ne bornait
+/// rien de la largeur. Trois fichiers de `config.d` qui s'incluent chacun par
+/// motif faisaient 3^16 lectures (quarante millions), et `list_hosts` figeait
+/// l'interface à chaque chargement.
+const MAX_INCLUDE_FICHIERS: usize = 256;
+
 /// Resout les directives `Include` et rend le contenu aplati.
 ///
 /// Les chemins relatifs sont resolus depuis `~/.ssh`, comme le fait OpenSSH.
 /// `~` est developpe. Les motifs (`config.d/*`) sont etendus par ordre
 /// alphabetique. Un fichier illisible est ignore en silence : OpenSSH se
 /// comporte ainsi, et une configuration partielle vaut mieux qu'aucune.
-fn resolve_includes(content: &str, base: &Path, depth: usize) -> String {
+///
+/// Chaque fichier n'est inclus qu'une fois par résolution (ce qui coupe les
+/// cycles et les doublons d'hôtes), et au plus `MAX_INCLUDE_FICHIERS` en tout.
+fn resolve_includes(content: &str, base: &Path) -> String {
+    let mut deja_inclus = std::collections::HashSet::new();
+    resolve_includes_borne(content, base, 0, &mut deja_inclus)
+}
+
+fn resolve_includes_borne(
+    content: &str,
+    base: &Path,
+    depth: usize,
+    deja_inclus: &mut std::collections::HashSet<PathBuf>,
+) -> String {
     if depth >= MAX_INCLUDE_DEPTH {
         return content.to_string();
     }
@@ -98,9 +168,21 @@ fn resolve_includes(content: &str, base: &Path, depth: usize) -> String {
         };
         for pattern in patterns.split_whitespace() {
             for path in expand_include(pattern, base) {
+                if deja_inclus.len() >= MAX_INCLUDE_FICHIERS {
+                    break;
+                }
+                let canonique = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                if !deja_inclus.insert(canonique) {
+                    continue; // déjà inclus : cycle ou doublon
+                }
                 if let Ok(inner) = std::fs::read_to_string(&path) {
                     let parent = path.parent().unwrap_or(base).to_path_buf();
-                    out.push_str(&resolve_includes(&inner, &parent, depth + 1));
+                    out.push_str(&resolve_includes_borne(
+                        &inner,
+                        &parent,
+                        depth + 1,
+                        deja_inclus,
+                    ));
                     out.push('\n');
                 }
             }
@@ -445,12 +527,10 @@ pub fn resoudre_hote_dans(content: &str, alias: &str) -> Option<SshHost> {
 }
 
 /// Comme [`resoudre_hote_dans`], en lisant `~/.ssh/config` (Include résolus).
+/// Pour plusieurs hôtes, lire [`configuration_resolue`] une fois.
 #[must_use]
 pub fn resoudre_hote(alias: &str) -> Option<SshHost> {
-    let path = ssh_config_path();
-    let content = std::fs::read_to_string(&path).ok()?;
-    let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    resoudre_hote_dans(&resolve_includes(&content, &base, 0), alias)
+    resoudre_hote_dans(&configuration_resolue().ok()?, alias)
 }
 
 #[cfg(test)]
@@ -1192,13 +1272,25 @@ pub fn repertoire_configuration() -> Option<std::path::PathBuf> {
 /// # Errors
 /// Si le répertoire, l'écriture, la synchronisation ou le renommage échouent.
 pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Result<()> {
+    ecrire_atomiquement_tire(path, contenu, &mut rand::random::<u64>)
+}
+
+/// Le nom du temporaire d'une écriture de `path` : `<nom>.tmp-<suffixe>`, dans
+/// le même répertoire (sans quoi `rename` franchirait un point de montage).
+fn nom_temporaire(path: &std::path::Path, suffixe: u64) -> std::path::PathBuf {
+    let mut nom = path.file_name().unwrap_or_default().to_owned();
+    nom.push(format!(".tmp-{suffixe:016x}"));
+    path.with_file_name(nom)
+}
+
+/// [`ecrire_atomiquement`], avec le tirage des suffixes du temporaire fourni
+/// (aléatoire en production, choisi par les tests).
+fn ecrire_atomiquement_tire(
+    path: &std::path::Path,
+    contenu: &[u8],
+    tirer: &mut dyn FnMut() -> u64,
+) -> anyhow::Result<()> {
     use std::io::Write as _;
-    // Le temporaire doit être unique par APPEL, pas seulement par processus :
-    // `folders::rename_core` réécrit ~/.ssh/config une fois par hôte, et une
-    // autre commande peut y toucher au même moment. Deux appels ouvrant le même
-    // `.tmp` en troncature produisaient un fichier mêlant les deux contenus —
-    // exactement la perte que cette fonction doit empêcher.
-    static SUITE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
             // Seul un répertoire que CET appel crée est resserré à 0700. On
@@ -1242,28 +1334,58 @@ pub fn ecrire_atomiquement(path: &std::path::Path, contenu: &[u8]) -> anyhow::Re
             return Err(anyhow::anyhow!("{} est en lecture seule.", path.display()));
         }
     }
-    let tmp = path.with_extension(format!(
-        "{}tmp{}.{}",
-        path.extension().map_or("", |_| "."),
-        std::process::id(),
-        SUITE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
+    // Le temporaire est unique par APPEL, pas seulement par processus :
+    // `folders::rename_core` réécrit ~/.ssh/config une fois par hôte, et une
+    // autre commande peut y toucher au même moment. Deux appels ouvrant le même
+    // `.tmp` en troncature produisaient un fichier mêlant les deux contenus —
+    // exactement la perte que cette fonction doit empêcher.
+    //
+    // Audit du 12 septembre 2026 (C-fs-1) : le nom était prévisible (pid public
+    // dans /proc, compteur parti de 0) et l'ouverture en troncature SUIVAIT un
+    // lien symbolique déjà là. Dans un répertoire partagé (le diagnostic
+    // s'exporte où l'utilisateur le demande, /tmp compris), un autre compte
+    // posait `<nom>.tmp<pid>.0 -> ~/.bashrc` et l'écriture remplaçait le fichier
+    // de la victime. Le suffixe est désormais tiré au hasard, et `create_new`
+    // (O_CREAT|O_EXCL) refuse tout nom déjà pris, lien symbolique compris, sans
+    // jamais le suivre (POSIX : EEXIST « regardless of the contents of the
+    // symbolic link ») ; on retire alors un autre suffixe.
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let ecrire = || -> std::io::Result<()> {
-        let mut f = options.open(&tmp)?;
+    let mut ouvert = None;
+    for _ in 0..64 {
+        let candidat = nom_temporaire(path, tirer());
+        match options.open(&candidat) {
+            Ok(f) => {
+                ouvert = Some((candidat, f));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                return Err(anyhow::anyhow!("Écriture de {} : {e}", candidat.display()));
+            }
+        }
+    }
+    let (tmp, mut f) = ouvert.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Écriture de {} : aucun nom temporaire libre après 64 essais.",
+            path.display()
+        )
+    })?;
+    let ecrire = |f: &mut std::fs::File| -> std::io::Result<()> {
         f.write_all(contenu)?;
         // Sans cette synchronisation, le renommage peut être visible avant le
         // contenu : on retrouverait un fichier de la bonne taille, rempli de
         // zéros, après une coupure de courant.
         f.sync_all()
     };
-    if let Err(e) = ecrire() {
+    let ecrit = ecrire(&mut f);
+    drop(f);
+    if let Err(e) = ecrit {
         let _ = std::fs::remove_file(&tmp);
         return Err(anyhow::anyhow!("Écriture de {} : {e}", tmp.display()));
     }

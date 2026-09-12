@@ -2,6 +2,7 @@
 
 use super::SessionStore;
 use avash::snippet::Snippet;
+use avash::Verrou as _;
 
 /// Une session ouverte, telle que le sélecteur de cibles l'affiche.
 #[derive(serde::Serialize)]
@@ -16,8 +17,7 @@ pub struct SessionInfo {
 pub fn open_sessions(state: tauri::State<'_, SessionStore>) -> Vec<SessionInfo> {
     state
         .inner
-        .lock()
-        .unwrap()
+        .verrou()
         .iter()
         .map(|(id, h)| SessionInfo {
             id: *id,
@@ -26,7 +26,7 @@ pub fn open_sessions(state: tauri::State<'_, SessionStore>) -> Vec<SessionInfo> 
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn snippet_list() -> Result<Vec<Snippet>, String> {
     avash::snippet::load_snippets().map_err(|e| e.to_string())
 }
@@ -40,7 +40,7 @@ pub fn snippet_vars(command: String) -> Vec<String> {
 }
 
 /// Cree (`id` absent) ou modifie un snippet.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn snippet_save(
     id: Option<String>,
     name: String,
@@ -57,7 +57,7 @@ pub fn snippet_save(
     Ok(snip)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn snippet_delete(id: String) -> Result<(), String> {
     avash::snippet::remove_snippet_in(&avash::snippet::snippets_path(), &id)
         .map_err(|e| e.to_string())?;
@@ -86,7 +86,7 @@ pub async fn snippet_send(
     let crochets = collage_entre_crochets.unwrap_or(!run);
     let payload = avash::snippet::terminal_payload(&command, run, crochets).into_bytes();
     let senders: Vec<_> = {
-        let store = state.inner.lock().unwrap();
+        let store = state.inner.verrou();
         session_ids
             .iter()
             .filter_map(|id| store.get(id).map(|h| h.input.clone()))

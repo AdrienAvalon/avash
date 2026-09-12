@@ -6,7 +6,7 @@ import { isPasswordRequired, describeTunnel, tunnelFlag, tunnelTraffic, activeTu
 import { $, state } from "./etat";
 import { askConfirm, askPassword } from "./dialogues";
 import { notifyErreur } from "./notifications";
-import { renderHosts } from "./main";
+import { rafraichirLignes } from "./main";
 import { t } from "./i18n";
 
 // ---------- Tunnels SSH ----------
@@ -33,6 +33,11 @@ export const tunnels = {
 
 const tunnelsModal = () => $("tunnels-modal");
 
+/** Ouverture en cours par tunnel : un jeton par tentative. « Annuler » retire le
+ *  jeton ; la tentative qui ne retrouve plus le sien sait qu'elle a été
+ *  abandonnée et se tait, même si une nouvelle tentative a pris la suite. */
+const ouvertures = new Map<string, object>();
+
 // Trouve par l'audit du 7 septembre 2026 : quand tunnel_defs/tunnel_status
 // echoue, l'erreur partait dans #t-error, invisible (dans la modale, voire
 // modale fermee quand le minuteur de fond tourne). On notifie desormais, mais
@@ -58,11 +63,13 @@ async function tunnelsRefresh() {
   const before = tunnels.byHost;
   tunnels.byHost = activeTunnelsByHost(tunnels.defs, tunnels.status);
   // Redessiner la liste d'hotes a chaque tick coûterait pour rien : on ne le
-  // fait que si un badge change.
-  const changed =
-    before.size !== tunnels.byHost.size ||
-    [...tunnels.byHost].some(([k, v]) => before.get(k) !== v);
-  if (changed) renderHosts();
+  // fait que si un badge change, et seulement pour les lignes concernées
+  // (contrat K10, audit du 12 septembre 2026 : renderHosts reconstruisait toute
+  // la barre latérale, focus et défilement compris, pour un badge).
+  const changes = [...new Set([...before.keys(), ...tunnels.byHost.keys()])].filter(
+    (alias) => before.get(alias) !== tunnels.byHost.get(alias),
+  );
+  if (changes.length > 0) rafraichirLignes(changes.map((alias) => `ssh:${alias}`));
   if (tunnelsModal().classList.contains("open")) renderTunnels();
 }
 
@@ -141,8 +148,15 @@ export function renderTunnels() {
     const busy = tunnels.busy.has(d.id);
     const toggle = row.querySelector('[data-act="toggle"]') as HTMLButtonElement;
     if (busy) {
-      toggle.textContent = "…";
-      toggle.disabled = true;
+      // Audit du 12 septembre 2026 (C-SIL-5) : pendant l'ouverture, la ligne
+      // montrait « … » désactivé, sans aucune annulation ; face à un hôte muet
+      // (pare-feu en DROP, tarpit), il ne restait qu'à fermer l'application.
+      // `tunnel_stop` agit pourtant pendant l'ouverture : le cœur note l'arrêt
+      // et referme le tunnel à son arrivée au lieu de l'installer.
+      toggle.dataset.act = "annuler";
+      toggle.innerHTML = `${ic("stop")}<span>${t("annuler")}</span>`;
+      toggle.className = "tbtn stop labeled";
+      toggle.title = t("annuler");
     } else if (alive) {
       toggle.innerHTML = `${ic("stop")}<span>${t("tunnels-arreter")}</span>`;
       toggle.className = "tbtn stop labeled";
@@ -150,7 +164,7 @@ export function renderTunnels() {
       toggle.innerHTML = `${ic("refresh")}<span>${running ? t("tunnels-relancer") : t("tunnels-demarrer")}</span>`;
       toggle.className = "tbtn go labeled";
     }
-    toggle.addEventListener("click", () => tunnelToggle(d));
+    toggle.addEventListener("click", () => (busy ? tunnelAnnulerOuverture(d) : tunnelToggle(d)));
     // Trouvé par l'audit du 7 septembre 2026 : pendant le démarrage, seul le
     // toggle était gelé ; « Supprimer » laissait un tunnel fantôme (la
     // définition partait mais tunnel_start finissait par l'installer, sans
@@ -165,11 +179,16 @@ export function renderTunnels() {
     list.appendChild(row);
   }
   // Refocaliser le bouton qui l'était avant le vidage (cf. commentaire en tête).
-  // Un bouton désactivé (ligne busy) refuse le focus : on l'ignore alors, l'état
-  // étant transitoire.
+  // « Démarrer » et « Annuler » occupent la même place : le focus passe de l'un
+  // à l'autre quand l'ouverture commence ou s'arrête. Un bouton désactivé
+  // refuse le focus : on l'ignore alors, l'état étant transitoire.
   if (focalise?.id) {
+    const ligne = `[data-id="${CSS.escape(focalise.id)}"]`;
+    const bascule = focalise.act === "toggle" || focalise.act === "annuler";
     list
-      .querySelector<HTMLElement>(`[data-id="${CSS.escape(focalise.id)}"] [data-act="${focalise.act}"]`)
+      .querySelector<HTMLElement>(
+        bascule ? `${ligne} [data-act="toggle"], ${ligne} [data-act="annuler"]` : `${ligne} [data-act="${focalise.act}"]`,
+      )
       ?.focus();
   }
 }
@@ -209,11 +228,15 @@ async function tunnelStart(d: TunnelDef) {
     /* le backend dira ce qui manque */
   }
   tunnels.busy.add(d.id);
+  const jeton = {};
+  ouvertures.set(d.id, jeton);
+  const abandonnee = () => ouvertures.get(d.id) !== jeton;
   renderTunnels();
   try {
     for (let essai = 0; essai < 3; essai++) {
       try {
         await invoke("tunnel_start", { id: d.id, password });
+        if (abandonnee()) return;
         // Demarrage reussi : on efface un motif d'echec eventuellement colle a
         // la ligne, sinon il resterait affiche sur un tunnel desormais vivant.
         tunnels.erreurs.delete(d.id);
@@ -223,10 +246,20 @@ async function tunnelStart(d: TunnelDef) {
             port: h.port,
             user: h.user ?? null,
             password,
-          }).catch(() => { /* facultatif */ });
+          }).catch((e) => {
+            // Audit du 12 septembre 2026 (C-SIL-6) : l'échec était avalé. Le
+            // tunnel s'ouvre (le mot de passe est encore en mémoire), mais le
+            // trousseau a refusé (Secret Service absent, portefeuille
+            // verrouillé) et le mot de passe serait redemandé « sans raison »
+            // à la prochaine ouverture. Même message que le chemin SSH.
+            notifyErreur(t("memorisation-impossible", { e: String(e) }));
+          });
         }
         return;
       } catch (e) {
+        // Ouverture annulée : son échec (« Tunnel arrêté pendant
+        // l'ouverture ») est la suite de la demande, pas une erreur à montrer.
+        if (abandonnee()) return;
         const msg = String(e);
         if (!isPasswordRequired(msg)) {
           // Trouvé par l'audit du 7 septembre 2026 : l'échec partait dans
@@ -244,7 +277,7 @@ async function tunnelStart(d: TunnelDef) {
         // trois est signalé comme pour un onglet (main.ts, « trois-tentatives »).
         if (essai === 2) break;
         const rep = await askPassword(label, essai === 0 ? undefined : t("mdp-refuse-nouvelle-tentative"));
-        if (!rep) return;
+        if (!rep || abandonnee()) return;
         password = rep.password;
         rememberAsked = rep.remember;
       }
@@ -252,9 +285,32 @@ async function tunnelStart(d: TunnelDef) {
     tunnels.erreurs.set(d.id, t("trois-tentatives"));
     notifyErreur(t("trois-tentatives"));
   } finally {
-    tunnels.busy.delete(d.id);
+    // Une tentative abandonnée ne touche plus à l'état de la ligne : une
+    // nouvelle ouverture a peut-être déjà repris la main.
+    if (!abandonnee()) {
+      ouvertures.delete(d.id);
+      tunnels.busy.delete(d.id);
+    }
     await tunnelsRefresh();
   }
+}
+
+/** Arrête l'ouverture en cours d'un tunnel et libère sa ligne (audit du
+ *  12 septembre 2026, C-SIL-5). Le cœur note l'arrêt et refermera le tunnel
+ *  s'il finit par s'ouvrir ; la tentative en cours, privée de son jeton, se
+ *  tait à son retour. */
+async function tunnelAnnulerOuverture(d: TunnelDef) {
+  try {
+    await invoke("tunnel_stop", { id: d.id });
+  } catch (e) {
+    notifyErreur(t("tunnels-arret-impossible", { e: String(e) }));
+    return;
+  }
+  ouvertures.delete(d.id);
+  tunnels.busy.delete(d.id);
+  tunnels.erreurs.delete(d.id);
+  renderTunnels();
+  await tunnelsRefresh();
 }
 
 async function tunnelDelete(d: TunnelDef) {

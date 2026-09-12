@@ -440,7 +440,7 @@ where
     // sous Linux (l'allocation à zéro y est paresseuse). Comme le texte du
     // presse-papiers, le nom passe désormais par `codec::tampon`, qui ferme la
     // session sur un message clair au lieu d'allouer sans borne.
-    let mut name_buf = codec::tampon(name_len as usize)?;
+    let mut name_buf = codec::tampon_texte(name_len as usize)?;
     stream.read_exact(&mut name_buf).await?;
     let name = String::from_utf8_lossy(&name_buf).into_owned();
 

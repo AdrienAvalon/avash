@@ -1,17 +1,14 @@
 // Bureaux RDP : sessions (canvas), entrées, presse-papiers, bureaux enregistrés.
 
 import { invoke } from "@tauri-apps/api/core";
-// Boîte de sélection JavaScript : seulement pour le champ « dossier partagé » du
-// formulaire, que l'utilisateur peut aussi remplir à la main ; les fichiers
-// offerts au distant passent, eux, par la boîte native (`choisir_fichiers_locaux`).
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { ic } from "./icons";
 import { partageClipboard, sonBureau } from "./prefs";
 import { LecteurAudio } from "./audio";
-import { rdpScancode, le16, rdpMousePos, humanSize, tailleBureau } from "./filters";
+import { rdpScancode, le16, rdpMousePos, humanSize, tailleBureau, libelleSur, nettoyerPourTerminal } from "./filters";
+import { decoderTrame, type BilanFichiers, type FichiersDistants } from "./trames-bureau";
 import { langue } from "./i18n";
 import { FiltreCtrlAltGrWindows, estWindows, keysymDe, messageKeysym } from "./vnc-clavier";
 import { ToucheTenues } from "./touches-tenues";
@@ -21,8 +18,9 @@ import { majMemoireOnglets } from "./onglets-restauration";
 import { appliquerVue, estAffiche, surFermeture, surFocus } from "./vue-partagee";
 import { closeAllContextMenus, placerMenu } from "./menu-hote";
 import { currentLocks } from "./verrous";
-import { focusTab, orderedTabs } from "./raccourcis";
-import { loadHosts, renderHosts } from "./main";
+import { fermerOnglet, focusTab, orderedTabs } from "./raccourcis";
+import { loadHosts, rafraichirLignes } from "./main";
+import { setTitlebar } from "./titre";
 import { notify, notifyErreur } from "./notifications";
 import { openMoveModal } from "./dossiers";
 import { sftp, sftpAppliquerVue } from "./sftp";
@@ -88,11 +86,78 @@ async function pushLocalClipboard(force = false): Promise<void> {
 export function pousseAuGeste(vnc: boolean, evenement: "focus" | "mousedown" | "connexion" | "bascule"): boolean {
   return vnc ? evenement !== "mousedown" : evenement === "mousedown";
 }
-/** Ce que le bureau distant a copié en dernier : liste et total, tels que le
- *  processus les annonce (message [15]). Rien n'est téléchargé avant l'accord. */
-type FichiersDistants = { dossier: string; octets: number; fichiers: { chemin: string; taille: number; dossier: boolean }[] };
+// Ce que le bureau distant a copié en dernier (`FichiersDistants`, message
+// [15]) : liste et total, tels que le processus les annonce. Rien n'est
+// téléchargé avant l'accord.
 
-export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean; audio?: LecteurAudio }>();
+/** `etat` : où en est le bureau, comme l'onglet l'affiche ; la pastille de la
+ *  barre latérale, le titre et la confirmation de fermeture le lisent.
+ *  `presseEnAttente` : texte copié par ce bureau pendant qu'il était en
+ *  arrière-plan, appliqué au presse-papiers du poste à son prochain focus. */
+export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; etat: "connecting" | "live" | "closed"; presseEnAttente?: string | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean; audio?: LecteurAudio }>();
+
+/** État d'un bureau enregistré pour sa pastille : `live` si l'une de ses
+ *  sessions est connectée, `connecting` si l'une se connecte, rien sinon.
+ *
+ *  Audit du 12 septembre 2026 (C-SIL-1) : la pastille se calculait sur la seule
+ *  présence d'une session ; une coupure du serveur laissait la session dans la
+ *  table, et l'hôte « connecté » dans la barre latérale tant que l'onglet
+ *  n'était pas fermé à la main. Le même faux connecté qu'on a retiré au SSH. */
+export function etatBureau(hostId: string): "live" | "connecting" | "" {
+  let etat: "connecting" | "" = "";
+  for (const s of rdpSessions.values()) {
+    if (s.hostId !== hostId) continue;
+    if (s.etat === "live") return "live";
+    if (s.etat === "connecting") etat = "connecting";
+  }
+  return etat;
+}
+
+/** Applique au poste ce qu'un bureau distant a copié. */
+function appliquerPressePapiers(texte: string): void {
+  lastClipText = texte; // ne pas le renvoyer aussitôt au distant
+  clipWriteText(texte).catch(() => {});
+}
+
+/** Montre (ou met à jour) l'incrustation « connexion en cours » d'un bureau,
+ *  avec de quoi renoncer. Audit du 12 septembre 2026 (C-front-15) : pendant
+ *  TLS, NLA ou un repli, des secondes durant, le bureau n'était qu'un rectangle
+ *  noir, et l'on double-cliquait une seconde fois ; pendant une reprise
+ *  (message [23], C-SIL-10), le canvas restait noir « connecté ». */
+function montrerConnexion(id: number, texte: string): void {
+  const wrap = rdpSessions.get(id)?.canvas.parentElement;
+  if (!wrap) return;
+  let ov = wrap.querySelector<HTMLElement>(".rdp-connexion");
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.className = "rdp-connexion";
+    ov.setAttribute("role", "status");
+    ov.innerHTML =
+      `<div class="rdp-closed-box"><p></p><div class="rdp-closed-actions">` +
+      `<button type="button" class="btn-ghost" data-act="annuler"></button></div></div>`;
+    const annuler = ov.querySelector("button")!;
+    annuler.textContent = t("annuler");
+    annuler.addEventListener("click", () => closeRdp(id));
+    wrap.appendChild(ov);
+  }
+  ov.querySelector("p")!.textContent = texte;
+}
+
+function retirerConnexion(id: number): void {
+  rdpSessions.get(id)?.canvas.parentElement?.querySelector(".rdp-connexion")?.remove();
+}
+
+/** Pose l'état d'un bureau : onglet, pastille de son hôte, titre. */
+function poserEtat(id: number, etat: "connecting" | "live" | "closed"): void {
+  const s = rdpSessions.get(id);
+  if (!s) return;
+  s.etat = etat;
+  const st = s.tab.querySelector(".state");
+  if (st) st.className = `state ${etat}`;
+  if (etat !== "connecting") retirerConnexion(id);
+  if (s.hostId) rafraichirLignes([`rdp:${s.hostId}`]);
+  setTitlebar();
+}
 
 /** Envoie un message JSON au processus (fichiers par le presse-papiers). */
 function envoyerJson(ws: WebSocket | null, code: number, valeur: unknown): boolean {
@@ -161,7 +226,7 @@ export async function choisirEtOffrirFichiers(): Promise<void> {
 }
 
 /** Bilan d'une réception ou d'une offre (message [18]). */
-async function bilanFichiers(id: number, b: { sens: string; dossier?: string; fichiers: number; octets: number; erreurs: string[] }): Promise<void> {
+async function bilanFichiers(id: number, b: BilanFichiers): Promise<void> {
   const s = rdpSessions.get(id);
   if (!s) return;
   if (b.sens === "offre") {
@@ -250,7 +315,9 @@ export async function openRdp(cible: RdpTarget) {
   // Même règle que les onglets SSH : le nom de l'hôte enregistré, et à défaut
   // « utilisateur@adresse » pour une connexion directe. Les deux protocoles se
   // lisent ainsi de la même façon dans la barre d'onglets.
-  tab.querySelector(".label")!.textContent = cible.name ?? (cible.user ? `${cible.user}@${cible.host}` : cible.host);
+  // Sans contrôle de direction (audit du 12 septembre 2026, FS-10).
+  const libelle = libelleSur(cible.name ?? (cible.user ? `${cible.user}@${cible.host}` : cible.host));
+  tab.querySelector(".label")!.textContent = libelle;
   tab.querySelector(".close")!.innerHTML = ic("x");
   tabs.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
   tabs.appendChild(tab);
@@ -317,12 +384,15 @@ export async function openRdp(cible: RdpTarget) {
   // WebView2, pas au décodage. On ne fait que des putImageData : le chemin
   // logiciel est le bon de toute façon.
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-  rdpSessions.set(id, { canvas, tab, ws: null, hostId: cible.hostId, target: cible, badge, fichiers: null });
+  rdpSessions.set(id, { canvas, tab, ws: null, etat: "connecting", hostId: cible.hostId, target: cible, badge, fichiers: null });
   majMemoireOnglets();
   state.active = id;
+  montrerConnexion(id, t("connexion-a", { cible: libelle }));
+  if (cible.hostId) rafraichirLignes([`rdp:${cible.hostId}`]);
 
   tab.addEventListener("click", () => focusRdp(id));
-  tab.querySelector(".close")!.addEventListener("click", (e) => { e.stopPropagation(); closeRdp(id); });
+  // Confirmée si le bureau est connecté (audit du 12 septembre 2026, C-front-6).
+  tab.querySelector(".close")!.addEventListener("click", (e) => { e.stopPropagation(); void fermerOnglet({ kind: "rdp", id }); });
 
   // Souris/clavier → sidecar via le WebSocket (binaire). Ignore si non prêt.
   const send = (bytes: number[]) => {
@@ -561,141 +631,156 @@ export async function openRdp(cible: RdpTarget) {
     ws.onmessage = (ev) => {
       if (!rdpSessions.has(id)) return;
       const buf = ev.data as ArrayBuffer;
-      const dv = new DataView(buf);
-      const kind = dv.getUint8(0);
-      if (kind === 2) {
-        try {
-          const x = dv.getUint16(1, true), y = dv.getUint16(3, true);
-          const fw = dv.getUint16(5, true), fh = dv.getUint16(7, true);
-          ctx.putImageData(new ImageData(new Uint8ClampedArray(buf, 9, fw * fh * 4), fw, fh), x, y);
-        } catch (err) {
-          console.warn("frame RDP invalide", err);
-        }
-        // ACK de rendu (même si la frame était invalide, pour ne pas figer le flux).
-        if (ws.readyState === WebSocket.OPEN) ws.send(RDP_ACK);
-      } else if (kind === 13) {
-        // Trame à plusieurs rectangles. Le sidecar n'accumulait qu'une union
-        // englobante : deux petites zones aux coins opposés donnaient un
-        // rectangle plein écran. Mesuré contre un vrai xrdp, 1,8 fois trop
-        // d'octets. Une seule trame, donc un seul accusé : le cadencement
-        // reste exact.
-        try {
-          const n = dv.getUint8(1);
-          let p = 2;
-          for (let i = 0; i < n; i++) {
-            const x = dv.getUint16(p, true), y = dv.getUint16(p + 2, true);
-            const fw = dv.getUint16(p + 4, true), fh = dv.getUint16(p + 6, true);
-            p += 8;
-            ctx.putImageData(
-              new ImageData(new Uint8ClampedArray(buf, p, fw * fh * 4), fw, fh), x, y);
-            p += fw * fh * 4;
+      // Le décodage est pur et testé (trames-bureau.ts) ; ici on n'applique
+      // que le résultat. Un message de forme inattendue ne lève plus : il est
+      // ignoré, et la trame suivante passe (audit du 12 septembre 2026, FS-8).
+      const tr = decoderTrame(buf);
+      switch (tr.type) {
+        case "image": {
+          // Une trame [13] porte plusieurs rectangles. Le sidecar n'accumulait
+          // qu'une union englobante : deux petites zones aux coins opposés
+          // donnaient un rectangle plein écran. Mesuré contre un vrai xrdp, 1,8
+          // fois trop d'octets. Une seule trame, donc un seul accusé : le
+          // cadencement reste exact. Vues sans copie sur le tampon reçu.
+          try {
+            for (const r of tr.rects) {
+              ctx.putImageData(new ImageData(new Uint8ClampedArray(buf, r.decalage, r.largeur * r.hauteur * 4), r.largeur, r.hauteur), r.x, r.y);
+            }
+          } catch (err) {
+            console.warn("trame RDP invalide", err);
           }
-        } catch (err) {
-          console.warn("trame RDP multiple invalide", err);
+          if (!tr.complete) console.warn("trame RDP incomplète : une partie annoncée manquait");
+          // ACK de rendu (même si la trame était invalide, pour ne pas figer le flux).
+          if (ws.readyState === WebSocket.OPEN) ws.send(RDP_ACK);
+          break;
         }
-        if (ws.readyState === WebSocket.OPEN) ws.send(RDP_ACK);
-      } else if (kind === 7) {
-        const fps = dv.getUint16(1, true);
-        const kbps = dv.getUint32(3, true);
-        const lat = dv.getUint16(7, true);
-        const q = lat < 40 ? "q-ok" : lat < 100 ? "q-mid" : "q-bad";
-        const rate = kbps >= 1024 ? `${(kbps / 1024).toFixed(1)} Mo/s` : `${kbps} Ko/s`;
-        hud.innerHTML = `<b>${fps}</b> fps · ${rate} · <span class="${q}">${lat} ms</span>`;
-      } else if (kind === 1) {
-        // Changer la taille du canvas l'efface : on capture l'image courante et
-        // on la réétire dans la nouvelle taille, le temps que le serveur renvoie
-        // une image complète. Plus de flash noir pendant la renégociation.
-        const nw = dv.getUint16(1, true), nh = dv.getUint16(3, true);
-        let snap: HTMLCanvasElement | null = null;
-        if (canvas.width > 0 && canvas.height > 0) {
-          snap = document.createElement("canvas");
-          snap.width = canvas.width;
-          snap.height = canvas.height;
-          snap.getContext("2d", { willReadFrequently: true })!.drawImage(canvas, 0, 0);
+        case "qualite": {
+          const q = tr.latence < 40 ? "q-ok" : tr.latence < 100 ? "q-mid" : "q-bad";
+          const rate = tr.kbps >= 1024 ? `${(tr.kbps / 1024).toFixed(1)} Mo/s` : `${tr.kbps} Ko/s`;
+          hud.innerHTML = `<b>${tr.fps}</b> fps · ${rate} · <span class="${q}">${tr.latence} ms</span>`;
+          break;
         }
-        rdpW = nw;
-        rdpH = nh;
-        canvas.width = rdpW;
-        canvas.height = rdpH;
-        if (snap) ctx.drawImage(snap, 0, 0, rdpW, rdpH);
-        tab.querySelector(".state")!.className = "state live";
-        // Allumer la pastille verte de l'hôte dans la barre latérale : elle se
-        // calcule depuis les sessions RDP ouvertes (rdpHostElement), et sans ce
-        // rendu elle restait éteinte jusqu'à ce qu'un autre événement rafraîchisse
-        // la liste — il fallait fermer l'onglet et rouvrir depuis la liste
-        // (signalé par Adrien le 11 septembre 2026). Le nom de l'onglet, lui,
-        // était déjà bon depuis 0.12.1 ; c'était la pastille qui manquait.
-        renderHosts();
-        // Aligner les verrous du bureau distant sur ceux du poste.
-        void currentLocks().then((l) => { if (l !== null) send([10, l]); });
-        // Renégociation terminée : si la fenêtre a encore bougé entre-temps, on
-        // applique la taille finale (une seule fois, évite les cascades).
-        resizeInFlight = false;
-        window.clearTimeout(resizeGuard);
-        window.clearTimeout(resizeTimer);
-        resizeTimer = window.setTimeout(sendResize, 120);
-      } else if (kind === 8) {
-        // Le bureau distant a copié du texte -> presse-papiers du poste. Le
-        // réglage vaut dans les deux sens : sans cela, un bureau hostile
-        // remplaçait en boucle le presse-papiers local — on copie une commande
-        // depuis sa documentation, on colle dans son terminal, on exécute la
-        // sienne — et ce, même après avoir explicitement coupé le partage.
-        if (!partageClipboard()) return;
-        const text = new TextDecoder().decode(new Uint8Array(buf, 1));
-        lastClipText = text; // ne pas le renvoyer aussitôt au distant
-        clipWriteText(text).catch(() => {});
-      } else if (kind === 3) {
-        tab.querySelector(".state")!.className = "state closed";
-        notifyErreur(`RDP : ${new TextDecoder().decode(new Uint8Array(buf, 1))}`);
-      } else if (kind === 20 || kind === 21) {
-        // Son du distant : blocs PCM joués à la suite, volume demandé.
-        const s = rdpSessions.get(id);
-        if (s) {
-          s.audio ??= new LecteurAudio();
-          if (kind === 20) s.audio.jouer(buf);
-          else if (buf.byteLength >= 5) s.audio.volume(dv.getUint16(1, true), dv.getUint16(3, true));
+        case "connecte": {
+          // Changer la taille du canvas l'efface : on capture l'image courante et
+          // on la réétire dans la nouvelle taille, le temps que le serveur renvoie
+          // une image complète. Plus de flash noir pendant la renégociation.
+          let snap: HTMLCanvasElement | null = null;
+          if (canvas.width > 0 && canvas.height > 0) {
+            snap = document.createElement("canvas");
+            snap.width = canvas.width;
+            snap.height = canvas.height;
+            snap.getContext("2d", { willReadFrequently: true })!.drawImage(canvas, 0, 0);
+          }
+          rdpW = tr.largeur;
+          rdpH = tr.hauteur;
+          canvas.width = rdpW;
+          canvas.height = rdpH;
+          if (snap) ctx.drawImage(snap, 0, 0, rdpW, rdpH);
+          // Onglet « live », incrustation retirée, pastille de l'hôte allumée
+          // en place (elle restait éteinte jusqu'au rendu suivant, signalé par
+          // Adrien le 11 septembre 2026), titre : `poserEtat`.
+          poserEtat(id, "live");
+          // Aligner les verrous du bureau distant sur ceux du poste.
+          void currentLocks().then((l) => { if (l !== null) send([10, l]); });
+          // Renégociation terminée : si la fenêtre a encore bougé entre-temps, on
+          // applique la taille finale (une seule fois, évite les cascades).
+          resizeInFlight = false;
+          window.clearTimeout(resizeGuard);
+          window.clearTimeout(resizeTimer);
+          resizeTimer = window.setTimeout(sendResize, 120);
+          break;
         }
-      } else if (kind === 15 || kind === 17 || kind === 18) {
-        // Fichiers par le presse-papiers : la liste copiée sur le distant, la
-        // progression d'une réception, le bilan d'une réception ou d'une offre.
-        let corps: unknown;
-        try { corps = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))); } catch { return; }
-        const s = rdpSessions.get(id);
-        if (!s) return;
-        if (kind === 15) {
-          const f = corps as FichiersDistants;
+        case "reprise":
+          // Le processus refait toute la connexion (redirection d'un broker RDS
+          // ou de GNOME Remote Desktop, reprise du canal graphique), jusqu'à
+          // 35 s : l'onglet repasse « connexion » et le dit ; le [1] suivant le
+          // remet « live » (audit du 12 septembre 2026, C-SIL-10, contrat K7).
+          poserEtat(id, "connecting");
+          montrerConnexion(id, t("rdp-reprise"));
+          break;
+        case "presse-papiers": {
+          // Le bureau distant a copié du texte -> presse-papiers du poste. Le
+          // réglage vaut dans les deux sens : sans cela, un bureau hostile
+          // remplaçait en boucle le presse-papiers local — on copie une commande
+          // depuis sa documentation, on colle dans son terminal, on exécute la
+          // sienne — et ce, même après avoir explicitement coupé le partage.
+          if (!partageClipboard()) return;
+          // Et seulement pour le bureau qu'on regarde : en arrière-plan, il
+          // écrasait ce qu'on venait de copier dans un onglet SSH, juste avant
+          // qu'on le colle. Le texte attend son prochain focus (audit du
+          // 12 septembre 2026, FS-4).
+          const s = rdpSessions.get(id);
+          if (state.active === id) appliquerPressePapiers(tr.texte);
+          else if (s) s.presseEnAttente = tr.texte;
+          break;
+        }
+        case "erreur":
+          poserEtat(id, "closed");
+          notifyErreur(`RDP : ${tr.texte}`);
+          break;
+        case "son":
+        case "volume": {
+          // Son du distant : blocs PCM joués à la suite, volume demandé.
+          const s = rdpSessions.get(id);
+          if (s) {
+            s.audio ??= new LecteurAudio();
+            if (tr.type === "son") s.audio.jouer(buf);
+            else s.audio.volume(tr.gauche, tr.droite);
+          }
+          break;
+        }
+        case "fichiers-copies": {
+          // Fichiers par le presse-papiers : la liste copiée sur le distant.
+          const s = rdpSessions.get(id);
+          if (!s) return;
+          const f: FichiersDistants = tr.liste;
           s.fichiers = f;
           s.reception = false;
           badge.classList.remove("en-cours");
           badge.textContent = t(f.fichiers.length === 1 && !f.fichiers[0].dossier ? "rdp-fichier-copie" : "rdp-fichiers-copies", { n: f.fichiers.length, taille: humanSize(f.octets, langue()) });
           badge.hidden = false;
-        } else if (kind === 17) {
-          const p = corps as { fichier: string; fait: number; total: number; termines: number; nombre: number };
+          break;
+        }
+        case "progression-fichiers": {
+          // La progression d'une réception ; le nom, venu du distant, est borné.
+          const p = tr.progression;
           badge.classList.add("en-cours");
           badge.textContent = t("rdp-fichiers-en-cours", { fichier: p.fichier, fait: humanSize(p.fait, langue()), total: humanSize(p.total, langue()), termines: p.termines, nombre: p.nombre });
           badge.hidden = false;
-        } else {
-          void bilanFichiers(id, corps as { sens: string; dossier?: string; fichiers: number; octets: number; erreurs: string[] });
+          break;
         }
-      } else if (kind === 14) {
-        // Le presse-papiers distant a changé (texte ou autre format) : la liste
-        // de fichiers offerte est caduque, ses verrous côté serveur vont
-        // expirer. On efface la pastille et l'état pour ne plus proposer une
-        // réception vouée à l'échec. Sauf réception en cours : le sidecar ne
-        // l'envoie déjà pas dans ce cas, garde-fou ici aussi pour ne pas
-        // effacer la pastille « ⬇︎ … » d'un transfert légitime. Trouvé par
-        // l'audit du 7 septembre 2026.
-        const s = rdpSessions.get(id);
-        if (s && !s.reception) {
-          s.fichiers = null;
-          badge.hidden = true;
-          badge.classList.remove("en-cours");
+        case "bilan-fichiers":
+          // Le bilan d'une réception ou d'une offre.
+          void bilanFichiers(id, tr.bilan);
+          break;
+        case "presse-papiers-change": {
+          // Le presse-papiers distant a changé (texte ou autre format) : la liste
+          // de fichiers offerte est caduque, ses verrous côté serveur vont
+          // expirer. On efface la pastille et l'état pour ne plus proposer une
+          // réception vouée à l'échec. Sauf réception en cours : le sidecar ne
+          // l'envoie déjà pas dans ce cas, garde-fou ici aussi pour ne pas
+          // effacer la pastille « ⬇︎ … » d'un transfert légitime. Trouvé par
+          // l'audit du 7 septembre 2026.
+          const s = rdpSessions.get(id);
+          if (s && !s.reception) {
+            s.fichiers = null;
+            badge.hidden = true;
+            badge.classList.remove("en-cours");
+          }
+          break;
         }
+        case "invalide":
+          console.warn(`message ${tr.code} du bureau distant ignoré : ${tr.raison}`);
+          break;
+        case "inconnue":
+          break;
       }
     };
     ws.onclose = () => {
-      const st = tab.querySelector(".state");
-      if (st) st.className = "state closed";
+      // Onglet, pastille de l'hôte et titre passent « fermé » : la pastille
+      // restait verte après une coupure du serveur (audit du 12 septembre 2026,
+      // C-SIL-1).
+      poserEtat(id, "closed");
       tab.classList.add("dead");
       // Le processus RDP, l'observateur de taille, les écouteurs d'invalidation
       // de rect (resize/scroll/visibilitychange) et le contexte audio (créé au
@@ -743,7 +828,7 @@ export async function openRdp(cible: RdpTarget) {
       await openRdp({ ...cible, sansNla: true });
       return;
     }
-    tab.querySelector(".state")!.className = "state closed";
+    poserEtat(id, "closed");
     notify(t("rdp-connexion-impossible", { e: String(e) }), "erreur");
     showRdpClosed(id); // proposer de réessayer
   }
@@ -764,7 +849,10 @@ async function proposerSansNla(cible: RdpTarget, erreur: string): Promise<boolea
   // Le processus RDP distingue deux cas — le serveur refuse NLA d'emblée, ou il
   // l'annonce sans mener l'échange à terme. On reprend SA phrase plutôt que
   // d'en inventer une générique qui serait fausse dans l'un des deux cas.
-  const raison = erreur.replace(/^.*\[AVASH_RDP_SANS_NLA\]\s*/s, "").trim();
+  // Nettoyée : reprise du serveur, elle portait des retours à la ligne qui
+  // repoussaient les boutons hors de l'écran (audit du 12 septembre 2026,
+  // C-front-13), comme la connexion directe le fait déjà.
+  const raison = nettoyerPourTerminal(erreur.replace(/^.*\[AVASH_RDP_SANS_NLA\]\s*/s, ""));
   const ok = await askConfirm(
     `${cible.name ?? cible.host} — ${raison}\n\n` + t("rdp-sans-nla-explication"),
     { ok: t("rdp-se-connecter-sans-nla") },
@@ -791,7 +879,7 @@ async function proposerSansNla(cible: RdpTarget, erreur: string): Promise<boolea
  *  nommer plutôt que d'agiter un avertissement vague.
  */
 async function proposerTlsHerite(cible: RdpTarget, erreur: string): Promise<boolean> {
-  const raison = erreur.replace(/^.*\[AVASH_RDP_TLS_HERITE\]\s*/s, "").trim();
+  const raison = nettoyerPourTerminal(erreur.replace(/^.*\[AVASH_RDP_TLS_HERITE\]\s*/s, "")); // cf. proposerSansNla
   const ok = await askConfirm(
     `${cible.name ?? cible.host} — ${raison}\n\n` + t("rdp-tls-herite-explication"),
     { ok: t("rdp-se-connecter-tls-herite") },
@@ -848,6 +936,12 @@ export function focusRdp(id: number) {
     : rdpSessions.has(state.active) ? { kind: "rdp" as const, id: state.active } : { kind: "ssh" as const, id: state.active };
   state.active = id;
   surFocus({ kind: "rdp", id }, precedent);
+  // Ce que ce bureau a copié pendant qu'il était en arrière-plan (FS-4).
+  const enAttente = rdpSessions.get(id)?.presseEnAttente;
+  if (enAttente != null) {
+    rdpSessions.get(id)!.presseEnAttente = null;
+    if (partageClipboard()) appliquerPressePapiers(enAttente);
+  }
   // On relève, AVANT d'appliquer la vue, l'état du bureau qui prend le focus :
   // était-il déjà affiché, et sous quel parent ? `appliquerVue` peut le
   // reparenter (elle détruit et recrée les `.volet` en vue partagée).
@@ -887,7 +981,8 @@ export function focusRdp(id: number) {
   // précédent. `sftp.open` reste la préférence, restaurée au retour sur le SSH.
   // Trouvé par l'audit du 7 septembre 2026.
   sftpAppliquerVue();
-  renderHosts(); // met à jour le surlignage « sélectionné »
+  // Plus de `renderHosts()` : un clic d'onglet ne change pas la liste (audit
+  // du 12 septembre 2026, C-front-1).
 }
 
 /** Relâche les ressources locales d'une session de bureau — observateur de
@@ -941,9 +1036,11 @@ export function closeRdp(id: number) {
       // l'audit du 7 septembre 2026.
       sftp.open = false;
       sftpAppliquerVue();
+      setTitlebar();
     }
   }
-  renderHosts(); // éteint le voyant vert de l'hôte fermé
+  // Éteint le voyant de l'hôte fermé, en place (C-front-1).
+  if (s.hostId) rafraichirLignes([`rdp:${s.hostId}`]);
 }
 
 /** Bureau RDP fermé (serveur/réseau) : propose de reconnecter ou fermer l'onglet
@@ -1019,9 +1116,14 @@ export async function connectRdpSaved(h: RdpHostT) {
     if (!rep) return;
     pw = rep.password;
     if (rep.remember && pw) {
+      // L'échec se dit : la connexion aboutit avec le mot de passe en mémoire,
+      // et sans message il était redemandé « sans raison » à la suivante
+      // (audit du 12 septembre 2026, C-SIL-6).
       const memorise = await invoke("rdp_password_save", { host: h.host, port: h.port, user: h.user, password: pw, protocole })
-        .then(() => true)
-        .catch(() => false);
+        .then(() => true, (e) => {
+          notifyErreur(t("memorisation-impossible", { e: String(e) }));
+          return false;
+        });
       // Une fois au trousseau, le secret n'a plus aucune raison de continuer sa
       // route : `rdp_open` le relira côté natif. Il séjournait sinon dans
       // `rdpSessions[id].target.password` toute la vie de l'onglet — le
@@ -1106,12 +1208,36 @@ function syncProtoEdition() {
 }
 $("re-proto").addEventListener("change", syncProtoEdition);
 
-/** Sélecteur de dossier du système pour le lecteur partagé ; annulé, le champ ne bouge pas. */
+/** Sélecteur de dossier natif pour le lecteur partagé ; annulé, le champ ne
+ *  bouge pas.
+ *
+ *  Contrat K12 (audit du 12 septembre 2026, C-ipc-1) : le champ était libre et
+ *  la boîte venait du greffon JavaScript, si bien que la page choisissait quel
+ *  dossier du poste servir au bureau distant (un script de la webview pouvait
+ *  y mettre `~`). La boîte est désormais native : le chemin qu'elle rend est
+ *  désigné côté Rust, et `rdp_open` comme `rdp_host_save` refusent un dossier
+ *  qui ne l'a pas été (sauf celui déjà enregistré pour le bureau). Le champ est
+ *  en lecture seule ; « Retirer » le vide. */
 export async function choisirDossierPartage(champ: HTMLInputElement) {
-  const choix = await openDialog({ directory: true, multiple: false, defaultPath: champ.value || undefined }).catch(() => null);
-  if (typeof choix === "string" && choix) champ.value = choix;
+  let choix: string[];
+  try {
+    choix = await invoke<string[]>("choisir_fichiers_locaux", { titre: t("dossier-partage-titre"), dossiers: true });
+  } catch (e) {
+    notifyErreur(t("selecteur-indisponible", { e: String(e) }));
+    return;
+  }
+  if (choix[0]) champ.value = choix[0];
 }
 $("re-partage-choisir").addEventListener("click", () => void choisirDossierPartage($("re-partage") as HTMLInputElement));
+// « Retirer » des deux formulaires (fiche d'un bureau, connexion directe) : le
+// champ en lecture seule n'a plus d'autre moyen d'être vidé. Câblés ici, à côté
+// du sélecteur qu'ils partagent.
+for (const [bouton, champ] of [["re-partage-retirer", "re-partage"], ["m-rdp-partage-retirer", "m-rdp-partage"]]) {
+  document.getElementById(bouton)?.addEventListener("click", () => {
+    const c = document.getElementById(champ) as HTMLInputElement | null;
+    if (c) c.value = "";
+  });
+}
 
 $("re-cancel").addEventListener("click", closeEditRdp);
 $("rdp-edit-form").addEventListener("submit", async (e) => {

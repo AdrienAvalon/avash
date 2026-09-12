@@ -11,6 +11,13 @@ on:
 
 # Par défaut, lecture seule ; seul le job qui publie reçoit les droits d'écrire
 # (release, attestation), pas les trois jobs de construction.
+#
+# La clé de la mise à jour automatique ne sert que dans le job `signer`, qui ne
+# compile ni n'installe rien ; les jobs de construction n'ont aucun secret.
+# `signer` et `publier` passent par l'environnement `release`, qui porte les
+# deux secrets et exige l'approbation du mainteneur. Commandes cargo en
+# --locked, outils en version exacte, checkouts sans jeton persistant (audit du
+# 12 septembre 2026, C-chaine-1, 3, 4, 5 et 7).
 permissions:
   contents: read
 
@@ -33,6 +40,7 @@ jobs:
     name: ${{ matrix.nom }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
 
       - name: Dépendances système (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -65,7 +73,7 @@ jobs:
       # Le sidecar RDP a son propre workspace : il se construit séparément.
       - name: Processus RDP
         working-directory: rdp-sidecar
-        run: cargo build --release
+        run: cargo build --locked --release
 
       - name: Placer le sidecar (Linux, macOS)
         if: matrix.os != 'windows-latest'
@@ -82,25 +90,49 @@ jobs:
           Copy-Item rdp-sidecar/target/release/avash-rdp.exe `
             crates/avash-ui/binaries/avash-rdp-${{ matrix.triple }}.exe
 
+      # Version exacte : tauri-cli assemble les bundles, et `^2` prenait la
+      # dernière publiée au moment du run (audit du 12 septembre 2026,
+      # C-chaine-5). La même que le job outil-signature.
       - name: Outil Tauri
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo install tauri-cli --version 2.11.4 --locked
 
       # Depuis crates/avash-ui : la commande de pré-build de tauri.conf.json
       # utilise un chemin relatif (../../web) qui ne se résout correctement que
       # depuis ce répertoire. NO_STRIP : linuxdeploy échoue à dépouiller les
       # binaires récents (.relr.dyn).
-      # TAURI_SIGNING_PRIVATE_KEY : sans elle, Tauri ne produit aucun fichier .sig
-      # et la mise à jour automatique ne peut pas vérifier ce qu'elle télécharge.
-      # macOS : l'image disque et l'archive .app.tar.gz que la mise à jour
-      # automatique télécharge. Sans identité de développeur Apple, rien n'est
-      # notarisé : Gatekeeper demande un clic droit → Ouvrir au premier lancement.
+      # Aucune clé ici. Trouvé par l'audit du 12 septembre 2026 (C-chaine-1) :
+      # cette étape recevait TAURI_SIGNING_PRIVATE_KEY, alors que `cargo tauri
+      # build` exécute vite et ses greffons, chaque build.rs et chaque macro
+      # procédurale avant de signer ; une seule dépendance compromise lisait la
+      # clé et signait des mises à jour que tous les postes auraient acceptées.
+      # On construit donc avec createUpdaterArtifacts coupé (Tauri ne signe rien
+      # et ne réclame aucune clé), et le job `signer` signe les mêmes fichiers.
+      # `-- --locked` va à cargo : le binaire est fait du Cargo.lock commité,
+      # celui que décrit le SBOM (C-chaine-4). shell bash partout : le JSON
+      # passe tel quel, sans les règles de guillemets de PowerShell.
+      # macOS : l'image disque et le paquet .app, archivé à l'étape suivante
+      # pour la mise à jour automatique. Sans identité de développeur Apple,
+      # rien n'est notarisé : Gatekeeper demande un clic droit → Ouvrir au
+      # premier lancement.
       - name: Bundles Tauri
         working-directory: crates/avash-ui
-        run: cargo tauri build ${{ matrix.os == 'macos-latest' && '--bundles app,dmg' || '' }}
+        shell: bash
+        run: cargo tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}' ${{ matrix.os == 'macos-latest' && '--bundles app,dmg' || '' }} -- --locked
         env:
           NO_STRIP: "1"
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # L'archive que le greffon updater télécharge sur macOS, que tauri-cli
+      # fabriquait tant qu'il signait lui-même : même structure (voir le script
+      # et sa garde, release-archive-macos-structure.sh).
+      - name: Archive de mise à jour (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -- target/release/bundle/macos/*.app
+          if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then
+            echo "::error::un seul paquet .app attendu sous target/release/bundle/macos, trouvé : $*"
+            exit 1
+          fi
+          scripts/archiver-app-macos.sh "$1"
 
       # Version portable Windows : l'application et son processus RDP côte à côte,
       # sans installation ni écriture dans la base de registre. Utile sur un poste
@@ -132,22 +164,18 @@ jobs:
           "@ | Set-Content "$dossier/LISEZ-MOI.txt"
           Compress-Archive -Path $dossier -DestinationPath "portable/avash-$version-windows-x64.zip"
 
+      # Pas de .sig ici : ils viennent du job `signer`.
       - name: Publier les artefacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: avash-${{ matrix.nom }}
           path: |
             target/release/bundle/appimage/*.AppImage
-            target/release/bundle/appimage/*.AppImage.sig
             target/release/bundle/deb/*.deb
-            target/release/bundle/deb/*.deb.sig
             target/release/bundle/rpm/*.rpm
-            target/release/bundle/rpm/*.rpm.sig
             target/release/bundle/nsis/*.exe
-            target/release/bundle/nsis/*.exe.sig
             target/release/bundle/dmg/*.dmg
             target/release/bundle/macos/*.app.tar.gz
-            target/release/bundle/macos/*.app.tar.gz.sig
             portable/*.zip
           if-no-files-found: warn
 
@@ -165,11 +193,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, persist-credentials: false }
       - name: Secrets dans l'historique (gitleaks)
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Version du binaire téléchargé, visible et relue ; la même que
+          # securite.yml (audit du 12 septembre 2026, C-chaine-13).
+          GITLEAKS_VERSION: "8.24.3"
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # nightly
         with:
           toolchain: nightly
@@ -177,7 +208,7 @@ jobs:
         with:
           workspaces: fuzz
       - name: cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
       # Corpus enrichi par les campagnes précédentes (lecture seule ici : la
       # clé n'est jamais nouvelle, seul `restore-keys` joue).
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -188,8 +219,85 @@ jobs:
       - name: Fuzz — 30 s par cible, toutes les cibles
         run: DUREE=30 fuzz/fuzz.sh
 
+  # L'outil qui signera, construit à part et sans aucun secret : le job
+  # `signer` reçoit ce binaire tout fait et ne compile rien. Construit dans
+  # `signer` même, un build.rs de l'arbre de tauri-cli aurait pu laisser un
+  # processus tourner à côté de la clé ; l'exécuteur de `signer` est neuf
+  # (audit du 12 septembre 2026, C-chaine-1). Version exacte, la même que
+  # celle qui construit les bundles.
+  outil-signature:
+    name: Outil de signature (tauri-cli, sans secret)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: {}
+    steps:
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: tauri-cli
+        run: cargo install tauri-cli --version 2.11.4 --locked --root "$RUNNER_TEMP/outil"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: outil-signature
+          path: ${{ runner.temp }}/outil/bin/cargo-tauri
+          retention-days: 1
+          if-no-files-found: error
+
+  # Seul job qui voit la clé de la mise à jour automatique. Il ne compile rien,
+  # n'installe rien, n'exécute aucune action tierce : il télécharge les bundles
+  # et l'outil, signe, et rend les signatures (audit du 12 septembre 2026,
+  # C-chaine-1 ; garde scripts/tests/release-cle-signature-hors-build.sh). Il
+  # passe par l'environnement `release`, qui porte les deux secrets et exige
+  # l'approbation du mainteneur (C-chaine-3), et attend la sécurité : on
+  # n'approuve que ce qui a déjà passé gitleaks et le fuzz. Chaque signature
+  # nomme son fichier (commentaire de confiance de minisign), comme celles que
+  # tauri-cli écrivait.
+  signer:
+    name: Signature des mises à jour
+    needs: [build, securite, outil-signature]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: avash-*
+          path: artefacts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: outil-signature
+          path: outil
+      # Les cinq fichiers que la mise à jour automatique télécharge : un de plus
+      # ou de moins signale un build incomplet. Le mot de passe est toujours
+      # posé, fût-il vide : absent, tauri-cli le demanderait à un terminal qui
+      # n'existe pas (vérifié avec tauri-cli 2.11.4).
+      - name: Signer les artefacts de mise à jour
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          chmod +x outil/cargo-tauri
+          mkdir signatures
+          n=0
+          while IFS= read -r -d '' f; do
+            outil/cargo-tauri signer sign "$f" >/dev/null
+            cp "$f.sig" signatures/
+            n=$((n + 1))
+          done < <(find artefacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*-setup.exe' -o -name '*.app.tar.gz' \) -print0)
+          ls -l signatures
+          if [ "$n" -ne 5 ]; then
+            echo "::error::$n artefacts de mise à jour signés, 5 attendus (AppImage, deb, rpm, setup NSIS, .app.tar.gz)."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: avash-signatures
+          path: signatures/*.sig
+          if-no-files-found: error
+
   publier:
-    needs: [build, securite]
+    needs: [build, securite, signer]
     runs-on: ubuntu-latest
     # L'événement autant que la référence. Trouvé par l'audit du 9 septembre
     # 2026 : `workflow_dispatch` est là pour ESSAYER un build sans créer de tag,
@@ -198,13 +306,19 @@ jobs:
     # sur un tag déjà publié republiait pour de bon : artefacts téléversés et
     # `latest.json` signé réécrit sous les utilisateurs.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # L'approbation du mainteneur est exigée avant d'écrire la release et
+    # latest.json sous tous les utilisateurs (audit du 12 septembre 2026,
+    # C-chaine-3 ; réglage de l'environnement sur GitHub, garde
+    # scripts/tests/release-environnement-protege.sh).
+    environment: release
     permissions:
       contents: write     # créer la release et y joindre les binaires
       id-token: write     # jeton OIDC : prouve à Sigstore que la signature vient de ce workflow
       attestations: write # enregistrer l'attestation de provenance
     steps:
+      # Les bundles et les signatures, pas l'outil de signature.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with: { path: artefacts }
+        with: { path: artefacts, pattern: "avash-*" }
       # Manifeste interrogé par l'application (plugin updater de Tauri). Sans ce
       # fichier, l'endpoint renvoie 404 et « vérifier les mises à jour » échoue.
       - name: Manifeste de mise à jour (latest.json)
@@ -216,25 +330,24 @@ jobs:
           # Sans signature, le manifeste serait vide et la mise à jour échouerait
           # sans rien dire. On préfère faire échouer la publication, visiblement.
           if [ -z "$(sig '*.AppImage.sig')" ] && [ -z "$(sig '*-setup.exe.sig')" ]; then
-            echo "::error::Aucune signature trouvée. Le secret TAURI_SIGNING_PRIVATE_KEY" \
-                 "est-il défini sur le dépôt ? Sans lui, la mise à jour automatique" \
-                 "ne peut pas vérifier ce qu'elle télécharge."
+            echo "::error::Aucune signature trouvée. Le job signer a-t-il tourné, et" \
+                 "les secrets TAURI_SIGNING_* sont-ils définis dans l'environnement" \
+                 "release ? Sans eux, la mise à jour automatique ne peut pas vérifier" \
+                 "ce qu'elle télécharge."
             exit 1
           fi
-          # Trouvé par l'audit du 7 septembre 2026 : tauri-cli signe aussi les
-          # paquets .deb et .rpm (createUpdaterArtifacts, bundle.rs sign_updaters).
-          # Le client d'une installation deb/rpm interroge linux-x86_64-deb /
-          # linux-x86_64-rpm ; sans ces entrées il se rabattait sur l'AppImage et
-          # échouait après l'avoir téléchargée (« invalid updater format »). On
-          # publie donc les cibles natives. Un paquet présent sans sa signature
-          # signale une clé absente : mieux vaut échouer que proposer une mise à
-          # jour deb/rpm impossible à vérifier.
-          for cible in deb rpm; do
-            if present "*.$cible" && [ -z "$(sig "*.$cible.sig")" ]; then
-              echo "::error::Un paquet .$cible est présent sans sa signature" \
-                   "(*.$cible.sig). tauri-cli devrait la produire quand" \
-                   "createUpdaterArtifacts est vrai et TAURI_SIGNING_PRIVATE_KEY" \
-                   "défini. Publication interrompue."
+          # Trouvé par l'audit du 7 septembre 2026 : le client d'une
+          # installation deb/rpm interroge linux-x86_64-deb / linux-x86_64-rpm ;
+          # sans ces entrées il se rabattait sur l'AppImage et échouait après
+          # l'avoir téléchargée (« invalid updater format »). On publie donc
+          # les cibles natives. Depuis l'audit du 12 septembre 2026, les
+          # signatures viennent du job `signer`, plus de tauri-cli : chacun des
+          # cinq artefacts de mise à jour présent doit avoir la sienne, sinon
+          # mieux vaut échouer que proposer une mise à jour impossible à vérifier.
+          for motif in '*.AppImage' '*.deb' '*.rpm' '*-setup.exe' '*.app.tar.gz'; do
+            if present "$motif" && [ -z "$(sig "$motif.sig")" ]; then
+              echo "::error::$motif est présent sans sa signature ($motif.sig)." \
+                   "Le job signer l'a-t-il manqué ? Publication interrompue."
               exit 1
             fi
           done
@@ -284,6 +397,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: source
+          persist-credentials: false
 
       # Nomenclature logicielle (SBOM) au format SPDX : la liste exacte des
       # bibliothèques embarquées, lue dans les fichiers de verrouillage de
@@ -321,6 +435,9 @@ jobs:
       #   gh attestation verify <fichier> --repo AdrienAvalon/avash
       # Ce n'est PAS une signature Authenticode : elle ne lève pas
       # l'avertissement de Windows, qui exige un certificat d'autorité.
+      # SHA256SUMS en est un sujet lui aussi : le fichier d'empreintes se
+      # vérifie à son tour, et scripts/winget-manifeste.sh ne recopie plus une
+      # empreinte que rien n'atteste (audit du 12 septembre 2026, C-chaine-10).
       - name: Attester la provenance des binaires
         id: provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -333,6 +450,7 @@ jobs:
             artefacts/**/*.zip
             artefacts/**/*.dmg
             artefacts/**/*.app.tar.gz
+            SHA256SUMS
 
       # Le lot Sigstore de cette attestation est joint à la release sous le
       # nom que les outils reconnaissent (`.intoto.jsonl`). L'attestation vit

@@ -31,7 +31,14 @@ impl<'a> SegmentedDataPdu<'a> {
                 for _ in 0..segment_count {
                     let size = usize::try_from(buffer.read_u32::<LittleEndian>()?)
                         .map_err(|_| ZgfxError::InvalidIntegralConversion("segment data size"))?;
-                    let (segment_data, new_buffer) = buffer.split_at(size);
+                    // La taille vient du fil : `split_at` paniquait au-delà du
+                    // message (audit du 12 septembre 2026, C-panique-1).
+                    let (segment_data, new_buffer) = buffer.split_at_checked(size).ok_or_else(|| {
+                        ZgfxError::IOError(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "segment ZGFX plus long que le message",
+                        ))
+                    })?;
                     buffer = new_buffer;
 
                     segments.push(BulkEncodedData::from_buffer(segment_data)?);

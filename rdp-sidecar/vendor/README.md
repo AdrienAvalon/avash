@@ -325,6 +325,22 @@ refusé, et une cible cargo-fuzz les traiterait à tort comme des plantages
 l'amplification, qui n'est **pas** rattrapable par `catch_unwind`, est corrigée
 dans le code.
 
+### Le message en plusieurs segments (audit du 12 septembre 2026)
+
+La borne ci-dessus vaut pour UN segment. Un message `Multipart` en porte
+jusqu'à 65 535 (`segment_count` sur 16 bits), et rien ne bornait leur somme :
+`uncompressed_size` n'était comparé qu'après avoir tout écrit. Environ 1,3 Mo
+reçus (65 535 segments d'un littéral et d'une longue correspondance)
+donnaient ≈ 4 Gio de sortie, puis autant de copies dans le découpage en PDU
+du processus RDP : l'OOM, hors de portée de son `catch_unwind`.
+`Decompressor::decompress` refuse désormais un message dont la taille annoncée
+dépasse `PLAFOND_MESSAGE` (16 Mio, comme le réassemblage d'`ironrdp-svc`)
+avant tout segment, et vérifie la somme à chaque segment. Au passage, la
+longueur de chaque segment, lue sur le fil, passait par `split_at`, qui
+paniquait au-delà du message : `split_at_checked` en fait une erreur. Deux
+tests dans `src/zgfx/mod.rs` : `un_message_zgfx_multipart_ne_depasse_pas_le_plafond`
+et `une_taille_de_segment_mensongere_est_une_erreur_pas_une_panique`.
+
 ## `vnc-rs` — un serveur VNC hostile, et une file qu'on ne peut pas attendre
 
 Copie de `vnc-rs` 0.5.3 (client RFB : poignée de main, authentification VNC
@@ -343,6 +359,10 @@ serveur entier scénarisé dans un tampon) :
   la met à zéro ; la résolution annoncée (à l'entrée et par le pseudo-codage
   DesktopSize) est refusée au-delà de 8192 dans chaque dimension ; un
   rectangle qui déborde du cadre est refusé avant qu'un décodeur n'alloue.
+  Le texte (presse-papiers `ServerCutText`, nom du bureau) a sa propre borne,
+  `codec::TEXTE_MAX` (16 Mio) : celle des pixels laissait un serveur faire
+  allouer 256 Mio de texte à tout moment (audit du 12 septembre 2026, test
+  `un_texte_du_presse_papiers_demesure_est_refuse_avant_toute_allocation`).
 - **Deux comportements indéfinis et deux paniques.** Le résultat
   d'authentification (un `u32` du serveur) était transmuté vers une
   énumération à deux variantes ; un message `SetColorMapEntries` tombait sur

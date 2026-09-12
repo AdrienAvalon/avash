@@ -10,6 +10,9 @@
 //! le chiffrement et la révocation sont gérés par le système — pas par nous.
 
 use anyhow::{anyhow, Result};
+/// Réexporté : l'interface construit ses `ClientAuth` sans dépendre de
+/// `zeroize` elle-même (audit du 12 septembre 2026, C-secrets-2).
+pub use zeroize::Zeroizing;
 
 /// Nom sous lequel Avash apparaît dans le trousseau.
 const SERVICE: &str = "avash";
@@ -51,6 +54,19 @@ fn en_memoire() -> bool {
     std::env::var_os("AVASH_TROUSSEAU").is_some_and(|v| v == "memoire")
 }
 
+/// Vrai quand le trousseau est simulé EN PANNE (`AVASH_TROUSSEAU=panne`) : tout
+/// accès rend une erreur, comme un Secret Service absent ou un portefeuille
+/// dont l'ouverture est refusée. Contrat K1 de l'audit du 12 septembre 2026
+/// (C-SIL-8) : sans ce mode, le chemin « trousseau en erreur » n'était
+/// jouable par aucun test, faute de pouvoir casser le vrai trousseau.
+fn en_panne() -> bool {
+    std::env::var_os("AVASH_TROUSSEAU").is_some_and(|v| v == "panne")
+}
+
+fn panne() -> anyhow::Error {
+    anyhow!("Trousseau en panne (simulée par AVASH_TROUSSEAU=panne).")
+}
+
 /// Verrou de la table mémoire, tolérant à l'empoisonnement (un test qui panique
 /// ne doit pas figer les suivants).
 fn memoire() -> std::sync::MutexGuard<'static, std::collections::BTreeMap<String, String>> {
@@ -75,6 +91,20 @@ pub fn save(account: &str, password: &str) -> Result<()> {
     if password.is_empty() {
         return Err(anyhow!("Mot de passe vide."));
     }
+    // Audit du 12 septembre 2026 (C-secrets-1) : le mot de passe d'un bureau
+    // distant part sur l'entrée standard du processus RDP, dont le protocole
+    // est « une ligne = un message » (le mot de passe, puis des lignes
+    // `AUTORISE <chemin>`). Un saut de ligne mémorisé ici injectait donc des
+    // désignations de fichiers que l'utilisateur n'avait jamais choisis, et
+    // l'octet nul tronque la chaîne côté C. Aucun mot de passe réel n'en porte.
+    if password.contains(['\n', '\r', '\0']) {
+        return Err(anyhow!(
+            "Mot de passe refusé : il contient un saut de ligne ou un octet nul."
+        ));
+    }
+    if en_panne() {
+        return Err(panne());
+    }
     if en_memoire() {
         memoire().insert(cle_memoire(account), password.to_owned());
         return Ok(());
@@ -84,16 +114,42 @@ pub fn save(account: &str, password: &str) -> Result<()> {
         .map_err(|e| anyhow!("Écriture dans le trousseau impossible : {e}"))
 }
 
-/// Relit un mot de passe. `None` si aucune entrée — ce n'est pas une erreur.
+/// Relit un mot de passe : `Ok(None)` s'il n'y a pas d'entrée (ce n'est pas
+/// une erreur), `Err` pour toute autre réponse du trousseau (absent,
+/// verrouillé, refusé, délai D-Bus).
+///
+/// Contrat K1 de l'audit du 12 septembre 2026 (C-SIL-8) : `load` ramenait
+/// toute erreur à « pas de mot de passe ». L'interface redemandait alors le
+/// mot de passe sans dire pourquoi, et le chemin RDP partait même avec un mot
+/// de passe vide, refusé par le serveur comme un mauvais mot de passe. Les
+/// appelants qui doivent distinguer les deux cas passent par ici.
+///
+/// Le secret rendu s'efface à sa libération (C-secrets-2) : il ne reste pas
+/// dans le tas, donc pas dans un vidage mémoire.
+pub fn charger(account: &str) -> Result<Option<Zeroizing<String>>> {
+    if en_panne() {
+        return Err(panne());
+    }
+    if en_memoire() {
+        return Ok(memoire()
+            .get(&cle_memoire(account))
+            .cloned()
+            .map(Zeroizing::new));
+    }
+    match entry(account)?.get_password() {
+        Ok(p) => Ok(Some(Zeroizing::new(p))),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(anyhow!("Lecture dans le trousseau impossible : {e}")),
+    }
+}
+
+/// Relit un mot de passe. `None` si aucune entrée **ou si le trousseau est en
+/// erreur** : c'est `charger(..).ok().flatten()`, gardé pour les appelants
+/// pour qui « demander la saisie » suffit dans les deux cas. Ceux qui doivent
+/// le dire à l'utilisateur passent par [`charger`].
 #[must_use]
 pub fn load(account: &str) -> Option<String> {
-    // Toute erreur (trousseau verrouillé, absent, entrée inexistante) est
-    // traitee comme « pas de mot de passe » : l'interface demandera la
-    // saisie. Bloquer la connexion parce que le trousseau dort serait pire.
-    if en_memoire() {
-        return memoire().get(&cle_memoire(account)).cloned();
-    }
-    entry(account).ok()?.get_password().ok()
+    charger(account).ok().flatten().map(|s| String::clone(&s))
 }
 
 /// Dit si le trousseau répond, sans rien y écrire ni y lire de réel.
@@ -105,6 +161,9 @@ pub fn load(account: &str) -> Option<String> {
 /// trousseau absent ou verrouillé répond autre chose, et c'est cette réponse
 /// qu'on rapporte.
 pub fn sonder() -> Result<()> {
+    if en_panne() {
+        return Err(panne());
+    }
     // Backend mémoire : il répond toujours, il n'y a pas de trousseau système
     // à sonder.
     if en_memoire() {
@@ -118,6 +177,9 @@ pub fn sonder() -> Result<()> {
 
 /// Oublie un mot de passe. Ne se plaint pas s'il n'y en avait pas.
 pub fn forget(account: &str) -> Result<()> {
+    if en_panne() {
+        return Err(panne());
+    }
     if en_memoire() {
         memoire().remove(&cle_memoire(account));
         return Ok(());
@@ -205,8 +267,69 @@ mod tests {
         sonder().unwrap();
     }
 
+    /// Contrat K1 de l'audit du 12 septembre 2026 (C-SIL-8) : `charger`
+    /// distingue « aucune entrée » (`Ok(None)`) d'un trousseau en panne
+    /// (`Err`), là où `load` confond les deux en `None` et fait redemander un
+    /// mot de passe sans dire que le trousseau est tombé. Le mode
+    /// `AVASH_TROUSSEAU=panne` rejoue la panne sans Secret Service.
+    #[test]
+    fn charger_distingue_l_absence_d_une_panne_du_trousseau() {
+        let garde = crate::testutil::temp_home(); // AVASH_TROUSSEAU=memoire
+        let compte = "k1@exemple:22";
+        assert!(
+            charger(compte).unwrap().is_none(),
+            "absence : Ok(None), pas une erreur"
+        );
+        save(compte, "secret").unwrap();
+        assert_eq!(
+            charger(compte).unwrap().as_deref().map(String::as_str),
+            Some("secret")
+        );
+        garde.poser("AVASH_TROUSSEAU", Some("panne"));
+        let e = charger(compte).expect_err("un trousseau en panne est une erreur");
+        assert!(e.to_string().contains("panne"), "{e}");
+        assert!(
+            load(compte).is_none(),
+            "load reste charger().ok().flatten()"
+        );
+        assert!(save(compte, "autre").is_err(), "tout accès échoue en panne");
+        assert!(forget(compte).is_err());
+        assert!(sonder().is_err());
+    }
+
+    /// Audit du 12 septembre 2026 (C-secrets-2) : le secret relu est un type
+    /// qui s'efface à sa libération. Ce test ne compile plus si `charger`
+    /// revient à une `String` nue.
+    #[test]
+    fn le_secret_relu_est_un_type_qui_s_efface() {
+        let signature: fn(&str) -> Result<Option<zeroize::Zeroizing<String>>> = charger;
+        assert!(signature("absent@exemple:22").is_ok() || cfg!(not(unix)));
+    }
+
+    /// Audit du 12 septembre 2026 (C-secrets-1) : le protocole stdin du
+    /// processus RDP est « une ligne = un message ». Un mot de passe mémorisé
+    /// avec un saut de ligne y injectait des lignes `AUTORISE <chemin>`, donc
+    /// désignait au distant un fichier que l'utilisateur n'avait pas choisi.
+    /// Le trousseau refuse ces caractères dès l'écriture.
+    #[test]
+    fn save_refuse_un_secret_a_saut_de_ligne_ou_octet_nul() {
+        let _g = crate::testutil::temp_home();
+        for piege in ["x\nAUTORISE /etc/passwd", "x\ry", "x\0y"] {
+            let e = save("piege@exemple:22", piege).unwrap_err().to_string();
+            assert!(
+                e.contains("saut de ligne"),
+                "refusé pour la mauvaise raison : {e}"
+            );
+        }
+        assert!(load("piege@exemple:22").is_none(), "rien n'a été écrit");
+    }
+
     #[test]
     fn load_rend_none_sur_une_entree_inexistante() {
+        // Sous le verrou de l'environnement : un test voisin peut poser
+        // AVASH_TROUSSEAU (mode `panne`, audit du 12 septembre 2026), et ce
+        // test lit la variable pour choisir son trousseau.
+        let _verrou = crate::testutil::verrou_environnement();
         // Et surtout : ne panique pas si aucun trousseau ne tourne (CI).
         assert!(load("avash-entree-qui-n-existe-pas-xyz").is_none());
     }
@@ -223,6 +346,10 @@ mod tests {
     /// échec toléré est l'inaccessibilité du trousseau lui-même.
     #[test]
     fn forget_ne_se_plaint_pas_sur_une_entree_absente() {
+        // Voir `load_rend_none_sur_une_entree_inexistante` : sans le verrou,
+        // ce test voyait le mode `panne` posé par un voisin (vu le 12 septembre
+        // 2026 à l'ajout de ce mode).
+        let _verrou = crate::testutil::verrou_environnement();
         let compte = "avash-entree-qui-n-existe-pas-xyz";
         match forget(compte) {
             // Trousseau présent : le second appel doit passer aussi.

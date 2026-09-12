@@ -73,7 +73,8 @@ beforeAll(async () => {
   // autres tests DOM) ; il importe ./sftp, dont on récupère ensuite les exports.
   await import("./main");
   const mod = await import("./sftp");
-  boutonAnnulerVisible = mod.boutonAnnulerVisible as typeof boutonAnnulerVisible;
+  // La décision vit dans sftp-transferts.ts depuis l'audit du 12 septembre 2026.
+  boutonAnnulerVisible = (await import("./sftp-transferts")).boutonAnnulerVisible as typeof boutonAnnulerVisible;
   annulerTransfert = mod.annulerTransfert as typeof annulerTransfert;
   const i18n = await import("./i18n");
   t = i18n.t;

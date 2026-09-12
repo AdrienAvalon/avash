@@ -111,7 +111,9 @@ describe("Enregistrement de session (asciicast)", () => {
     expect(evenements.some((e) => e[1] === "o" && e[2].includes("bonjour-cast-ok"))).toBe(true);
 
     // La liste des enregistrements, depuis la palette, montre les deux fichiers.
-    await browser.keys(["Control", "k"]);
+    // Le terminal a le focus : Ctrl+K y est le kill-line de readline, la
+    // palette s'ouvre par Ctrl+Maj+K (audit du 12 septembre 2026, C-front-3).
+    await browser.keys(["Control", "Shift", "k"]);
     const input = await $("#palette-input");
     await input.waitForDisplayed({ timeout: 5000 });
     await input.setValue("Enregistrements");

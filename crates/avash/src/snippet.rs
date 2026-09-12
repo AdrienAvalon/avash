@@ -89,7 +89,12 @@ pub fn render<S: std::hash::BuildHasher>(
             }
         }
         // Pousse l'octet courant en restant sur une frontiere de caractere.
-        let ch = command[i..].chars().next().unwrap();
+        // `i < command.len()` et `i` toujours sur une frontière : il reste un
+        // caractère. Écrit sans `unwrap` pour le lint `unwrap_used` (audit du
+        // 12 septembre 2026).
+        let Some(ch) = command[i..].chars().next() else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -116,7 +121,17 @@ pub fn render<S: std::hash::BuildHasher>(
 /// APRES `ESC[201~`, jamais dedans.
 #[must_use]
 pub fn terminal_payload(text: &str, run: bool, crochets: bool) -> String {
-    let conv = text.replace("\r\n", "\n").replace('\n', "\r");
+    let mut conv = text.replace("\r\n", "\n").replace('\n', "\r");
+    // Audit du 12 septembre 2026 (C-injection-2) : un `ESC[201~` présent DANS
+    // le texte refermait le collage protégé, et le `\r` qui suivait
+    // s'exécutait malgré la case « Exécuter » décochée. Les deux marqueurs sont
+    // retirés du texte, jusqu'à stabilité : en retirer un peut en reformer un
+    // autre avec ses voisins (`ESC[20` + `ESC[201~` + `1~`).
+    if crochets {
+        while conv.contains("\x1b[200~") || conv.contains("\x1b[201~") {
+            conv = conv.replace("\x1b[200~", "").replace("\x1b[201~", "");
+        }
+    }
     let mut out = if crochets {
         format!("\x1b[200~{conv}\x1b[201~")
     } else {
@@ -256,6 +271,28 @@ mod tests {
         );
         // Aucun `\r` ne sort des crochets : rien ne peut s'executer tout seul.
         assert!(!terminal_payload("stop\nrm -rf x\nstart", false, true).ends_with('\r'));
+    }
+
+    /// Audit du 12 septembre 2026 (C-injection-2) : la fin du collage protégé
+    /// ne peut venir que d'Avash, jamais du texte collé ; sinon ce qui suit
+    /// s'exécute sans que l'utilisateur l'ait demandé.
+    #[test]
+    fn la_fin_de_collage_entre_crochets_ne_peut_pas_venir_du_texte() {
+        for piege in [
+            "a\x1b[201~\rrm -rf x",
+            "a\x1b[20\x1b[201~1~\rrm -rf x",
+            "\x1b[200~b\x1b[201~\n",
+        ] {
+            let p = terminal_payload(piege, false, true);
+            assert_eq!(p.matches("\x1b[201~").count(), 1, "{p:?}");
+            assert_eq!(p.matches("\x1b[200~").count(), 1, "{p:?}");
+            assert!(
+                p.starts_with("\x1b[200~") && p.ends_with("\x1b[201~"),
+                "{p:?}"
+            );
+        }
+        // Hors crochets, le texte n'est pas touché (la commande est voulue).
+        assert_eq!(terminal_payload("a\x1b[201~", false, false), "a\x1b[201~");
     }
 
     #[test]

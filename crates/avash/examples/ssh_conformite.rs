@@ -10,6 +10,10 @@
 //!
 //! L'hôte vient de `PARC_HOTE` (127.0.0.1 par défaut ; « docker » sur GitLab,
 //! où le parc tourne dans un démon à part).
+
+// Programme d'essai lancé à la main : un décor qui échoue doit s'arrêter net,
+// d'où les `unwrap` et `expect`, que le lint `unwrap_used` signalerait.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::process::ExitCode;
 
 #[tokio::main]
@@ -24,12 +28,15 @@ async fn main() -> ExitCode {
     // changement de clé et le test échoue pour une mauvaise raison.
     let bac = std::env::temp_dir().join(format!("avash-conf-ssh-{}", std::process::id()));
     std::fs::create_dir_all(bac.join(".ssh")).ok();
+    // SAFETY: `#[tokio::main]` a lancé les fils du runtime, mais ils dorment et
+    // ne lisent pas l'environnement ; aucun code C (ring, russh) n'a encore
+    // démarré, donc aucun `getenv` concurrent. Seule écriture du programme.
     unsafe { std::env::set_var("AVASH_HOME", &bac) };
 
     let auth = avash::ssh::ClientAuth {
         user: user.clone(),
         key_path: None,
-        password: Some(mdp),
+        password: Some(mdp.into()),
     };
     let hote = std::env::var("PARC_HOTE").unwrap_or_else(|_| "127.0.0.1".to_owned());
     let r = avash::ssh::AvashSession::connect(&hote, port, &auth).await;

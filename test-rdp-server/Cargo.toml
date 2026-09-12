@@ -33,3 +33,17 @@ sha2 = "0.11"
 # fabrique de canal, par laquelle passe rdpdr. Voir vendor/README.md.
 [patch.crates-io]
 ironrdp-server = { path = "vendor/ironrdp-server" }
+
+# Politique de sûreté commune au processus RDP et aux serveurs de test (audit
+# du 12 septembre 2026, unsafe.md) : ce paquet n'hérite de rien, l'espace de
+# travail ne le couvre pas. Aucun `unsafe` ici hors de `vendor/` (dont les
+# paquets gardent leurs propres réglages) : ces lints ne coûtent rien et
+# signalent le premier qui arriverait sans justification.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+deprecated_safe_2024 = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+unnecessary_safety_comment = "warn"

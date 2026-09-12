@@ -74,3 +74,27 @@ export function setSondeAuDemarrage(actif: boolean): void {
     /* stockage indisponible : le choix vaut pour la session */
   }
 }
+
+/** Demander avant de fermer un onglet vivant (session SSH ou série ouverte,
+ *  bureau distant connecté). Audit du 12 septembre 2026 (C-front-6) : toutes les
+ *  actions destructrices passaient par une confirmation, sauf celle-ci, pourtant
+ *  irréversible pour ce qui tourne dans la session ; une croix de 18 px visée un
+ *  peu trop à droite, ou Ctrl+W par réflexe readline, tuait une migration en
+ *  cours. Demandé par défaut ; « Ne plus demander » se règle à la palette. */
+export const FERMETURE_KEY = "avash.onglets.confirmer-fermeture";
+
+export function confirmerFermetureOnglet(): boolean {
+  try {
+    return localStorage.getItem(FERMETURE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function setConfirmerFermetureOnglet(actif: boolean): void {
+  try {
+    localStorage.setItem(FERMETURE_KEY, actif ? "1" : "0");
+  } catch {
+    /* stockage indisponible : le choix vaut pour la session */
+  }
+}

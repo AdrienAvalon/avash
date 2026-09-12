@@ -155,7 +155,7 @@ Le front se construit avec Vite, et l'application native avec Tauri :
 cd web && npm run dev
 
 # Application native complète (nécessite tauri-cli)
-cargo install tauri-cli --version '^2.0' --locked   # une fois
+cargo install tauri-cli --version 2.11.4 --locked   # une fois (version exacte de la chaîne)
 cd crates/avash-ui && cargo tauri dev
 ```
 
@@ -298,7 +298,7 @@ accommodent. La fonctionnalité `webdriver` n'entre jamais dans un binaire
 publié.
 
 Voir `e2e/README.md` pour les prérequis (`tauri-driver`, `webkit2gtk-driver`)
-et le détail des 78 scénarios.
+et le détail des 81 scénarios.
 
 ### Claude sur les issues et les PR
 
@@ -314,7 +314,7 @@ pas accès, et c'est voulu.
 
 `fuzz/` secoue les parseurs du cœur avec cargo-fuzz ; il exige nightly, donc
 il est hors de l'espace de travail et de `check.sh`. Une fois
-`rustup toolchain install nightly` et `cargo install cargo-fuzz --locked`
+`rustup toolchain install nightly` et `cargo install cargo-fuzz --version 0.13.2 --locked`
 passés : `fuzz/fuzz.sh` (60 s par cible), ou plus longtemps avec `DUREE=600`.
 Une entrée qui fait paniquer atterrit dans `fuzz/artifacts/<cible>/` ; elle
 se rejoue avec `cargo +nightly fuzz run <cible> <fichier>` et mérite un test

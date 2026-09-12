@@ -26,10 +26,10 @@ vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ readText: vi.fn().mockR
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 // Collaborateurs d'`openRdp` sans intérêt ici : on les neutralise pour n'exercer
 // que le chemin de fermeture (ordre des appels et incrustation).
-vi.mock("./main", () => ({ loadHosts: vi.fn(), renderHosts: vi.fn(), moveHostTo: vi.fn(), setupFolderDrop: vi.fn(), closeSession: vi.fn(), focusSession: vi.fn(), openSession: vi.fn() }));
+vi.mock("./main", () => ({ loadHosts: vi.fn(), renderHosts: vi.fn(), rafraichirLignes: vi.fn(), moveHostTo: vi.fn(), setupFolderDrop: vi.fn(), closeSession: vi.fn(), focusSession: vi.fn(), openSession: vi.fn() }));
 vi.mock("./vue-partagee", () => ({ appliquerVue: vi.fn(), estAffiche: () => false, surFermeture: vi.fn(), surFocus: vi.fn() }));
 vi.mock("./verrous", () => ({ currentLocks: () => Promise.resolve(null) }));
-vi.mock("./raccourcis", () => ({ orderedTabs: () => [], focusTab: vi.fn() }));
+vi.mock("./raccourcis", () => ({ orderedTabs: () => [], focusTab: vi.fn(), fermerOnglet: vi.fn() }));
 vi.mock("./onglets-restauration", () => ({ majMemoireOnglets: vi.fn() }));
 vi.mock("./notifications", () => ({ notify: vi.fn(), notifyErreur: vi.fn() }));
 vi.mock("./dossiers", () => ({ openMoveModal: vi.fn() }));

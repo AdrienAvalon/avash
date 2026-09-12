@@ -14,6 +14,21 @@ type KeyEntry = {
   mode: string | null;
 };
 
+/** Ce que la liste dit des droits d'une clé privée.
+ *
+ *  Audit du 12 septembre 2026 (couverture.md, section 5, point 2) : décision
+ *  extraite pour être testée. OpenSSH refuse une clé privée dont le groupe ou
+ *  les autres ont un droit quelconque (`st_mode & 077`, « UNPROTECTED PRIVATE
+ *  KEY FILE ») ; « 400 » ou « 700 » lui conviennent. L'ancienne règle (tout ce
+ *  qui n'est pas « 600 ») criait à tort sur une clé en lecture seule. `null` :
+ *  Windows, droits portés par une ACL (le cœur garde ce `null` exprès). Un mode
+ *  illisible avertit plutôt que de se taire. */
+export function droitsCle(mode: string | null): "acl" | "correct" | "trop-ouverts" {
+  if (mode === null) return "acl";
+  if (!/^[0-7]{1,4}$/.test(mode)) return "trop-ouverts";
+  return (parseInt(mode, 8) & 0o077) === 0 ? "correct" : "trop-ouverts";
+}
+
 const keysModal = () => $("keys-modal");
 const keyError = () => $("k-error");
 const keyOk = () => $("k-ok");
@@ -60,7 +75,8 @@ async function keysRefresh() {
     // Des droits trop ouverts font refuser la cle par OpenSSH : on le signale
     // plutot que de laisser l'utilisateur devant un echec incomprehensible.
     const mode = document.createElement("span");
-    if (k.mode === null) {
+    const droits = droitsCle(k.mode);
+    if (droits === "acl") {
       // Windows n'a pas de bits de permission : les droits passent par une ACL
       // (posee par icacls). Afficher « - ⚠ OpenSSH exige 600 » accusait des
       // droits que le systeme n'a pas ; on montre une etiquette neutre, sans
@@ -69,9 +85,10 @@ async function keysRefresh() {
       mode.textContent = t("cles-droits-acl");
       mode.title = t("cles-droits-acl-detail");
     } else {
-      mode.className = "kmode" + (k.mode === "600" ? "" : " warn");
-      mode.textContent = k.mode === "600" ? "600" : `${k.mode} ⚠`;
-      mode.title = k.mode === "600" ? t("cles-droits-corrects") : t("cles-droits-600");
+      const correct = droits === "correct";
+      mode.className = "kmode" + (correct ? "" : " warn");
+      mode.textContent = correct ? (k.mode ?? "") : `${k.mode} ⚠`;
+      mode.title = correct ? t("cles-droits-corrects") : t("cles-droits-600");
     }
 
     row.append(name, mode);

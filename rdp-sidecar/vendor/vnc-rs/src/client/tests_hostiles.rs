@@ -810,3 +810,36 @@ async fn une_raison_de_refus_demesuree_est_bornee() {
         "un refus d'authentification doit se présenter comme tel : {e}"
     );
 }
+
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-5) : le texte
+/// `ServerCutText` n'était borné que par le tampon prévu pour les pixels
+/// (8192 × 8192 × 4, 256 Mio). Un serveur faisait allouer 200 Mio de texte à
+/// tout moment, puis le double une fois converti en UTF-8. Le texte a sa propre
+/// borne, 16 Mio, tenue avant toute allocation.
+#[tokio::test]
+async fn un_texte_du_presse_papiers_demesure_est_refuse_avant_toute_allocation() {
+    let mut s = script_sans_auth(4, 4);
+    s.extend_from_slice(&[3, 0, 0, 0]); // ServerCutText, bourrage
+    s.extend_from_slice(&u32::try_from(crate::codec::TEXTE_MAX + 1).unwrap().to_be_bytes());
+    // ...et pas un octet de texte : la borne doit tomber avant toute lecture.
+    let flux = serveur(&s).await;
+    let client = connecteur(flux)
+        .try_start()
+        .await
+        .unwrap()
+        .finish()
+        .unwrap();
+    let mut evenements = client.take_events().await.expect("file des événements");
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(3), evenements.recv()).await {
+            Ok(Some(VncEvent::Error(m))) => {
+                assert!(m.contains("borne"), "{m}");
+                break;
+            }
+            Ok(Some(VncEvent::Text(_))) => panic!("un texte de 16 Mio + 1 a été accepté"),
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("la file s'est fermée sans erreur"),
+            Err(_) => panic!("aucune erreur : le client attend les octets d'un texte démesuré"),
+        }
+    }
+}

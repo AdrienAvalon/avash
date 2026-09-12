@@ -8,7 +8,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { startVncServer, waitForPort, attendreBureauConnecte, openssl } from "./helpers.js";
+import { startVncServer, waitForPort, attendreBureauConnecte, openssl, confirmerFermeture } from "./helpers.js";
 
 const VNC_PORT = 35903;
 const TLS_PORT = 35904;
@@ -77,6 +77,8 @@ describe("VNC — VeNCrypt, TLS et certificat épinglé", () => {
     // tombe y poserait sa propre incrustation, et l'on ne saurait plus
     // laquelle on lit.
     await browser.execute(() => document.querySelector(".tab.active .close")?.click());
+    // Bureau connecté : la fermeture se confirme (audit du 12 septembre 2026, C-front-6).
+    await confirmerFermeture();
     await browser.waitUntil(async () => (await $$(".rdp-container")).length === 0, { timeout: 5000 });
     srv.kill();
     srv = null;

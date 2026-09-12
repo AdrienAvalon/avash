@@ -55,17 +55,17 @@ sidecar() {
 
 titre "Binaires instrumentés (application et processus RDP, release)"
 sidecar cargo llvm-cov clean
-sidecar cargo build --release
+sidecar cargo build --locked --release
 # Le build-script de l'application exige le binaire du sidecar sous
 # binaries/<triplet> (ressource embarquée) : c'est l'instrumenté qu'on y pose.
 triplet=$(rustc -vV | sed -n 's/^host: //p')
 mkdir -p crates/avash-ui/binaries
 cp rdp-sidecar/target/release/avash-rdp "crates/avash-ui/binaries/avash-rdp-$triplet"
-cargo build --release -p avash-ui
+cargo build --locked --release -p avash-ui
 
 titre "Tests unitaires, même profil"
-cargo test --workspace --release
-sidecar cargo test --release
+cargo test --locked --workspace --release
+sidecar cargo test --locked --release
 
 # La suite hérite de LLVM_PROFILE_FILE : l'application et le processus RDP
 # qu'elle lance écrivent leurs profils dans target/ à côté de ceux des tests.

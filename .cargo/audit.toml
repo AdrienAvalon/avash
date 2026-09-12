@@ -4,8 +4,11 @@
 # ~/.cargo/audit.toml) : joint CONFIG_FILE = "audit.toml" à ./.cargo. Un fichier
 # `audit.toml` à la racine n'était donc lu par aucun outil (trouvé par l'audit
 # du 8 septembre 2026 : la liste effective vivait dans les --ignore de check.sh
-# et des deux CI, qui divergeaient de ce fichier mort). Les avis acceptés sont
-# désormais ICI, une seule fois, pour les deux appels (workspace et sidecar).
+# et des deux CI, qui divergeaient de ce fichier mort). Les avis acceptés pour
+# l'espace de travail sont désormais ICI, une seule fois. Le processus RDP a
+# les siens dans rdp-sidecar/.cargo/audit.toml, lus quand on l'audite depuis
+# son dossier, ce que font les trois chaînes depuis l'audit du 12 septembre
+# 2026 (lancé d'ici avec --file, il passait sous cette liste-ci).
 #
 # Source jumelle : deny.toml, dont le [advisories] ignore ne peut rien accepter
 # qui ne soit ici, et qui doit expliquer en commentaire tout avis d'ici qu'il

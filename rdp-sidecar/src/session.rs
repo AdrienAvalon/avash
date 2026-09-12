@@ -8,7 +8,8 @@ use crate::entrees::{input_ops, lock_sync_event};
 use crate::fichiers::{self, Offre, Reception};
 use crate::presse_papiers::{ClipBackend, ClipReq, LocalClip};
 use crate::son::{Son, SonBackend};
-use crate::trames::{ajouter_rect, frame_msg, frames_msg, nouvelle_taille};
+use crate::trames::{ajouter_rect, frame_msg, frames_msg, nouvelle_taille, REPRISE};
+use crate::verrou::Verrou as _;
 use crate::{egfx, magnetoscope};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -51,6 +52,18 @@ pub async fn executer(
     graphique: egfx::Politique,
     dessine: &std::sync::atomic::AtomicBool,
 ) -> Result<Suite> {
+    // Un poste déjà établi signifie qu'un tour précédent a annoncé `[1]
+    // CONNECTED` : celui-ci est une redirection ou une reprise avec le canal
+    // graphique, qui refait toute la connexion (jusqu'à 35 s). On le dit à
+    // l'interface AVANT de rouvrir quoi que ce soit, sans quoi l'onglet se
+    // disait connecté devant un canvas noir (audit du 12 septembre 2026,
+    // C-SIL-10). Le `[1]` de ce tour-ci le remettra en direct.
+    if let Some(p) = poste.as_mut() {
+        p.sink
+            .send(Message::Binary(vec![REPRISE].into()))
+            .await
+            .context("annonce de la reprise")?;
+    }
     let local_text: LocalClip = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel::<ClipReq>();
     // Actif par défaut — parité avec les autres clients RDP ; l'interface
@@ -65,8 +78,7 @@ pub async fn executer(
     let (son_tx, mut son_rx) = tokio::sync::mpsc::unbounded_channel::<Son>();
     // Le lecteur partagé : son fil répond sur `disque_rx`, la boucle écrit. Il
     // impose le canal son (muet s'il est coupé), voir `SonBackend::muet`.
-    let (disque_tx, mut disque_rx) =
-        tokio::sync::mpsc::unbounded_channel::<ironrdp::rdpdr::pdu::RdpdrPdu>();
+    let (disque_tx, mut disque_rx) = crate::disque::canal_des_reponses();
     let disque_backend = match &args.lecteur {
         Some(dossier) => Some(crate::disque::demarrer(
             std::path::Path::new(dossier),
@@ -186,8 +198,7 @@ pub async fn executer(
     // Établi au premier passage seulement : une redirection de serveur rappelle
     // cette fonction, et rouvrir un port neuf laisserait l'interface parler dans
     // le vide, attachée à l'ancien.
-    etablir_poste(poste).await?;
-    let Poste { sink, stream, .. } = poste.as_mut().expect("poste établi juste au-dessus");
+    let Poste { sink, stream, .. } = etablir_poste(poste).await?;
 
     // CONNECTED [1][w][h]
     let mut hello = vec![1u8];
@@ -267,7 +278,7 @@ pub async fn executer(
     #[allow(clippy::items_after_statements)]
     macro_rules! peindre_egfx {
         () => {{
-            let sortie = std::mem::take(&mut *file_egfx.lock().unwrap());
+            let sortie = std::mem::take(&mut *file_egfx.verrou());
             if let Some((nl, nh)) = sortie.taille {
                 if nouvelle_taille(&mut image, &mut dirty, &mut awaiting_ack, nl, nh) {
                     let mut hello = vec![1u8];
@@ -343,15 +354,23 @@ pub async fn executer(
     }
     // Les requêtes de contenu d'une réception, vers le serveur.
     #[allow(clippy::items_after_statements)]
+    // Une requête que le canal refuse compte son fichier en échec au lieu
+    // d'être perdue en silence (voir `fichiers::preparer_requetes`).
     macro_rules! demander_contenus {
         ($reqs:expr) => {{
-            for req in $reqs {
-                let msgs = active
-                    .get_svc_processor_mut::<CliprdrClient>()
-                    .and_then(|c| c.request_file_contents(req).ok());
-                if let Some(msgs) = msgs {
-                    send_svc!(msgs);
+            let a_envoyer = match reception.as_mut() {
+                Some(r) => {
+                    fichiers::preparer_requetes(r, $reqs, |req| {
+                        active
+                            .get_svc_processor_mut::<CliprdrClient>()
+                            .and_then(|c| c.request_file_contents(req).ok())
+                    })
+                    .await
                 }
+                None => Vec::new(),
+            };
+            for msgs in a_envoyer {
+                send_svc!(msgs);
             }
         }};
     }
@@ -361,8 +380,11 @@ pub async fn executer(
         () => {{
             if let Some(r) = reception.as_ref() {
                 envoyer_json!(17u8, r.progression());
-                if r.terminee() {
-                    let r = reception.take().expect("réception présente");
+            }
+            // `take_if` plutôt qu'un `take().expect(…)` sous un test séparé
+            // (audit du 12 septembre 2026, lint `unwrap_used`).
+            if let Some(r) = reception.take_if(|r| r.terminee()) {
+                {
                     let p = r.progression();
                     plage_flux = plage_flux.wrapping_add(1 << 20).max(1);
                     envoyer_json!(
@@ -710,7 +732,7 @@ pub async fn executer(
                     ClipReq::FichiersDistants(liste, data_id) => {
                         // Le distant a copié des fichiers : l'interface le montre,
                         // l'utilisateur décide. Rien n'est téléchargé d'ici.
-                        let octets: u64 = liste.iter().filter_map(|d| d.file_size).sum();
+                        let octets = fichiers::octets_annonces(&liste);
                         envoyer_json!(
                             15u8,
                             serde_json::json!({
@@ -1012,6 +1034,92 @@ mod tests_offre_en_attente {
         assert_eq!(
             accuse["erreurs"][0],
             "le canal du presse-papiers n'est pas ouvert"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_reprise_annoncee {
+    use super::executer;
+    use crate::acces_local::Poste;
+    use futures_util::StreamExt as _;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
+
+    type Interface = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    /// Un poste déjà établi, comme au second tour d'une redirection : l'écoute
+    /// locale, et la WebSocket de l'interface acceptée de l'autre côté.
+    async fn poste_etabli() -> (Poste, Interface) {
+        let ecoute = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = ecoute.local_addr().unwrap().port();
+        let interface = tokio::spawn(async move {
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/"))
+                .await
+                .expect("poignée WebSocket de l'interface")
+                .0
+        });
+        let (tcp, _) = ecoute.accept().await.unwrap();
+        let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let (sink, stream) = ws.split();
+        let poste = Poste {
+            _listener: ecoute,
+            sink,
+            stream,
+        };
+        (poste, interface.await.unwrap())
+    }
+
+    /// Un port où personne n'écoute : la connexion RDP y échoue aussitôt.
+    fn port_ferme() -> u16 {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        l.local_addr().unwrap().port()
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-SIL-10) : pendant une
+    /// redirection (GNOME Remote Desktop, courtier RDS) ou une reprise avec le
+    /// canal graphique, le processus refait toute la connexion, jusqu'à 35 s,
+    /// alors que l'interface a déjà reçu `[1] CONNECTED` : l'onglet se disait
+    /// connecté devant un canvas noir. Chaque tour qui suit le premier commence
+    /// désormais par `[23] REPRISE`, avant même d'ouvrir le TCP, pour que
+    /// l'interface repasse l'onglet en « connexion » ; le `[1]` suivant le
+    /// remet en direct.
+    #[tokio::test]
+    async fn la_reprise_annonce_son_debut() {
+        let (poste, mut interface) = poste_etabli().await;
+        let mut poste = Some(poste);
+        let port = port_ferme().to_string();
+        let args = crate::args::parse_args_de(
+            &[
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &port,
+                "-u",
+                "x",
+                "--sans-son",
+            ],
+            "p",
+        )
+        .unwrap();
+        let dessine = std::sync::atomic::AtomicBool::new(false);
+        let issue = executer(
+            &args,
+            None,
+            &mut poste,
+            crate::egfx::Politique::Accepter,
+            &dessine,
+        )
+        .await;
+        assert!(issue.is_err(), "personne n'écoute sur ce port");
+        // Fermer le poste ferme la WebSocket : la lecture ne peut pas attendre.
+        drop(poste);
+        let premier = interface.next().await;
+        assert!(
+            matches!(&premier, Some(Ok(Message::Binary(b))) if b.as_ref() == [23u8]),
+            "le tour de reprise doit s'annoncer par [23] : {premier:?}"
         );
     }
 }

@@ -1,7 +1,9 @@
 //! Sessions de terminal : magasin, cible, connexion, relais de sortie, commandes PTY, hôtes et exécution ponctuelle.
 
 use super::enregistreur_de;
+use avash::secrets::Zeroizing;
 use avash::ssh::AvashSession;
+use avash::Verrou as _;
 use avash::{parse_ssh_config, sftp::SftpHandle, SshHost};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +20,7 @@ pub(crate) static SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 /// présenter une fermeture d'onglet comme un échec de connexion.
 pub const CONNEXION_ANNULEE: &str = "[AVASH_ANNULE]";
 
+#[derive(Default)]
 pub struct SessionStore {
     pub inner: Mutex<HashMap<u64, SessionHandle>>,
     /// Onglets fermés AVANT que leur session ne soit enregistrée.
@@ -41,6 +44,13 @@ pub struct SessionStore {
     /// « connexion annulée » — figé, sans reconnexion possible. Le trou était
     /// simplement passé de l'autre côté.
     pub en_cours: Mutex<std::collections::HashSet<u64>>,
+    /// Copies directes (scp chez la source) en cours, par onglet source.
+    ///
+    /// Une copie directe tient le verrou de la session toute sa durée (voir
+    /// `executeur`) ; ouvrir le panneau SFTP pendant ce temps attendait sa fin,
+    /// des minutes sous « Chargement… ». Trouvé par l'audit du 12 septembre
+    /// 2026 (C-SIL-14) : `sftp_of` consulte ce compte et répond tout de suite.
+    pub copies_directes: Mutex<HashMap<u64, usize>>,
 }
 
 /// De quoi ouvrir le sous-système SFTP sur la connexion SSH de l'onglet.
@@ -107,8 +117,11 @@ pub struct Target {
     pub key_path: Option<std::path::PathBuf>,
     /// ⚠️ En memoire vive uniquement, le temps de la connexion : la cible
     /// n'est pas conservee une fois la session etablie. Jamais ecrit sur
-    /// disque, jamais renvoye au front, jamais journalise.
-    pub password: Option<String>,
+    /// disque, jamais renvoye au front, jamais journalise. Effacé à la
+    /// libération (audit de sécurité du 12 septembre 2026, C-secrets-2) : une
+    /// `String` ordinaire laissait ses octets dans le tas, donc dans un vidage
+    /// mémoire conservé par systemd-coredump.
+    pub password: Option<Zeroizing<String>>,
     /// Libelle affiche : l'alias, ou `user@hote` pour une saisie directe.
     pub label: String,
     /// Chaine de rebonds (`ProxyJump`), resolue depuis la config. Vide = direct.
@@ -134,24 +147,34 @@ impl std::fmt::Debug for Target {
 impl Target {
     /// Resout un alias declare dans `~/.ssh/config`.
     pub(crate) fn from_alias(alias: &str) -> Result<Self, String> {
-        // `resoudre_hote` (et non `find_host`) : la connexion doit appliquer les
-        // valeurs par défaut d'un bloc à motif (`Host *`), comme `ssh <alias>`.
+        Self::depuis_alias(alias).map(|(t, _)| t)
+    }
+
+    /// Comme `from_alias`, et rend aussi la panne du trousseau s'il y en a eu
+    /// une (contrat K1 de l'audit du 12 septembre 2026, C-SIL-8). Le mot de
+    /// passe est alors absent, comme sans entrée, et l'interface le demandera ;
+    /// mais l'appelant peut dire POURQUOI au lieu de redemander « sans raison ».
+    pub(crate) fn depuis_alias(alias: &str) -> Result<(Self, Option<String>), String> {
+        // `resoudre_hote_dans` (et non `find_host`) : la connexion doit appliquer
+        // les valeurs par défaut d'un bloc à motif (`Host *`), comme `ssh <alias>`.
         // `find_host` reste brut pour le formulaire d'édition, qui ne doit pas
-        // matérialiser les valeurs héritées dans le bloc littéral.
-        let host =
-            avash::resoudre_hote(alias).ok_or_else(|| format!("Hôte introuvable : {alias}"))?;
-        let addr = host.hostname.clone().unwrap_or_else(|| host.alias.clone());
-        let port = host.port.unwrap_or(22);
-        let user = host
-            .user
-            .clone()
-            .unwrap_or_else(avash::ssh::current_username);
+        // matérialiser les valeurs héritées dans le bloc littéral. La
+        // configuration est lue UNE fois pour la cible et ses rebonds (contrat
+        // K3, C-perf-5) : chaque maillon la relisait, `Include` compris.
+        let conf = avash::configuration_resolue().map_err(|e| format!("{e:#}"))?;
+        let host = avash::resoudre_hote_dans(&conf, alias)
+            .ok_or_else(|| format!("Hôte introuvable : {alias}"))?;
+        let (addr, port, user) = cible_de(&host);
         // Mot de passe deja memorise ? Le trousseau evite de le redemander.
         // Une absence n'est pas une erreur : l'interface fera la saisie.
-        let password = avash::secrets::load(&avash::secrets::account_id(&user, &addr, port));
+        let (password, panne) =
+            match avash::secrets::charger(&avash::secrets::account_id(&user, &addr, port)) {
+                Ok(p) => (p, None),
+                Err(e) => (None, Some(format!("{e:#}"))),
+            };
         let key_path = host.identity_file.as_deref().map(avash::developper_tilde);
-        let jumps = resolve_jumps(host.proxy_jump.as_deref(), key_path.as_ref());
-        Ok(Self {
+        let jumps = resolve_jumps(&conf, host.proxy_jump.as_deref(), key_path.as_ref());
+        let t = Self {
             port,
             user,
             key_path,
@@ -159,7 +182,18 @@ impl Target {
             label: host.alias.clone(),
             addr,
             jumps,
-        })
+        };
+        Ok((t, panne))
+    }
+
+    /// L'identifiant de trousseau d'un alias (`user@hôte:port`), résolu comme
+    /// `from_alias` mais SANS lire le trousseau : supprimer ou modifier un hôte
+    /// n'a besoin que de la clé, et chaque lecture pouvait ouvrir la boîte de
+    /// déverrouillage du portefeuille pour rien.
+    pub(crate) fn identifiant(conf: &str, alias: &str) -> Option<String> {
+        let host = avash::resoudre_hote_dans(conf, alias)?;
+        let (addr, port, user) = cible_de(&host);
+        Some(avash::secrets::account_id(&user, &addr, port))
     }
 
     /// Connexion saisie a la main, sans passer par `~/.ssh/config`.
@@ -189,7 +223,7 @@ impl Target {
                 return Err(format!("Clé introuvable : {}", k.display()));
             }
         }
-        let password = password.filter(|p| !p.is_empty());
+        let password = password.filter(|p| !p.is_empty()).map(Zeroizing::new);
         if password.is_none() && key_path.is_none() {
             return Err("Renseigne un mot de passe ou une clé privée.".into());
         }
@@ -213,7 +247,7 @@ impl Target {
     /// l'utilisateur devait retaper un mot de passe pourtant enregistre.
     pub(crate) fn override_password(&mut self, typed: Option<String>) {
         if let Some(p) = typed.filter(|p| !p.is_empty()) {
-            self.password = Some(p);
+            self.password = Some(Zeroizing::new(p));
         }
     }
 
@@ -226,14 +260,28 @@ impl Target {
     }
 }
 
+/// Adresse, port et utilisateur effectifs d'un hôte résolu : le nom d'hôte
+/// sinon l'alias, le port 22 par défaut, l'utilisateur courant faute de `User`.
+/// Une seule définition pour la connexion et pour l'identifiant du trousseau :
+/// deux lectures divergentes ont déjà cassé « mémoriser » (hôte sans `User`).
+pub(crate) fn cible_de(h: &SshHost) -> (String, u16, String) {
+    (
+        h.hostname.clone().unwrap_or_else(|| h.alias.clone()),
+        h.port.unwrap_or(22),
+        h.user.clone().unwrap_or_else(avash::ssh::current_username),
+    )
+}
+
 /// Resout une chaine `ProxyJump` en rebonds concrets.
 ///
 /// Chaque maillon est soit un alias de `~/.ssh/config` (on reprend son
 /// hostname/user/port/cle), soit une saisie `user@host:port`. Faute de cle
 /// propre, un rebond reutilise la cle de la cible (cas courant : meme cle sur
 /// le bastion et le serveur). Les rebonds n'ont pas de mot de passe : ils
-/// s'appuient sur une cle (agent a venir).
+/// s'appuient sur une cle (agent a venir). `conf` est la configuration déjà
+/// lue par l'appelant (contrat K3).
 fn resolve_jumps(
+    conf: &str,
     proxy_jump: Option<&str>,
     fallback_key: Option<&std::path::PathBuf>,
 ) -> Vec<avash::ssh::Hop> {
@@ -244,23 +292,23 @@ fn resolve_jumps(
         .into_iter()
         .map(|hop| {
             // Un maillon sans user ni port explicite peut être un alias. On le
-            // résout comme la cible (`resoudre_hote`) pour qu'un bastion sans
-            // `User` propre hérite de celui du `Host *`, comme `ssh`.
+            // résout comme la cible (`resoudre_hote_dans`) pour qu'un bastion
+            // sans `User` propre hérite de celui du `Host *`, comme `ssh`.
             let alias = if hop.user.is_none() && hop.port.is_none() {
-                avash::resoudre_hote(&hop.host)
+                avash::resoudre_hote_dans(conf, &hop.host)
             } else {
                 None
             };
             let (addr, port, user, key_path) = match alias {
-                Some(h) => (
-                    h.hostname.clone().unwrap_or_else(|| h.alias.clone()),
-                    h.port.unwrap_or(22),
-                    h.user.clone().unwrap_or_else(avash::ssh::current_username),
-                    h.identity_file
+                Some(h) => {
+                    let (addr, port, user) = cible_de(&h);
+                    let cle = h
+                        .identity_file
                         .as_deref()
                         .map(avash::developper_tilde)
-                        .or_else(|| fallback_key.cloned()),
-                ),
+                        .or_else(|| fallback_key.cloned());
+                    (addr, port, user, cle)
+                }
                 None => (
                     hop.host.clone(),
                     hop.port.unwrap_or(22),
@@ -292,7 +340,11 @@ pub(crate) fn find_host(alias: &str) -> Result<SshHost, String> {
 }
 
 /// Liste les hôtes de ~/.ssh/config.
-#[tauri::command]
+///
+/// Hors du fil principal (audit du 12 septembre 2026, C-perf-10) : sur un
+/// profil réseau, la lecture de la configuration et de ses `Include` gelait
+/// la fenêtre au démarrage.
+#[tauri::command(async)]
 pub fn list_hosts() -> Result<Vec<SshHost>, String> {
     parse_ssh_config().map_err(|e| e.to_string())
 }
@@ -300,7 +352,7 @@ pub fn list_hosts() -> Result<Vec<SshHost>, String> {
 /// Exécution one-shot (écho de test / commandes rapides).
 #[tauri::command]
 pub async fn run_command(alias: String, command: String) -> Result<String, String> {
-    let target = Target::from_alias(&alias)?;
+    let target = super::bloquant(move || Target::from_alias(&alias)).await?;
     let mut session =
         AvashSession::connect_via(&target.jumps, &target.addr, target.port, &target.auth())
             .await
@@ -334,6 +386,14 @@ impl Utf8Stream {
     /// dans `carry` qu'une éventuelle séquence multi-octets TRONQUÉE en fin de
     /// bloc (au plus 3 octets), à recoller au bloc suivant.
     pub fn push(&mut self, chunk: &[u8]) -> String {
+        // Chemin rapide (audit du 12 septembre 2026, C-perf-8) : sans reliquat
+        // et sur un bloc valide, cas de presque tous les blocs, on décode
+        // directement, sans recopier le bloc dans `carry`.
+        if self.carry.is_empty() {
+            if let Ok(s) = std::str::from_utf8(chunk) {
+                return s.to_owned();
+            }
+        }
         self.carry.extend_from_slice(chunk);
         let mut out = String::new();
         let mut consumed = 0; // octets de `carry` déjà traités
@@ -379,8 +439,7 @@ pub(crate) fn is_superseded<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epo
     use tauri::Manager as _;
     app.state::<SessionStore>()
         .inner
-        .lock()
-        .unwrap()
+        .verrou()
         .get(&sid)
         .is_some_and(|h| h.epoch != epoch)
 }
@@ -399,7 +458,12 @@ pub(crate) fn is_superseded<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epo
 /// bornant à l'intérieur, `run_borne` ferme le canal avant de rendre, ce qui
 /// coupe le flux ; le verrou de session reste pris DANS la fonction bornée, il
 /// est donc bien relâché à l'échéance.
-async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &SessionPartagee) {
+async fn probe_and_emit_os<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    sid: u64,
+    label: String,
+    session: SessionPartagee,
+) {
     let probe = session
         .lock()
         .await
@@ -408,13 +472,34 @@ async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &S
             std::time::Duration::from_secs(4),
         )
         .await;
-    if let Ok((out, _)) = probe {
-        if let Some(os) = avash::osinfo::parse_probe_output(&out) {
-            let _ = app.emit(
-                "host-os",
-                serde_json::json!({ "id": sid, "label": label, "os": os }),
-            );
+    match probe {
+        Ok((out, _)) => {
+            if let Some(os) = avash::osinfo::parse_probe_output(&out) {
+                emettre(
+                    &app,
+                    "host-os",
+                    serde_json::json!({ "id": sid, "label": label, "os": os }),
+                );
+            }
         }
+        // Sans logo, rien ne dit pourquoi : le journal le garde (C-SIL-2).
+        Err(e) => tracing::info!(
+            onglet = sid,
+            "sonde du système distant sans réponse : {e:#}"
+        ),
+    }
+}
+
+/// Émet un événement vers le front ; un refus est journalisé au lieu d'être
+/// avalé (audit du 12 septembre 2026, C-SIL-2) : chaque `let _ = app.emit(..)`
+/// perdait en silence une sortie de terminal ou une fermeture d'onglet.
+pub(crate) fn emettre<R: tauri::Runtime, S: serde::Serialize + Clone>(
+    app: &AppHandle<R>,
+    evenement: &str,
+    charge: S,
+) {
+    if let Err(e) = app.emit(evenement, charge) {
+        tracing::warn!("événement « {evenement} » non émis : {e}");
     }
 }
 
@@ -435,10 +520,22 @@ async fn probe_and_emit_os(app: &AppHandle, sid: u64, label: String, session: &S
 /// front croyait vivante (renumérotation après rechargement de la webview). Le
 /// test d'époque et le retrait tiennent désormais le même verrou.
 pub(crate) fn clore_session<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epoch: u64) {
+    clore_session_avec(app, sid, epoch, true);
+}
+
+/// `clore_session`, avec ou sans finalisation de l'enregistrement : pendant le
+/// déroulement d'une panique (garde `FinDeSession`), écrire dans le fichier
+/// pourrait paniquer une seconde fois, ce qui interrompt le processus entier.
+fn clore_session_avec<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    sid: u64,
+    epoch: u64,
+    finaliser: bool,
+) {
     use tauri::Manager as _;
     let store = app.state::<SessionStore>();
     let retire = {
-        let mut inner = store.inner.lock().unwrap();
+        let mut inner = store.inner.verrou();
         // Cet id porte-t-il déjà une session plus récente ? Si oui, on la laisse.
         if inner.get(&sid).is_some_and(|h| h.epoch != epoch) {
             return;
@@ -450,9 +547,75 @@ pub(crate) fn clore_session<R: tauri::Runtime>(app: &AppHandle<R>, sid: u64, epo
     // retoucher le magasin. On n'annonce `pty-closed` que si l'on a réellement
     // retiré quelque chose : sinon on fermerait un onglet qu'on n'a pas fermé.
     if let Some(h) = retire {
-        finaliser_enregistrement(app, sid, &h.enregistreur);
-        let _ = app.emit("pty-closed", serde_json::json!({ "id": sid }));
+        if finaliser {
+            finaliser_enregistrement(app, sid, &h.enregistreur);
+        }
+        emettre(app, "pty-closed", serde_json::json!({ "id": sid }));
     }
+}
+
+/// Garde de fin de session, posée en tête de la tâche du relais.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-SIL-9) : tokio avale la panique
+/// d'une tâche détachée, et `clore_session` n'était appelée qu'à la fin
+/// NORMALE du relais. Une panique laissait la poignée dans le magasin : onglet
+/// « connecté » sans session, listé par `open_sessions`, visé par un snippet
+/// « toutes les sessions », chaque frappe rendant « channel closed ». Le
+/// `Drop` s'exécute aussi pendant le déroulement de pile : la fermeture part
+/// quel que soit le chemin de sortie.
+struct FinDeSession<R: tauri::Runtime> {
+    app: AppHandle<R>,
+    sid: u64,
+    epoch: u64,
+    armee: bool,
+}
+
+impl<R: tauri::Runtime> Drop for FinDeSession<R> {
+    fn drop(&mut self) {
+        if self.armee {
+            let panique = std::thread::panicking();
+            if panique {
+                tracing::error!(
+                    onglet = self.sid,
+                    "le relais de l'onglet a paniqué : onglet fermé"
+                );
+            }
+            clore_session_avec(&self.app, self.sid, self.epoch, !panique);
+        }
+    }
+}
+
+/// Lance la tâche qui relaie la sortie d'une session vers le front, avec à
+/// côté `a_cote` (la sonde d'OS en SSH), puis ferme l'onglet et enfin attend
+/// `deconnexion`. La garde `FinDeSession` ferme l'onglet même si le relais
+/// panique. Commun aux sessions SSH et série.
+pub(crate) fn lancer_relais<R, A, D>(
+    app: AppHandle<R>,
+    sid: u64,
+    epoch: u64,
+    out_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    enregistreur: Enregistrement,
+    a_cote: A,
+    deconnexion: D,
+) -> tokio::task::JoinHandle<()>
+where
+    R: tauri::Runtime,
+    A: std::future::Future<Output = ()> + Send + 'static,
+    D: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut garde = FinDeSession {
+            app: app.clone(),
+            sid,
+            epoch,
+            armee: true,
+        };
+        tokio::join!(a_cote, relayer_sortie(&app, sid, out_rx, enregistreur));
+        // Fin normale : `fermer_onglet_apres_pump` ferme l'onglet AVANT la
+        // déconnexion ; la garde n'a plus rien à faire.
+        garde.armee = false;
+        fermer_onglet_apres_pump(&app, sid, epoch, deconnexion).await;
+    })
 }
 
 /// Ferme l'onglet une fois le pump terminé : retrait du magasin et `pty-closed`
@@ -490,14 +653,11 @@ pub(crate) fn finaliser_enregistrement<R: tauri::Runtime>(
     sid: u64,
     enregistreur: &Enregistrement,
 ) {
-    let pris = enregistreur.lock().unwrap().take();
+    let pris = enregistreur.verrou().take();
     if let Some(e) = pris {
         let chemin = e.chemin().display().to_string();
         if let Err(err) = e.arreter() {
-            let _ = app.emit(
-                "enregistrement-erreur",
-                serde_json::json!({ "id": sid, "chemin": chemin, "erreur": format!("{err:#}") }),
-            );
+            signaler_echec_enregistrement(app, sid, chemin, format!("{err:#}"));
         }
     }
 }
@@ -517,9 +677,9 @@ pub(crate) fn enregistrer_session(
     handle: SessionHandle,
 ) -> Result<(), String> {
     let evicted = {
-        let mut inner = state.inner.lock().unwrap();
-        state.en_cours.lock().unwrap().remove(&id);
-        if state.annules.lock().unwrap().remove(&id) {
+        let mut inner = state.inner.verrou();
+        state.en_cours.verrou().remove(&id);
+        if state.annules.verrou().remove(&id) {
             return Err(CONNEXION_ANNULEE.to_owned());
         }
         inner.insert(id, handle)
@@ -564,10 +724,10 @@ async fn etablir(
 /// durée, ce qui sérialise ces commandes (voir `executeur`). La fermeture de
 /// l'onglet, elle, ne passe jamais par ce verrou (voir
 /// `fermer_onglet_apres_pump`).
-type SessionPartagee = std::sync::Arc<tokio::sync::Mutex<AvashSession>>;
+pub(crate) type SessionPartagee = std::sync::Arc<tokio::sync::Mutex<AvashSession>>;
 
 /// Le canal SFTP de l'onglet s'ouvrira sur cette session-là.
-fn ouvreur_sftp(session: &SessionPartagee) -> OuvreurSftp {
+pub(crate) fn ouvreur_sftp(session: &SessionPartagee) -> OuvreurSftp {
     let session = session.clone();
     std::sync::Arc::new(move || {
         let session = session.clone();
@@ -593,7 +753,7 @@ fn ouvreur_sftp(session: &SessionPartagee) -> OuvreurSftp {
 /// minutes retient le verrou d'autant, ce qui ne doit PAS retarder la fermeture
 /// de l'onglet — d'où `fermer_onglet_apres_pump`, qui retire l'onglet et émet
 /// `pty-closed` sans passer par ce verrou.
-fn executeur(session: &SessionPartagee) -> Executeur {
+pub(crate) fn executeur(session: &SessionPartagee) -> Executeur {
     let session = session.clone();
     std::sync::Arc::new(move |commande: String, annulation| {
         let session = session.clone();
@@ -607,27 +767,196 @@ fn executeur(session: &SessionPartagee) -> Executeur {
     })
 }
 
+/// Nombre de messages `pty-output` émis et non encore accusés par le front,
+/// au-delà duquel le relais cesse de lire sa source (contrat K6).
+const EN_VOL_MAX: u64 = 4;
+
+/// Sans accusé pendant ce délai, le relais reprend quand même : un front qui
+/// n'accuse jamais (ancienne version, écouteur perdu) retombe à un débit
+/// plancher au lieu de geler l'onglet (contrat K6).
+const FILET: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Fenêtre de regroupement de la sortie : au plus un message par fenêtre.
+const COALESCE: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// Au-delà de ce volume en attente, on émet sans attendre la fenêtre.
+const FLUSH_BYTES: usize = 16 * 1024;
+
+/// Les accusés de réception du front, par onglet (contrat K6 de l'audit du
+/// 12 septembre 2026, C-front-4 et C-perf-4).
+///
+/// Un `emit` Tauri n'a ni accusé ni borne : sous `base64 /dev/urandom`, le
+/// relais poussait des messages plus vite que xterm.js ne les écrivait, la
+/// file de la webview gonflait, et Ctrl+C mettait des secondes à revenir.
+#[derive(Default)]
+pub struct Accuses {
+    inner: Mutex<HashMap<u64, std::sync::Arc<Accuse>>>,
+}
+
+/// L'état d'accusé d'un relais : le plus grand `seq` accusé, et de quoi
+/// réveiller le relais qui attend.
+#[derive(Default)]
+pub(crate) struct Accuse {
+    dernier: AtomicU64,
+    reveil: tokio::sync::Notify,
+}
+
+impl Accuse {
+    fn dernier(&self) -> u64 {
+        self.dernier.load(Ordering::Acquire)
+    }
+}
+
+/// Le front a écrit le message `seq` de l'onglet `id` dans son terminal.
+///
+/// Synchrone à dessein : l'appel est fréquent, ne touche qu'à la mémoire, et
+/// n'a pas à payer un saut de fil. Un accusé pour un onglet inconnu (fermé
+/// entre-temps) est ignoré sans erreur.
+#[tauri::command]
+pub fn pty_ack(accuses: tauri::State<'_, Accuses>, id: u64, seq: u64) {
+    let a = accuses.inner.verrou().get(&id).cloned();
+    if let Some(a) = a {
+        a.dernier.fetch_max(seq, Ordering::AcqRel);
+        a.reveil.notify_one();
+    }
+}
+
+/// Le message `pty-output` : sérialisé par emprunt, sans recopier le tampon
+/// dans une `serde_json::Value` (audit du 12 septembre 2026, C-perf-8 : le
+/// `json!` sur `&buffer` en faisait une copie de plus par octet).
+#[derive(Clone, serde::Serialize)]
+struct SortiePty<'a> {
+    id: u64,
+    data: &'a str,
+    seq: u64,
+}
+
+/// Prévient le front qu'un enregistrement est condamné.
+fn signaler_echec_enregistrement<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    sid: u64,
+    chemin: String,
+    erreur: String,
+) {
+    tracing::warn!(onglet = sid, "enregistrement interrompu : {erreur}");
+    emettre(
+        app,
+        "enregistrement-erreur",
+        serde_json::json!({ "id": sid, "chemin": chemin, "erreur": erreur }),
+    );
+}
+
+/// Applique `op` à l'enregistreur de l'onglet s'il y en a un ; une écriture
+/// refusée (disque plein) le retire et prévient le front, qui éteint le voyant.
+///
+/// Trouvé par l'audit du 7 septembre 2026 : l'erreur était avalée, le voyant
+/// « rec » restait allumé et « Enregistrement terminé » mentait.
+fn dans_l_enregistrement<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    sid: u64,
+    enregistreur: &Enregistrement,
+    op: impl FnOnce(&mut avash::enregistrement::Enregistreur) -> Result<(), String>,
+) {
+    let echec = {
+        let mut slot = enregistreur.verrou();
+        let mut echec = None;
+        if let Some(e) = slot.as_mut() {
+            if let Err(err) = op(e) {
+                echec = Some((e.chemin().display().to_string(), err));
+            }
+        }
+        if echec.is_some() {
+            *slot = None;
+        }
+        echec
+    };
+    if let Some((chemin, erreur)) = echec {
+        signaler_echec_enregistrement(app, sid, chemin, erreur);
+    }
+}
+
 /// Relaie la sortie du terminal vers le front, regroupée, et vers
 /// l'enregistrement s'il y en a un.
 ///
 /// Les blocs arrivant du canal SSH sont souvent minuscules — 1, 4, 38,
 /// 101 octets — et chacun coûterait un message JSON, un aller-retour IPC
-/// et une écriture xterm. On les regroupe donc sur une courte fenêtre :
-/// le débit s'effondre en nombre de messages sans que la latence devienne
-/// perceptible (`COALESCE_MS` reste sous la durée d'une image à 60 Hz).
+/// et une écriture xterm. On les regroupe donc : au plus un message par
+/// fenêtre de `COALESCE`, un gros volume partant sans attendre.
+///
+/// Regroupement en DÉBUT de fenêtre depuis l'audit du 12 septembre 2026
+/// (C-perf-1) : le premier bloc d'une rafale attendait la fin de la fenêtre,
+/// si bien que chaque écho de frappe payait 8 ms de plus que le réseau (10 ms
+/// d'écho médian mesurés sur la boucle locale, dont 8 de fenêtre). Désormais un
+/// bloc qui arrive après une fenêtre calme part aussitôt ; ce qui suit dans la
+/// fenêtre attend son échéance et part en un seul message.
+///
+/// Contre-pression (contrat K6) : chaque message porte un `seq` croissant ;
+/// au-delà de `EN_VOL_MAX` messages non accusés par `pty_ack`, le relais cesse
+/// de lire sa source, ce qui remonte jusqu'au canal SSH, jusqu'à un accusé ou
+/// jusqu'au `FILET`.
 pub(crate) async fn relayer_sortie<R: tauri::Runtime>(
     app2: &AppHandle<R>,
     sid: u64,
     mut out_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     enregistreur: Enregistrement,
 ) {
-    const COALESCE_MS: u64 = 8;
-    const FLUSH_BYTES: usize = 16 * 1024;
+    use tauri::Manager as _;
+    // Sans magasin d'accusés (tests, moteur factice), pas de contre-pression.
+    let accuse: Option<std::sync::Arc<Accuse>> = app2.try_state::<Accuses>().map(|a| {
+        let neuf = std::sync::Arc::new(Accuse::default());
+        a.inner.verrou().insert(sid, neuf.clone());
+        neuf
+    });
     let mut decoder = Utf8Stream::default();
     let mut buffer = String::new();
+    let mut derniere: Option<tokio::time::Instant> = None;
     let mut deadline: Option<tokio::time::Instant> = None;
+    let mut seq: u64 = 0;
+    // Messages tenus pour accusés par le filet, faute d'accusé du front.
+    let mut filet: u64 = 0;
+
+    let emettre_tampon = |buffer: &mut String, seq: &mut u64| {
+        *seq += 1;
+        emettre(
+            app2,
+            "pty-output",
+            SortiePty {
+                id: sid,
+                data: buffer,
+                seq: *seq,
+            },
+        );
+        buffer.clear();
+        // Contrat K4 : l'enregistreur ne vide plus son tampon à chaque ligne ;
+        // on le vide au rythme des messages du terminal.
+        dans_l_enregistrement(app2, sid, &enregistreur, |e| {
+            e.vider().map_err(|err| err.to_string())
+        });
+    };
 
     loop {
+        if let Some(a) = &accuse {
+            if seq.saturating_sub(a.dernier().max(filet)) >= EN_VOL_MAX {
+                let fin_filet = tokio::time::Instant::now() + FILET;
+                while seq.saturating_sub(a.dernier().max(filet)) >= EN_VOL_MAX {
+                    if tokio::time::timeout_at(fin_filet, a.reveil.notified())
+                        .await
+                        .is_err()
+                    {
+                        // Passé le filet sans accusé : on absout les messages
+                        // envoyés jusqu'ici pour ne pas rester bloqué. Remettre
+                        // `filet` à 0 laissait `a.dernier().max(filet)` inchangé
+                        // tant qu'aucun accusé n'arrivait jamais, donc la
+                        // condition du `while` restait vraie pour toujours —
+                        // une boucle active sans la moindre progression,
+                        // trouvée le 12 septembre 2026 en tests (deux
+                        // `#[tokio::test]` qui ne rendaient plus jamais la
+                        // main).
+                        filet = seq;
+                    }
+                }
+            }
+        }
         // Tant que le tampon attend, on borne l'attente a l'echeance :
         // sans cela un octet isole resterait bloque jusqu'au suivant.
         let recu = match deadline {
@@ -636,11 +965,8 @@ pub(crate) async fn relayer_sortie<R: tauri::Runtime>(
                     v
                 } else {
                     if !buffer.is_empty() {
-                        let _ = app2.emit(
-                            "pty-output",
-                            serde_json::json!({ "id": sid, "data": buffer }),
-                        );
-                        buffer.clear();
+                        emettre_tampon(&mut buffer, &mut seq);
+                        derniere = Some(tokio::time::Instant::now());
                     }
                     deadline = None;
                     continue;
@@ -656,51 +982,33 @@ pub(crate) async fn relayer_sortie<R: tauri::Runtime>(
         }
         // L'enregistrement reçoit le texte tel qu'il arrive, avant le
         // regroupement : les temps du fichier sont ceux du serveur.
-        //
-        // Trouvé par l'audit du 7 septembre 2026 : sur une écriture refusée
-        // (disque plein), on ne se contente plus de l'avaler — sinon le voyant
-        // « rec » restait allumé et « Enregistrement terminé » mentait. On
-        // retire l'enregistreur et on prévient le front, qui éteint le voyant.
-        let echec = {
-            let mut slot = enregistreur.lock().unwrap();
-            let mut echec = None;
-            if let Some(e) = slot.as_mut() {
-                if let Err(err) = e.sortie(&text) {
-                    echec = Some((e.chemin().display().to_string(), format!("{err:#}")));
-                }
-            }
-            if echec.is_some() {
-                *slot = None;
-            }
-            echec
-        };
-        if let Some((chemin, erreur)) = echec {
-            let _ = app2.emit(
-                "enregistrement-erreur",
-                serde_json::json!({ "id": sid, "chemin": chemin, "erreur": erreur }),
-            );
-        }
+        dans_l_enregistrement(app2, sid, &enregistreur, |e| {
+            e.sortie(&text).map_err(|err| format!("{err:#}"))
+        });
         buffer.push_str(&text);
 
-        // Gros volume : inutile d'attendre, on ecoule tout de suite.
-        if buffer.len() >= FLUSH_BYTES {
-            let _ = app2.emit(
-                "pty-output",
-                serde_json::json!({ "id": sid, "data": buffer }),
-            );
-            buffer.clear();
+        let maintenant = tokio::time::Instant::now();
+        let fenetre_calme = derniere.is_none_or(|t| maintenant >= t + COALESCE);
+        if buffer.len() >= FLUSH_BYTES || fenetre_calme {
+            emettre_tampon(&mut buffer, &mut seq);
+            derniere = Some(maintenant);
             deadline = None;
         } else if deadline.is_none() {
-            deadline =
-                Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(COALESCE_MS));
+            deadline = derniere.map(|t| t + COALESCE);
         }
     }
     // Ne pas perdre ce qui restait au moment de la fermeture.
     if !buffer.is_empty() {
-        let _ = app2.emit(
-            "pty-output",
-            serde_json::json!({ "id": sid, "data": buffer }),
-        );
+        emettre_tampon(&mut buffer, &mut seq);
+    }
+    if let (Some(a), Some(accuses)) = (&accuse, app2.try_state::<Accuses>()) {
+        let mut inner = accuses.inner.verrou();
+        if inner
+            .get(&sid)
+            .is_some_and(|x| std::sync::Arc::ptr_eq(x, a))
+        {
+            inner.remove(&sid);
+        }
     }
 }
 
@@ -713,7 +1021,7 @@ async fn open_on_target(
     cols: u32,
     rows: u32,
 ) -> Result<String, String> {
-    state.en_cours.lock().unwrap().insert(id);
+    state.en_cours.verrou().insert(id);
     let (session, pty) = match etablir(&target, cols, rows).await {
         Ok(v) => v,
         Err(e) => {
@@ -723,9 +1031,9 @@ async fn open_on_target(
             // fenêtre, la session qui héritait de cet identifiant se connectait
             // puis se voyait répondre « annulée » — onglet figé sur
             // « connexion en cours », sans message ni reconnexion possible.
-            let mut en_cours = state.en_cours.lock().unwrap();
+            let mut en_cours = state.en_cours.verrou();
             en_cours.remove(&id);
-            state.annules.lock().unwrap().remove(&id);
+            state.annules.verrou().remove(&id);
             return Err(e);
         }
     };
@@ -780,37 +1088,25 @@ async fn open_on_target(
 
     // Pump out → event front ; la session vit dans le pump.
     //
-    // Les blocs arrivant du canal SSH sont souvent minuscules — 1, 4, 38,
-    // 101 octets — et chacun coûterait un message JSON, un aller-retour IPC
-    // et une écriture xterm. On les regroupe donc sur une courte fenêtre :
-    // le débit s'effondre en nombre de messages sans que la latence devienne
-    // perceptible (COALESCE_MS reste sous la durée d'une image à 60 Hz).
-    let app2 = app.clone();
-    let pump_epoch = epoch;
-    let _pump = tokio::spawn(async move {
-        // La sonde d'OS tourne EN MÊME TEMPS que le relais, plus avant lui.
-        // Elle ouvre un canal exec, lance un `cat /etc/os-release` distant et
-        // attend sa sortie *et* son code de retour : deux à trois allers-retours
-        // plus un fork distant. Placée en tête, rien ne s'affichait tant qu'elle
-        // n'avait pas rendu la main — quelques centaines de millisecondes d'écran
-        // noir sur un lien lointain, jusqu'aux quatre secondes du délai de garde
-        // sur un hôte chargé. Rien n'était perdu (le canal tamponne), mais le
-        // geste le plus fréquent de l'application paraissait lent.
-        // La boucle ne touche pas à `session` : les deux emprunts cohabitent.
-        tokio::join!(
-            probe_and_emit_os(&app2, sid, label_for_event, &session),
-            relayer_sortie(&app2, sid, out_rx, enregistreur)
-        );
-        // La session distante s'est terminee (exit, coupure, kill). On retire
-        // l'onglet et on emet `pty-closed` AVANT d'envoyer le `disconnect` SSH,
-        // qui peut attendre une copie directe encore en cours (voir
-        // `fermer_onglet_apres_pump`). Le garde d'epoque de `clore_session` evite
-        // de fermer un onglet plus recent reattribue au meme id.
-        fermer_onglet_apres_pump(&app2, sid, pump_epoch, async move {
-            let _ = session.lock().await.disconnect().await;
-        })
-        .await;
-    });
+    // La sonde d'OS tourne EN MÊME TEMPS que le relais, plus avant lui.
+    // Elle ouvre un canal exec, lance un `cat /etc/os-release` distant et
+    // attend sa sortie *et* son code de retour : deux à trois allers-retours
+    // plus un fork distant. Placée en tête, rien ne s'affichait tant qu'elle
+    // n'avait pas rendu la main — quelques centaines de millisecondes d'écran
+    // noir sur un lien lointain, jusqu'aux quatre secondes du délai de garde
+    // sur un hôte chargé. Rien n'était perdu (le canal tamponne), mais le
+    // geste le plus fréquent de l'application paraissait lent.
+    //
+    // La session distante terminee (exit, coupure, kill), on retire l'onglet
+    // et on emet `pty-closed` AVANT d'envoyer le `disconnect` SSH, qui peut
+    // attendre une copie directe encore en cours (voir
+    // `fermer_onglet_apres_pump`). Le garde d'epoque de `clore_session` evite
+    // de fermer un onglet plus recent reattribue au meme id.
+    let sonde = probe_and_emit_os(app.clone(), sid, label_for_event, session.clone());
+    let deconnexion = async move {
+        let _ = session.lock().await.disconnect().await;
+    };
+    let _pump = lancer_relais(app, sid, epoch, out_rx, enregistreur, sonde, deconnexion);
 
     Ok(label)
 }
@@ -830,7 +1126,12 @@ pub async fn pty_open(
     cols: u32,
     rows: u32,
 ) -> Result<String, String> {
-    let mut target = Target::from_alias(&alias)?;
+    // Le trousseau se lit hors des fils du runtime (C-SIL-7) ; une panne est
+    // signalée une fois par lancement (contrat K1).
+    let (mut target, panne) = super::bloquant(move || Target::depuis_alias(&alias)).await?;
+    if let Some(m) = panne {
+        super::signaler_trousseau_indisponible(&app, &m);
+    }
     target.override_password(password);
     open_on_target(app, &state, id, target, cols, rows).await
 }
@@ -841,8 +1142,14 @@ pub async fn pty_open(
 /// connexion vouee a l'echec, plutot qu'apres. `from_alias` ayant deja
 /// consulte le trousseau, un mot de passe memorise compte comme suffisant.
 #[tauri::command]
-pub async fn host_needs_password(alias: String) -> Result<bool, String> {
-    let t = Target::from_alias(&alias)?;
+pub async fn host_needs_password<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    alias: String,
+) -> Result<bool, String> {
+    let (t, panne) = super::bloquant(move || Target::depuis_alias(&alias)).await?;
+    if let Some(m) = panne {
+        super::signaler_trousseau_indisponible(&app, &m);
+    }
     // Une cle, un mot de passe memorise, ou un agent qui a des identites :
     // dans les trois cas, inutile de reclamer une saisie a l'avance.
     if t.key_path.is_some() || t.password.is_some() {
@@ -882,7 +1189,7 @@ pub async fn pty_write(
     data: String,
 ) -> Result<(), String> {
     let input = {
-        let store = state.inner.lock().unwrap();
+        let store = state.inner.verrou();
         store.get(&id).map(|h| h.input.clone())
     };
     // Sans cette erreur, une frappe adressee a une session fermee etait perdue
@@ -905,35 +1212,23 @@ pub async fn pty_resize<R: tauri::Runtime>(
     rows: u32,
 ) -> Result<(), String> {
     let resize = {
-        let store = state.inner.lock().unwrap();
+        let store = state.inner.verrou();
         store.get(&id).map(|h| h.resize.clone())
     };
     let resize = resize.ok_or_else(|| format!("Session {id} inconnue"))?;
-    let _ = resize.send((cols, rows)).await;
+    if let Err(e) = resize.send((cols, rows)).await {
+        // Le relais est déjà parti : la fermeture de l'onglet suit.
+        tracing::info!(onglet = id, "redimensionnement sans destinataire : {e}");
+    }
     if let Some(e) = enregistreur_de(&state, id) {
         // Même traitement que le pump : un redimensionnement écrit lui aussi
         // dans l'enregistrement, une écriture refusée doit le condamner et être
         // signalée, sinon `pty_resize` restait le seul à continuer d'écrire
         // dans un enregistreur déjà mort. Trouvé par l'audit du 7 septembre 2026.
-        let echec = {
-            let mut slot = e.lock().unwrap();
-            let mut echec = None;
-            if let Some(enr) = slot.as_mut() {
-                if let Err(err) = enr.redimension(cols, rows) {
-                    echec = Some((enr.chemin().display().to_string(), format!("{err:#}")));
-                }
-            }
-            if echec.is_some() {
-                *slot = None;
-            }
-            echec
-        };
-        if let Some((chemin, erreur)) = echec {
-            let _ = app.emit(
-                "enregistrement-erreur",
-                serde_json::json!({ "id": id, "chemin": chemin, "erreur": erreur }),
-            );
-        }
+        dans_l_enregistrement(&app, id, &e, |enr| {
+            enr.redimension(cols, rows)
+                .map_err(|err| format!("{err:#}"))
+        });
     }
     Ok(())
 }

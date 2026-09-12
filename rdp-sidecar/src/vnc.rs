@@ -228,6 +228,32 @@ fn message(e: vnc::VncError) -> anyhow::Error {
 /// fraîchement copié — au serveur, sans le moindre geste de collage, dès la
 /// connexion et à chaque focus (fuite du contenu vers l'opérateur du serveur, en
 /// clair en RFB classique).
+/// Le message `[8]` d'un texte copié par le serveur VNC, ou `None` si le
+/// partage est coupé ou si le texte dépasse le plafond de l'interface.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-5) : le texte n'était
+/// borné que par le tampon des pixels du paquet porté (256 Mio) puis relayé
+/// tel quel ; 200 Mio de `ServerCutText` devenaient un message de 400 Mio pour
+/// la webview, qui gelait toute l'application. Même plafond qu'en RDP, et le
+/// refus se dit dans le journal plutôt que de passer en silence.
+fn message_texte_distant(texte: &str, partage: bool) -> Option<Vec<u8>> {
+    if !partage {
+        return None;
+    }
+    if texte.len() > crate::presse_papiers::TEXTE_VERS_INTERFACE_MAX {
+        eprintln!(
+            "vnc : texte du presse-papiers distant ignoré ({} octets, plus que le plafond de {})",
+            texte.len(),
+            crate::presse_papiers::TEXTE_VERS_INTERFACE_MAX
+        );
+        return None;
+    }
+    let mut m = Vec::with_capacity(1 + texte.len());
+    m.push(8u8);
+    m.extend_from_slice(texte.as_bytes());
+    Some(m)
+}
+
 fn presse_papiers_vers_serveur(
     memoire: &mut Option<String>,
     b: &[u8],
@@ -325,8 +351,7 @@ pub async fn executer(args: &Args) -> Result<()> {
     let mut image = DecodedImage::new(PixelFormat::RgbA32, w, h);
 
     let mut poste: Option<Poste> = None;
-    etablir_poste(&mut poste).await?;
-    let Poste { sink, stream, .. } = poste.as_mut().expect("poste établi juste au-dessus");
+    let Poste { sink, stream, .. } = etablir_poste(&mut poste).await?;
     let mut hello = vec![1u8];
     hello.extend_from_slice(&w.to_le_bytes());
     hello.extend_from_slice(&h.to_le_bytes());
@@ -493,9 +518,7 @@ pub async fn executer(args: &Args) -> Result<()> {
                             }
                         }
                         VncEvent::Text(texte) => {
-                            if partage_clip {
-                                let mut m = vec![8u8];
-                                m.extend_from_slice(texte.as_bytes());
+                            if let Some(m) = message_texte_distant(&texte, partage_clip) {
                                 sink.send(Message::Binary(m.into())).await.context("envoi presse-papiers")?;
                             }
                         }
@@ -764,7 +787,28 @@ mod tests_copie {
 
 #[cfg(test)]
 mod tests_presse_papiers {
-    use super::presse_papiers_vers_serveur;
+    use super::{message_texte_distant, presse_papiers_vers_serveur};
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-5) : le texte
+    /// `ServerCutText` n'était borné que par le tampon générique des pixels
+    /// (256 Mio) puis relayé tel quel. Un serveur VNC envoyait 200 Mio, le
+    /// processus en faisait 400 en passant du Latin-1 à l'UTF-8, et poussait un
+    /// message de 400 Mio à la webview : c'est l'application entière qui gelait.
+    /// Même plafond qu'en RDP (8 Mio), tenu avant l'envoi.
+    #[test]
+    fn un_texte_vnc_demesure_n_est_pas_pousse_au_front() {
+        let limite = crate::presse_papiers::TEXTE_VERS_INTERFACE_MAX;
+        let m = message_texte_distant(&"a".repeat(limite), true).expect("au plafond, il passe");
+        assert_eq!((m[0], m.len()), (8, limite + 1));
+        assert!(
+            message_texte_distant(&"a".repeat(limite + 1), true).is_none(),
+            "au-delà du plafond, rien ne part vers l'interface"
+        );
+        assert!(
+            message_texte_distant("court", false).is_none(),
+            "partage coupé"
+        );
+    }
 
     /// Régression trouvée par l'audit du 7 septembre 2026 : sur l'annonce [8]
     /// (poussée par l'interface à l'ouverture, au focus et au changement

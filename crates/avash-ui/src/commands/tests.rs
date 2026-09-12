@@ -2,7 +2,6 @@
 
 use super::*;
 use avash::tunnel::TunnelKind;
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 fn target_with(password: Option<&str>) -> Target {
@@ -11,7 +10,7 @@ fn target_with(password: Option<&str>) -> Target {
         port: 22,
         user: "u".into(),
         key_path: None,
-        password: password.map(str::to_string),
+        password: password.map(|p| avash::secrets::Zeroizing::new(p.to_owned())),
         label: "h".into(),
         jumps: Vec::new(),
     }
@@ -21,10 +20,13 @@ fn target_with(password: Option<&str>) -> Target {
 fn override_password_garde_le_mot_de_passe_du_trousseau_sans_saisie() {
     let mut t = target_with(Some("du-trousseau"));
     t.override_password(None);
-    assert_eq!(t.password.as_deref(), Some("du-trousseau"));
+    assert_eq!(
+        t.password.as_deref().map(String::as_str),
+        Some("du-trousseau")
+    );
     t.override_password(Some(String::new()));
     assert_eq!(
-        t.password.as_deref(),
+        t.password.as_deref().map(String::as_str),
         Some("du-trousseau"),
         "saisie vide = pas de saisie"
     );
@@ -34,10 +36,10 @@ fn override_password_garde_le_mot_de_passe_du_trousseau_sans_saisie() {
 fn override_password_prefere_la_saisie_quand_il_y_en_a_une() {
     let mut t = target_with(Some("ancien"));
     t.override_password(Some("nouveau".into()));
-    assert_eq!(t.password.as_deref(), Some("nouveau"));
+    assert_eq!(t.password.as_deref().map(String::as_str), Some("nouveau"));
     let mut t = target_with(None);
     t.override_password(Some("saisi".into()));
-    assert_eq!(t.password.as_deref(), Some("saisi"));
+    assert_eq!(t.password.as_deref().map(String::as_str), Some("saisi"));
 }
 
 #[test]
@@ -109,9 +111,9 @@ pub(crate) fn with_ssh_config(contents: &str) -> HomeGuard {
     // réelle `deploy@10.0.0.1:2222` faisait alors échouer les `is_none()`.
     // Trouvé par l'audit du 7 septembre 2026. Voir `avash::secrets::en_memoire`.
     let previous_trousseau = std::env::var("AVASH_TROUSSEAU").ok();
-    std::env::set_var("HOME", &dir);
-    std::env::set_var("AVASH_HOME", &dir);
-    std::env::set_var("AVASH_TROUSSEAU", "memoire");
+    poser_variable("HOME", Some(dir.as_os_str()));
+    poser_variable("AVASH_HOME", Some(dir.as_os_str()));
+    poser_variable("AVASH_TROUSSEAU", Some("memoire".as_ref()));
     HomeGuard {
         previous,
         previous_avash,
@@ -125,89 +127,68 @@ pub(crate) struct HomeGuard {
     previous: Option<String>,
     previous_avash: Option<String>,
     previous_trousseau: Option<String>,
-    dir: std::path::PathBuf,
+    pub(crate) dir: std::path::PathBuf,
     _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+/// Pose (`Some`) ou retire (`None`) une variable d'environnement du
+/// processus de test. Un seul bloc `unsafe` pour les deux gardes de ce
+/// fichier (audit du 12 septembre 2026, C-unsafe-6 : les appels étaient nus,
+/// à moitié migrés vers l'édition 2024).
+fn poser_variable(nom: &str, valeur: Option<&std::ffi::OsStr>) {
+    match valeur {
+        // SAFETY: appelé sous HOME_LOCK (tenu par `HomeGuard`), qui sérialise
+        // tous les tests de ce binaire qui écrivent l'environnement ; les
+        // autres fils ne le lisent que par std::env (verrou interne de la
+        // std), et aucun code C de ce binaire de test n'y lit (moteur factice
+        // pur Rust, trousseau simulé).
+        Some(v) => unsafe { std::env::set_var(nom, v) },
+        // SAFETY: même garantie que le bras précédent : sous HOME_LOCK,
+        // lecteurs Rust seulement.
+        None => unsafe { std::env::remove_var(nom) },
+    }
 }
 
 impl Drop for HomeGuard {
     fn drop(&mut self) {
-        match &self.previous {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        match &self.previous_avash {
-            Some(h) => std::env::set_var("AVASH_HOME", h),
-            None => std::env::remove_var("AVASH_HOME"),
-        }
-        match &self.previous_trousseau {
-            Some(t) => std::env::set_var("AVASH_TROUSSEAU", t),
-            None => std::env::remove_var("AVASH_TROUSSEAU"),
-        }
+        poser_variable("HOME", self.previous.as_deref().map(std::ffi::OsStr::new));
+        poser_variable(
+            "AVASH_HOME",
+            self.previous_avash.as_deref().map(std::ffi::OsStr::new),
+        );
+        poser_variable(
+            "AVASH_TROUSSEAU",
+            self.previous_trousseau.as_deref().map(std::ffi::OsStr::new),
+        );
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
+/// Comme `with_ssh_config`, mais le trousseau simulé est EN PANNE : tout accès
+/// rend une erreur (contrat K1 de l'audit du 12 septembre 2026).
+pub(crate) fn with_trousseau_en_panne(contents: &str) -> HomeGuard {
+    let g = with_ssh_config(contents);
+    poser_variable("AVASH_TROUSSEAU", Some("panne".as_ref()));
+    g
+}
+
+/// Les charges d'un événement émis par l'application factice, dans l'ordre.
+pub(crate) fn ecouter(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    evenement: &str,
+) -> std::sync::Arc<Mutex<Vec<serde_json::Value>>> {
+    use tauri::Listener as _;
+    let recus = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let r = recus.clone();
+    app.listen_any(evenement, move |e| {
+        r.lock()
+            .unwrap()
+            .push(serde_json::from_str(e.payload()).unwrap());
+    });
+    recus
+}
+
 // ---------- local_target ----------
-
-/// Un chemin imposé libre reste respecté tel quel : la garde posée par l'audit
-/// du 9 septembre 2026 ne déplace la cible que si elle est déjà prise. Le test
-/// visait `/tmp/ailleurs.md` en dur, ce qui n'exerçait plus rien une fois la
-/// garde en place (le fichier peut exister sur le poste) : il travaille
-/// maintenant sous le HOME jetable du garde.
-#[test]
-fn local_target_respecte_le_chemin_impose() {
-    let _g = with_ssh_config("");
-    let dir = avash::sftp::default_local_dir();
-    std::fs::create_dir_all(&dir).unwrap();
-    let vise = dir.join("ailleurs.md");
-    let got = local_target("/srv/rapport.md", Some(vise.to_string_lossy().into_owned())).unwrap();
-    assert_eq!(std::path::Path::new(&got), vise);
-}
-
-/// Trouvé par l'audit du 9 septembre 2026 : dès que l'appelant IPC fournissait
-/// un `local`, `local_target` le rendait tel quel, sans passer par
-/// `chemin_local_libre`. Un appel direct à `sftp_download` depuis la webview
-/// (dépendance front compromise, outils de développement) écrivait alors le contenu d'un
-/// serveur choisi par l'attaquant par-dessus `~/.bashrc` : `download_reprise`
-/// finit par un `rename()` POSIX, qui remplace la cible sans un mot. La règle
-/// de SECURITY.md (« rien n'écrase un fichier existant ») vaut aussi pour un
-/// chemin imposé, pas seulement pour la cible dérivée du nom distant.
-#[test]
-fn local_target_n_ecrase_pas_un_chemin_impose_deja_pris() {
-    let _g = with_ssh_config("");
-    let dir = avash::sftp::default_local_dir();
-    std::fs::create_dir_all(&dir).unwrap();
-    let pris = dir.join("bashrc");
-    std::fs::write(&pris, b"a moi").unwrap();
-
-    let got = local_target("/srv/piege", Some(pris.to_string_lossy().into_owned())).unwrap();
-    let got = std::path::Path::new(&got);
-    assert_ne!(got, pris, "la cible ne doit pas viser le fichier existant");
-    assert!(
-        !got.exists(),
-        "le nom choisi doit être libre : {}",
-        got.display()
-    );
-    assert_eq!(
-        std::fs::read(&pris).unwrap(),
-        b"a moi",
-        "le fichier existant a été écrasé"
-    );
-}
-
-/// Même audit : toutes les commandes voisines qui touchent au disque local
-/// exigent un chemin absolu (`diagnostic_exporter`, `dossier_partage`,
-/// `rdp_ouvrir_dossier`). Un chemin relatif se résoudrait contre le répertoire
-/// courant de l'application, que l'utilisateur ne voit nulle part.
-#[test]
-fn local_target_refuse_un_chemin_impose_relatif() {
-    for l in ["ailleurs.md", "../../etc/passwd", ""] {
-        assert!(
-            local_target("/srv/rapport.md", Some(l.to_owned())).is_err(),
-            "{l} devrait être refusé"
-        );
-    }
-}
 
 #[test]
 fn local_target_derive_le_nom_du_fichier_distant() {
@@ -215,7 +196,7 @@ fn local_target_derive_le_nom_du_fichier_distant() {
     // défaut n'existe pas, on garde donc le nom tel quel (déterministe, sans
     // dépendre du vrai dossier Téléchargements du poste).
     let _g = with_ssh_config("");
-    let got = local_target("/srv/data/rapport.md", None).unwrap();
+    let got = local_target("/srv/data/rapport.md").unwrap();
     assert!(
         got.ends_with("rapport.md"),
         "le nom distant doit etre conserve : {got}"
@@ -226,7 +207,7 @@ fn local_target_derive_le_nom_du_fichier_distant() {
 fn local_target_ne_garde_que_le_dernier_segment() {
     // Un remote contenant ../ ne doit pas remonter dans l'arborescence locale.
     let _g = with_ssh_config("");
-    let got = local_target("/srv/../../etc/passwd", None).unwrap();
+    let got = local_target("/srv/../../etc/passwd").unwrap();
     assert!(got.ends_with("passwd"), "{got}");
     assert!(!got.contains(".."), "traversee de chemin : {got}");
 }
@@ -242,7 +223,7 @@ fn local_target_ne_prend_pas_un_nom_deja_pris() {
     let pris = dir.join("backup.sql");
     std::fs::write(&pris, b"ancien").unwrap();
 
-    let got = local_target("/srv/backup.sql", None).unwrap();
+    let got = local_target("/srv/backup.sql").unwrap();
     let got = std::path::Path::new(&got);
     assert_ne!(got, pris, "la cible ne doit pas viser le fichier existant");
     assert!(
@@ -270,7 +251,7 @@ fn local_target_evite_aussi_un_dossier_homonyme() {
     let dir = avash::sftp::default_local_dir();
     std::fs::create_dir_all(dir.join("logs")).unwrap();
 
-    let got = local_target("/srv/logs", None).unwrap();
+    let got = local_target("/srv/logs").unwrap();
     let got = std::path::Path::new(&got);
     assert!(
         !got.exists(),
@@ -325,7 +306,7 @@ fn local_target_refuse_un_chemin_sans_nom_de_fichier() {
     // une chaine vide et la destination devenait le dossier lui-meme.
     for remote in ["/", "..", "/srv/.."] {
         assert!(
-            local_target(remote, None).is_err(),
+            local_target(remote).is_err(),
             "{remote} devrait etre refuse"
         );
     }
@@ -448,7 +429,12 @@ fn deux_alias_vers_le_meme_serveur_partagent_le_secret_a_ne_pas_oublier() {
     let hotes = avash::parse_ssh_config().unwrap();
     let id = avash::secrets::account_id("deploy", "web.exemple.com", 22);
     assert!(
-        identifiant_encore_utilise(&hotes, "web-via-bastion", &id),
+        identifiant_encore_utilise(
+            &avash::configuration_resolue().unwrap(),
+            &hotes,
+            "web-via-bastion",
+            &id
+        ),
         "web réclame encore l'entrée : ne pas l'oublier"
     );
 }
@@ -460,7 +446,7 @@ fn un_seul_alias_vers_le_serveur_laisse_oublier_le_secret() {
     let hotes = avash::parse_ssh_config().unwrap();
     let id = avash::secrets::account_id("deploy", "web.exemple.com", 22);
     assert!(
-        !identifiant_encore_utilise(&hotes, "web", &id),
+        !identifiant_encore_utilise(&avash::configuration_resolue().unwrap(), &hotes, "web", &id),
         "aucun autre alias : l'entrée est orpheline, on l'oublie"
     );
 }
@@ -476,7 +462,7 @@ fn un_port_different_ne_partage_pas_l_entree() {
     let hotes = avash::parse_ssh_config().unwrap();
     let id = avash::secrets::account_id("deploy", "web.exemple.com", 22);
     assert!(
-        !identifiant_encore_utilise(&hotes, "web", &id),
+        !identifiant_encore_utilise(&avash::configuration_resolue().unwrap(), &hotes, "web", &id),
         "web-alt est sur le port 2222 : il ne partage pas deploy@…:22"
     );
 }
@@ -499,7 +485,7 @@ fn un_alias_venu_d_un_include_compte_comme_utilisateur_de_l_entree() {
     let hotes = avash::parse_ssh_config().unwrap();
     let id = avash::secrets::account_id("deploy", "web.exemple.com", 22);
     assert!(
-        identifiant_encore_utilise(&hotes, "web", &id),
+        identifiant_encore_utilise(&avash::configuration_resolue().unwrap(), &hotes, "web", &id),
         "web-via-bastion vient d'un Include mais réclame encore l'entrée"
     );
 }
@@ -518,7 +504,12 @@ fn un_alias_sans_user_partage_l_entree_utilisateur_courant() {
     let hotes = avash::parse_ssh_config().unwrap();
     let id = avash::secrets::account_id(&courant, "srv", 22);
     assert!(
-        identifiant_encore_utilise(&hotes, "explicite", &id),
+        identifiant_encore_utilise(
+            &avash::configuration_resolue().unwrap(),
+            &hotes,
+            "explicite",
+            &id
+        ),
         "l'alias sans User résout courant@srv:22 et partage l'entrée"
     );
 }
@@ -701,7 +692,7 @@ fn manual_accepte_adresse_user_et_mot_de_passe() {
     assert_eq!(t.addr, "10.0.0.5");
     assert_eq!(t.port, 2222);
     assert_eq!(t.user, "adrien");
-    assert_eq!(t.password.as_deref(), Some("secret"));
+    assert_eq!(t.password.as_deref().map(String::as_str), Some("secret"));
     assert_eq!(t.label, "adrien@10.0.0.5", "libelle affiche dans l'onglet");
 }
 
@@ -815,23 +806,40 @@ fn debug_ne_divulgue_jamais_le_mot_de_passe() {
 
 use tauri::Manager as _;
 
-fn app_de_test() -> tauri::App<tauri::test::MockRuntime> {
+/// Application factice qui gère TOUS les états de `lib.rs::run` : un test de
+/// n'importe quel module (`rdp.rs`, `sante.rs`, `tests_reseau.rs`) la prend
+/// telle quelle au lieu de réinventer la sienne. Audit du 12 septembre 2026
+/// (C-couv-8) : `rdp.rs` avait son propre `app_de_test`, qui ne gérait que
+/// `RdpStore`, et chaque nouveau module de test recopiait l'état factice.
+pub(crate) fn app_de_test() -> tauri::App<tauri::test::MockRuntime> {
     tauri::test::mock_builder()
-        .manage(SessionStore {
-            inner: Mutex::new(HashMap::new()),
-            annules: Mutex::new(std::collections::HashSet::new()),
-            en_cours: Mutex::new(std::collections::HashSet::new()),
-        })
+        .manage(SessionStore::default())
+        .manage(TunnelStore::default())
         .manage(TransfertsStore::default())
         .manage(ChoixLocaux::default())
+        .manage(crate::rdp::RdpStore::default())
+        .manage(Accuses::default())
+        .manage(TrousseauSignale::default())
+        .manage(RenduTerminal::default())
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("application factice")
 }
 
-fn poignee(epoch: u64) -> SessionHandle {
-    let (input, _) = tokio::sync::mpsc::channel(1);
+/// Poignée de session sans transport : SFTP et exécution rendent une erreur,
+/// le clavier part dans le vide.
+pub(crate) fn poignee(epoch: u64) -> SessionHandle {
+    poignee_avec_clavier(epoch).0
+}
+
+/// Comme `poignee`, mais rend aussi le récepteur du clavier : un test voit ce
+/// que `pty_write` ou `snippet_send` a réellement envoyé au canal. Le garder
+/// vivant compte : lâché, le canal se ferme et `pty_write` rend une erreur.
+pub(crate) fn poignee_avec_clavier(
+    epoch: u64,
+) -> (SessionHandle, tokio::sync::mpsc::Receiver<Vec<u8>>) {
+    let (input, clavier) = tokio::sync::mpsc::channel(16);
     let (resize, _) = tokio::sync::mpsc::channel(1);
-    SessionHandle {
+    let h = SessionHandle {
         epoch,
         input,
         resize,
@@ -845,7 +853,8 @@ fn poignee(epoch: u64) -> SessionHandle {
         label: "h".into(),
         cible: ("h".into(), 22, "u".into()),
         enregistreur: std::sync::Arc::new(Mutex::new(None)),
-    }
+    };
+    (h, clavier)
 }
 
 /// Démarrer, écrire par le chemin du pump, arrêter : le fichier existe,
@@ -1160,10 +1169,14 @@ async fn open_sessions_liste_les_sessions_enregistrees() {
     assert_eq!((liste[0].id, liste[0].label.as_str()), (4, "h"));
 }
 
-/// Un écrivain qui laisse passer l'en-tête (première écriture) puis refuse
-/// tout : il rejoue un disque qui se remplit dès la première sortie, sans
-/// dépendre de `/dev/full` (absent sous Windows). Compter les écritures plutôt
-/// que les octets rend le test indépendant de la longueur exacte des lignes.
+/// Un écrivain qui accepte l'en-tête mais refuse toute écriture qui porte un
+/// événement (`"o"` ou `"r"`) : il rejoue un disque qui se remplit dès la
+/// première sortie, sans dépendre de `/dev/full` (absent sous Windows).
+///
+/// Depuis le contrat K4 (audit du 12 septembre 2026), l'enregistreur tamponne
+/// et ne vide qu'à `vider()` : en-tête et première sortie partent alors dans la
+/// même écriture. Compter les écritures ne distinguait plus rien ; regarder ce
+/// qu'elles portent, si.
 struct PleinApresEntete {
     ecritures: usize,
 }
@@ -1171,10 +1184,11 @@ struct PleinApresEntete {
 impl std::io::Write for PleinApresEntete {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.ecritures += 1;
-        if self.ecritures <= 1 {
-            Ok(buf.len()) // l'en-tête
-        } else {
+        let evenement = buf.windows(3).any(|w| w == b"\"o\"" || w == b"\"r\"");
+        if evenement {
             Err(std::io::Error::other("No space left on device"))
+        } else {
+            Ok(buf.len()) // l'en-tête
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -1246,9 +1260,11 @@ async fn fermer_l_onglet_arrete_l_enregistrement_et_signale_l_echec() {
     let state = app.state::<SessionStore>();
     let mut h = poignee(1);
     let mut enr = enregistreur_condamne();
-    // Une écriture refusée condamne l'enregistreur : la fermeture doit passer
-    // par la branche qui signale l'échec, sans planter.
-    assert!(enr.sortie("x").is_err());
+    // Un vidage refusé condamne l'enregistreur (contrat K4 : l'écriture est
+    // tamponnée, l'erreur apparaît au vidage) : la fermeture doit passer par la
+    // branche qui signale l'échec, sans planter.
+    enr.sortie("x").unwrap();
+    assert!(enr.vider().is_err());
     h.enregistreur = std::sync::Arc::new(Mutex::new(Some(enr)));
     let slot = h.enregistreur.clone();
     enregistrer_session(&state, 10, h).unwrap();
@@ -1286,8 +1302,8 @@ fn le_decodeur_utf8_garde_un_debit_plancher() {
     );
 }
 
-#[test]
-fn open_external_refuse_les_schemas_dangereux() {
+#[tokio::test]
+async fn open_external_refuse_les_schemas_dangereux() {
     // Un lien du terminal ne doit jamais ouvrir file://, javascript:, etc.
     for mauvais in [
         "file:///etc/passwd",
@@ -1297,7 +1313,7 @@ fn open_external_refuse_les_schemas_dangereux() {
         "  file:///home",
     ] {
         assert!(
-            open_external(mauvais.into()).is_err(),
+            open_external(mauvais.into()).await.is_err(),
             "devrait refuser : {mauvais}"
         );
     }
@@ -1313,7 +1329,7 @@ fn open_external_refuse_les_schemas_dangereux() {
 /// Une poignée de session dont l'`executer` mime `run_avec_agent` : il tourne
 /// jusqu'à ce que l'interface lève le drapeau d'annulation, puis rend l'erreur
 /// `ANNULE` que le front reconnaît. C'est la source d'une copie directe.
-fn poignee_scp_annulable(epoch: u64) -> SessionHandle {
+pub(crate) fn poignee_scp_annulable(epoch: u64) -> SessionHandle {
     let (input, _) = tokio::sync::mpsc::channel(1);
     let (resize, _) = tokio::sync::mpsc::channel(1);
     SessionHandle {
@@ -1488,4 +1504,873 @@ fn un_chemin_designe_mais_disparu_reste_refuse() {
     std::fs::remove_file(&choisi).unwrap();
     let refus = source_autorisee(&choix, &choisi.to_string_lossy()).unwrap_err();
     assert!(refus.contains("n'existe pas"), "{refus}");
+}
+
+// ---------- Audit de sécurité du 12 septembre 2026 : surface IPC ----------
+
+/// C-ipc-2 : `sftp_download` acceptait un chemin local imposé par la page, que
+/// le front n'envoie jamais. Contrôlé seulement « absolu », il laissait un
+/// script de la webview CRÉER un fichier au contenu d'un serveur de son choix
+/// là où il voulait (`~/.config/autostart/x.desktop`). Le paramètre disparaît :
+/// garde de contrat sur la signature, faute de pouvoir appeler la commande
+/// sans session SFTP.
+#[test]
+fn sftp_download_ne_prend_plus_de_chemin_local_de_la_page() {
+    let source = include_str!("sftp.rs");
+    let debut = source.find("pub async fn sftp_download(").unwrap();
+    let fin = debut + source[debut..].find(") -> Result").unwrap();
+    let signature = &source[debut..fin];
+    assert!(
+        !signature.contains("local"),
+        "sftp_download ne doit prendre aucun chemin local : {signature}"
+    );
+}
+
+/// C-SIL-14 : ouvrir le panneau SFTP pendant une copie directe attendait la
+/// fin de la copie derrière le verrou de la session, des minutes sous
+/// « Chargement… ». La poignée rejoue ce verrou : la copie le tient, et
+/// l'ouverture du canal SFTP l'attend. La réponse doit venir tout de suite.
+#[tokio::test]
+async fn ouvrir_le_sftp_pendant_une_copie_directe_repond_tout_de_suite() {
+    let app = app_de_test();
+    let verrou = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    let mut source = poignee_scp_annulable(1);
+    {
+        let v = verrou.clone();
+        source.ouvrir_sftp = std::sync::Arc::new(move || {
+            let v = v.clone();
+            Box::pin(async move {
+                let _g = v.lock().await;
+                Err("pas de transport dans ce test".to_owned())
+            })
+        });
+        let v = verrou.clone();
+        let executer = source.executer.clone();
+        source.executer = std::sync::Arc::new(move |c, a| {
+            let v = v.clone();
+            let executer = executer.clone();
+            Box::pin(async move {
+                let _g = v.lock().await;
+                executer(c, a).await
+            })
+        });
+    }
+    enregistrer_session(&app.state::<SessionStore>(), 1, source).unwrap();
+    enregistrer_session(&app.state::<SessionStore>(), 2, poignee(1)).unwrap();
+    let copie = sftp_copier_vers(
+        app.handle().clone(),
+        app.state::<SessionStore>(),
+        app.state::<TransfertsStore>(),
+        1,
+        42,
+        "f.txt".into(),
+        false,
+        2,
+        "/tmp".into(),
+        true,
+    );
+    let pendant = async {
+        // La copie est inscrite (donc lancée) : on ouvre le panneau.
+        while !app
+            .state::<TransfertsStore>()
+            .inner
+            .lock()
+            .unwrap()
+            .contains_key(&42)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        let issue = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            sftp_of(&app.state::<SessionStore>(), 1),
+        )
+        .await;
+        assert!(sftp_annuler(app.state::<TransfertsStore>(), 42));
+        issue
+    };
+    let (_, issue) = tokio::join!(copie, pendant);
+    let Ok(Err(e)) = issue else {
+        panic!("l'ouverture du panneau a attendu la fin de la copie directe")
+    };
+    assert!(e.contains("copie directe"), "{e}");
+    // La copie finie, le panneau s'ouvre de nouveau normalement.
+    let e = sftp_of(&app.state::<SessionStore>(), 1)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(e, "pas de transport dans ce test");
+}
+
+// ---------- Relais de la sortie : regroupement et contre-pression ----------
+
+/// L'émetteur d'un relais de test, sa tâche, et les messages reçus.
+type RelaisDeTest = (
+    tokio::sync::mpsc::Sender<Vec<u8>>,
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<Mutex<Vec<serde_json::Value>>>,
+);
+
+/// Pousse des blocs dans un relais lancé à part, et rend l'émetteur, la tâche
+/// et les messages `pty-output` reçus.
+fn relais_de_test(app: &tauri::App<tauri::test::MockRuntime>) -> RelaisDeTest {
+    let recus = ecouter(app, "pty-output");
+    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+    let h = app.handle().clone();
+    let tache = tokio::spawn(async move {
+        relayer_sortie(&h, 1, rx, std::sync::Arc::new(Mutex::new(None))).await;
+    });
+    (tx, tache, recus)
+}
+
+fn donnees(recus: &Mutex<Vec<serde_json::Value>>) -> Vec<String> {
+    recus
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|v| v["data"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Audit du 12 septembre 2026 (C-perf-1) : le regroupement était en fin de
+/// fenêtre, et chaque écho de frappe attendait 8 ms avant de partir (10 ms
+/// d'écho médian mesurés sur la boucle locale). Temps figé : l'écho doit être
+/// émis sans que l'horloge avance d'un instant.
+#[tokio::test(start_paused = true)]
+async fn un_echo_isole_part_sans_attendre_la_fenetre_de_regroupement() {
+    let app = app_de_test();
+    let (tx, tache, recus) = relais_de_test(&app);
+    let depart = tokio::time::Instant::now();
+    tx.send(b"a".to_vec()).await.unwrap();
+    for _ in 0..100 {
+        if !recus.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(tokio::time::Instant::now(), depart, "l'horloge a avancé");
+    assert_eq!(donnees(&recus), ["a"]);
+    assert_eq!(recus.lock().unwrap()[0]["seq"], 1);
+    drop(tx);
+    tache.await.unwrap();
+}
+
+/// Ce qui suit l'écho dans la même fenêtre part en un seul message : le
+/// regroupement reste, il a seulement changé de bord.
+#[tokio::test(start_paused = true)]
+async fn deux_blocs_dans_la_meme_fenetre_ne_font_qu_un_message() {
+    let app = app_de_test();
+    let (tx, tache, recus) = relais_de_test(&app);
+    tx.send(b"a".to_vec()).await.unwrap();
+    while recus.lock().unwrap().is_empty() {
+        tokio::task::yield_now().await;
+    }
+    tx.send(b"b".to_vec()).await.unwrap();
+    tx.send(b"c".to_vec()).await.unwrap();
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        donnees(&recus),
+        ["a"],
+        "b et c attendent la fin de la fenêtre"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(9)).await;
+    assert_eq!(donnees(&recus), ["a", "bc"]);
+    assert_eq!(recus.lock().unwrap()[1]["seq"], 2);
+    drop(tx);
+    tache.await.unwrap();
+}
+
+/// Envoie `0` à `9`, un bloc toutes les 10 ms (chacun après une fenêtre
+/// calme, donc émis seul tant que la contre-pression le permet).
+async fn dix_blocs_espaces(tx: &tokio::sync::mpsc::Sender<Vec<u8>>) {
+    for i in 0..10 {
+        tx.send(i.to_string().into_bytes()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Contrat K6 (audit du 12 septembre 2026) : sans accusé du front, le relais
+/// n'a jamais plus de quatre messages en vol ; un accusé rouvre la fenêtre.
+#[tokio::test(start_paused = true)]
+async fn le_relais_n_emet_pas_plus_de_quatre_messages_sans_accuse() {
+    let app = app_de_test();
+    let (tx, tache, recus) = relais_de_test(&app);
+    dix_blocs_espaces(&tx).await;
+    assert_eq!(
+        donnees(&recus),
+        ["0", "1", "2", "3"],
+        "quatre messages au plus sans accusé"
+    );
+    pty_ack(app.state::<Accuses>(), 1, 2);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let recu = donnees(&recus);
+    assert_eq!(recu.len(), 6, "{recu:?}");
+    assert_eq!(recu.concat(), "0123456789");
+    drop(tx);
+    tache.await.unwrap();
+}
+
+/// Contrat K6 : un front qui n'accuse jamais ne gèle pas l'onglet ; passé le
+/// filet de 250 ms, le relais reprend.
+#[tokio::test(start_paused = true)]
+async fn sans_accuse_le_relais_reprend_apres_le_filet() {
+    let app = app_de_test();
+    let (tx, tache, recus) = relais_de_test(&app);
+    dix_blocs_espaces(&tx).await;
+    assert_eq!(donnees(&recus).len(), 4);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let recu = donnees(&recus);
+    assert!(recu.len() > 4, "{recu:?}");
+    assert_eq!(recu.concat(), "0123456789");
+    drop(tx);
+    tache.await.unwrap();
+}
+
+/// Un accusé pour un onglet inconnu (fermé entre-temps) ne fait rien.
+#[test]
+fn un_accuse_pour_un_onglet_inconnu_est_ignore() {
+    let app = app_de_test();
+    pty_ack(app.state::<Accuses>(), 77, 3);
+}
+
+/// Audit du 12 septembre 2026 (C-perf-8) : un bloc valide sans reliquat,
+/// cas de presque tous les blocs, ne passe plus par `carry`.
+#[test]
+fn un_bloc_valide_sans_reliquat_ne_passe_pas_par_carry() {
+    let mut d = Utf8Stream::default();
+    assert_eq!(d.push(b"abc"), "abc");
+    assert_eq!(d.carry.capacity(), 0, "le bloc a été recopié dans carry");
+    // Le reliquat, lui, est toujours recollé.
+    assert_eq!(d.push(&[0xC3]), "");
+    assert_eq!(d.push(&[0xA9, b'!']), "é!");
+}
+
+/// Un écrivain qui panique : rejoue un défaut du code d'écriture de
+/// l'enregistrement, qui ferait paniquer la tâche du relais.
+struct Paniqueur;
+
+impl std::io::Write for Paniqueur {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        panic!("écriture de l'enregistrement impossible (panique de test)");
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Audit du 12 septembre 2026 (C-SIL-9) : tokio avale la panique d'une tâche
+/// détachée, et l'onglet restait « connecté » sans session. La garde
+/// `FinDeSession` le ferme quel que soit le chemin de sortie.
+#[tokio::test]
+async fn une_panique_du_relais_ferme_quand_meme_l_onglet() {
+    let app = app_de_test();
+    let fermes = ecouter(&app, "pty-closed");
+    let mut h = poignee(3);
+    h.enregistreur = std::sync::Arc::new(Mutex::new(Some(
+        avash::enregistrement::Enregistreur::depuis_ecrivain(
+            Box::new(Paniqueur),
+            std::path::PathBuf::from("/inexistant/panique.cast"),
+            "h",
+            80,
+            24,
+        )
+        .unwrap(),
+    )));
+    let slot = h.enregistreur.clone();
+    enregistrer_session(&app.state::<SessionStore>(), 5, h).unwrap();
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let tache = lancer_relais(app.handle().clone(), 5, 3, rx, slot, async {}, async {});
+    tx.send(b"x".to_vec()).await.unwrap();
+    let issue = tache.await;
+    assert!(issue.unwrap_err().is_panic(), "le relais devait paniquer");
+    assert!(
+        !app.state::<SessionStore>()
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&5),
+        "l'onglet est resté dans le magasin"
+    );
+    assert_eq!(
+        *fermes.lock().unwrap(),
+        [serde_json::json!({ "id": 5 })],
+        "pty-closed doit partir"
+    );
+}
+
+/// Audit du 12 septembre 2026 (C-panique-4) : un verrou empoisonné par une
+/// panique ailleurs condamnait toutes les commandes du magasin. Frappe et
+/// fermeture doivent répondre malgré tout.
+#[tokio::test]
+async fn un_verrou_empoisonne_n_empeche_ni_d_ecrire_ni_de_fermer() {
+    let app = app_de_test();
+    let (h, mut clavier) = poignee_avec_clavier(1);
+    enregistrer_session(&app.state::<SessionStore>(), 1, h).unwrap();
+    let handle = app.handle().clone();
+    let _ = std::thread::spawn(move || {
+        let s = handle.state::<SessionStore>();
+        let _g = s.inner.lock().unwrap();
+        panic!("verrou empoisonné (panique de test)");
+    })
+    .join();
+    assert!(app.state::<SessionStore>().inner.is_poisoned());
+    pty_write(app.state::<SessionStore>(), 1, "ls".into())
+        .await
+        .unwrap();
+    assert_eq!(clavier.recv().await.unwrap(), b"ls");
+    pty_close(app.handle().clone(), app.state::<SessionStore>(), 1)
+        .await
+        .unwrap();
+    assert!(open_sessions(app.state::<SessionStore>()).is_empty());
+}
+
+// ---------- Trousseau en panne (contrat K1) ----------
+
+/// Audit du 12 septembre 2026 (C-SIL-8) : une panne du trousseau valait
+/// « pas de mot de passe », sans un mot. Elle est désormais signalée au front,
+/// une fois par lancement, et la demande de saisie suit son cours.
+#[tokio::test]
+async fn un_trousseau_en_panne_est_signale_une_fois_par_lancement() {
+    let _g = with_trousseau_en_panne("Host h\n  HostName 10.0.0.1\n  IdentityFile ~/.ssh/k\n");
+    let app = app_de_test();
+    let signales = ecouter(&app, "trousseau-indisponible");
+    for _ in 0..2 {
+        // Une clé déclarée suffit : pas de saisie à réclamer.
+        assert!(!host_needs_password(app.handle().clone(), "h".into())
+            .await
+            .unwrap());
+        assert!(!password_known(app.handle().clone(), "10.0.0.1".into(), None, None).await);
+    }
+    let recus = signales.lock().unwrap().clone();
+    assert_eq!(recus.len(), 1, "{recus:?}");
+    let message = recus[0]["message"].as_str().unwrap();
+    assert!(message.contains("trousseau"), "{message}");
+}
+
+/// Même panne à la modification d'un hôte : l'hôte change, et la commande dit
+/// que le mot de passe n'a pas suivi au lieu de rendre `Ok` sans rien faire.
+#[tokio::test]
+async fn modifier_un_hote_quand_le_trousseau_est_en_panne_le_dit() {
+    let _g = with_trousseau_en_panne("Host web\n  HostName 10.0.0.1\n  User deploy\n");
+    let e = host_update(
+        "web".into(),
+        "web".into(),
+        "10.0.0.2".into(),
+        None,
+        Some("deploy".into()),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(e.contains("n'a pas pu être déplacé"), "{e}");
+    assert_eq!(
+        find_host("web").unwrap().hostname.as_deref(),
+        Some("10.0.0.2")
+    );
+}
+
+// ---------- Secrets : commandes (C-couv-1) ----------
+//
+// Audit du 12 septembre 2026 : les décisions pures (`plan_deplacement`,
+// `identifiant_encore_utilise`) étaient testées, pas les commandes qui les
+// appliquent. Inverser `save` et `forget` dans `host_update` passait `check.sh`.
+
+async fn connu(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    addr: &str,
+    port: Option<u16>,
+    user: &str,
+) -> bool {
+    password_known(app.handle().clone(), addr.into(), port, Some(user.into())).await
+}
+
+/// LE test du bug de la 0.10 (« mémoriser » cassé pour tout hôte sans
+/// `User`) : écriture par `password_save`, relecture par la résolution d'alias
+/// ET par `password_known`.
+#[tokio::test]
+async fn le_mot_de_passe_memorise_est_relu_par_la_resolution_d_alias() {
+    let _g = with_ssh_config("Host h\n  HostName 10.0.0.1\n");
+    let app = app_de_test();
+    password_save("10.0.0.1".into(), None, None, "s3cr3t".into())
+        .await
+        .unwrap();
+    let t = Target::from_alias("h").unwrap();
+    assert_eq!(t.password.as_deref().map(String::as_str), Some("s3cr3t"));
+    assert!(password_known(app.handle().clone(), "10.0.0.1".into(), None, None).await);
+}
+
+#[tokio::test]
+async fn oublier_un_mot_de_passe_le_retire_et_ne_se_plaint_pas_deux_fois() {
+    let _g = with_ssh_config("");
+    let app = app_de_test();
+    password_save("10.0.0.1".into(), None, Some("u".into()), "s".into())
+        .await
+        .unwrap();
+    assert!(connu(&app, "10.0.0.1", None, "u").await);
+    password_forget("10.0.0.1".into(), None, Some("u".into()))
+        .await
+        .unwrap();
+    assert!(!connu(&app, "10.0.0.1", None, "u").await);
+    password_forget("10.0.0.1".into(), None, Some("u".into()))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn le_port_et_l_espace_de_l_adresse_sont_normalises_avant_le_trousseau() {
+    let _g = with_ssh_config("");
+    let app = app_de_test();
+    password_save(
+        "  10.0.0.1 ".into(),
+        Some(22),
+        Some(" deploy ".into()),
+        "s".into(),
+    )
+    .await
+    .unwrap();
+    assert!(connu(&app, "10.0.0.1", None, "deploy").await);
+}
+
+const JUMEAUX: &str = "Host web\n  HostName 10.0.0.1\n  User deploy\n\nHost web-via-bastion\n  HostName 10.0.0.1\n  User deploy\n  ProxyJump bastion\n";
+
+#[tokio::test]
+async fn supprimer_un_hote_oublie_son_secret_seulement_s_il_est_orphelin() {
+    let _g = with_ssh_config(JUMEAUX);
+    let app = app_de_test();
+    password_save("10.0.0.1".into(), None, Some("deploy".into()), "s".into())
+        .await
+        .unwrap();
+    host_delete("web-via-bastion".into()).await.unwrap();
+    assert!(
+        connu(&app, "10.0.0.1", None, "deploy").await,
+        "web le partage encore"
+    );
+    host_delete("web".into()).await.unwrap();
+    assert!(!connu(&app, "10.0.0.1", None, "deploy").await);
+    assert!(avash::parse_ssh_config().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn supprimer_un_hote_inconnu_ne_touche_pas_au_trousseau() {
+    let _g = with_ssh_config("Host web\n  HostName 10.0.0.1\n  User deploy\n");
+    let app = app_de_test();
+    password_save("10.0.0.1".into(), None, Some("deploy".into()), "s".into())
+        .await
+        .unwrap();
+    assert!(host_delete("absent".into()).await.is_err());
+    assert!(connu(&app, "10.0.0.1", None, "deploy").await);
+}
+
+/// `host_update` avec les champs d'une fiche : alias inchangé, nouvelle
+/// adresse et port.
+async fn repointer(ancien: &str, addr: &str, port: Option<u16>) -> Result<(), String> {
+    host_update(
+        ancien.into(),
+        ancien.into(),
+        addr.into(),
+        port,
+        Some("deploy".into()),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn modifier_l_adresse_d_un_hote_deplace_son_secret() {
+    let _g = with_ssh_config("Host web\n  HostName 10.0.0.1\n  User deploy\n");
+    let app = app_de_test();
+    password_save("10.0.0.1".into(), None, Some("deploy".into()), "s".into())
+        .await
+        .unwrap();
+    repointer("web", "10.0.0.2", None).await.unwrap();
+    assert!(!connu(&app, "10.0.0.1", None, "deploy").await);
+    assert!(connu(&app, "10.0.0.2", None, "deploy").await);
+}
+
+#[tokio::test]
+async fn modifier_un_hote_vers_une_cible_occupee_garde_le_secret_de_la_cible() {
+    let _g = with_ssh_config(
+        "Host web\n  HostName 10.0.0.1\n  User deploy\n\nHost db\n  HostName 10.0.0.2\n  User deploy\n",
+    );
+    let app = app_de_test();
+    password_save(
+        "10.0.0.1".into(),
+        None,
+        Some("deploy".into()),
+        "web-mdp".into(),
+    )
+    .await
+    .unwrap();
+    password_save(
+        "10.0.0.2".into(),
+        None,
+        Some("deploy".into()),
+        "db-mdp".into(),
+    )
+    .await
+    .unwrap();
+    repointer("web", "10.0.0.2", None).await.unwrap();
+    let cible = avash::secrets::charger("deploy@10.0.0.2:22")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cible.as_str(),
+        "db-mdp",
+        "le secret de la cible a été écrasé"
+    );
+    assert!(
+        connu(&app, "10.0.0.1", None, "deploy").await,
+        "l'ancien est conservé"
+    );
+}
+
+#[tokio::test]
+async fn modifier_le_port_d_un_alias_jumeau_ne_perd_pas_le_secret_de_l_autre() {
+    let _g = with_ssh_config(
+        "Host prod\n  HostName 10.0.0.1\n  User deploy\n\nHost prod-tunnel\n  HostName 10.0.0.1\n  User deploy\n",
+    );
+    let app = app_de_test();
+    password_save("10.0.0.1".into(), None, Some("deploy".into()), "s".into())
+        .await
+        .unwrap();
+    repointer("prod", "10.0.0.1", Some(2222)).await.unwrap();
+    assert!(
+        connu(&app, "10.0.0.1", None, "deploy").await,
+        "prod-tunnel le partage"
+    );
+    assert!(connu(&app, "10.0.0.1", Some(2222), "deploy").await);
+}
+
+#[tokio::test]
+async fn une_modification_refusee_laisse_le_secret_en_place() {
+    let _g = with_ssh_config("Host web\n  HostName 10.0.0.1\n  User deploy\n");
+    let app = app_de_test();
+    password_save("10.0.0.1".into(), None, Some("deploy".into()), "s".into())
+        .await
+        .unwrap();
+    assert!(repointer("absent", "10.0.0.2", None).await.is_err());
+    assert!(connu(&app, "10.0.0.1", None, "deploy").await);
+}
+
+/// Le formulaire d'édition reçoit les champs du bloc littéral, pas les
+/// valeurs héritées d'un `Host *` (contrat commenté dans `Target::from_alias`).
+#[test]
+fn host_get_rend_les_champs_bruts_sans_les_valeurs_heritees() {
+    let _g = with_ssh_config("Host *\n  User global\n\nHost h\n  HostName 10.0.0.1\n");
+    let h = host_get("h".into()).unwrap();
+    assert_eq!(h.user, None);
+    assert_eq!(h.hostname.as_deref(), Some("10.0.0.1"));
+}
+
+/// Garde de contrat : ce qui part vers le front ne porte aucun secret.
+#[tokio::test]
+async fn host_get_ne_serialise_aucun_champ_secret() {
+    let _g = with_ssh_config("Host h\n  HostName 10.0.0.1\n  User u\n");
+    password_save(
+        "10.0.0.1".into(),
+        None,
+        Some("u".into()),
+        "tres-secret".into(),
+    )
+    .await
+    .unwrap();
+    let v = serde_json::to_value(host_get("h".into()).unwrap()).unwrap();
+    assert!(v.get("password").is_none(), "{v}");
+    assert!(!v.to_string().contains("tres-secret"), "{v}");
+}
+
+/// Oublier une clé d'hôte retire ses lignes, et elles seules.
+#[test]
+fn oublier_une_cle_d_hote_retire_ses_lignes_et_rend_leur_nombre() {
+    const CLE: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKZTt57uQjti9xLGa1ZWBlI1FtsRw8E9NL4ayZQ9dcD0";
+    let g = with_ssh_config("");
+    let chemin = g.dir.join(".ssh").join("known_hosts");
+    std::fs::write(
+        &chemin,
+        format!("# commentaire\n[10.0.0.1]:2222 {CLE}\n10.0.0.9 {CLE}\n"),
+    )
+    .unwrap();
+    assert_eq!(known_hosts_forget("10.0.0.1".into(), Some(2222)), Ok(1));
+    let reste = std::fs::read_to_string(&chemin).unwrap();
+    assert!(reste.contains("# commentaire"), "{reste}");
+    assert!(reste.contains("10.0.0.9"), "{reste}");
+    assert!(!reste.contains("[10.0.0.1]:2222"), "{reste}");
+    assert_eq!(known_hosts_forget("10.0.0.1".into(), Some(2222)), Ok(0));
+}
+
+// ---------- Clés et hôtes enregistrés (C-couv-3) ----------
+
+const CLE_PUBLIQUE: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKZTt57uQjti9xLGa1ZWBlI1FtsRw8E9NL4ayZQ9dcD0 test";
+
+/// `key_deploy` exige le mot de passe AVANT toute connexion : sans lui, il
+/// n'a rien à faire (la clé serait déjà acceptée) et ne doit rien tenter.
+#[tokio::test]
+async fn key_deploy_refuse_sans_mot_de_passe_avant_toute_connexion() {
+    let issue = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        key_deploy(
+            "avash-inexistant.invalid".into(),
+            None,
+            "u".into(),
+            String::new(),
+            CLE_PUBLIQUE.into(),
+        ),
+    )
+    .await
+    .expect("la garde doit répondre sans tenter de connexion");
+    let e = issue.unwrap_err();
+    assert!(e.contains("mot de passe"), "{e}");
+}
+
+#[tokio::test]
+async fn key_deploy_refuse_une_ligne_qui_n_est_pas_une_cle() {
+    let e = key_deploy(
+        "avash-inexistant.invalid".into(),
+        None,
+        "u".into(),
+        "p".into(),
+        "bonjour".into(),
+    )
+    .await
+    .unwrap_err();
+    assert!(e.contains("ne ressemble pas"), "{e}");
+}
+
+#[test]
+fn host_save_rogne_analyse_les_etiquettes_et_ecrit_dans_la_config() {
+    let g = with_ssh_config("");
+    let h = host_save(
+        " web ".into(),
+        " 10.0.0.1 ".into(),
+        Some(2222),
+        " deploy ".into(),
+        Some("  ".into()),
+        Some(" bastion ".into()),
+        Some("a, ,b ,".into()),
+    )
+    .unwrap();
+    assert_eq!(h.alias, "web");
+    assert_eq!(h.identity_file, None);
+    assert_eq!(h.tags, ["a", "b"]);
+    assert_eq!(h.proxy_jump.as_deref(), Some("bastion"));
+    assert!(avash::parse_ssh_config()
+        .unwrap()
+        .iter()
+        .any(|x| x.alias == "web"));
+    let texte = std::fs::read_to_string(g.dir.join(".ssh").join("config")).unwrap();
+    assert!(!texte.to_lowercase().contains("password"), "{texte}");
+}
+
+#[test]
+fn host_save_refuse_un_alias_deja_declare() {
+    let g = with_ssh_config("");
+    let enregistrer = || {
+        host_save(
+            "web".into(),
+            "10.0.0.1".into(),
+            None,
+            "deploy".into(),
+            None,
+            None,
+            None,
+        )
+    };
+    enregistrer().unwrap();
+    let avant = std::fs::read(g.dir.join(".ssh").join("config")).unwrap();
+    let e = enregistrer().unwrap_err();
+    assert!(e.contains("déjà déclaré"), "{e}");
+    assert_eq!(
+        std::fs::read(g.dir.join(".ssh").join("config")).unwrap(),
+        avant
+    );
+}
+
+// ---------- Snippets (C-couv-6) ----------
+
+async fn envoyer(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    ids: Vec<u64>,
+    run: bool,
+    crochets: Option<bool>,
+) -> usize {
+    snippet_send(
+        app.state::<SessionStore>(),
+        ids,
+        "a\nb".into(),
+        run,
+        crochets,
+    )
+    .await
+    .unwrap()
+}
+
+/// Correctif du 7 septembre 2026 : une insertion multi-lignes part entre
+/// crochets de collage, sinon chaque ligne sauf la dernière s'exécutait.
+#[tokio::test]
+async fn inserer_un_snippet_multi_lignes_l_entoure_de_crochets_par_defaut() {
+    let app = app_de_test();
+    let (h, mut clavier) = poignee_avec_clavier(1);
+    enregistrer_session(&app.state::<SessionStore>(), 1, h).unwrap();
+    assert_eq!(envoyer(&app, vec![1], false, None).await, 1);
+    assert_eq!(clavier.recv().await.unwrap(), b"\x1b[200~a\rb\x1b[201~");
+}
+
+#[tokio::test]
+async fn executer_un_snippet_ajoute_le_retour_chariot_sans_crochets() {
+    let app = app_de_test();
+    let (h, mut clavier) = poignee_avec_clavier(1);
+    enregistrer_session(&app.state::<SessionStore>(), 1, h).unwrap();
+    envoyer(&app, vec![1], true, None).await;
+    assert_eq!(clavier.recv().await.unwrap(), b"a\rb\r");
+}
+
+#[tokio::test]
+async fn le_front_peut_refuser_les_crochets() {
+    let app = app_de_test();
+    let (h, mut clavier) = poignee_avec_clavier(1);
+    enregistrer_session(&app.state::<SessionStore>(), 1, h).unwrap();
+    envoyer(&app, vec![1], false, Some(false)).await;
+    assert_eq!(clavier.recv().await.unwrap(), b"a\rb");
+}
+
+/// Une session absente ou fermée n'arrête pas l'envoi aux autres, et ne
+/// compte pas parmi les sessions atteintes.
+#[tokio::test]
+async fn une_session_fermee_est_ignoree_et_les_autres_recoivent() {
+    let app = app_de_test();
+    let (h, mut clavier) = poignee_avec_clavier(1);
+    enregistrer_session(&app.state::<SessionStore>(), 1, h).unwrap();
+    // `poignee` lâche son récepteur : l'envoi y échoue.
+    enregistrer_session(&app.state::<SessionStore>(), 2, poignee(1)).unwrap();
+    assert_eq!(envoyer(&app, vec![1, 9, 2], true, None).await, 1);
+    assert_eq!(clavier.recv().await.unwrap(), b"a\rb\r");
+}
+
+#[test]
+fn snippet_vars_rend_les_variables_dans_l_ordre_sans_doublon() {
+    assert_eq!(
+        snippet_vars("ssh {{hote}} -p {{port}} {{hote}}".into()),
+        ["hote", "port"]
+    );
+}
+
+#[test]
+fn snippet_list_lit_le_fichier_du_bac_a_sable() {
+    let _g = with_ssh_config("");
+    assert!(snippet_list().unwrap().is_empty());
+    let s = snippet_save(None, "n".into(), "c".into(), true, None).unwrap();
+    let liste = snippet_list().unwrap();
+    assert_eq!(liste.len(), 1);
+    assert_eq!(liste[0].id, s.id);
+    snippet_delete(s.id).unwrap();
+    assert!(snippet_list().unwrap().is_empty());
+}
+
+// ---------- Petites promesses (C-couv-7) ----------
+
+/// Au plus un événement de progression toutes les 80 ms, et toujours le
+/// dernier : une régression noierait l'IPC pendant un gros transfert.
+#[tokio::test]
+async fn la_progression_n_emet_qu_un_evenement_par_80_ms_et_toujours_le_dernier() {
+    let app = app_de_test();
+    let recus = ecouter(&app, "sftp-progress");
+    let mut rapport = progress_reporter(app.handle(), 1, 7, "f", "download");
+    for i in 0..100 {
+        rapport("f", i, 100, 0, 1);
+    }
+    rapport("f", 100, 100, 0, 1);
+    let recus = recus.lock().unwrap().clone();
+    assert!((2..=3).contains(&recus.len()), "{} événements", recus.len());
+    let dernier = recus.last().unwrap();
+    assert_eq!(
+        (dernier["done"].as_u64(), dernier["total"].as_u64()),
+        (Some(100), Some(100))
+    );
+    assert_eq!(dernier["transfert"], 7);
+}
+
+/// Un arrêt demandé pendant l'ouverture note l'annulation, que
+/// `tunnel_start` verra en arrivant ; sans ouverture en vol, rien n'est semé.
+#[tokio::test]
+async fn arreter_un_tunnel_pendant_son_ouverture_note_l_annulation() {
+    let app = app_de_test();
+    let tunnels = || app.state::<TunnelStore>();
+    tunnels().en_cours.lock().unwrap().insert("t".into());
+    tunnel_stop(tunnels(), "t".into()).await.unwrap();
+    tunnel_stop(tunnels(), "u".into()).await.unwrap();
+    let annules = tunnels().annules.lock().unwrap().clone();
+    assert!(annules.contains("t"));
+    assert!(!annules.contains("u"));
+}
+
+#[tokio::test]
+async fn une_definition_de_tunnel_exige_un_alias_declare_et_un_type_connu() {
+    let _g = with_ssh_config("Host h\n  HostName 10.0.0.1\n");
+    let app = app_de_test();
+    let definir = |alias: &str, kind: &str| {
+        tunnel_def_save(
+            None,
+            alias.into(),
+            kind.into(),
+            8080,
+            Some("x".into()),
+            Some(80),
+            None,
+        )
+    };
+    assert!(definir("absent", "local")
+        .unwrap_err()
+        .contains("introuvable"));
+    assert!(definir("h", "socks").is_err());
+    let d = definir("h", "local").unwrap();
+    assert!(tunnel_defs().unwrap().iter().any(|x| x.id == d.id));
+    tunnel_def_delete(app.state::<TunnelStore>(), d.id)
+        .await
+        .unwrap();
+    assert!(tunnel_defs().unwrap().is_empty());
+}
+
+#[test]
+fn arreter_l_enregistrement_d_une_session_inconnue_est_une_erreur() {
+    let app = app_de_test();
+    let e = enregistrement_arreter(app.state::<SessionStore>(), 99).unwrap_err();
+    assert!(e.contains("inconnue"), "{e}");
+}
+
+/// Sans chemin désigné, l'analyse lit les sessions `PuTTY` du répertoire
+/// personnel, et dit où elle a regardé.
+#[cfg(not(windows))]
+#[test]
+fn le_scan_par_defaut_lit_les_sessions_putty_du_repertoire_personnel() {
+    let _g = with_ssh_config("");
+    let dir = avash::import::repertoire_putty().unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("prod"), "HostName=10.0.0.7\nProtocol=ssh\n").unwrap();
+    let bilan = import_scan(None).unwrap();
+    assert!(
+        bilan
+            .consultes
+            .iter()
+            .any(|c| c == &dir.display().to_string()),
+        "{:?}",
+        bilan.consultes
+    );
+    assert!(
+        bilan.candidats.iter().any(|c| c.host.alias == "prod"),
+        "{:?}",
+        bilan
+            .candidats
+            .iter()
+            .map(|c| &c.host.alias)
+            .collect::<Vec<_>>()
+    );
 }

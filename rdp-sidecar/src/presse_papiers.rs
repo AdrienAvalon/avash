@@ -8,6 +8,11 @@ use ironrdp::cliprdr::pdu::{
 };
 use ironrdp::core::IntoOwned;
 
+/// Plafond d'un texte du presse-papiers distant relayé à l'interface : au-delà,
+/// la webview gèle à le recevoir puis à l'écrire. Partagé par RDP et VNC depuis
+/// l'audit du 12 septembre 2026 (C-sidecar-5), où VNC n'en avait aucun.
+pub(crate) const TEXTE_VERS_INTERFACE_MAX: usize = 8 * 1024 * 1024;
+
 /// Presse-papiers local partagé (texte), alimenté par le front, servi au serveur.
 pub(crate) type LocalClip = std::sync::Arc<std::sync::Mutex<Option<String>>>;
 
@@ -155,7 +160,7 @@ impl CliprdrBackend for ClipBackend {
                 // déjà décodé ici, et en amont le réassemblage des morceaux du
                 // canal statique était illimité ; la borne mémoire vit désormais
                 // dans `ironrdp-svc` (dechunkify, REASSEMBLAGE_MAX à 16 Mio).
-                if text.len() <= 8 * 1024 * 1024 {
+                if text.len() <= TEXTE_VERS_INTERFACE_MAX {
                     let _ = self.tx.send(ClipReq::RemoteText(text));
                 }
             }

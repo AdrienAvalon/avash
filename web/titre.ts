@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ic } from "./icons";
 import { $, state } from "./etat";
 import { rdpSessions } from "./rdp";
+import { libelleSur } from "./filters";
 
 // ---------- Barre de titre custom (decorations: false) ----------
 
@@ -12,16 +13,25 @@ export async function setupWindowControls() {
   $("win-min").innerHTML = ic("winMin");
   $("win-close").innerHTML = ic("winClose");
   const maxBtn = $("win-max");
-  // On ne réécrit le bouton que si l'état a réellement changé : réinjecter le
+  // Icône par défaut tout de suite, corrigée dès que la fenêtre répond. On ne
+  // réécrit ensuite le bouton que si l'état a réellement changé : réinjecter le
   // même SVG force une réanalyse HTML pour rien.
-  let maxAffiche: boolean | null = null;
+  maxBtn.innerHTML = ic("winMax");
+  let maxAffiche = false;
   const paintMax = async () => {
-    const maximisee = await win.isMaximized();
+    let maximisee: boolean;
+    try {
+      maximisee = await win.isMaximized();
+    } catch {
+      return; // état illisible : l'icône par défaut reste, le bouton marche
+    }
     if (maximisee === maxAffiche) return;
     maxAffiche = maximisee;
     maxBtn.innerHTML = ic(maximisee ? "winRestore" : "winMax");
   };
-  await paintMax();
+  // Les boutons se câblent AVANT tout `await` : un `isMaximized()` rejeté
+  // laissait réduire, agrandir et fermer sans effet, sans un mot, sur une
+  // fenêtre sans décorations (audit du 12 septembre 2026, C-SIL-13).
   $("win-min").addEventListener("click", () => win.minimize());
   maxBtn.addEventListener("click", async () => { await win.toggleMaximize(); await paintMax(); });
   $("win-close").addEventListener("click", () => win.close());
@@ -33,14 +43,14 @@ export async function setupWindowControls() {
   // sans même qu'une session soit ouverte. L'état maximisé ne peut changer
   // qu'au terme du geste : on attend que le redimensionnement se pose.
   let repeindreMax: number | undefined;
-  void win.onResized(() => {
+  win.onResized(() => {
     window.clearTimeout(repeindreMax);
     repeindreMax = window.setTimeout(() => void paintMax(), 150);
-  });
+  }).catch(() => { /* sans l'événement, l'icône se corrige au prochain clic */ });
   // Fenêtre en arrière-plan : geler les animations (CPU au repos ~0).
-  void win.onFocusChanged(({ payload: focused }) => {
+  win.onFocusChanged(({ payload: focused }) => {
     document.body.classList.toggle("win-blur", !focused);
-  });
+  }).catch(() => { /* sans l'événement, les animations tournent : sans gravité */ });
 
   // Poignées de redimensionnement : sans décorations, la fenêtre n'a plus de
   // bords redimensionnables (surtout sous Wayland). On les recrée nous-mêmes.
@@ -59,6 +69,7 @@ export async function setupWindowControls() {
     });
     box.appendChild(h);
   }
+  await paintMax();
 }
 
 /** Reflète l'onglet actif dans la barre de titre (utile + évite le doublon).
@@ -75,9 +86,14 @@ export function setTitlebar() {
 
 function nomOngletActif(): string | null {
   if (state.active === null) return null;
+  // `libelleSur` : sans contrôle de direction, qui réordonnait le titre (audit
+  // du 12 septembre 2026, FS-10).
   const s = state.sessions.get(state.active);
-  if (s) return s.closed ? null : `${s.alias} — Avash`;
+  if (s) return s.closed ? null : `${libelleSur(s.alias)} — Avash`;
   const r = rdpSessions.get(state.active);
-  const nom = r?.tab.querySelector<HTMLElement>(".label")?.textContent;
-  return nom ? `${nom} — Avash` : null;
+  // Un bureau fermé ne se nomme plus, comme un onglet SSH fermé : il gardait
+  // son nom après une coupure du serveur (même audit, C-SIL-1).
+  if (!r || r.etat === "closed") return null;
+  const nom = r.tab.querySelector<HTMLElement>(".label")?.textContent;
+  return nom ? `${libelleSur(nom)} — Avash` : null;
 }

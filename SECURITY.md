@@ -542,6 +542,34 @@ PR — un mainteneur seul pousse directement. La revue de code obligatoire et le
 badge de bonnes pratiques supposent l'un un flux par PR, l'autre une
 inscription sur bestpractices.dev : ils restent des choix du mainteneur.
 
+**Qui peut publier une mise à jour.** La clé privée qui signe les mises à jour
+automatiques est la pièce la plus précieuse de la chaîne : tous les postes
+installés acceptent ce qu'elle signe, et aucun ne sait la révoquer. Jusqu'au
+12 septembre 2026, elle entrait dans l'environnement de `cargo tauri build`,
+qui exécute le code de chaque dépendance du build (`beforeBuildCommand`,
+`build.rs`, macros procédurales) : une seule dépendance compromise pouvait la
+lire. Depuis, les bundles sont construits sans aucun secret, et un job
+`signer`, qui ne compile ni n'installe rien et dont l'outil de signature est
+construit à part, signe les artefacts. `signer` et `publier` tournent dans
+l'environnement GitHub `release`, qui peut exiger l'approbation du mainteneur
+avant chaque publication. Toutes les commandes cargo des chaînes sont en
+`--locked` et les outils de la chaîne en version exacte : le graphe construit
+est celui du `Cargo.lock` commité, que décrit le SBOM attesté.
+
+**L'exécuteur GitLab et le poste qui signe.** La chaîne GitLab tourne sur le
+poste du mainteneur, dans un exécuteur Docker privilégié qui monte le socket du
+démon : chaque job, et donc chaque `npm ci`, `build.rs` ou scénario bout en
+bout, a les droits de root sur ce poste. Tant que ce poste détient aussi la clé
+privée de la mise à jour automatique, la clé age qui déchiffre les jetons de
+`secrets/` et une session `gh` administratrice, une dépendance compromise, ou
+un commit poussé sur `main` par un agent trompé, peut depuis un job GitLab lire
+la clé et publier une mise à jour signée que tous les postes installés
+accepteraient. Les releases GitHub ne signent plus dans le build ; la présence
+de la clé sur ce poste reste pourtant le maillon le plus faible de la chaîne,
+et le sortir de là (support chiffré monté le temps d'une publication, ou
+exécuteur confiné dans une machine virtuelle sans secret) est la prochaine
+étape.
+
 ### Un serveur RDP est une entrée non fiable
 
 Le modèle de sécurité d'avash traitait le serveur comme un pair : on vérifie son

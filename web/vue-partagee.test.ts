@@ -31,7 +31,9 @@ function monterSession(id: number): void {
   const element = document.createElement("div");
   conteneur.appendChild(element);
   document.getElementById("terminal")!.appendChild(conteneur);
-  state.sessions.set(id, { term: { element }, fit: { fit: () => {} } } as unknown as Session);
+  // `alias` : la barre de titre le nettoie désormais (audit du 12 septembre
+  // 2026, FS-10) et une session réelle en a toujours un.
+  state.sessions.set(id, { alias: `srv-${id}`, term: { element }, fit: { fit: () => {} } } as unknown as Session);
 }
 
 beforeEach(() => {

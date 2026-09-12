@@ -6,6 +6,7 @@
 //! Les definitions sont conservees dans `~/.config/avash/tunnels.yaml`.
 
 use crate::ssh::{AvashSession, ForwardCounters};
+use crate::Verrou as _;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -212,14 +213,21 @@ impl Tunnel {
             bytes_up: self.counters.bytes_up.load(Ordering::Relaxed),
             bytes_down: self.counters.bytes_down.load(Ordering::Relaxed),
             alive,
-            last_error: self.last_error.lock().unwrap().clone(),
+            last_error: self.last_error.verrou().clone(),
         }
     }
 
     /// Ferme le tunnel et sa connexion SSH.
+    ///
+    /// La tâche d'écoute est interrompue PUIS attendue : `abort()` ne fait que
+    /// demander l'arrêt, la socket d'écoute n'est lâchée qu'au prochain passage
+    /// de l'ordonnanceur. Trouvé par l'audit du 12 septembre 2026 (test
+    /// C-couv-4.7) : juste après `tunnel_stop`, le port local était encore pris
+    /// (`EADDRINUSE`), et un « relancer » immédiat pouvait échouer à l'écoute.
     pub async fn close(mut self) {
         if let Some(task) = self.acceptor.take() {
             task.abort();
+            let _ = task.await;
         }
         if self.def.kind == TunnelKind::Remote {
             let _ = self
@@ -251,7 +259,7 @@ async fn accept_loop(
         let (stream, peer) = match listener.accept().await {
             Ok(x) => x,
             Err(e) => {
-                *last_error.lock().unwrap() = Some(format!("Écoute interrompue : {e}"));
+                *last_error.verrou() = Some(format!("Écoute interrompue : {e}"));
                 break;
             }
         };
@@ -261,7 +269,7 @@ async fn accept_loop(
         let last_error = last_error.clone();
         tokio::spawn(async move {
             if let Err(e) = relay_one(stream, peer, &session, &def, &counters).await {
-                *last_error.lock().unwrap() = Some(e.to_string());
+                *last_error.verrou() = Some(e.to_string());
             }
         });
     }

@@ -1,0 +1,7 @@
+# Configuration de clippy pour tout le dépôt (espace de travail, processus RDP,
+# serveurs de test : clippy cherche ce fichier en remontant depuis chaque
+# manifeste). Audit du 12 septembre 2026 : `unwrap_used` devient bloquant en
+# production ; dans les tests, un unwrap qui échoue est un échec lisible, pas
+# une panne de l'application.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

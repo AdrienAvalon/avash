@@ -130,6 +130,46 @@ export async function doubleCliquerHote(alias) {
   }
   throw new Error(`double-clic sur « ${alias} » : aucun onglet ouvert après plusieurs essais (liste sans cesse reconstruite ?)`);
 }
+/** Confirme la fermeture d'un onglet vivant.
+ *
+ *  Audit du 12 septembre 2026 (C-front-6) : fermer une session ouverte (croix,
+ *  Ctrl+W) demande désormais confirmation ; un onglet fermé ou en connexion se
+ *  ferme sans question. Les scénarios qui ferment un onglet vivant passent par
+ *  ici, et échouent en le disant si la question ne vient pas. */
+export async function confirmerFermeture() {
+  const modale = await $("#confirm-modal");
+  await modale.waitForDisplayed({ timeout: 5000, timeoutMsg: "fermer un onglet vivant n'a pas demandé confirmation" });
+  await $("#confirm-ok").click();
+  await modale.waitForDisplayed({ reverse: true, timeout: 5000 });
+}
+
+/** Ferme l'onglet actif par sa croix ; `vivant` : la session est ouverte, la
+ *  fermeture se confirme. Le clic est émis sur l'élément, comme avant : la croix
+ *  n'est pas toujours sous le pointeur du pilote. */
+export async function fermerOngletActif({ vivant }) {
+  await browser.execute(() => document.querySelector(".tab.active .close")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  if (vivant) await confirmerFermeture();
+}
+
+/** Tape dans le terminal affiché, comme `taper` d'enregistrement.spec.js :
+ *  xterm écoute sur son textarea caché, qu'on focalise ; le serveur WebDriver
+ *  embarqué ne synthétisant que keydown et keyup, le texte y passe par un
+ *  événement `input` (le chemin d'une saisie IME), les touches nommées par
+ *  `browser.keys`. */
+export async function taperDansLeTerminal(texte) {
+  await browser.execute(() => {
+    const visibles = [...document.querySelectorAll("#terminal .xterm-container")].filter((c) => getComputedStyle(c).display !== "none");
+    (visibles.at(-1) ?? document).querySelector(".xterm-helper-textarea")?.focus();
+  });
+  if (EMBARQUE) {
+    await browser.execute((t) => {
+      document.activeElement?.dispatchEvent(new InputEvent("input", { data: t, inputType: "insertText", bubbles: true }));
+    }, texte);
+  } else {
+    await browser.keys(texte);
+  }
+}
+
 export async function findFolderRow(name) {
   const r = await trouverLigne("#host-list .folder-row", ".fname", name);
   if (!r) throw new Error(`dossier « ${name} » introuvable`);

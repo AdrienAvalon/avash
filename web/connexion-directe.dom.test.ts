@@ -42,7 +42,7 @@ function monterDom() {
         <label id="m-addr-row"><input id="m-addr" value="" /></label>
         <label id="m-port-row"><input id="m-port" value="" /></label>
         <label id="m-user-row"><input id="m-user" value="" /></label>
-        <label id="m-serie-row" hidden><input id="m-serie-chemin" /><select id="m-serie-vitesse"><option value="115200">115200</option></select><span id="m-serie-hint"></span></label>
+        <label id="m-serie-row" hidden><input id="m-serie-chemin" list="m-serie-ports" /><datalist id="m-serie-ports"></datalist><select id="m-serie-vitesse"><option value="115200">115200</option></select><span id="m-serie-hint"></span></label>
         <label id="m-serie-vitesse-row" hidden></label>
         <div id="m-auth-switch">
           <label class="radio"><input type="radio" name="auth" value="password" checked /></label>
@@ -190,5 +190,58 @@ describe("connexion directe : enregistrement puis connexion échouée", () => {
     // L'onglet du nouvel essai garde « prod » : l'hôte est enregistré sous ce
     // nom même si la case a été décochée entre-temps.
     expect(openManualSession).toHaveBeenLastCalledWith(expect.anything(), "prod");
+  });
+});
+
+// Audit du 12 septembre 2026 (C-SIL-12, contrat K2) : une énumération des ports
+// série en échec (droits sur /dev, libudev absent, erreur de `serialport`) était
+// avalée côté cœur et côté front (`.catch(() => [])`), puis affichée « Aucun
+// port série détecté ». L'utilisateur débranchait et rebranchait son adaptateur
+// pour rien. `serie_ports` rend désormais l'erreur ; le formulaire la dit.
+describe("connexion directe : ports série", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    monterDom();
+  });
+
+  const indication = () => document.getElementById("m-serie-hint") as HTMLElement;
+
+  it("le_formulaire_dit_quand_l_enumeration_echoue", async () => {
+    const { manualOpen } = await import("./connexion-directe");
+    invoke.mockImplementation((cmd: string) =>
+      // L'invoke de Tauri rejette avec le `Err(String)` de la commande, pas avec
+      // un `Error` : le test reproduit cette forme.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      cmd === "serie_ports" ? Promise.reject("libudev introuvable") : Promise.resolve(null),
+    );
+
+    manualOpen();
+
+    await vi.waitFor(() => expect(indication().textContent).toContain("libudev introuvable"));
+    expect(indication().textContent).toBe(t("serie-enumeration-impossible", { e: "libudev introuvable" }));
+    expect(indication().textContent).not.toBe(t("serie-aucun-port"));
+  });
+
+  it("une énumération vide dit toujours qu'aucun port n'est détecté", async () => {
+    const { manualOpen } = await import("./connexion-directe");
+    invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === "serie_ports" ? [] : null));
+
+    manualOpen();
+
+    await vi.waitFor(() => expect(indication().textContent).toBe(t("serie-aucun-port")));
+  });
+
+  it("les ports trouvés remplissent la liste proposée et l'indication", async () => {
+    const { manualOpen } = await import("./connexion-directe");
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "serie_ports" ? [{ chemin: "/dev/ttyUSB0", description: "FT232R" }] : null),
+    );
+
+    manualOpen();
+
+    await vi.waitFor(() => expect(indication().textContent).toBe(t("serie-ports-trouves", { n: 1 })));
+    const options = [...document.querySelectorAll<HTMLOptionElement>("#m-serie-ports option")];
+    expect(options.map((o) => o.value)).toEqual(["/dev/ttyUSB0"]);
+    expect(options[0].label).toBe("FT232R");
   });
 });

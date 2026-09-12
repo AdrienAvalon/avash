@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CLIP_KEY, SANTE_DEMARRAGE_KEY, partageClipboard, setPartageClipboard, sonBureau, setSonBureau, sondeAuDemarrage, setSondeAuDemarrage } from "./prefs";
+import { CLIP_KEY, FERMETURE_KEY, SANTE_DEMARRAGE_KEY, confirmerFermetureOnglet, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, sonBureau, setSonBureau, sondeAuDemarrage, setSondeAuDemarrage } from "./prefs";
 
 // Node 26 déclare un `localStorage` global inerte que jsdom ne remplace pas :
 // l'environnement DOM ne suffit donc pas ici. On installe un stockage conforme
@@ -87,6 +87,30 @@ describe("son des bureaux distants", () => {
   });
 });
 
+// Audit du 12 septembre 2026 (C-front-6) : fermer un onglet vivant ne demandait
+// rien, alors que tout le reste de destructif passe par une confirmation. Le
+// défaut demande ; « Ne plus demander » se retient et se règle à la palette.
+describe("confirmation avant de fermer un onglet vivant", () => {
+  beforeEach(() => stockage.clear());
+
+  it("demande quand rien n'a jamais été réglé", () => {
+    expect(confirmerFermetureOnglet()).toBe(true);
+  });
+
+  it("retient « ne plus demander », puis le retour à la question", () => {
+    setConfirmerFermetureOnglet(false);
+    expect(stockage.getItem(FERMETURE_KEY)).toBe("0");
+    expect(confirmerFermetureOnglet()).toBe(false);
+    setConfirmerFermetureOnglet(true);
+    expect(confirmerFermetureOnglet()).toBe(true);
+  });
+
+  it("ne tient une valeur inattendue que pour une question", () => {
+    stockage.setItem(FERMETURE_KEY, "jamais ?");
+    expect(confirmerFermetureOnglet()).toBe(true);
+  });
+});
+
 // Un navigateur en mode privé strict refuse tout accès au stockage, en lecture
 // comme en écriture : chaque réglage retombe sur son défaut, et régler ne fait
 // pas échouer l'appelant (le choix vaut alors pour la session en cours).
@@ -111,9 +135,11 @@ describe("stockage refusé par le navigateur", () => {
     expect(partageClipboard()).toBe(true);
     expect(sonBureau()).toBe(true);
     expect(sondeAuDemarrage()).toBe(false);
+    expect(confirmerFermetureOnglet()).toBe(true);
   });
 
   it("régler ne lève rien", () => {
+    expect(() => setConfirmerFermetureOnglet(false)).not.toThrow();
     expect(() => setPartageClipboard(false)).not.toThrow();
     expect(() => setSonBureau(false)).not.toThrow();
     expect(() => setSondeAuDemarrage(true)).not.toThrow();

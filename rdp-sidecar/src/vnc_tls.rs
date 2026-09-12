@@ -202,53 +202,6 @@ mod tests {
     use tokio::io::AsyncReadExt as _;
     use tokio::net::TcpListener;
 
-    /// `AVASH_HOME` posé sur un répertoire jetable le temps du test, sous le
-    /// verrou que partagent tous les tests qui touchent à cette variable ;
-    /// remis en place à la sortie, même sur panique. Sans lui, le test
-    /// écrirait dans le fichier de confiance RÉEL du poste (vu une fois, à la
-    /// main, avec un `vnc:127.0.0.1:35911` semé dans `~/.config/avash`).
-    struct Bac {
-        chemin: std::path::PathBuf,
-        precedent: Option<std::ffi::OsString>,
-        _verrou: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Bac {
-        fn poser() -> Self {
-            let verrou = crate::empreintes::VERROU_AVASH_HOME
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let chemin = std::env::temp_dir().join(format!("avash-vnc-tls-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&chemin);
-            let precedent = std::env::var_os("AVASH_HOME");
-            unsafe { std::env::set_var("AVASH_HOME", &chemin) };
-            Self {
-                chemin,
-                precedent,
-                _verrou: verrou,
-            }
-        }
-
-        fn fichier_de_confiance(&self) -> std::path::PathBuf {
-            self.chemin
-                .join(".config")
-                .join("avash")
-                .join("rdp_known_hosts")
-        }
-    }
-
-    impl Drop for Bac {
-        fn drop(&mut self) {
-            unsafe {
-                match self.precedent.take() {
-                    Some(v) => std::env::set_var("AVASH_HOME", v),
-                    None => std::env::remove_var("AVASH_HOME"),
-                }
-            }
-            let _ = std::fs::remove_dir_all(&self.chemin);
-        }
-    }
-
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -292,7 +245,7 @@ mod tests {
     /// l'empreinte d'origine reste celle du fichier.
     #[test]
     fn le_montage_epingle_le_certificat_et_refuse_qu_il_change() {
-        let bac = Bac::poser();
+        let bac = crate::empreintes::BacAvashHome::poser("vnc-tls");
         runtime().block_on(async {
             let ecoute = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
             let port = ecoute.local_addr().unwrap().port();

@@ -41,12 +41,16 @@ pub(crate) type PosteSplit = (
 /// attend le premier client qui présente le jeton. Sans effet si le poste
 /// existe déjà : une redirection RDP rappelle la session, et rouvrir un port
 /// neuf laisserait l'interface parler dans le vide, attachée à l'ancien.
-pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<()> {
+///
+/// Rend le poste lui-même (audit du 12 septembre 2026) : les appelants
+/// reprenaient `poste.as_mut().expect(…)` juste après, un `expect` de
+/// production que rien ne justifiait.
+pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<&mut Poste> {
     use anyhow::Context as _;
     use tokio::io::AsyncWriteExt as _;
 
     if poste.is_some() {
-        return Ok(());
+        return poste.as_mut().context("poste présent");
     }
     // Serveur WebSocket local : un seul client (Avash), jeton obligatoire.
     let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -60,13 +64,12 @@ pub(crate) async fn etablir_poste(poste: &mut Option<Poste>) -> Result<()> {
         .await?;
     out.flush().await?;
 
-    let (sink, stream) = attendre_client(&listener, &token).await;
-    *poste = Some(Poste {
+    let (sink, stream) = attendre_client_au_plus(&listener, &token, DELAI_CLIENT).await?;
+    Ok(poste.insert(Poste {
         _listener: listener,
         sink,
         stream,
-    });
-    Ok(())
+    }))
 }
 
 /// Attend, sur une écoute déjà ouverte, le premier client qui présente le bon
@@ -139,6 +142,33 @@ pub(crate) async fn attendre_client(listener: &TcpListener, token: &str) -> Post
     }
 }
 
+/// Délai global laissé à l'interface pour se présenter sur le canal local.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-1) : le poste est établi
+/// après l'authentification RDP, et `attendre_client` attendait sans fin. Si
+/// l'application disparaissait entre le lancement et la connexion de sa
+/// WebSocket, la session authentifiée restait ouverte sur le serveur, sans
+/// personne. L'interface se connecte dans la seconde qui suit l'annonce
+/// « PORT JETON » : une minute ne coupe aucun usage réel.
+pub(crate) const DELAI_CLIENT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// [`attendre_client`] borné par `delai` : une erreur qui le dit, plutôt
+/// qu'une attente sans fin.
+pub(crate) async fn attendre_client_au_plus(
+    listener: &TcpListener,
+    token: &str,
+    delai: std::time::Duration,
+) -> Result<PosteSplit> {
+    tokio::time::timeout(delai, attendre_client(listener, token))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "aucune interface ne s'est présentée sur le canal local en {delai:?} : \
+                 l'application a disparu, la session est abandonnée"
+            )
+        })
+}
+
 /// Compare deux jetons en temps constant : la durée ne dépend pas de la position
 /// du premier octet qui diffère. Le `==` de tranches s'arrête au premier écart,
 /// ce qui, en théorie, laisse deviner le jeton octet par octet. Non exploitable
@@ -182,8 +212,10 @@ pub(crate) fn verifier_origine(
 /// Décide si une origine WebSocket est admise. Une page web réelle porte
 /// `http(s)://<domaine>` : on la refuse. La webview native porte `tauri://…`
 /// (Linux/macOS) ou `http(s)://tauri.localhost` (Windows) ; le serveur de
-/// développement, `http://localhost:<port>`. Une absence d'origine est admise —
-/// certains clients n'en posent pas, et le jeton reste l'authentification réelle.
+/// développement, `http://localhost:<port>`, n'est admis que dans une
+/// construction de développement (voir [`origine_admise_selon`]). Une absence
+/// d'origine est admise : certains clients n'en posent pas, et le jeton reste
+/// l'authentification réelle.
 ///
 /// Le tri se fait sur une copie en minuscules (un navigateur normalise le schéma,
 /// mais on ne s'y fie pas) et refuse par défaut : seuls les schémas explicitement
@@ -191,6 +223,19 @@ pub(crate) fn verifier_origine(
 /// rejeté. Fail-closed — le laxisme précédent n'était que de la défense en
 /// profondeur, autant qu'elle ferme réellement.
 fn origine_admise(origine: Option<&str>) -> bool {
+    origine_admise_selon(origine, cfg!(debug_assertions))
+}
+
+/// Le tri d'origine, avec ou sans l'exception du serveur de développement.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-ipc-6) : `localhost` et
+/// `127.0.0.1` étaient admis en http(s) dans le binaire publié. Le jeton
+/// restait requis, mais une page servie par n'importe quel service local (un
+/// Jupyter sur `localhost:8888`, un outil interne) passait un contrôle que la
+/// documentation dit fermé aux pages web. L'exception ne vaut plus que sous
+/// `debug_assertions` (`cargo tauri dev` et vite) ; la suite bout en bout joue
+/// un binaire publié, dont la webview porte `tauri://` ou `tauri.localhost`.
+fn origine_admise_selon(origine: Option<&str>, developpement: bool) -> bool {
     let Some(o) = origine else {
         return true;
     };
@@ -200,7 +245,7 @@ fn origine_admise(origine: Option<&str>) -> bool {
         .or_else(|| o.strip_prefix("https://"))
     {
         let hote = reste.split(['/', ':']).next().unwrap_or(reste);
-        hote == "tauri.localhost" || hote == "localhost" || hote == "127.0.0.1"
+        hote == "tauri.localhost" || (developpement && (hote == "localhost" || hote == "127.0.0.1"))
     } else {
         // Seule la webview native (schéma tauri://) est admise hors http(s) ; tout
         // autre schéma est refusé plutôt qu'admis par défaut.
@@ -210,7 +255,36 @@ fn origine_admise(origine: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests_acces_local {
-    use super::{jetons_egaux, origine_admise};
+    use super::{jetons_egaux, origine_admise, origine_admise_selon};
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-ipc-6) : l'exception du
+    /// serveur de développement (`http://localhost:<port>`) était compilée dans
+    /// le binaire publié. Le jeton restait requis, mais une page servie par
+    /// n'importe quel service local (un Jupyter sur `localhost:8888`) passait
+    /// le contrôle d'origine que la documentation dit fermé aux pages web.
+    #[test]
+    fn en_publication_une_page_locale_http_est_refusee() {
+        for o in [
+            "http://localhost:8888",
+            "http://127.0.0.1:5173",
+            "https://localhost",
+            "HTTP://LOCALHOST:1420",
+        ] {
+            assert!(
+                !origine_admise_selon(Some(o), false),
+                "{o} admis en publication"
+            );
+        }
+        // La webview native passe toujours, en publication comme en développement.
+        for o in [
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+        ] {
+            assert!(origine_admise_selon(Some(o), false), "{o}");
+        }
+        assert!(origine_admise_selon(None, false));
+    }
 
     #[test]
     fn jetons_egaux_ne_depend_pas_de_la_position_du_premier_ecart() {
@@ -236,8 +310,9 @@ mod tests_acces_local {
         assert!(origine_admise(Some("tauri://localhost")));
         assert!(origine_admise(Some("http://tauri.localhost")));
         assert!(origine_admise(Some("https://tauri.localhost")));
-        assert!(origine_admise(Some("http://localhost:1420"))); // vite dev
-        assert!(origine_admise(Some("http://127.0.0.1:5173")));
+        // Le serveur de développement (vite) : admis seulement hors publication.
+        assert!(origine_admise_selon(Some("http://localhost:1420"), true));
+        assert!(origine_admise_selon(Some("http://127.0.0.1:5173"), true));
     }
 
     #[test]
@@ -251,7 +326,7 @@ mod tests_acces_local {
         // Un schéma en majuscules ne doit pas basculer dans la branche « admis ».
         assert!(!origine_admise(Some("HTTP://evil.example")));
         assert!(!origine_admise(Some("HtTpS://evil.example")));
-        assert!(origine_admise(Some("HTTP://localhost:1420")));
+        assert!(origine_admise_selon(Some("HTTP://localhost:1420"), true));
     }
 
     #[test]
@@ -267,7 +342,7 @@ mod tests_acces_local {
 
 #[cfg(test)]
 mod tests_attendre_client {
-    use super::attendre_client;
+    use super::{attendre_client, attendre_client_au_plus};
     use futures_util::{SinkExt as _, StreamExt as _};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::Message;
@@ -282,6 +357,28 @@ mod tests_attendre_client {
             .await
             .expect("poignée WebSocket cliente");
         ws
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-1) : l'attente du
+    /// client n'avait pas de borne globale. Si l'application disparaît entre le
+    /// lancement du processus et la connexion de sa WebSocket, la session RDP,
+    /// déjà authentifiée, restait ouverte sur le serveur sans personne pour la
+    /// regarder.
+    #[tokio::test]
+    async fn sans_interface_l_attente_du_client_est_bornee() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let attente = attendre_client_au_plus(
+            &listener,
+            "0123456789abcdef",
+            std::time::Duration::from_millis(200),
+        );
+        let issue = tokio::time::timeout(std::time::Duration::from_secs(5), attente)
+            .await
+            .expect("l'attente du client n'est pas bornée");
+        let Err(e) = issue else {
+            panic!("aucun client ne s'est présenté, l'attente ne peut pas réussir")
+        };
+        assert!(format!("{e:#}").contains("interface"), "{e:#}");
     }
 
     // Trouvé par l'audit du 7 septembre 2026 : le contrôle du jeton du canal

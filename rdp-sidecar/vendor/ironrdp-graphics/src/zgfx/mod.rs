@@ -41,6 +41,18 @@ pub(crate) const HISTORY_SIZE: usize = 2_500_000;
 /// écriture, comme le fait FreeRDP.
 const OCTETS_MAX_SEGMENT: usize = 65_535;
 
+/// Plafond de la sortie d'un message `Multipart` entier : 16 Mio, comme le
+/// réassemblage des canaux statiques (`REASSEMBLAGE_MAX` d'`ironrdp-svc` porté).
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-panique-1) : `OCTETS_MAX_SEGMENT`
+/// borne UN segment, mais un message en porte jusqu'à 65 535 et rien ne
+/// bornait leur somme ; `uncompressed_size` n'était comparé qu'après avoir tout
+/// écrit. Environ 1,3 Mo reçus donnaient ≈ 4 Gio de sortie, puis autant de
+/// copies dans le découpage en PDU : l'OOM du processus, hors de portée de son
+/// `catch_unwind`. La taille annoncée est jugée avant tout segment, et la somme
+/// à chaque segment.
+const PLAFOND_MESSAGE: usize = 16 << 20;
+
 pub struct Decompressor {
     history: FixedCircularBuffer,
 }
@@ -61,10 +73,24 @@ impl Decompressor {
                 uncompressed_size,
                 segments,
             } => {
-                let mut bytes_written = 0;
+                if uncompressed_size > PLAFOND_MESSAGE {
+                    return Err(ZgfxError::InvalidDecompressedSize {
+                        decompressed_size: 0,
+                        uncompressed_size,
+                    });
+                }
+                let mut bytes_written: usize = 0;
                 for segment in segments {
                     let written = self.handle_segment(&segment, output)?;
-                    bytes_written += written;
+                    bytes_written = bytes_written.saturating_add(written);
+                    // Au plus un segment (`OCTETS_MAX_SEGMENT`) au-delà de la
+                    // taille annoncée, elle-même sous le plafond.
+                    if bytes_written > uncompressed_size {
+                        return Err(ZgfxError::InvalidDecompressedSize {
+                            decompressed_size: bytes_written,
+                            uncompressed_size,
+                        });
+                    }
                 }
 
                 if bytes_written != uncompressed_size {
@@ -856,5 +882,79 @@ mod tests {
         zgfx.decompress_segment(buffer.as_ref(), &mut decompressed)
             .unwrap();
         assert_eq!(decompressed, expected);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-panique-1) : le correctif du
+    /// 7 septembre borne la sortie d'UN segment, mais un message `Multipart`
+    /// en porte jusqu'à 65 535 et rien ne bornait leur somme :
+    /// `uncompressed_size` n'était comparé qu'après avoir tout écrit. Environ
+    /// 1,3 Mo reçus (65 535 segments d'un littéral et d'une longue
+    /// correspondance) donnaient ≈ 4 Gio de sortie, hors de portée du
+    /// `catch_unwind` du processus. Ici 400 segments de 60 000 octets (24 Mo),
+    /// assez pour dépasser le plafond sans mettre la machine de test en danger.
+    #[test]
+    fn un_message_zgfx_multipart_ne_depasse_pas_le_plafond() {
+        let segment = {
+            let donnees = Compressor::new().compress(&[b'A'; 60_000]).unwrap();
+            let mut s = u32::try_from(donnees.len() + 1)
+                .unwrap()
+                .to_le_bytes()
+                .to_vec();
+            s.push(0x24); // RDP8, compressé
+            s.extend_from_slice(&donnees);
+            s
+        };
+        let multipart = |nombre: u16, annonce: u32| {
+            let mut m = vec![0xE1];
+            m.extend_from_slice(&nombre.to_le_bytes());
+            m.extend_from_slice(&annonce.to_le_bytes());
+            for _ in 0..nombre {
+                m.extend_from_slice(&segment);
+            }
+            m
+        };
+        // Une taille annoncée au-delà du plafond : refusée avant tout segment.
+        let mut sortie = Vec::new();
+        assert!(Decompressor::new()
+            .decompress(&multipart(2, u32::MAX), &mut sortie)
+            .is_err());
+        assert!(
+            sortie.is_empty(),
+            "{} octets écrits avant le refus",
+            sortie.len()
+        );
+        // Des segments qui dépassent la taille annoncée : arrêtés au premier
+        // dépassement, sortie jamais au-delà du plafond et d'un segment.
+        let mut sortie = Vec::new();
+        let annonce = u32::try_from(PLAFOND_MESSAGE).unwrap();
+        assert!(Decompressor::new()
+            .decompress(&multipart(400, annonce), &mut sortie)
+            .is_err());
+        assert!(
+            sortie.len() <= PLAFOND_MESSAGE + OCTETS_MAX_SEGMENT,
+            "{} octets écrits",
+            sortie.len()
+        );
+        // Contrôle : un message honnête passe.
+        let mut sortie = Vec::new();
+        assert_eq!(
+            Decompressor::new()
+                .decompress(&multipart(3, 180_000), &mut sortie)
+                .unwrap(),
+            180_000
+        );
+    }
+
+    /// Même audit : la longueur d'un segment venait du fil et `split_at`
+    /// paniquait quand elle dépassait le message. Le processus rattrapait la
+    /// panique par `catch_unwind`, mais c'est une erreur de données, pas un
+    /// défaut du programme.
+    #[test]
+    fn une_taille_de_segment_mensongere_est_une_erreur_pas_une_panique() {
+        let mut m = vec![0xE1, 1, 0, 10, 0, 0, 0];
+        m.extend_from_slice(&1000u32.to_le_bytes()); // annonce 1000 octets…
+        m.push(0x04); // …et n'en porte qu'un
+        let mut sortie = Vec::new();
+        assert!(Decompressor::new().decompress(&m, &mut sortie).is_err());
     }
 }

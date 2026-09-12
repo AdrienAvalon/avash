@@ -61,6 +61,89 @@ const STATUS_OBJECT_NAME_INVALID: u32 = 0xC000_0033;
 const STATUS_OBJECT_PATH_NOT_FOUND: u32 = 0xC000_003A;
 const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
 const STATUS_FILE_IS_A_DIRECTORY: u32 = 0xC000_00BA;
+const STATUS_TOO_MANY_OPENED_FILES: u32 = 0xC000_011F;
+const STATUS_DISK_FULL: u32 = 0xC000_007F;
+
+/// Fichiers et dossiers que le serveur peut garder ouverts à la fois.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-2, C-panique-6) : rien
+/// ne bornait ce nombre. Un `IRP_MJ_CREATE` en boucle sans fermeture épuisait
+/// les descripteurs de tout le processus (réception et offre de fichiers,
+/// relecture de `rdp_known_hosts` au tour suivant), et chaque dossier énuméré
+/// retenait son instantané. L'Explorateur de Windows en tient quelques
+/// dizaines ouverts au plus fort d'une copie ; 512 laisse toute la marge.
+const OUVERTS_MAX: usize = 512;
+
+/// Longueur maximale d'un motif d'énumération, en caractères : la limite
+/// historique d'un chemin Windows (`MAX_PATH`). Audit du 12 septembre 2026
+/// (C-sidecar-11) : le motif n'était borné que par les 16 Mio du réassemblage.
+const MOTIF_MAX: usize = 260;
+
+/// Réponses en attente entre le fil du lecteur et la boucle de session.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-panique-5) : la file était non
+/// bornée. Une lecture de 4 Mio se demande en une cinquantaine d'octets ; un
+/// serveur qui en enchaîne des milliers puis cesse de lire son socket bloquait
+/// la boucle dans son écriture pendant que le fil continuait d'empiler les
+/// réponses, jusqu'à l'OOM. Bornée, la file arrête le fil : au plus
+/// `REPONSES_EN_VOL` × 4 Mio en vol.
+const REPONSES_EN_VOL: usize = 8;
+
+/// Délai laissé au système pour résoudre le dossier partagé (voir
+/// [`racine_resolue`]).
+const DELAI_DOSSIER_PARTAGE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// La file des réponses du lecteur vers la boucle, bornée (voir
+/// [`REPONSES_EN_VOL`]).
+pub(crate) type EnvoiReponses = tokio::sync::mpsc::Sender<RdpdrPdu>;
+pub(crate) type ReceptionReponses = tokio::sync::mpsc::Receiver<RdpdrPdu>;
+
+pub(crate) fn canal_des_reponses() -> (EnvoiReponses, ReceptionReponses) {
+    tokio::sync::mpsc::channel(REPONSES_EN_VOL)
+}
+
+/// Résout le dossier partagé par `resoudre`, en au plus `delai`.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-SIL-13) : `canonicalize` puis
+/// `is_dir` n'avaient pas de délai, et tout se passe avant l'annonce du
+/// processus à l'interface. Sur un montage réseau qui ne répond plus (NFS dur,
+/// partage SMB d'un NAS en veille), l'onglet restait en « connexion » sans un
+/// mot. La résolution tourne dans son propre fil ; passé le délai, on le dit.
+/// Le fil, lui, reste bloqué dans le noyau jusqu'à ce que le montage réponde :
+/// rien ne peut l'interrompre, mais il ne retient plus la session.
+pub(crate) fn racine_resolue(
+    racine: &Path,
+    delai: std::time::Duration,
+    resoudre: fn(&Path) -> anyhow::Result<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    let chemin = racine.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("racine-rdpdr".to_owned())
+        .spawn(move || {
+            let _ = tx.send(resoudre(&chemin));
+        })
+        .map_err(|e| anyhow::anyhow!("fil de résolution du dossier partagé : {e}"))?;
+    rx.recv_timeout(delai).unwrap_or_else(|_| {
+        Err(anyhow::anyhow!(
+            "dossier partagé {} injoignable : aucune réponse du système en {delai:?} \
+             (montage réseau qui ne répond plus ?)",
+            racine.display()
+        ))
+    })
+}
+
+/// Résolution réelle : liens compris, et ce doit être un dossier.
+fn resoudre_racine(racine: &Path) -> anyhow::Result<PathBuf> {
+    let r = std::fs::canonicalize(racine)
+        .map_err(|e| anyhow::anyhow!("dossier partagé {} : {e}", racine.display()))?;
+    anyhow::ensure!(
+        r.is_dir(),
+        "dossier partagé {} : ce n'est pas un dossier",
+        r.display()
+    );
+    Ok(r)
+}
 
 /// `FILE_CREATED` : le paquet ne connaît que `FILE_SUPERSEDED`, `FILE_OPENED`
 /// et `FILE_OVERWRITTEN`, mais un serveur Windows attend cette valeur quand la
@@ -113,10 +196,7 @@ impl RdpdrBackend for DisqueBackend {
 /// Démarre le fil du lecteur sur `racine` et rend le gestionnaire à donner au
 /// canal. Les réponses partent sur `reponses`, que la boucle de session écrit
 /// sur le canal.
-pub(crate) fn demarrer(
-    racine: &Path,
-    reponses: tokio::sync::mpsc::UnboundedSender<RdpdrPdu>,
-) -> anyhow::Result<DisqueBackend> {
+pub(crate) fn demarrer(racine: &Path, reponses: EnvoiReponses) -> anyhow::Result<DisqueBackend> {
     let lecteur = Lecteur::nouveau(racine)?;
     let (tx, rx) = std::sync::mpsc::channel::<ServerDriveIoRequest>();
     std::thread::Builder::new()
@@ -125,7 +205,11 @@ pub(crate) fn demarrer(
             let mut lecteur = lecteur;
             while let Ok(req) = rx.recv() {
                 for pdu in lecteur.traiter(req) {
-                    if reponses.send(pdu).is_err() {
+                    // Attend une place dans la file bornée : c'est la
+                    // contre-pression qui manquait (voir REPONSES_EN_VOL). Un
+                    // fil ordinaire, hors de tout contexte tokio, ce qui rend
+                    // `blocking_send` légitime ici.
+                    if reponses.blocking_send(pdu).is_err() {
                         return;
                     }
                 }
@@ -166,13 +250,7 @@ impl Lecteur {
     /// `racine` doit être un dossier ; elle est résolue une fois pour toutes
     /// (liens compris), c'est contre elle que chaque chemin sera jugé.
     pub(crate) fn nouveau(racine: &Path) -> anyhow::Result<Self> {
-        let racine = std::fs::canonicalize(racine)
-            .map_err(|e| anyhow::anyhow!("dossier partagé {} : {e}", racine.display()))?;
-        anyhow::ensure!(
-            racine.is_dir(),
-            "dossier partagé {} : ce n'est pas un dossier",
-            racine.display()
-        );
+        let racine = racine_resolue(racine, DELAI_DOSSIER_PARTAGE, resoudre_racine)?;
         Ok(Self {
             racine,
             ouverts: HashMap::new(),
@@ -249,6 +327,18 @@ impl Lecteur {
         Ok(chemin)
     }
 
+    /// Cette poignée désigne-t-elle la racine partagée elle-même ?
+    ///
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-16) : la racine était
+    /// un fichier ouvert comme un autre. Vide, une disposition suivie d'une
+    /// fermeture la supprimait, et un renommage la déplaçait : « rien d'autre
+    /// que ce dossier » n'inclut pas le dossier lui-même.
+    fn est_la_racine(&self, file_id: u32) -> bool {
+        self.ouverts
+            .get(&file_id)
+            .is_some_and(|o| o.chemin == self.racine)
+    }
+
     fn ouvert(&mut self, file_id: u32) -> Result<&mut Ouvert, NtStatus> {
         self.ouverts
             .get_mut(&file_id)
@@ -271,6 +361,11 @@ impl Lecteur {
 
     /// `IRP_MJ_CREATE` : ouvre ou crée, selon la disposition demandée.
     fn ouvrir(&mut self, req: &DeviceCreateRequest) -> Result<(u32, Information), NtStatus> {
+        // Refusé AVANT tout accès au disque : ni descripteur pris, ni dossier
+        // créé pour une poignée qu'on ne pourrait pas enregistrer.
+        if self.ouverts.len() >= OUVERTS_MAX {
+            return Err(NtStatus::from(STATUS_TOO_MANY_OPENED_FILES));
+        }
         let chemin = self.resoudre(&req.path)?;
         let existant = std::fs::metadata(&chemin).ok();
         let veut_dossier = req
@@ -542,10 +637,20 @@ impl Lecteur {
     }
 
     fn ecrire_bloc(&mut self, req: &DeviceWriteRequest) -> Result<(), NtStatus> {
-        let o = self.ouvert(req.device_io_request.file_id)?;
+        let Self {
+            racine, ouverts, ..
+        } = self;
+        let o = ouverts
+            .get_mut(&req.device_io_request.file_id)
+            .ok_or_else(|| NtStatus::from(STATUS_INVALID_HANDLE))?;
         let Some(f) = o.fichier.as_mut() else {
             return Err(NtStatus::from(STATUS_FILE_IS_A_DIRECTORY));
         };
+        let fin = u64::try_from(req.write_data.len())
+            .ok()
+            .and_then(|n| req.offset.checked_add(n))
+            .ok_or_else(|| NtStatus::from(STATUS_DISK_FULL))?;
+        borne_par_l_espace_libre(f, fin, racine)?;
         f.seek(SeekFrom::Start(req.offset)).map_err(statut_io)?;
         f.write_all(&req.write_data).map_err(statut_io)
     }
@@ -625,10 +730,16 @@ impl Lecteur {
                 .next()
                 .filter(|m| !m.is_empty())
                 .unwrap_or("*");
+            // Refusé avant de lire le dossier (C-sidecar-11), puis converti en
+            // minuscules une seule fois, et non pour chaque entrée.
+            if motif.chars().count() > MOTIF_MAX {
+                return Err(NtStatus::from(STATUS_OBJECT_NAME_INVALID));
+            }
+            let motif: Vec<char> = motif.to_lowercase().chars().collect();
             let mut entrees = Vec::new();
             let meta_dossier = std::fs::metadata(&o.chemin).map_err(statut_io)?;
             for special in [".", ".."] {
-                if correspond(motif, special) {
+                if correspond_en_minuscules(&motif, special) {
                     entrees.push(Entree {
                         nom: special.to_owned(),
                         meta: meta_dossier.clone(),
@@ -650,7 +761,7 @@ impl Lecteur {
                     if !meta.is_file() && !meta.is_dir() {
                         return None;
                     }
-                    correspond(motif, &nom).then_some(Entree { nom, meta })
+                    correspond_en_minuscules(&motif, &nom).then_some(Entree { nom, meta })
                 })
                 .collect();
             fichiers.sort_by(|a, b| a.nom.cmp(&b.nom));
@@ -662,6 +773,10 @@ impl Lecteur {
             o.position = 0;
         }
         let Some(e) = o.entrees.get(o.position) else {
+            // Liste épuisée : l'instantané n'a plus de raison d'être (audit du
+            // 12 septembre 2026, C-sidecar-2). Il ne restait libéré qu'à la
+            // fermeture du dossier, que le serveur peut repousser sans fin.
+            o.entrees = Vec::new();
             return Err(NtStatus::NO_MORE_FILES);
         };
         o.position += 1;
@@ -826,13 +941,18 @@ impl Lecteur {
                 Ok(())
             }
             FileInformationClass::EndOfFile(e) => {
-                let o = self.ouvert(file_id)?;
-                let f = o
+                let Self {
+                    racine, ouverts, ..
+                } = self;
+                let f = ouverts
+                    .get_mut(&file_id)
+                    .ok_or_else(|| NtStatus::from(STATUS_INVALID_HANDLE))?
                     .fichier
                     .as_mut()
                     .ok_or_else(|| NtStatus::from(STATUS_FILE_IS_A_DIRECTORY))?;
                 let longueur = u64::try_from(e.end_of_file)
                     .map_err(|_| NtStatus::from(STATUS_OBJECT_NAME_INVALID))?;
+                borne_par_l_espace_libre(f, longueur, racine)?;
                 f.set_len(longueur).map_err(statut_io)
             }
             FileInformationClass::Allocation(a) => {
@@ -854,8 +974,11 @@ impl Lecteur {
                 Ok(())
             }
             FileInformationClass::Disposition(d) => {
-                let o = self.ouvert(file_id)?;
                 let supprimer = d.delete_pending != 0;
+                if supprimer && self.est_la_racine(file_id) {
+                    return Err(NtStatus::ACCESS_DENIED);
+                }
+                let o = self.ouvert(file_id)?;
                 if supprimer && o.repertoire {
                     let vide = std::fs::read_dir(&o.chemin)
                         .map_err(statut_io)?
@@ -869,6 +992,9 @@ impl Lecteur {
                 Ok(())
             }
             FileInformationClass::Rename(r) => {
+                if self.est_la_racine(file_id) {
+                    return Err(NtStatus::ACCESS_DENIED);
+                }
                 let destination = self.resoudre(&r.file_name)?;
                 let o = self.ouvert(file_id)?;
                 if destination.exists() && r.replace_if_exists == Boolean::False {
@@ -918,8 +1044,18 @@ impl Lecteur {
 /// échappait à la racine partagée vers le cwd du sidecar. Les deux-points
 /// couvrent le préfixe de disque et les flux ADS (« nom:flux »). `.` et `..`
 /// ne sont pas des `Normal` et sont donc refusés d'office.
+///
+/// Ni nom réservé de Windows (`CON`, `aux.txt`, `COM1`…), ni nom finissant par
+/// un point ou une espace (audit du 12 septembre 2026, C-sidecar-9) : sous
+/// Windows, la racine canonicalisée porte le préfixe `\\?\`, qui fait de ces
+/// noms des fichiers NTFS littéraux que l'Explorateur ne sait ni ouvrir ni
+/// supprimer. La réception du presse-papiers les refusait déjà.
 fn composant_normal(c: &str) -> bool {
-    if c.contains(':') || c.contains('\0') {
+    if c.contains(':')
+        || c.contains('\0')
+        || c.ends_with(['.', ' '])
+        || ironrdp::cliprdr::is_windows_device_name(c)
+    {
         return false;
     }
     let mut composants = Path::new(c).components();
@@ -1039,6 +1175,14 @@ fn attributs(m: &std::fs::Metadata, nom: &str) -> FileAttributes {
 /// exponentiel ne se voyait que de l'extérieur du crate).
 #[must_use]
 pub fn correspond(motif: &str, nom: &str) -> bool {
+    let motif: Vec<char> = motif.to_lowercase().chars().collect();
+    correspond_en_minuscules(&motif, nom)
+}
+
+/// [`correspond`] pour un motif déjà converti en minuscules : l'énumération le
+/// convertit une fois pour toutes ses entrées (audit du 12 septembre 2026,
+/// C-sidecar-11), au lieu d'une fois par entrée.
+fn correspond_en_minuscules(m: &[char], nom: &str) -> bool {
     // Trouvé par l'audit du 7 septembre 2026 : l'ancienne récursion traitait
     // `*` par `rec(&m[1..], n) || rec(m, &n[1..])` sans mémoïsation, soit un
     // nombre d'appels en C(n+k, k) pour k étoiles et un nom de n caractères
@@ -1048,7 +1192,6 @@ pub fn correspond(motif: &str, nom: &str) -> bool {
     // reste de la session. Algorithme itératif type `fnmatch` (deux index,
     // point de reprise sur la dernière `*`) : coût O(n·m), plus aucun
     // retour arrière exponentiel, mêmes réponses qu'avant.
-    let m: Vec<char> = motif.to_lowercase().chars().collect();
     let n: Vec<char> = nom.to_lowercase().chars().collect();
     let (mut i, mut j) = (0, 0);
     // Dernière `*` rencontrée et position dans le nom où reprendre après elle.
@@ -1078,6 +1221,34 @@ pub fn correspond(motif: &str, nom: &str) -> bool {
     i == m.len()
 }
 
+/// Octets libres sur le volume qui porte `racine` (l'estimation de repli
+/// d'[`espace_inconnu`] si le système ne répond pas).
+pub(crate) fn octets_libres(racine: &Path) -> u64 {
+    let e = espace_disque(racine);
+    u64::try_from(e.libres_unites)
+        .unwrap_or(0)
+        .saturating_mul(u64::from(e.secteurs_par_unite))
+        .saturating_mul(u64::from(e.octets_par_secteur))
+}
+
+/// Refuse d'étendre `f` jusqu'à `fin` au-delà de sa taille actuelle plus
+/// l'espace libre du volume.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-10) : la position
+/// d'écriture et la fin de fichier sont des `u64` du serveur, appliqués tels
+/// quels. Un seul PDU `EndOfFile = 2^40` réservait des clusters sur NTFS
+/// jusqu'à remplir le disque, et laissait sur ext4 un fichier creux dont la
+/// taille apparente affole sauvegardes et synchronisation. Ce qui tient dans
+/// l'espace libre passe comme avant ; le reste est refusé comme un disque
+/// plein, ce que le redirecteur de Windows sait dire à l'utilisateur.
+fn borne_par_l_espace_libre(f: &std::fs::File, fin: u64, racine: &Path) -> Result<(), NtStatus> {
+    let actuelle = f.metadata().map_err(statut_io)?.len();
+    if fin > actuelle && fin - actuelle > octets_libres(racine) {
+        return Err(NtStatus::from(STATUS_DISK_FULL));
+    }
+    Ok(())
+}
+
 /// Numéro de série du volume : dérivé de la racine, stable d'une session à
 /// l'autre (Windows s'en sert pour reconnaître un lecteur).
 fn serie_du_volume(racine: &Path) -> u32 {
@@ -1103,10 +1274,16 @@ struct Espace {
 fn espace_disque(racine: &Path) -> Espace {
     use std::os::unix::ffi::OsStrExt as _;
     let chemin = std::ffi::CString::new(racine.as_os_str().as_bytes());
+    // SAFETY: statvfs n'a que des champs entiers (compteurs, identifiant,
+    // drapeaux, réserve) : tout à zéro est une valeur valide, écrasée par
+    // l'appel qui suit.
     let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
-    let ok = chemin
-        .as_ref()
-        .is_ok_and(|c| unsafe { libc::statvfs(c.as_ptr(), &raw mut s) } == 0);
+    let ok = chemin.as_ref().is_ok_and(|c| {
+        // SAFETY: c est une CString vivante pour l'appel (chemin terminé par
+        // NUL) et s une locale valide en écriture ; ses champs ne sont lus
+        // que si l'appel a rendu 0.
+        unsafe { libc::statvfs(c.as_ptr(), &raw mut s) == 0 }
+    });
     if !ok || s.f_frsize == 0 {
         return espace_inconnu();
     }
@@ -1126,6 +1303,9 @@ fn espace_disque(racine: &Path) -> Espace {
     let mut chemin: Vec<u16> = racine.as_os_str().encode_wide().collect();
     chemin.push(0);
     let (mut libres, mut total, mut libres_total) = (0u64, 0u64, 0u64);
+    // SAFETY: chemin est terminé par un 0 (poussé juste au-dessus) et vit pour
+    // l'appel ; les trois pointeurs désignent des u64 locaux, valides en
+    // écriture.
     let ok = unsafe {
         windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
             chemin.as_ptr(),
@@ -1494,6 +1674,7 @@ mod tests {
         // GitLab tourne en root dans son conteneur, et cette assertion y
         // rougissait à chaque pipeline depuis le 8 septembre 2026 (le cas 0000
         // ci-dessous portait déjà cette réserve, celui-ci l'avait oubliée).
+        // SAFETY: geteuid n'a ni argument ni précondition et ne peut pas échouer.
         if unsafe { libc::geteuid() } != 0 {
             let (s, id, _) = ouvrir_acces(
                 &mut l,
@@ -1508,6 +1689,7 @@ mod tests {
         // Un 0000 : aucun accès, même MAXIMUM_ALLOWED n'ouvre rien. (root
         // outrepasse les droits Unix : on ne l'affirme que pour un compte
         // ordinaire, sinon le fichier serait réellement lisible.)
+        // SAFETY: geteuid n'a ni argument ni précondition et ne peut pas échouer.
         if unsafe { libc::geteuid() } != 0 {
             let (s, id, _) = ouvrir_acces(
                 &mut l,
@@ -1847,7 +2029,7 @@ mod tests {
     fn le_gestionnaire_repond_par_le_fil_et_non_dans_l_appel() {
         let d = bac("fil");
         std::fs::write(d.join("f"), b"contenu").unwrap();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = canal_des_reponses();
         let mut backend = demarrer(&d, tx).unwrap();
         let immediat = backend
             .handle_drive_io_request(demande_creation(
@@ -1888,11 +2070,10 @@ mod tests {
         let d = bac("fifo");
         let tube = d.join("steam.pipe");
         let nom = std::ffi::CString::new(tube.as_os_str().as_bytes()).unwrap();
-        assert_eq!(
-            unsafe { libc::mkfifo(nom.as_ptr(), 0o644) },
-            0,
-            "création de la FIFO"
-        );
+        // SAFETY: nom est une CString vivante pour l'appel (chemin terminé par
+        // NUL, sans NUL intérieur) ; mkfifo ne conserve pas le pointeur.
+        let cree = unsafe { libc::mkfifo(nom.as_ptr(), 0o644) };
+        assert_eq!(cree, 0, "création de la FIFO");
         assert!(
             std::fs::symlink_metadata(&tube)
                 .unwrap()
@@ -1991,5 +2172,274 @@ mod tests {
         assert!(attributs(&m, "f").contains(FileAttributes::FILE_ATTRIBUTE_ARCHIVE));
         assert!(attributs(&m, ".cache").contains(FileAttributes::FILE_ATTRIBUTE_HIDDEN));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-2, C-panique-6) :
+    /// rien ne bornait le nombre de fichiers et dossiers que le serveur garde
+    /// ouverts. Un `IRP_MJ_CREATE` en boucle sans fermeture épuisait les
+    /// descripteurs de TOUT le processus (réception et offre de fichiers,
+    /// relecture de `rdp_known_hosts`), et chaque dossier énuméré retenait son
+    /// instantané entier. Des dossiers ici : ils comptent sans prendre de
+    /// descripteur, ce qui garde ce test sans effet sur ses voisins.
+    #[test]
+    fn le_lecteur_refuse_la_cinq_cent_treizieme_ouverture_sans_fermeture() {
+        let d = bac("ouverts-max");
+        std::fs::create_dir(d.join("sous")).unwrap();
+        let mut l = Lecteur::nouveau(&d).unwrap();
+        for n in 0..OUVERTS_MAX {
+            let (s, id, _) = ouvrir(&mut l, "\\sous", CreateDisposition::FILE_OPEN, true, false);
+            assert_eq!(s, NtStatus::SUCCESS, "ouverture {n}");
+            assert_ne!(id, 0);
+        }
+        let (s, id, _) = ouvrir(&mut l, "\\sous", CreateDisposition::FILE_OPEN, true, false);
+        assert_eq!(s, NtStatus::from(STATUS_TOO_MANY_OPENED_FILES));
+        assert_eq!(id, 0, "un échec ne donne pas d'identifiant");
+        assert_eq!(l.ouverts.len(), OUVERTS_MAX);
+        // Une fermeture rend une place.
+        let premier = *l.ouverts.keys().next().unwrap();
+        assert_eq!(fermer(&mut l, premier), NtStatus::SUCCESS);
+        let (s, _, _) = ouvrir(&mut l, "\\sous", CreateDisposition::FILE_OPEN, true, false);
+        assert_eq!(s, NtStatus::SUCCESS);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Même audit : l'instantané d'une énumération (toutes les entrées et leurs
+    /// métadonnées) restait en mémoire jusqu'à la fermeture du dossier, même
+    /// une fois la liste épuisée.
+    #[test]
+    fn l_instantane_d_enumeration_est_libere_a_la_fin() {
+        let d = bac("instantane");
+        for n in ["a", "b", "c"] {
+            std::fs::write(d.join(n), b"x").unwrap();
+        }
+        let mut l = Lecteur::nouveau(&d).unwrap();
+        let (s, id, _) = ouvrir(&mut l, "\\", CreateDisposition::FILE_OPEN, true, false);
+        assert_eq!(s, NtStatus::SUCCESS);
+        let mut vus = vec![enumerer(&mut l, id, "\\*", true).unwrap()];
+        loop {
+            match enumerer(&mut l, id, "\\*", false) {
+                Ok(n) => vus.push(n),
+                Err(s) => {
+                    assert_eq!(s, NtStatus::NO_MORE_FILES);
+                    break;
+                }
+            }
+        }
+        assert!(vus.iter().any(|n| n == "c"), "{vus:?}");
+        let o = &l.ouverts[&id];
+        assert!(
+            o.entrees.is_empty() && o.entrees.capacity() == 0,
+            "l'instantané survit à la fin de la liste ({} entrées)",
+            o.entrees.len()
+        );
+        // Une requête de plus reste une fin de liste.
+        assert_eq!(
+            enumerer(&mut l, id, "\\*", false),
+            Err(NtStatus::NO_MORE_FILES)
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-9) : le lecteur
+    /// refusait `:` et l'octet nul, mais ni les noms réservés de Windows
+    /// (`CON`, `aux.txt`, `COM1`) ni les noms finissant par un point ou une
+    /// espace, alors que la réception du presse-papiers refusait les premiers.
+    /// Sous Windows, la racine canonicalisée porte le préfixe `\\?\` : ces noms
+    /// devenaient des fichiers NTFS littéraux que l'Explorateur ne sait ni
+    /// ouvrir ni supprimer.
+    #[test]
+    fn un_nom_reserve_windows_ou_a_fin_blanche_est_refuse_par_le_lecteur() {
+        let d = bac("reserves");
+        let l = Lecteur::nouveau(&d).unwrap();
+        for p in [
+            "\\CON",
+            "\\aux.txt",
+            "\\nom.",
+            "\\nom ",
+            "\\CON ",
+            "\\com1.log",
+            "\\LPT9",
+        ] {
+            assert!(l.resoudre(p).is_err(), "{p:?} accepté");
+        }
+        // Un nom qui commence comme un périphérique n'en est pas un.
+        assert!(l.resoudre("\\console.txt").is_ok());
+        assert!(l.resoudre("\\nom.txt").is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-10) : la position
+    /// d'écriture et la fin de fichier sont des `u64` du serveur, appliqués
+    /// tels quels. Un seul PDU `EndOfFile = 2^40` réservait des clusters sur
+    /// NTFS jusqu'à remplir le disque, et laissait sur ext4 un fichier creux
+    /// qui affole sauvegardes et synchronisation. Quatre tébioctets ici : plus
+    /// que l'espace libre de tout poste de test, moins que la taille maximale
+    /// d'un fichier ext4, pour que ce soit la borne qui refuse et non le
+    /// système de fichiers.
+    #[test]
+    fn une_fin_de_fichier_au_dela_de_l_espace_libre_est_refusee() {
+        let d = bac("fin-de-fichier");
+        std::fs::write(d.join("f"), b"contenu").unwrap();
+        let mut l = Lecteur::nouveau(&d).unwrap();
+        let (s, id, _) = ouvrir(&mut l, "\\f", CreateDisposition::FILE_OPEN, false, true);
+        assert_eq!(s, NtStatus::SUCCESS);
+        let demesure: i64 = 1 << 42;
+        let s = modifier(
+            &mut l,
+            id,
+            FileInformationClass::EndOfFile(FileEndOfFileInformation {
+                end_of_file: demesure,
+            }),
+        );
+        assert_ne!(s, NtStatus::SUCCESS, "fin de fichier démesurée acceptée");
+        assert_eq!(std::fs::metadata(d.join("f")).unwrap().len(), 7);
+        let (s, n) = ecrire(&mut l, id, 1 << 42, b"x");
+        assert_ne!(s, NtStatus::SUCCESS, "écriture à 4 Tio acceptée");
+        assert_eq!(n, 0);
+        assert_eq!(std::fs::metadata(d.join("f")).unwrap().len(), 7);
+        // Contrôle : ce qui tient dans l'espace libre passe toujours.
+        let s = modifier(
+            &mut l,
+            id,
+            FileInformationClass::EndOfFile(FileEndOfFileInformation { end_of_file: 4096 }),
+        );
+        assert_eq!(s, NtStatus::SUCCESS);
+        assert_eq!(std::fs::metadata(d.join("f")).unwrap().len(), 4096);
+        assert_eq!(ecrire(&mut l, id, 8192, b"x"), (NtStatus::SUCCESS, 1));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-11) : le motif
+    /// d'énumération n'était borné que par les 16 Mio du réassemblage, et
+    /// converti en minuscules pour chaque entrée. Un motif de 16 Mio sur un
+    /// dossier de 100 000 entrées occupait le fil du lecteur des heures.
+    #[test]
+    fn un_motif_demesure_est_refuse_avant_l_enumeration() {
+        let d = bac("motif");
+        std::fs::write(d.join("f"), b"x").unwrap();
+        let mut l = Lecteur::nouveau(&d).unwrap();
+        let (_, id, _) = ouvrir(&mut l, "\\", CreateDisposition::FILE_OPEN, true, false);
+        let motif = format!("\\{}", "a".repeat(10_000));
+        assert_eq!(
+            enumerer(&mut l, id, &motif, true),
+            Err(NtStatus::from(STATUS_OBJECT_NAME_INVALID))
+        );
+        // 260 caractères, la limite historique d'un chemin Windows, passent.
+        let motif = format!("\\f{}", "*".repeat(259));
+        assert_eq!(enumerer(&mut l, id, &motif, true), Ok("f".to_owned()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-16) : la racine
+    /// partagée était un fichier ouvert comme un autre. Vide, elle se faisait
+    /// supprimer par une disposition suivie d'une fermeture, ou renommer :
+    /// le serveur retirait à l'utilisateur le dossier même qu'il lui prêtait.
+    #[test]
+    fn la_racine_partagee_ne_se_supprime_pas() {
+        let d = bac("racine");
+        let mut l = Lecteur::nouveau(&d).unwrap();
+        let (s, id, _) = ouvrir(&mut l, "\\", CreateDisposition::FILE_OPEN, true, false);
+        assert_eq!(s, NtStatus::SUCCESS);
+        assert_eq!(
+            modifier(
+                &mut l,
+                id,
+                FileInformationClass::Disposition(FileDispositionInformation { delete_pending: 1 }),
+            ),
+            NtStatus::ACCESS_DENIED
+        );
+        assert_eq!(
+            modifier(
+                &mut l,
+                id,
+                FileInformationClass::Rename(FileRenameInformation {
+                    replace_if_exists: Boolean::True,
+                    file_name: "\\ailleurs".to_owned(),
+                }),
+            ),
+            NtStatus::ACCESS_DENIED
+        );
+        assert_eq!(fermer(&mut l, id), NtStatus::SUCCESS);
+        assert!(d.is_dir(), "la racine partagée a disparu");
+        assert!(!d.join("ailleurs").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-panique-5) : la file des
+    /// réponses entre le fil du lecteur et la boucle n'était pas bornée. Un
+    /// serveur qui enchaîne les lectures de 4 Mio puis cesse de lire son socket
+    /// bloque la boucle dans son écriture, pendant que le fil continue
+    /// d'empiler : mille requêtes, quatre gigaoctets, et l'OOM. Bornée, la file
+    /// arrête le fil : la mémoire en vol plafonne à quelques réponses.
+    #[test]
+    fn un_serveur_qui_ne_lit_plus_ne_fait_pas_enfler_le_lecteur() {
+        let d = bac("contre-pression");
+        std::fs::write(d.join("gros"), vec![7u8; LECTURE_MAX as usize]).unwrap();
+        let (tx, mut rx) = canal_des_reponses();
+        let mut backend = demarrer(&d, tx).unwrap();
+        backend
+            .handle_drive_io_request(demande_creation(
+                "\\gros",
+                CreateDisposition::FILE_OPEN,
+                false,
+                false,
+            ))
+            .unwrap();
+        let Some(RdpdrPdu::DeviceCreateResponse(c)) = rx.blocking_recv() else {
+            panic!("une réponse de création")
+        };
+        for _ in 0..30 {
+            backend
+                .handle_drive_io_request(ServerDriveIoRequest::DeviceReadRequest(
+                    DeviceReadRequest {
+                        device_io_request: io(c.file_id, 3, MajorFunction::Read),
+                        length: LECTURE_MAX,
+                        offset: 0,
+                    },
+                ))
+                .unwrap();
+        }
+        // On attend que le fil ait rempli ce qu'il peut, puis on vérifie qu'il
+        // s'est arrêté là : personne ne lit la file, comme un serveur muet.
+        let debut = std::time::Instant::now();
+        while rx.len() < REPONSES_EN_VOL && debut.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            rx.len() <= REPONSES_EN_VOL,
+            "{} réponses de 4 Mio empilées sans lecteur",
+            rx.len()
+        );
+        drop(rx);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-SIL-13) : la résolution du
+    /// dossier partagé (`canonicalize`, puis `is_dir`) n'avait pas de délai. Sur
+    /// un montage réseau qui ne répond plus, l'onglet restait en « connexion »
+    /// sans un mot. On simule le montage mort par une résolution qui dort.
+    #[test]
+    fn un_dossier_partage_injoignable_est_signale_en_temps_borne() {
+        fn montage_mort(_: &Path) -> anyhow::Result<PathBuf> {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            Ok(PathBuf::from("/"))
+        }
+        let debut = std::time::Instant::now();
+        let issue = racine_resolue(
+            Path::new("/mnt/nas"),
+            std::time::Duration::from_millis(100),
+            montage_mort,
+        );
+        assert!(
+            debut.elapsed() < std::time::Duration::from_secs(2),
+            "attendu {:?}",
+            debut.elapsed()
+        );
+        let Err(e) = issue else {
+            panic!("un dossier injoignable a été accepté")
+        };
+        let m = format!("{e:#}");
+        assert!(m.contains("injoignable") && m.contains("/mnt/nas"), "{m}");
     }
 }

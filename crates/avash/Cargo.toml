@@ -52,6 +52,34 @@ serialport = { version = "4", default-features = false }
 # futures. `futures` est déjà dans l'arbre (russh en dépend).
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
+# Journal du cœur : ce qui ne remonte pas comme une erreur mais ne doit pas
+# être avalé en silence (clé publique illisible, carte de reprise non écrite).
+# Le cœur ne fait qu'émettre ; l'abonné qui écrit le journal est posé par
+# l'interface. Sans ses macros procédurales : `tracing` 0.1 est déjà dans
+# l'arbre, et `std` suffit à `warn!`. Audit du 12 septembre 2026 (C-SIL-13).
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+# Effacement des mots de passe à leur libération (`Zeroizing<String>`), au lieu
+# d'octets qui restent dans le tas jusqu'à réutilisation, donc dans un vidage
+# mémoire. Déjà dans l'arbre (russh, ssh-key). Audit du 12 septembre 2026
+# (C-secrets-2).
+zeroize = "1.7"
+# Marqueurs `@revoked`/`@cert-authority` sur un `known_hosts` haché
+# (`|1|sel|condensat`, HMAC-SHA1 du nom) : mêmes versions que russh, qui s'en
+# sert déjà pour les clés, donc rien de neuf à compiler. Audit du 12 septembre
+# 2026 (C-reseau-2).
+hmac = "0.13"
+sha1 = "0.11"
+data-encoding = "2"
+# Seulement pour le serveur SSH de test (`outils-de-test`).
+bytes = { version = "1.12.1", optional = true }
+
+[features]
+# Serveur SSH+SFTP en mémoire et aides de test (`avash::testutil`), partagés
+# avec les tests d'`avash-ui`. Jamais dans un binaire publié : seules les
+# `[dev-dependencies]` la posent (auto-dépendance ci-dessous, et celle
+# d'`avash-ui`). Audit du 12 septembre 2026 (C-couv-4).
+outils-de-test = ["dep:bytes"]
+
 # Pageant (agent SSH de PuTTY) : russh l'utilise déjà pour l'auth
 # (`connect_pageant`) et le tire donc dans l'arbre sous Windows. On le prend en
 # dépendance directe pour ouvrir son transport BRUT (`PageantStream`) et relayer
@@ -62,10 +90,25 @@ futures = { version = "0.3", default-features = false, features = ["std", "async
 pageant = "0.2"
 
 [dev-dependencies]
-bytes = "1.12.1"
-# Un pseudo-terminal pour éprouver la session série sans matériel (openpty).
-libc = "0.2"
-log = "0.4.34"
+# Auto-dépendance : les tests d'intégration (`tests/integration.rs`) et les
+# tests unitaires reçoivent ainsi la fonctionnalité `outils-de-test`, donc le
+# serveur SSH+SFTP en mémoire, sans `required-features` sur la cible de test
+# (qui ferait disparaître ces tests en silence d'un `cargo test -p avash`).
+# Le résolveur 2 de l'espace de travail ne l'unifie qu'aux constructions de
+# développement : un binaire publié ne la voit jamais. Audit du 12 septembre
+# 2026 (C-couv-4).
+avash = { path = ".", features = ["outils-de-test"] }
+# `log` retiré par l'audit du 12 septembre 2026 : aucune ligne du crate ne s'en
+# servait. Le journal du cœur passe par `tracing`.
+
+# Un pseudo-terminal pour éprouver la session série sans matériel, et un tube
+# nommé pour les tests de `known_hosts` : `nix` 0.26 est déjà compilé dans
+# l'arbre (tiré par `serialport`, fonctionnalités `term` et `fs`), et ses
+# fonctions `posix_openpt`, `ptsname_r` et `mkfifo` remplacent les blocs
+# `unsafe` de FFI libc que les tests portaient (audit du 12 septembre 2026,
+# C-unsafe-1 et C-unsafe-5).
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.26", default-features = false, features = ["term", "fs"] }
 
 [lints]
 workspace = true

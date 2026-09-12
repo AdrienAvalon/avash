@@ -138,6 +138,24 @@ describe("barre de titre intégrée", () => {
     expect(tbName()).toBe("srv-rdp — Avash");
   });
 
+  it("le_titre_ne_nomme_plus_un_bureau_ferme", () => {
+    // Audit du 12 septembre 2026 (C-SIL-1) : un bureau coupé par le serveur
+    // gardait son nom dans la barre de titre, là où un onglet SSH fermé rend
+    // « Avash ». Les deux protocoles se lisent désormais pareil.
+    rdpSessions.set(3, { ...(rdpFactice("srv-rdp") as object), etat: "closed" });
+    state.active = 3;
+    setTitlebar();
+    expect(tbName()).toBe("Avash");
+  });
+
+  it("le_titre_retire_les_controles_bidi", () => {
+    // Audit du 12 septembre 2026 (FS-10).
+    state.sessions.set(1, sessionFactice("prod\u202ebd"));
+    state.active = 1;
+    setTitlebar();
+    expect(tbName()).toBe("prodbd — Avash");
+  });
+
   it("changer de langue ne perd pas l'alias", () => {
     state.sessions.set(1, sessionFactice("web-1"));
     state.active = 1;

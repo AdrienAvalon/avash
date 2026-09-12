@@ -518,3 +518,105 @@ fn un_alias_inconnu_ne_se_resout_pas() {
     let cfg = "Host *\n  User root\n";
     assert!(resoudre_hote_dans(cfg, "inexistant").is_none());
 }
+
+/// Contrat K5 de l'audit du 12 septembre 2026 (C-SIL-4) : un `~/.ssh/config`
+/// absent est une configuration vide (poste neuf), un fichier présent mais
+/// illisible est une erreur. `parse_ssh_config` rendait une erreur dans les
+/// deux cas, et l'interface montrait « Aucun hôte » pour un fichier illisible,
+/// comme pour un fichier absent. Le fichier illisible est ici un répertoire à
+/// sa place : la lecture échoue même pour root, contrairement à un mode 0000.
+#[test]
+fn un_config_illisible_n_est_pas_un_config_vide() {
+    let garde = crate::testutil::temp_home();
+    assert!(
+        parse_ssh_config().expect("absent : Ok").is_empty(),
+        "un fichier absent vaut une configuration vide"
+    );
+    assert_eq!(configuration_resolue().expect("absent : Ok"), "");
+    std::fs::create_dir_all(garde.dir().join(".ssh").join("config")).unwrap();
+    let e = parse_ssh_config().expect_err("un fichier illisible est une erreur");
+    assert!(
+        e.to_string().contains("config"),
+        "l'erreur nomme le fichier : {e}"
+    );
+    assert!(configuration_resolue().is_err());
+}
+
+/// Contrat K3 de l'audit du 12 septembre 2026 (C-perf-5) : la configuration
+/// lue une fois, `Include` résolus, pour que les appelants qui résolvent
+/// plusieurs hôtes passent par `resoudre_hote_dans` au lieu de relire et
+/// réanalyser le fichier (et ses inclus) une fois par hôte.
+#[test]
+fn la_configuration_resolue_porte_les_hotes_inclus() {
+    let garde = crate::testutil::temp_home();
+    let ssh = garde.dir().join(".ssh");
+    std::fs::create_dir_all(ssh.join("config.d")).unwrap();
+    std::fs::write(
+        ssh.join("config"),
+        "Include config.d/*\n\nHost principal\n  HostName 10.0.0.1\n\nHost *\n  User defaut\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ssh.join("config.d").join("equipe"),
+        "Host inclus\n  HostName 10.0.0.2\n",
+    )
+    .unwrap();
+    let contenu = configuration_resolue().unwrap();
+    let inclus = resoudre_hote_dans(&contenu, "inclus").expect("hôte d'un Include");
+    assert_eq!(inclus.hostname.as_deref(), Some("10.0.0.2"));
+    assert_eq!(
+        inclus.user.as_deref(),
+        Some("defaut"),
+        "le Host * s'applique"
+    );
+    assert!(resoudre_hote_dans(&contenu, "principal").is_some());
+    // Même résultat que la résolution qui relit le fichier.
+    assert_eq!(resoudre_hote("inclus").unwrap().hostname, inclus.hostname);
+}
+
+/// Contrat K15 de l'audit du 12 septembre 2026 (C-panique-4) : un verrou
+/// empoisonné par une panique ailleurs se reprend, avec ses données, au lieu
+/// de faire paniquer à son tour chaque commande qui le prend.
+#[test]
+fn un_verrou_empoisonne_se_reprend_avec_ses_donnees() {
+    let m = std::sync::Arc::new(std::sync::Mutex::new(vec![1]));
+    let m2 = m.clone();
+    let _ = std::thread::spawn(move || {
+        let _g = m2.lock().unwrap();
+        panic!("panique volontaire sous le verrou");
+    })
+    .join();
+    assert!(m.is_poisoned(), "le décor : un verrou empoisonné");
+    m.verrou().push(2);
+    assert_eq!(*m.verrou(), vec![1, 2]);
+}
+
+/// Audit du 12 septembre 2026 (C-panique-10) : trois fichiers de `config.d`
+/// qui s'incluent chacun par motif faisaient 3^16 lectures ; `list_hosts`
+/// figeait l'interface. Chaque fichier n'est désormais lu qu'une fois, et
+/// chaque hôte n'apparaît qu'une fois.
+#[test]
+fn trois_fichiers_qui_s_incluent_par_motif_ne_figent_pas() {
+    let garde = crate::testutil::temp_home();
+    let ssh = garde.dir().join(".ssh");
+    std::fs::create_dir_all(ssh.join("config.d")).unwrap();
+    std::fs::write(ssh.join("config"), "Include ~/.ssh/config.d/*\n").unwrap();
+    for nom in ["a", "b", "c"] {
+        std::fs::write(
+            ssh.join("config.d").join(nom),
+            format!("Include ~/.ssh/config.d/*\n\nHost hote-{nom}\n  HostName 10.0.0.1\n"),
+        )
+        .unwrap();
+    }
+    let (envoi, reception) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = envoi.send(parse_ssh_config());
+    });
+    let hotes = reception
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("la résolution des Include doit terminer")
+        .unwrap();
+    let mut noms: Vec<_> = hotes.iter().map(|h| h.alias.as_str()).collect();
+    noms.sort_unstable();
+    assert_eq!(noms, ["hote-a", "hote-b", "hote-c"], "chaque hôte une fois");
+}

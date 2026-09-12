@@ -14,16 +14,13 @@ fn ecrire_le_profil_en_continu() {
     }
     std::thread::spawn(|| loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        // SAFETY : fonction du runtime de profilage, liée dès que le binaire
+        // SAFETY: fonction du runtime de profilage, liée dès que le binaire
         // est instrumenté ; sans argument ni état partagé avec nous.
         let _ = unsafe { __llvm_profile_write_file() };
     });
 }
 
 fn main() {
-    #[cfg(coverage)]
-    ecrire_le_profil_en_continu();
-
     // Pilotage WebDriver (suite bout en bout) : tauri-driver le signale par
     // TAURI_WEBVIEW_AUTOMATION=true, que Tauri lit lui-même pour ouvrir
     // l'automatisation de la webview. Les deux durcissements ci-dessous en
@@ -45,7 +42,9 @@ fn main() {
     #[cfg(target_os = "linux")]
     {
         if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
-            // SAFETY: exécuté avant tout démarrage de fil d'exécution ou de WebKit.
+            // SAFETY: aucun autre fil n'existe encore (le fil de profilage, sous
+            // cfg(coverage), est lancé plus bas, après ce bloc) et WebKit n'est
+            // pas chargé : personne ne lit l'environnement en parallèle.
             unsafe { std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1") };
         }
         // Un serveur d'inspection WebKit hérité de l'environnement ouvrirait un
@@ -65,7 +64,8 @@ fn main() {
             std::env::var_os("WEBKIT_INSPECTOR_SERVER").is_some(),
             automatisation,
         ) {
-            // SAFETY: idem, avant tout démarrage de fil ou de WebKit.
+            // SAFETY: même garantie : aucun autre fil (profilage compris, lancé
+            // plus bas) et WebKit pas encore chargé.
             unsafe { std::env::remove_var("WEBKIT_INSPECTOR_SERVER") };
         }
         // Trouvé par l'audit du 7 septembre 2026 : la même WebKitGTK honore aussi
@@ -81,7 +81,8 @@ fn main() {
         if retirer_inspecteur_http_webkit(
             std::env::var_os("WEBKIT_INSPECTOR_HTTP_SERVER").is_some(),
         ) {
-            // SAFETY: idem, avant tout démarrage de fil ou de WebKit.
+            // SAFETY: même garantie : aucun autre fil (profilage compris, lancé
+            // plus bas) et WebKit pas encore chargé.
             unsafe { std::env::remove_var("WEBKIT_INSPECTOR_HTTP_SERVER") };
         }
     }
@@ -118,16 +119,28 @@ fn main() {
     {
         let herite = std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_some();
         match action_webview2(herite, session_distante(), automatisation) {
-            // SAFETY: exécuté avant tout démarrage de fil d'exécution ou de WebView2.
+            // SAFETY: sous Windows, set_var et remove_var sont toujours sûrs
+            // (std::env, section Safety) ; on est de surcroît avant WebView2 et
+            // avant tout autre fil (le profilage est lancé plus bas).
             ActionWebview2::Poser(v) => unsafe {
                 std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", v)
             },
+            // SAFETY: même garantie que le bras précédent (audit du 12 septembre
+            // 2026, C-unsafe-5 : un commentaire au-dessus du premier bras ne
+            // couvre pas le second).
             ActionWebview2::Retirer => unsafe {
                 std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
             },
             ActionWebview2::NePasToucher => {}
         }
     }
+
+    // Le fil du profil de couverture part APRÈS le bloc d'environnement
+    // (audit du 12 septembre 2026, C-unsafe-2) : lancé en tête, il rendait
+    // fausse, sous cfg(coverage), l'affirmation « aucun autre fil » des
+    // commentaires de sûreté ci-dessus.
+    #[cfg(coverage)]
+    ecrire_le_profil_en_continu();
 
     avash_ui_lib::run();
 }
@@ -143,12 +156,15 @@ fn main() {
 fn session_distante() -> bool {
     // SM_REMOTESESSION, cf. MS-RDPBCGR / winuser.h.
     const SM_REMOTESESSION: i32 = 0x1000;
+    // SAFETY: GetSystemMetrics n'a ni pointeur, ni précondition, ni effet de
+    // bord : l'assertion de sûreté remonte à la déclaration (`safe fn`, Rust
+    // 1.82), et l'appel n'a plus besoin de bloc (audit du 12 septembre 2026,
+    // C-unsafe-5).
     #[link(name = "user32")]
-    extern "system" {
-        fn GetSystemMetrics(n_index: i32) -> i32;
+    unsafe extern "system" {
+        safe fn GetSystemMetrics(n_index: i32) -> i32;
     }
-    // SAFETY: GetSystemMetrics est sans effet de bord et sans paramètre pointeur.
-    unsafe { GetSystemMetrics(SM_REMOTESESSION) != 0 }
+    GetSystemMetrics(SM_REMOTESESSION) != 0
 }
 
 /// Faut-il retirer `WEBKIT_INSPECTOR_SERVER` de l'environnement ? Oui dès

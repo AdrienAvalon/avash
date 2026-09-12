@@ -90,10 +90,16 @@ impl AsyncWrite for Flux {
 pub async fn monter(tcp: TcpStream, hote: &str) -> Result<(Flux, x509_cert::Certificate)> {
     use x509_cert::der::Decode as _;
 
+    // TLS 1.2 au moins. Trouvé par l'audit du 12 septembre 2026 (C-sidecar-4) :
+    // sans minimum, native-tls acceptait TLS 1.0 et 1.1 là où la pile du
+    // système les accepte encore (SChannel, Secure Transport), alors que ce
+    // chemin ne doit relâcher que le choix des suites (SECURITY.md). Windows
+    // Server 2012 R2, le cas visé, parle TLS 1.2 avec ses suites RSA et CBC.
     let connecteur = native_tls::TlsConnector::builder()
         .danger_accept_invalid_certs(true)
         .danger_accept_invalid_hostnames(true)
         .use_sni(false)
+        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
         .build()
         .context("pile TLS du système")?;
     let connecteur = tokio_native_tls::TlsConnector::from(connecteur);
@@ -198,6 +204,9 @@ mod tests {
     #[tokio::test]
     async fn un_reset_reel_de_secure_transport_est_reconnu() {
         use std::time::Duration;
+        // Pile TLS du système : sous le garde, comme tout test qui en initialise
+        // une (voir BacAvashHome, audit du 12 septembre 2026).
+        let _bac = crate::empreintes::BacAvashHome::poser("tls-reset");
         use tokio::net::{TcpListener, TcpStream};
 
         let ecouteur = TcpListener::bind("127.0.0.1:0")
@@ -219,6 +228,74 @@ mod tests {
         serveur.await.expect("serveur terminé");
         let erreur = resultat.err().expect("la coupure doit refuser TLS");
         assert!(coupure_de_la_pile_systeme(&erreur), "{erreur:?}");
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-4) : le connecteur ne
+    /// fixait pas de version minimale, et TLS 1.0 passait sans que
+    /// l'utilisateur, qui a consenti à des suites héritées, le sache. Sous
+    /// Linux, l'OpenSSL embarqué refuse déjà TLS 1.0 des deux côtés (niveau de
+    /// sécurité 1 d'OpenSSL 3) : la sonde le constate et le test s'arrête là en
+    /// le disant, faute de pouvoir monter le serveur à éprouver. Il mord sous
+    /// Windows (SChannel) et macOS (Secure Transport).
+    #[test]
+    fn le_chemin_herite_refuse_un_serveur_limite_a_tls_1_0() {
+        // rcgen initialise aws-lc et native-tls l'OpenSSL embarqué, deux
+        // lecteurs C de l'environnement : sous le garde (voir BacAvashHome).
+        let _bac = crate::empreintes::BacAvashHome::poser("tls-herite");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(tls_1_0_refuse());
+    }
+
+    async fn tls_1_0_refuse() {
+        use tokio::net::{TcpListener, TcpStream};
+        let cle = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let identite = native_tls::Identity::from_pkcs8(
+            cle.cert.pem().as_bytes(),
+            cle.signing_key.serialize_pem().as_bytes(),
+        )
+        .unwrap();
+        let Ok(accepteur) = native_tls::TlsAcceptor::builder(identite)
+            .min_protocol_version(Some(native_tls::Protocol::Tlsv10))
+            .max_protocol_version(Some(native_tls::Protocol::Tlsv10))
+            .build()
+        else {
+            eprintln!("pile TLS du système sans TLS 1.0 côté serveur : test sans objet ici");
+            return;
+        };
+        let accepteur = tokio_native_tls::TlsAcceptor::from(accepteur);
+        let ecoute = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let adresse = ecoute.local_addr().unwrap();
+        let serveur = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (tcp, _) = ecoute.accept().await.unwrap();
+                let _ = accepteur.accept(tcp).await;
+            }
+        });
+        // Sonde : un client qui admet TLS 1.0 se connecte-t-il ?
+        let sonde = tokio_native_tls::TlsConnector::from(
+            native_tls::TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_hostnames(true)
+                .min_protocol_version(Some(native_tls::Protocol::Tlsv10))
+                .max_protocol_version(Some(native_tls::Protocol::Tlsv10))
+                .build()
+                .unwrap(),
+        );
+        let tcp = TcpStream::connect(adresse).await.unwrap();
+        if sonde.connect("127.0.0.1", tcp).await.is_err() {
+            eprintln!("la pile TLS du système refuse elle-même TLS 1.0 : test sans objet ici");
+            serveur.abort();
+            return;
+        }
+        let tcp = TcpStream::connect(adresse).await.unwrap();
+        assert!(
+            super::monter(tcp, "127.0.0.1").await.is_err(),
+            "le chemin hérité a accepté un serveur limité à TLS 1.0"
+        );
+        serveur.abort();
     }
 
     /// Sans le chemin hérité, le marqueur ouvre la porte au repli ; avec lui,

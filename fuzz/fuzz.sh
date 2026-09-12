@@ -21,6 +21,14 @@ if [ "${#CIBLES[@]}" -eq 0 ]; then
   echo "✗ fuzz : aucune cible lue dans fuzz/Cargo.toml" >&2
   exit 1
 fi
+# `cargo fuzz` (0.13) n'a pas d'option `--locked` : on vérifie le verrou avant
+# la campagne, comme le font toutes les commandes cargo des chaînes depuis
+# l'audit du 12 septembre 2026. Un Cargo.lock périmé face à la version d'avash
+# se voyait sinon réécrit en silence par la première cible.
+if ! cargo metadata --locked --format-version 1 >/dev/null; then
+  echo "✗ fuzz : fuzz/Cargo.lock n'est plus à jour (cargo update -p avash)" >&2
+  exit 1
+fi
 journal="$(mktemp)"
 trap 'rm -f "$journal"' EXIT
 echecs=()

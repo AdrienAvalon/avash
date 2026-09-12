@@ -6,20 +6,19 @@ import "@xterm/xterm/css/xterm.css";
 import type { Terminal } from "@xterm/xterm";
 import { chargerXterm } from "./xterm-charge";
 import { invoke } from "@tauri-apps/api/core";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { majMemoireOnglets, proposerRestauration } from "./onglets-restauration";
 import { appliquerVue, basculerPartage, ongletsAffiches, surFermeture, surFocus, vuePartagee } from "./vue-partagee";
 import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
-import { partageClipboard, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage } from "./prefs";
-import { filterHosts, isPasswordRequired, isHostKeyChanged, stripHtml, nettoyerMarqueurs, nettoyerPourTerminal, etiquetteHote, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode } from "./filters";
+import { confirmerFermetureOnglet, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage } from "./prefs";
+import { filterHosts, isPasswordRequired, isHostKeyChanged, nettoyerMarqueurs, libelleSur, estRaccourciApplicatif, ouvrePaletteOuPanneau, nettoyerPourTerminal, etiquetteHote, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode, classeSante, santePerimee, ilYA, santesARestaurer } from "./filters";
 import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
-import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, hostSessionState, renderTagBar, terminalTheme } from "./theme";
+import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, ensureGrasseChargee, etatsSessionsParHote, renderTagBar, terminalTheme } from "./theme";
 import { MENUS_CONTEXTUELS, openHostMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { type ManualTarget } from "./connexion-directe";
-import { annoncerPartageClip, bureauActif, choisirEtOffrirFichiers, connectRdpSaved, fichiersARecevoir, openRdpMenu, rdpSessions, recevoirFichiers } from "./rdp";
-import { askConfirm, askPassword, collerDansTerminal } from "./dialogues";
-import { focusTab, orderedTabs } from "./raccourcis";
+import { annoncerPartageClip, bureauActif, choisirEtOffrirFichiers, connectRdpSaved, etatBureau, fichiersARecevoir, openRdpMenu, rdpSessions, recevoirFichiers } from "./rdp";
+import { askConfirm, askPassword, collerDansTerminal, intercepterCollageNatif } from "./dialogues";
+import { fermerOnglet, focusTab, orderedTabs } from "./raccourcis";
 import { notify, notifyErreur } from "./notifications";
 import { openFolderMenu } from "./dossiers";
 import { openTermSearch, setFontSize } from "./terminal-outils";
@@ -51,7 +50,45 @@ function buildTree(): TreeNode {
   ]);
 }
 
-/** Une ligne d'hôte SSH (avatar, logo distro, tags, état), déplaçable. */
+// ---------- Rendu réconcilié ----------
+//
+// Audit du 12 septembre 2026 (C-front-1) : `renderHosts` reconstruisait toute
+// la liste à chaque changement d'état (session qui passe « live », logo d'OS,
+// sonde, clic d'onglet, badge de tunnels) : `innerHTML = ""`, sept écouteurs
+// par ligne, et l'état des sessions relu dans les classes CSS des onglets.
+// Trois reconstructions par ouverture de session, 4200 écouteurs pour 200
+// hôtes, et un double-clic qui tombait sur un nœud détaché (l'aléa E2E de
+// vue-partagee). Chaque fabrique de ligne rend désormais aussi sa mise à jour
+// en place (`maj`), rangée ici sous la clé de `data-cle` ; `rafraichirLignes`
+// l'appelle, et `renderHosts` ne sert plus qu'aux changements de structure
+// (liste, filtre, tags, dossiers, langue).
+
+/** Ce que les mises à jour lisent, calculé une fois par passage. */
+type ContexteLignes = { etats: Map<string, "live" | "connecting">; maintenant: number };
+type Ligne = { el: HTMLElement; maj: (c: ContexteLignes) => void };
+/** Les lignes affichées, par clé stable (`ssh:alias`, `rdp:id`, `dossier:chemin`). */
+const lignes = new Map<string, Ligne>();
+
+const contexteLignes = (): ContexteLignes => ({ etats: etatsSessionsParHote(), maintenant: Date.now() });
+
+/** Classes de la pastille : l'état d'une session prime, sinon la dernière sonde. */
+function classesPastille(session: string | undefined, cle: string, maintenant: number): string {
+  return ["dot", session || classeSante(state.sante.get(cle), maintenant)].filter(Boolean).join(" ");
+}
+
+/** Met à jour en place les lignes de la barre latérale (clés `ssh:alias`,
+ *  `rdp:id`, `dossier:chemin`), ou toutes si aucune clé n'est donnée : pastille,
+ *  logo d'OS, badge de tunnels, infobulle. Ni nœud recréé, ni focus perdu, ni
+ *  défilement touché. Contrat K10 du même audit (tunnels.ts l'appelle). */
+export function rafraichirLignes(cles?: Iterable<string>): void {
+  const c = contexteLignes();
+  if (cles === undefined) {
+    for (const l of lignes.values()) l.maj(c);
+    return;
+  }
+  for (const cle of cles) lignes.get(cle)?.maj(c);
+}
+
 /** Les lignes de la barre latérale, dans l'ordre où on les parcourt.
  *  Hôtes SSH, bureaux RDP et dossiers confondus : c'est ce que voit l'œil. */
 function lignesBarre(): HTMLElement[] {
@@ -138,22 +175,13 @@ function rendreAtteignableAuClavier(
  *  gestes clavier, alors que l'infobulle est le seul endroit où les découvrir. */
 const gestesLigne = () => t("gestes-ligne");
 
-function sshHostElement(h: Host): HTMLElement {
+/** Une ligne d'hôte SSH (avatar, logo distro, tags, état), déplaçable. */
+function sshHostElement(h: Host, ctx: ContexteLignes): HTMLElement {
   const el = document.createElement("div");
   el.className = "host";
-  el.style.setProperty("--hue", hostHue(h.alias));
   const target = `${h.user ?? "?"}@${h.hostname ?? h.alias}:${h.port ?? 22}`;
   el.innerHTML = `<span class="avatar"><span class="ini"></span><span class="dot"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
-  const os = osByHost.get(h.alias);
   const ini = el.querySelector(".ini") as HTMLElement;
-  if (os) {
-    const b = osBadge(os);
-    ini.textContent = b.glyph;
-    ini.className = "ini logo";
-    el.style.setProperty("--hue", b.color);
-  } else {
-    ini.textContent = hostInitials(h.alias);
-  }
   el.querySelector(".alias")!.textContent = h.alias;
   el.querySelector(".meta")!.textContent = target;
   // Deux badges étaient stylés depuis toujours mais jamais posés : rien
@@ -168,27 +196,47 @@ function sshHostElement(h: Host): HTMLElement {
     j.title = t("hote-passe-par", { rebond: h.proxy_jump ?? "" });
     info.appendChild(j);
   }
-  const vifs = tunnels.byHost.get(h.alias) ?? 0;
-  if (vifs > 0) {
-    const tun = document.createElement("span");
-    tun.className = "tun";
-    tun.textContent = String(vifs);
-    tun.title = t("hote-tunnels-ouverts", { n: vifs });
-    info.appendChild(tun);
-  }
+  // Le badge des tunnels existe toujours, masqué à zéro : `maj` n'a qu'à le
+  // montrer (audit du 12 septembre 2026, C-front-1).
+  const tun = document.createElement("span");
+  tun.className = "tun";
+  tun.hidden = true;
+  info.appendChild(tun);
   const dot = el.querySelector(".dot") as HTMLElement;
-  dot.className = "dot " + (hostSessionState(h.alias) || classeSante(`ssh:${h.alias}`));
-  dot.title = titreSante(`ssh:${h.alias}`);
   if (h.alias === state.pickedAlias) el.classList.add("picked");
-  // L'alias peut être tronqué et les tags ne tiennent pas dans la ligne : les
-  // deux se retrouvent ici, où l'on va naturellement chercher le détail.
-  // Trouvé par l'audit du 7 septembre 2026 : le préfixe « tags : » de
-  // l'infobulle était écrit en dur en français ; en interface anglaise il
-  // apparaissait au milieu du reste traduit. On le tire de t("tags").
-  const detail = [h.alias, target, os?.pretty, h.tags.length > 0 ? `${t("tags").toLowerCase()} : ${h.tags.join(", ")}` : ""]
-    .filter(Boolean)
-    .join(" · ");
-  el.title = `${detail} — ${gestesLigne()}`;
+  const cle = `ssh:${h.alias}`;
+  // Ce qui varie sans que la liste change : logo d'OS, badge de tunnels,
+  // pastille (session ou sonde) et infobulle. `picked` n'y est pas : il suit
+  // le clic et le focus, que ces mises à jour ne doivent pas défaire.
+  const maj = (c: ContexteLignes) => {
+    const os = osByHost.get(h.alias);
+    if (os) {
+      const b = osBadge(os);
+      ini.textContent = b.glyph;
+      ini.className = "ini logo";
+      el.style.setProperty("--hue", b.color);
+    } else {
+      ini.textContent = hostInitials(h.alias);
+      ini.className = "ini";
+      el.style.setProperty("--hue", hostHue(h.alias));
+    }
+    const vifs = tunnels.byHost.get(h.alias) ?? 0;
+    tun.hidden = vifs === 0;
+    tun.textContent = String(vifs);
+    tun.title = vifs > 0 ? t("hote-tunnels-ouverts", { n: vifs }) : "";
+    dot.className = classesPastille(c.etats.get(h.alias), cle, c.maintenant);
+    dot.title = titreSante(cle, c.maintenant);
+    // L'alias peut être tronqué et les tags ne tiennent pas dans la ligne : les
+    // deux se retrouvent ici, où l'on va naturellement chercher le détail.
+    // Trouvé par l'audit du 7 septembre 2026 : le préfixe « tags : » de
+    // l'infobulle était écrit en dur en français ; en interface anglaise il
+    // apparaissait au milieu du reste traduit. On le tire de t("tags").
+    const detail = [h.alias, target, os?.pretty, h.tags.length > 0 ? `${t("tags").toLowerCase()} : ${h.tags.join(", ")}` : ""]
+      .filter(Boolean)
+      .join(" · ");
+    el.title = `${detail} — ${gestesLigne()}`;
+  };
+  maj(ctx);
   el.addEventListener("click", () => {
     state.pickedAlias = h.alias;
     state.pickedRdp = null;
@@ -200,23 +248,29 @@ function sshHostElement(h: Host): HTMLElement {
     e.preventDefault();
     openHostMenu(h, e as MouseEvent);
   });
-  rendreAtteignableAuClavier(el, `ssh:${h.alias}`, () => void openSession(h), (p) =>
+  rendreAtteignableAuClavier(el, cle, () => void openSession(h), (p) =>
     openHostMenu(h, p as MouseEvent));
   makeHostDraggable(el, "ssh", h.alias);
+  lignes.set(cle, { el, maj });
   return el;
 }
 
 /** Une ligne de bureau RDP enregistré, déplaçable. */
-function rdpHostElement(h: RdpHostT): HTMLElement {
+function rdpHostElement(h: RdpHostT, ctx: ContexteLignes): HTMLElement {
   const el = document.createElement("div");
   el.className = "host";
   el.innerHTML = `<span class="avatar rdp"><span class="ini logo"></span><span class="dot"></span></span><span class="info"><div class="alias"></div><div class="meta"></div></span>`;
   (el.querySelector(".ini") as HTMLElement).innerHTML = ic("monitor");
-  // Voyant vert : une session RDP est ouverte pour cet hôte.
-  const live = [...rdpSessions.values()].some((sess) => sess.hostId === h.id);
   const dotRdp = el.querySelector(".dot") as HTMLElement;
-  dotRdp.className = "dot" + (live ? " live" : " " + classeSante(`rdp:${h.id}`));
-  dotRdp.title = titreSante(`rdp:${h.id}`);
+  const cle = `rdp:${h.id}`;
+  const maj = (c: ContexteLignes) => {
+    // L'état de ses sessions, pas leur présence : une session coupée par le
+    // serveur reste dans la table, et laissait l'hôte « connecté » (audit du
+    // 12 septembre 2026, C-SIL-1).
+    dotRdp.className = classesPastille(etatBureau(h.id) || undefined, cle, c.maintenant);
+    dotRdp.title = titreSante(cle, c.maintenant);
+  };
+  maj(ctx);
   el.querySelector(".alias")!.textContent = h.name;
   // Un bureau VNC se lit comme tel dans la liste ; l'utilisateur y est
   // facultatif, on ne montre pas un « @ » orphelin.
@@ -236,9 +290,10 @@ function rdpHostElement(h: RdpHostT): HTMLElement {
     e.preventDefault();
     openRdpMenu(h, e as MouseEvent);
   });
-  rendreAtteignableAuClavier(el, `rdp:${h.id}`, () => void connectRdpSaved(h), (p) =>
+  rendreAtteignableAuClavier(el, cle, () => void connectRdpSaved(h), (p) =>
     openRdpMenu(h, p as MouseEvent));
   makeHostDraggable(el, "rdp", h.id);
+  lignes.set(cle, { el, maj });
   return el;
 }
 
@@ -343,6 +398,9 @@ function folderRow(node: TreeNode, depth: number): HTMLElement {
   );
   row.setAttribute("aria-expanded", String(!collapsed));
   setupFolderDrop(row, node.path);
+  // Rien n'y varie hors changement de structure (le compte suit la liste) :
+  // la clé est tenue pour que `rafraichirLignes` connaisse toutes les lignes.
+  lignes.set(`dossier:${node.path}`, { el: row, maj: () => {} });
   return row;
 }
 
@@ -351,20 +409,23 @@ function itemName(it: TreeItem): string {
 }
 
 /** Rend récursivement un nœud : sous-dossiers (triés) puis hôtes. */
-function renderNode(node: TreeNode, container: HTMLElement, depth: number) {
+function renderNode(node: TreeNode, container: HTMLElement, depth: number, ctx: ContexteLignes) {
   const subs = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const sub of subs) {
     container.appendChild(folderRow(sub, depth));
-    if (!collapsedFolders.has(sub.path)) renderNode(sub, container, depth + 1);
+    if (!collapsedFolders.has(sub.path)) renderNode(sub, container, depth + 1, ctx);
   }
   const items = [...node.items].sort((a, b) => itemName(a).localeCompare(itemName(b)));
   for (const it of items) {
-    const el = it.kind === "ssh" ? sshHostElement(it.ssh) : rdpHostElement(it.rdp);
+    const el = it.kind === "ssh" ? sshHostElement(it.ssh, ctx) : rdpHostElement(it.rdp, ctx);
     el.style.setProperty("--depth", String(depth));
     container.appendChild(el);
   }
 }
 
+/** Reconstruit la liste : réservé aux changements de structure (hôtes chargés,
+ *  recherche, tag, dossier replié, langue). Un changement d'état passe par
+ *  `rafraichirLignes`. */
 export function renderHosts() {
   const list = $("host-list");
   // AVANT le vidage, impérativement : `innerHTML = ""` met scrollHeight à 0 et
@@ -380,6 +441,21 @@ export function renderHosts() {
     "#host-list [data-cle]",
   )?.dataset.cle;
   list.innerHTML = "";
+  lignes.clear();
+  const ctx = contexteLignes();
+  // Une configuration illisible ne se confond plus avec une configuration vide
+  // (audit du 12 septembre 2026, C-SIL-4, contrat K5) : le bandeau reste en
+  // tête de liste tant que la lecture échoue.
+  for (const [erreur, cle] of [[erreurConfigSsh, "config-ssh-illisible"], [erreurRdpYaml, "rdp-yaml-illisible"]] as const) {
+    if (!erreur) continue;
+    const bandeau = document.createElement("div");
+    bandeau.className = "host-empty host-erreur";
+    bandeau.setAttribute("role", "alert");
+    const p = document.createElement("p");
+    p.textContent = t(cle, { e: erreur });
+    bandeau.appendChild(p);
+    list.appendChild(bandeau);
+  }
   renderTagBar();
   const q = state.filter.trim().toLowerCase();
   const filtering = q !== "" || state.tagFilter !== null;
@@ -394,13 +470,13 @@ export function renderHosts() {
 
   if (filtering) {
     // Recherche/filtre : liste plate, sans dossiers (on cherche, on ne range pas).
-    for (const h of sshShown) list.appendChild(sshHostElement(h));
-    for (const h of rdpShown) list.appendChild(rdpHostElement(h));
+    for (const h of sshShown) list.appendChild(sshHostElement(h, ctx));
+    for (const h of rdpShown) list.appendChild(rdpHostElement(h, ctx));
   } else {
-    renderNode(buildTree(), list, 0);
+    renderNode(buildTree(), list, 0, ctx);
   }
 
-  if (state.hosts.length === 0 && state.rdpHosts.length === 0) {
+  if (state.hosts.length === 0 && state.rdpHosts.length === 0 && !erreurConfigSsh && !erreurRdpYaml) {
     const empty = document.createElement("div");
     empty.className = "host-empty";
     empty.innerHTML =
@@ -413,7 +489,11 @@ export function renderHosts() {
     // Filtrer par tag seul affichait « Aucun hôte ne correspond à «  » » : le
     // critère cité doit être celui qui filtre réellement.
     const critere = q !== "" ? state.filter : `${t("hotes-tag")} ${state.tagFilter ?? ""}`;
-    empty.innerHTML = `<p>${stripHtml(t("hotes-aucun-correspond", { critere }))}</p>`;
+    // textContent : « a&b » s'affichait « ab » par `stripHtml`, qui supprimait au
+    // lieu d'échapper (audit du 12 septembre 2026, FS-9 et C-front-13).
+    const p = document.createElement("p");
+    p.textContent = t("hotes-aucun-correspond", { critere });
+    empty.appendChild(p);
     list.appendChild(empty);
   }
   // Filtrer par tag écarte tous les bureaux RDP — ils n'en portent pas. Ils
@@ -433,7 +513,6 @@ export function renderHosts() {
   majTabulation();
 }
 
-
 type SessionState = "connecting" | "live" | "closed";
 
 /**
@@ -445,22 +524,39 @@ type SessionState = "connecting" | "live" | "closed";
 function setSessionState(id: number, st: SessionState) {
   const s = state.sessions.get(id);
   if (!s) return;
+  // L'état vit dans la session : la barre latérale le lit là, plus dans les
+  // classes CSS de l'onglet (audit du 12 septembre 2026, C-front-1).
+  s.etat = st;
   const dot = s.tab.querySelector(".state") as HTMLElement | null;
-  if (!dot) return;
-  dot.className = `state ${st}`;
-  dot.title =
-    st === "connecting" ? t("session-connexion-en-cours") : st === "live" ? t("session-connectee") : t("session-terminee");
+  if (dot) {
+    dot.className = `state ${st}`;
+    dot.title =
+      st === "connecting" ? t("session-connexion-en-cours") : st === "live" ? t("session-connectee") : t("session-terminee");
+  }
   s.tab.classList.toggle("dead", st === "closed");
-  renderHosts();
+  rafraichirLignes([`ssh:${s.alias}`]);
   sftpSyncButton();
   setTitlebar();
+}
+
+/** Retient le moteur de rendu du terminal et le confie au diagnostic.
+ *
+ *  Audit du 12 septembre 2026 (C-front-14, contrat K8) : le repli WebGL → DOM
+ *  était silencieux. Sous WebKitGTK sans compositing (`main.rs`), le WebGL est
+ *  relu en mémoire centrale à chaque image et peut coûter plus que le DOM :
+ *  sans savoir lequel tournait, un « le terminal rame » était intranchable. */
+function noterRendu(rendu: "webgl" | "dom"): void {
+  state.rendu = rendu;
+  invoke("diagnostic_noter_rendu", { rendu }).catch(() => {});
 }
 
 /** Cree l'onglet et le terminal. La connexion elle-meme est faite par l'appelant. */
 async function newSessionShell(label: string) {
   // xterm.js vit hors du paquet principal (voir xterm-charge.ts) : déjà là
-  // après le premier terminal, ou déjà en route depuis l'accueil.
-  const { Terminal, FitAddon, WebglAddon, SearchAddon, SerializeAddon, WebLinksAddon } = await chargerXterm();
+  // après le premier terminal, ou déjà en route depuis l'accueil. La graisse
+  // grasse de la police vient avec lui (C-front-8) : le rendu WebGL met les
+  // glyphes en cache, un gras dessiné avec la police de repli le resterait.
+  const [{ Terminal, FitAddon, WebglAddon, SearchAddon, SerializeAddon, WebLinksAddon }] = await Promise.all([chargerXterm(), ensureGrasseChargee()]);
   const id = state.nextId++;
   const term = new Terminal({
     theme: terminalTheme(),
@@ -471,7 +567,10 @@ async function newSessionShell(label: string) {
     letterSpacing: 0,
     fontWeight: "400",
     fontWeightBold: "600",
-    cursorBlink: true,
+    // Un curseur qui clignote pour qui a demandé au système de ne plus rien
+    // animer : la CSS respectait `prefers-reduced-motion`, xterm non (audit du
+    // 12 septembre 2026, C-front-10).
+    cursorBlink: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
     cursorStyle: "bar",
     cursorWidth: 2,
     scrollback: 10000,
@@ -481,6 +580,16 @@ async function newSessionShell(label: string) {
     // (xterm n'a pas d'option de padding, on le fait en CSS sur le container.)
     drawBoldTextInBrightColors: false,
     minimumContrastRatio: 1.5,
+    // Hyperliens OSC 8 (`ls --hyperlink`, gcc, systemd) : xterm les active
+    // d'office, par un confirm() natif en anglais puis window.open, hors de la
+    // liste blanche de Rust. Même porte que les liens repérés dans le texte
+    // (audit du 12 septembre 2026, FS-3).
+    linkHandler: {
+      activate: (_e, uri) => {
+        invoke("open_external", { url: uri }).catch(() => {});
+      },
+      allowNonHttpProtocols: false,
+    },
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -491,11 +600,13 @@ async function newSessionShell(label: string) {
   const tab = document.createElement("div");
   tab.className = "tab active";
   tab.innerHTML = `<span class="state" title="${t("session-connexion")}"></span><span class="label"></span><span class="close">✕</span>`;
-  tab.querySelector(".label")!.textContent = label;
+  // Sans contrôle de direction : un alias portant U+202E réordonnait le
+  // libellé (audit du 12 septembre 2026, FS-10).
+  tab.querySelector(".label")!.textContent = libelleSur(label);
   tab.addEventListener("click", () => focusSession(id));
   tab.querySelector(".close")!.addEventListener("click", (e) => {
     e.stopPropagation();
-    closeSession(id);
+    void fermerOnglet({ kind: "ssh", id }); // confirmée si la session vit (C-front-6)
   });
   tabs.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
   tabs.appendChild(tab);
@@ -509,18 +620,28 @@ async function newSessionShell(label: string) {
   container.style.inset = "10px 8px 6px 14px";
   $("terminal").appendChild(container);
   term.open(container);
+  // Collage natif (Maj+Inser, clic du milieu, menu du système) : par la même
+  // décision que Ctrl+Maj+V, confirmation comprise. Il allait droit au PTY
+  // (audit du 12 septembre 2026, FS-2, contrat K9).
+  intercepterCollageNatif(container, term);
 
   // Rendu GPU : nettement plus net et plus fluide que le rendu DOM.
-  // On replie silencieusement si le contexte WebGL est indisponible
-  // (machine virtuelle, pilote graphique limite) — mieux vaut un rendu
-  // moins beau qu'un terminal qui refuse de s'ouvrir.
+  // On replie si le contexte WebGL est indisponible (machine virtuelle, pilote
+  // graphique limite) — mieux vaut un rendu moins beau qu'un terminal qui
+  // refuse de s'ouvrir. Le moteur retenu est noté pour le diagnostic.
+  let rendu: "webgl" | "dom" = "dom";
   try {
     const webgl = new WebglAddon();
-    webgl.onContextLoss(() => webgl.dispose());
+    webgl.onContextLoss(() => {
+      webgl.dispose();
+      noterRendu("dom");
+    });
     term.loadAddon(webgl);
+    rendu = "webgl";
   } catch {
     /* rendu DOM par defaut */
   }
+  if (state.rendu === null) noterRendu(rendu);
 
   const search = new SearchAddon();
   term.loadAddon(search);
@@ -540,14 +661,18 @@ async function newSessionShell(label: string) {
   // d'interruption) part au shell distant.
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
-    // Raccourcis de l'application : xterm les écrivait DANS le PTY avant que
-    // nos écouteurs ne s'en saisissent. Ctrl+B est le préfixe de tmux et Ctrl+K
-    // le kill-line de readline : chaque frappe agissait donc deux fois, à
-    // distance et localement. On les retient ici pour que seul l'effet local
-    // subsiste.
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-      const k = e.key.toLowerCase();
-      if (k === "b" || k === "k") return false;
+    // Raccourcis de l'application : `false` et xterm n'envoie rien au shell, la
+    // touche remonte aux écouteurs de la fenêtre. Ctrl+Tab partait en
+    // tabulation (complétion du shell) au lieu de changer d'onglet, Ctrl+W
+    // effaçait un mot ; à l'inverse Ctrl+B (préfixe de tmux) et Ctrl+K
+    // (kill-line) étaient confisqués. Dans un terminal, le panneau SFTP et la
+    // palette passent donc à Ctrl+Maj+B et Ctrl+Maj+K (audit du 12 septembre
+    // 2026, C-front-2 et C-front-3 ; décision dans `estRaccourciApplicatif`).
+    if (estRaccourciApplicatif(e)) {
+      // Sans cela, Ctrl+Tab ferait sortir le focus du terminal quand il n'y a
+      // pas d'autre onglet où aller.
+      if (e.key === "Tab") e.preventDefault();
+      return false;
     }
     const mod = e.ctrlKey && e.shiftKey;
     if (mod && e.code === "KeyC") {
@@ -605,7 +730,7 @@ async function newSessionShell(label: string) {
     }, 60);
   });
 
-  const s: Session = { id, alias: label, term, fit, tab, search, serialiser, closed: false, reconnect: null, sftpPath: "" };
+  const s: Session = { id, alias: label, term, fit, tab, search, serialiser, closed: false, etat: "connecting", reconnect: null, sftpPath: "" };
   state.sessions.set(id, s);
   // Le nouvel onglet prend la place de l'actif (ou son volet, en vue
   // partagée) ; la vue cache le reste, bureaux RDP compris : leur conteneur
@@ -649,7 +774,7 @@ export async function openSerie(cible: { chemin: string; vitesse: number }) {
     try {
       const label = await invoke<string>("serie_open", { id, chemin: cible.chemin, vitesse: cible.vitesse });
       session.alias = label;
-      session.tab.querySelector(".label")!.textContent = label;
+      session.tab.querySelector(".label")!.textContent = libelleSur(label);
       setSessionState(id, "live");
     } catch (e) {
       // Trouvé par l'audit du 7 septembre 2026 : « connexion-impossible »
@@ -663,7 +788,11 @@ export async function openSerie(cible: { chemin: string; vitesse: number }) {
       throw e;
     }
   };
-  session.reconnect = connecter;
+  // Entrée sur un onglet mort relance `connecter`, dont l'échec est déjà écrit
+  // dans le terminal : la promesse rejetée partait sinon dans le vide (audit du
+  // 12 septembre 2026, C-SIL-11). Le premier appel, lui, rejette : le
+  // formulaire de connexion directe en a besoin.
+  session.reconnect = () => connecter().catch(() => {});
   await connecter();
 }
 
@@ -711,7 +840,14 @@ async function connectByAlias(s: Session, h: Host) {
 
   term.write(`\x1b[90m${nettoyerPourTerminal(t("connexion-a", { cible: label }))}\x1b[0m\r\n`);
 
-  for (let essai = 0; essai < 3; essai++) {
+  // Trois mots de passe refusés au plus. La clé d'hôte oubliée puis réapprise
+  // n'en fait pas partie : elle consommait un des trois essais, et le
+  // troisième mot de passe saisi n'était jamais essayé (audit du 12 septembre
+  // 2026, C-front-13). Elle ne se réapprend qu'une fois : un serveur dont la
+  // clé change encore s'arrête là.
+  let refuses = 0;
+  let cleReapprise = false;
+  for (;;) {
     // L'onglet a pu être fermé pendant qu'on attendait : sans cette garde, la
     // boucle continuait pour un onglet qui n'existe plus — une modale « Mot de
     // passe » s'ouvrait pour lui, et la remplir établissait une vraie session
@@ -740,6 +876,10 @@ async function connectByAlias(s: Session, h: Host) {
         // marqueurs internes (pas seulement celui-ci) et les caractères de
         // contrôle avant de le montrer dans la boîte de confirmation.
         const clean = nettoyerPourTerminal(nettoyerMarqueurs(msg));
+        if (cleReapprise) {
+          markClosed(s, clean);
+          return;
+        }
         const ok = await askConfirm(`${clean}\n\n${t("cle-hote-oublier-question")}`);
         if (!ok) {
           markClosed(s, t("connexion-annulee-cle-changee"));
@@ -752,6 +892,7 @@ async function connectByAlias(s: Session, h: Host) {
           markClosed(s, t("cle-hote-oubli-impossible", { e: String(fe) }));
           return;
         }
+        cleReapprise = true;
         continue; // réessayer : TOFU réapprend la nouvelle clé
       }
       if (!isPasswordRequired(msg)) {
@@ -761,10 +902,15 @@ async function connectByAlias(s: Session, h: Host) {
         markClosed(s, "⚠️ " + t("echec-connexion", { e: msg }));
         return;
       }
-      // Mot de passe manquant ou refuse : on redemande, jusqu'a 3 fois.
+      // Mot de passe manquant, ou refusé : on redemande, trois refus au plus.
+      if (password !== null) refuses++;
+      if (refuses >= 3) {
+        markClosed(s, "⚠️ " + t("trois-tentatives"));
+        return;
+      }
       const rep = await askPassword(
         label,
-        essai === 0 ? undefined : t("mdp-refuse-nouvelle-tentative"),
+        password === null ? undefined : t("mdp-refuse-nouvelle-tentative"),
       );
       if (!rep) {
         markClosed(s, t("connexion-annulee"));
@@ -774,7 +920,6 @@ async function connectByAlias(s: Session, h: Host) {
       rememberAsked = rep.remember;
     }
   }
-  markClosed(s, "⚠️ " + t("trois-tentatives"));
 }
 
 /**
@@ -860,7 +1005,7 @@ async function connectManual(s: Session, cible: ManualTarget) {
   // restait jusqu'à ce qu'on ferme l'onglet et rouvre depuis la barre latérale.
   if (!s.alias) {
     s.alias = label;
-    s.tab.querySelector(".label")!.textContent = label;
+    s.tab.querySelector(".label")!.textContent = libelleSur(label);
   }
   setSessionState(id, "live");
 }
@@ -893,7 +1038,8 @@ export function focusSession(id: number) {
   // la remet selon `sftp.open`. Trouve par l'audit du 7 septembre 2026.
   sftpAppliquerVue();
   if (sftp.open && cur) void sftpOpenAt(cur, cur.sftpPath);
-  renderHosts(); // met à jour le surlignage « sélectionné »
+  // Plus de `renderHosts()` ici : un clic d'onglet ne change ni la liste ni
+  // `pickedAlias`, la reconstruction ne servait à rien (C-front-1).
 }
 
 export function closeSession(id: number) {
@@ -909,6 +1055,9 @@ export function closeSession(id: number) {
   s.tab.remove();
   conteneur?.remove();
   state.sessions.delete(id);
+  // La pastille de l'hôte s'éteint avec l'onglet ; elle restait verte jusqu'au
+  // rendu suivant (audit du 12 septembre 2026).
+  rafraichirLignes([`ssh:${s.alias}`]);
   majMemoireOnglets();
   if (state.active === id) {
     // Le repli se faisait sur la première session SSH seulement : fermer le
@@ -931,38 +1080,45 @@ export function closeSession(id: number) {
 }
 
 // Écoute du flux PTY côté Rust → xterm
-type PtyPayload = { id: number; data: string };
+type PtyPayload = { id: number; data: string; seq?: number };
 void listenPty();
 async function listenPty() {
   try {
-    await listen<PtyPayload>("pty-output", (ev) => {
-      const s = state.sessions.get(ev.payload.id);
-      if (s && ev.payload.id === state.active) {
-        s.term.write(ev.payload.data);
-      } else if (s) {
-        // bufferise même si pas actif : le terminal xterm stocke
-        s.term.write(ev.payload.data);
-      }
-    });
-    await listen<{ id: number; label: string; os: OsInfo }>("host-os", (ev) => {
+    // Les quatre écoutes partent ensemble : elles s'enchaînaient, quatre
+    // allers-retours au démarrage pour ce qui en vaut un (audit du
+    // 12 septembre 2026, C-front-9).
+    await Promise.all([
+    listen<PtyPayload>("pty-output", (ev) => {
+      const { id, data, seq } = ev.payload;
+      const s = state.sessions.get(id);
+      if (!s) return;
+      // Onglet actif ou non, le terminal garde tout. L'accusé part une fois
+      // xterm passé sur ces octets, un seul par message : c'est lui qui
+      // retient le relais côté Rust. Sans lui, `cat` d'un gros journal
+      // remplissait sans borne la file d'évaluation de la webview et celle de
+      // xterm, et Ctrl+C attendait derrière (C-front-4, contrat K6).
+      s.term.write(data, typeof seq === "number" ? () => { invoke("pty_ack", { id, seq }).catch(() => {}); } : undefined);
+    }),
+    listen<{ id: number; label: string; os: OsInfo }>("host-os", (ev) => {
       rememberOs(ev.payload.label, ev.payload.os);
-      renderHosts();
-    });
-    await listen<{ id: number }>("pty-closed", (ev) => {
+      rafraichirLignes([`ssh:${ev.payload.label}`]);
+    }),
+    listen<{ id: number }>("pty-closed", (ev) => {
       const s = state.sessions.get(ev.payload.id);
       // Un evenement d'une session deja remplacee (reconnexion) ne doit pas
       // marquer la nouvelle comme morte.
       if (!s || s.closed) return;
       markClosed(s, `── ${t("session-terminee-minuscule")} ──`);
-    });
+    }),
     // L'enregistrement a échoué en cours de route (disque plein) : le back a
     // retiré l'enregistreur, on éteint le voyant et on prévient, plutôt que de
     // laisser croire à un fichier complet. Trouvé par l'audit du 7 septembre 2026.
-    await listen<{ id: number; chemin: string; erreur: string }>("enregistrement-erreur", (ev) => {
+    listen<{ id: number; chemin: string; erreur: string }>("enregistrement-erreur", (ev) => {
       const s = state.sessions.get(ev.payload.id);
       s?.tab.classList.remove("rec");
       notifyErreur(t("enregistrement-erreur", { e: ev.payload.erreur }));
-    });
+    }),
+    ]);
   } catch (e) {
     // Un echec ici rend TOUS les terminaux muets : la sortie du serveur
     // n'arrive jamais. Le signaler visiblement plutot que dans une console
@@ -976,6 +1132,16 @@ async function listenPty() {
 /** Renseigne si l'ecoute des evenements a echoue au demarrage. */
 let ptyListenError: string | null = null;
 
+// Le trousseau du système ne répond pas (D-Bus absent, portefeuille verrouillé
+// et refusé) : le cœur le dit une fois par lancement. Sans cela, un trousseau
+// en panne passait pour « aucun mot de passe mémorisé », et un bureau RDP
+// échouait en « mot de passe refusé » alors que le mot de passe était bon
+// (audit du 12 septembre 2026, C-SIL-8, contrat K1). La phrase est composée
+// par le cœur (`message_trousseau`, commands/secrets.rs), cause comprise.
+void listen<{ message: string }>("trousseau-indisponible", (ev) => {
+  notifyErreur(ev.payload.message);
+}).catch((e) => console.warn("Écoute du trousseau indisponible :", e));
+
 /** L'ecran d'accueil s'adapte : sans hote, « double-clic » n'aide personne. */
 function refreshEmptyHint() {
   $("empty-hint").textContent =
@@ -984,18 +1150,35 @@ function refreshEmptyHint() {
       : t("double-clic-sur-un-hote-pour-te-connecter");
 }
 
+/** Dernière erreur de lecture de `~/.ssh/config` et de `rdp.yaml`, montrée en
+ *  tête de liste (audit du 12 septembre 2026, C-SIL-4, contrat K5). Un fichier
+ *  absent n'en est pas une : le cœur rend alors une liste vide. */
+let erreurConfigSsh: string | null = null;
+let erreurRdpYaml: string | null = null;
+
 export async function loadHosts() {
   // Les trois lectures s'enchaînaient, chacune attendant la précédente : trois
   // allers-retours IPC en série sur le chemin du tout premier affichage, alors
   // qu'elles ne dépendent pas les unes des autres.
+  //
+  // Une lecture en échec gardait « Aucun hôte » à l'écran, message d'un poste
+  // sans configuration, et l'erreur partait dans une console que personne
+  // n'ouvre : on croyait sa configuration perdue. On garde la liste d'avant,
+  // on le dit dans la liste et par une notification (une fois par erreur).
+  const avantSsh = erreurConfigSsh, avantRdp = erreurRdpYaml;
   const [hotes, bureaux, dossiers] = await Promise.all([
-    invoke<Host[]>("list_hosts").catch((e) => {
-      console.warn("Config SSH illisible :", e);
-      return state.hosts;
-    }),
-    invoke<RdpHostT[]>("rdp_hosts").catch(() => [] as RdpHostT[]),
+    invoke<Host[]>("list_hosts").then(
+      (h) => { erreurConfigSsh = null; return h; },
+      (e) => { erreurConfigSsh = String(e); return state.hosts; },
+    ),
+    invoke<RdpHostT[]>("rdp_hosts").then(
+      (b) => { erreurRdpYaml = null; return b; },
+      (e) => { erreurRdpYaml = String(e); return state.rdpHosts; },
+    ),
     invoke<string[]>("folders_list").catch(() => [] as string[]),
   ]);
+  if (erreurConfigSsh && erreurConfigSsh !== avantSsh) notifyErreur(t("config-ssh-illisible", { e: erreurConfigSsh }));
+  if (erreurRdpYaml && erreurRdpYaml !== avantRdp) notifyErreur(t("rdp-yaml-illisible", { e: erreurRdpYaml }));
   state.hosts = hotes;
   state.rdpHosts = bureaux;
   state.folders = dossiers;
@@ -1045,28 +1228,32 @@ let paletteEntrees: EntreePalette[] = [];
 /** Réglages atteignables à la palette, avant la liste des hôtes.
  *  La palette est déjà le seul point d'entrée entièrement au clavier : y placer
  *  les réglages évite d'ajouter une fenêtre de préférences pour un interrupteur. */
-/** Classe du voyant selon la dernière sonde : `up`, `down`, ou rien. */
-function classeSante(cle: string): string {
-  const s = state.sante.get(cle);
-  return s ? (s.etat === "joignable" ? "up" : "down") : "";
-}
-
-function titreSante(cle: string): string {
+/** Infobulle du voyant : ce que la sonde a vu, et depuis quand si ce n'est
+ *  plus récent (audit du 12 septembre 2026, C-SIL-3). */
+function titreSante(cle: string, maintenant: number): string {
   const s = state.sante.get(cle);
   if (!s) return "";
-  if (s.etat === "joignable") return t("sante-joignable", { ms: s.latence_ms });
-  return t(s.etat === "inconnu" ? "sante-inconnu" : "sante-injoignable", { raison: s.raison });
+  const vu = s.etat === "joignable"
+    ? t("sante-joignable", { ms: s.latence_ms })
+    : t(s.etat === "inconnu" ? "sante-inconnu" : "sante-injoignable", { raison: s.raison });
+  if (!santePerimee(s, maintenant) || typeof s.quand !== "number") return vu;
+  return `${vu} · ${t("sante-sondee", { quand: ilYA(maintenant - s.quand, langue()) })}`;
 }
 
 const SANTE_KEY = "avash.sante";
 
-/** La dernière sonde survit au relancement : les voyants reviennent tels
- *  qu'ils étaient, jusqu'à la prochaine sonde. */
+/** La dernière sonde survit au relancement, datée : les voyants reviennent
+ *  grisés passé une heure, et rien au-delà de sept jours (audit du
+ *  12 septembre 2026, C-SIL-3 : un hôte vu joignable lundi restait vert
+ *  vendredi, la sonde au démarrage étant coupée par défaut). */
 function restaurerSante() {
   try {
     const brut = localStorage.getItem(SANTE_KEY);
     if (!brut) return;
-    for (const [cle, sante] of JSON.parse(brut) as [string, Sante][]) state.sante.set(cle, sante);
+    const lu: unknown = JSON.parse(brut);
+    if (!Array.isArray(lu)) return;
+    const entrees = lu.filter((e): e is [string, unknown] => Array.isArray(e) && e.length === 2);
+    for (const [cle, sante] of santesARestaurer(entrees, Date.now())) state.sante.set(cle, sante);
   } catch {
     /* rien de mémorisé, ou illisible : on repart sans voyants */
   }
@@ -1081,13 +1268,14 @@ async function verifierSante(silencieux = false) {
   try {
     const r = await invoke<{ cle: string; sante: Sante }[]>("hosts_health");
     state.sante.clear();
-    for (const { cle, sante } of r) state.sante.set(cle, sante);
+    const quand = Date.now();
+    for (const { cle, sante } of r) state.sante.set(cle, { ...sante, quand });
     try {
       localStorage.setItem(SANTE_KEY, JSON.stringify([...state.sante]));
     } catch {
       /* stockage indisponible : les voyants vivent le temps de la session */
     }
-    renderHosts();
+    rafraichirLignes();
     const up = r.filter((x) => x.sante.etat === "joignable").length;
     if (!silencieux) notify(t("sante-bilan", { up, down: r.length - up }), up === r.length ? "succes" : "info");
   } catch (e) {
@@ -1099,17 +1287,16 @@ async function verifierSante(silencieux = false) {
 
 /** « Exporter un diagnostic… » : l'utilisateur choisit où, le cœur écrit
  *  (versions, système, configuration en nombre, journaux du processus de
- *  bureau distant ; jamais un mot de passe). Ce qu'on joint à un ticket. */
+ *  bureau distant ; jamais un mot de passe). Ce qu'on joint à un ticket.
+ *
+ *  Contrat K13 (audit du 12 septembre 2026) : la page ne choisit plus le
+ *  chemin. La commande ouvre elle-même « Enregistrer sous » et rend le chemin
+ *  écrit, `null` si l'utilisateur renonce ; un script dans la webview ne peut
+ *  donc plus faire écrire le diagnostic où il veut. */
 async function exporterDiagnostic(): Promise<void> {
-  const jour = new Date().toISOString().slice(0, 10);
   try {
-    const chemin = await saveDialog({
-      defaultPath: `avash-diagnostic-${jour}.txt`,
-      filters: [{ name: "Texte", extensions: ["txt"] }],
-    });
-    if (!chemin) return;
-    const ecrit = await invoke<string>("diagnostic_exporter", { chemin });
-    notify(t("diagnostic-ecrit", { chemin: ecrit }), "succes");
+    const ecrit = await invoke<string | null>("diagnostic_exporter");
+    if (ecrit) notify(t("diagnostic-ecrit", { chemin: ecrit }), "succes");
   } catch (e) {
     notifyErreur(t("diagnostic-erreur", { e: String(e) }));
   }
@@ -1196,6 +1383,15 @@ function commandesPalette(): EntreePalette[] {
       },
     },
     {
+      nom: t(confirmerFermetureOnglet() ? "palette-fermeture-demander-off" : "palette-fermeture-demander-on"),
+      detail: t("palette-fermeture-detail"),
+      icone: "x",
+      ouvrir: () => {
+        setConfirmerFermetureOnglet(!confirmerFermetureOnglet());
+        notify(t(confirmerFermetureOnglet() ? "fermeture-demandee" : "fermeture-sans-question"), "succes");
+      },
+    },
+    {
       nom: t(anglais ? "palette-langue-fr" : "palette-langue-en"),
       detail: t("palette-langue-detail"),
       icone: "book",
@@ -1239,7 +1435,10 @@ function renderPalette() {
     // Aucune option rendue : l'input ne doit plus désigner de descendant actif,
     // sinon aria-activedescendant pointe dans le vide (audit du 7 septembre 2026).
     paletteInput.removeAttribute("aria-activedescendant");
-    res.innerHTML = `<div class="empty">${stripHtml(t("palette-aucun-hote", { q }))}</div>`;
+    const vide = document.createElement("div");
+    vide.className = "empty";
+    vide.textContent = t("palette-aucun-hote", { q });
+    res.appendChild(vide);
     return;
   }
   paletteIndex = Math.min(paletteIndex, paletteEntrees.length - 1);
@@ -1267,9 +1466,21 @@ paletteInput.addEventListener("keydown", (e) => {
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
     const pas = e.key === "ArrowDown" ? 1 : -1;
+    const ancienne = document.getElementById(`palette-item-${paletteIndex}`);
     paletteIndex = (paletteIndex + pas + paletteEntrees.length) % paletteEntrees.length;
-    renderPalette();
-    $(`palette-item-${paletteIndex}`).scrollIntoView({ block: "nearest" });
+    // Seul le surlignage bouge : chaque flèche reconstruisait toutes les
+    // lignes, 6000 nœuds par seconde en répétition clavier sur 200 hôtes
+    // (audit du 12 septembre 2026, C-front-12). `renderPalette` ne sert plus
+    // qu'à la saisie.
+    ancienne?.classList.remove("hl");
+    ancienne?.setAttribute("aria-selected", "false");
+    const nouvelle = document.getElementById(`palette-item-${paletteIndex}`);
+    if (nouvelle) {
+      nouvelle.classList.add("hl");
+      nouvelle.setAttribute("aria-selected", "true");
+      paletteInput.setAttribute("aria-activedescendant", nouvelle.id);
+      nouvelle.scrollIntoView({ block: "nearest" });
+    }
   } else if (e.key === "Enter") {
     e.preventDefault();
     const choisie = paletteEntrees[paletteIndex];
@@ -1278,8 +1489,14 @@ paletteInput.addEventListener("keydown", (e) => {
   }
 });
 paletteEl.addEventListener("click", (e) => { if (e.target === paletteEl) paletteClose(); });
+/** Le focus est-il dans un terminal ? Ctrl+K et Ctrl+B y vont au shell. */
+function terminalFocalise(): boolean {
+  return !!(document.activeElement as HTMLElement | null)?.closest(".xterm");
+}
 document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+  // Dans un terminal, Ctrl+K est le kill-line de readline : la palette y
+  // demande Ctrl+Maj+K (audit du 12 septembre 2026, C-front-3).
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && ouvrePaletteOuPanneau(e, terminalFocalise())) {
     // Ne pas s'ouvrir par-dessus une boîte de dialogue : la palette prenait le
     // focus à la demande de mot de passe, et la frappe suivante — le mot de
     // passe — partait en clair dans son champ de recherche.

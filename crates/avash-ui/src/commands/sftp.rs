@@ -2,7 +2,8 @@
 
 use super::SessionStore;
 use avash::sftp::SftpHandle;
-use tauri::{AppHandle, Emitter};
+use avash::Verrou as _;
+use tauri::AppHandle;
 
 /// Ouvre (ou réutilise) le canal SFTP d'un onglet, sur la session SSH du
 /// terminal. Retourne un Arc partagé avec le store.
@@ -12,54 +13,96 @@ pub(crate) async fn sftp_of(
 ) -> Result<std::sync::Arc<SftpHandle>, String> {
     // Rapide : déjà ouverte ?
     {
-        let store = state.inner.lock().unwrap();
+        let store = state.inner.verrou();
         if let Some(h) = store.get(&id) {
-            if let Some(s) = h.sftp.lock().unwrap().as_ref() {
+            if let Some(s) = h.sftp.verrou().as_ref() {
                 return Ok(s.clone());
             }
         }
+    }
+    // Une copie directe tient le verrou de la session toute sa durée : ouvrir
+    // le canal attendrait sa fin. On le dit tout de suite (audit du
+    // 12 septembre 2026, C-SIL-14) ; le front l'affiche à la place de
+    // « Chargement… ».
+    if state
+        .copies_directes
+        .verrou()
+        .get(&id)
+        .is_some_and(|n| *n > 0)
+    {
+        return Err(SESSION_OCCUPEE.to_owned());
     }
     // Sinon : un canal de plus sur la session du terminal, puis stockage. Pas
     // de seconde connexion, donc pas de seconde authentification ni de cible à
     // rejouer — le mot de passe n'a pas été gardé.
     let ouvrir = {
-        let store = state.inner.lock().unwrap();
+        let store = state.inner.verrou();
         store
             .get(&id)
             .map(|h| h.ouvrir_sftp.clone())
             .ok_or_else(|| format!("Session {id} inconnue"))?
     };
-    let mut fresh = Some(ouvrir().await?);
+    let fresh = ouvrir().await?;
 
     // Course : deux commandes SFTP concurrentes sur le meme onglet ont pu, le
     // temps de cette ouverture, en obtenir chacune un. On re-verifie et on
     // stocke atomiquement sous le verrou ; aucun `await` n'y a lieu (les gardes
     // de Mutex ne sont pas Send). Le canal perdant est ferme ensuite, hors du
     // verrou, sinon il resterait ouvert sur le serveur.
-    let mut to_close: Option<SftpHandle> = None;
-    let chosen: Option<std::sync::Arc<SftpHandle>> = {
-        let store = state.inner.lock().unwrap();
+    let (chosen, to_close) = {
+        let store = state.inner.verrou();
         match store.get(&id) {
-            None => None,
+            // Session disparue pendant l'ouverture : on ferme ce qu'on a ouvert.
+            None => (None, Some(fresh)),
             Some(h) => {
-                let mut slot = h.sftp.lock().unwrap();
+                let mut slot = h.sftp.verrou();
                 if let Some(existing) = slot.as_ref() {
                     // Un autre appel a gagne : on fermera notre connexion.
-                    to_close = fresh.take();
-                    Some(existing.clone())
+                    (Some(existing.clone()), Some(fresh))
                 } else {
-                    let arc = std::sync::Arc::new(fresh.take().unwrap());
+                    let arc = std::sync::Arc::new(fresh);
                     *slot = Some(arc.clone());
-                    Some(arc)
+                    (Some(arc), None)
                 }
             }
         }
     };
-    // Handle en trop (course perdue) ou session disparue : on ferme proprement.
-    if let Some(f) = to_close.or(fresh) {
-        let _ = f.close().await;
+    if let Some(f) = to_close {
+        if let Err(e) = f.close().await {
+            tracing::info!(onglet = id, "canal SFTP en trop mal fermé : {e:#}");
+        }
     }
     chosen.ok_or_else(|| format!("Session {id} inconnue"))
+}
+
+/// Réponse immédiate de `sftp_of` quand une copie directe occupe la session.
+pub(crate) const SESSION_OCCUPEE: &str = "Une copie directe occupe la session de cet onglet : \
+     le panneau SFTP sera disponible à sa fin.";
+
+/// Compte une copie directe en cours sur l'onglet source le temps de sa vie :
+/// le `Drop` décompte en succès, en erreur comme en annulation.
+struct CopieDirecteEnCours<'a> {
+    store: &'a SessionStore,
+    id: u64,
+}
+
+impl<'a> CopieDirecteEnCours<'a> {
+    fn inscrire(store: &'a SessionStore, id: u64) -> Self {
+        *store.copies_directes.verrou().entry(id).or_default() += 1;
+        Self { store, id }
+    }
+}
+
+impl Drop for CopieDirecteEnCours<'_> {
+    fn drop(&mut self) {
+        let mut copies = self.store.copies_directes.verrou();
+        if let Some(n) = copies.get_mut(&self.id) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                copies.remove(&self.id);
+            }
+        }
+    }
 }
 
 /// Determine le chemin local d'un telechargement.
@@ -82,23 +125,14 @@ pub(crate) async fn sftp_of(
 /// choisi une seule fois par téléchargement, ici, puis réutilisé.
 ///
 /// Trouvé par l'audit du 9 septembre 2026 : un `local` fourni par l'appelant
-/// court-circuitait tout ce qui précède. Il était rendu tel quel, sans être
-/// absolu ni libre, alors que `download_reprise` termine par un `rename()`
-/// POSIX qui remplace sa cible sans un mot. Depuis la webview (dépendance front
-/// compromise, outils de développement) un `invoke("sftp_download", { local: "…/.bashrc" })`
-/// écrivait donc le contenu d'un serveur choisi par l'appelant par-dessus un
-/// fichier de l'utilisateur. Le chemin imposé passe désormais par les mêmes
-/// gardes que le chemin dérivé, comme toutes les commandes voisines qui
-/// touchent au disque local (`diagnostic_exporter`, `dossier_partage`,
-/// `rdp_ouvrir_dossier`).
-pub(crate) fn local_target(remote: &str, local: Option<String>) -> Result<String, String> {
-    if let Some(l) = local {
-        let vise = std::path::Path::new(&l);
-        if !vise.is_absolute() {
-            return Err(format!("Le chemin local doit être absolu : {l}"));
-        }
-        return Ok(chemin_local_libre(vise).to_string_lossy().into_owned());
-    }
+/// court-circuitait tout ce qui précède, et un `invoke("sftp_download", { local:
+/// "…/.bashrc" })` écrivait le contenu d'un serveur par-dessus un fichier de
+/// l'utilisateur. La garde « absolu et libre » posée alors n'empêchait pas la
+/// CRÉATION d'un fichier n'importe où (`~/.config/autostart/x.desktop`, exécuté
+/// à la prochaine ouverture de session) : l'audit de sécurité du 12 septembre
+/// 2026 (C-ipc-2) a retiré le paramètre, que le front n'envoyait jamais. La
+/// cible se déduit toujours du nom distant, dans le dossier de téléchargement.
+pub(crate) fn local_target(remote: &str) -> Result<String, String> {
     let name = std::path::Path::new(remote)
         .file_name()
         .ok_or_else(|| format!("Chemin distant sans nom de fichier : {remote}"))?;
@@ -193,11 +227,7 @@ pub struct TransfertsStore {
 /// la fin de la commande, en succès comme en erreur.
 fn inscrire(store: &tauri::State<'_, TransfertsStore>, transfert: u64) -> avash::sftp::Annulation {
     let drapeau: avash::sftp::Annulation = std::sync::Arc::default();
-    store
-        .inner
-        .lock()
-        .unwrap()
-        .insert(transfert, drapeau.clone());
+    store.inner.verrou().insert(transfert, drapeau.clone());
     drapeau
 }
 
@@ -206,7 +236,7 @@ fn inscrire(store: &tauri::State<'_, TransfertsStore>, transfert: u64) -> avash:
 #[tauri::command]
 #[must_use]
 pub fn sftp_annuler(store: tauri::State<'_, TransfertsStore>, transfert: u64) -> bool {
-    match store.inner.lock().unwrap().get(&transfert) {
+    match store.inner.verrou().get(&transfert) {
         Some(d) => {
             d.store(true, std::sync::atomic::Ordering::Relaxed);
             true
@@ -216,7 +246,7 @@ pub fn sftp_annuler(store: tauri::State<'_, TransfertsStore>, transfert: u64) ->
 }
 
 fn retirer(store: &tauri::State<'_, TransfertsStore>, transfert: u64) {
-    store.inner.lock().unwrap().remove(&transfert);
+    store.inner.verrou().remove(&transfert);
 }
 
 /// Rapporte la progression d'un transfert au front, sans le noyer : au plus
@@ -224,7 +254,7 @@ fn retirer(store: &tauri::State<'_, TransfertsStore>, transfert: u64) {
 ///
 /// `transfert` identifie la ligne dans la file du panneau ; `termines` et
 /// `nombre` ne servent qu'aux dossiers.
-fn progress_reporter<R: tauri::Runtime>(
+pub(crate) fn progress_reporter<R: tauri::Runtime>(
     app: &AppHandle<R>,
     id: u64,
     transfert: u64,
@@ -239,7 +269,8 @@ fn progress_reporter<R: tauri::Runtime>(
         let due = last.is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(80));
         if due || done == total {
             last = Some(std::time::Instant::now());
-            let _ = app.emit(
+            super::emettre(
+                &app,
                 "sftp-progress",
                 serde_json::json!({
                     "id": id, "transfert": transfert, "name": name, "kind": kind,
@@ -263,11 +294,10 @@ pub async fn sftp_download(
     id: u64,
     transfert: u64,
     remote: String,
-    local: Option<String>,
     is_dir: Option<bool>,
 ) -> Result<String, String> {
     let sftp = sftp_of(&state, id).await?;
-    let local = local_target(&remote, local)?;
+    let local = local_target(&remote)?;
     let name = std::path::Path::new(&remote)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -385,7 +415,7 @@ pub async fn sftp_copier_vers<R: tauri::Runtime>(
         // défaut) et sur l'envoi/le téléchargement.
         // scp chez la source, vers la cible, avec l'agent du poste prêté.
         let (executer, cible) = {
-            let store = state.inner.lock().unwrap();
+            let store = state.inner.verrou();
             let src = store
                 .get(&id)
                 .ok_or_else(|| format!("Session {id} inconnue"))?;
@@ -429,7 +459,9 @@ pub async fn sftp_copier_vers<R: tauri::Runtime>(
         // est levé ; `retirer` l'ôte en succès comme en erreur (sinon un
         // transfert terminé resterait « annulable »).
         let annulation = inscrire(&transferts, transfert);
+        let occupe = CopieDirecteEnCours::inscrire(&state, id);
         let issue = executer(commande, Some(annulation)).await;
+        drop(occupe);
         retirer(&transferts, transfert);
         let (sortie, code) = issue?;
         if code != 0 {

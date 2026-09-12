@@ -802,53 +802,6 @@ mod tests_rdstls {
 mod tests_epinglage {
     use super::epingler_certificat;
 
-    /// `AVASH_HOME` posé sur un répertoire jetable le temps du test, sous le
-    /// verrou que partagent tous les tests touchant cette variable globale, et
-    /// remis en place à la sortie même sur panique. Sans lui, le test écrirait
-    /// dans le fichier de confiance RÉEL du poste.
-    struct Bac {
-        chemin: std::path::PathBuf,
-        precedent: Option<std::ffi::OsString>,
-        _verrou: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Bac {
-        fn poser() -> Self {
-            let verrou = crate::empreintes::VERROU_AVASH_HOME
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let chemin =
-                std::env::temp_dir().join(format!("avash-rdp-tofu-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&chemin);
-            let precedent = std::env::var_os("AVASH_HOME");
-            unsafe { std::env::set_var("AVASH_HOME", &chemin) };
-            Self {
-                chemin,
-                precedent,
-                _verrou: verrou,
-            }
-        }
-
-        fn fichier_de_confiance(&self) -> std::path::PathBuf {
-            self.chemin
-                .join(".config")
-                .join("avash")
-                .join("rdp_known_hosts")
-        }
-    }
-
-    impl Drop for Bac {
-        fn drop(&mut self) {
-            unsafe {
-                match self.precedent.take() {
-                    Some(v) => std::env::set_var("AVASH_HOME", v),
-                    None => std::env::remove_var("AVASH_HOME"),
-                }
-            }
-            let _ = std::fs::remove_dir_all(&self.chemin);
-        }
-    }
-
     /// Clé publique jetable, distincte à chaque appel (certificat auto-signé
     /// neuf) : deux appels donnent deux empreintes, comme un serveur réinstallé.
     /// On passe par `server_public_key`, le même chemin que `connect`.
@@ -872,7 +825,7 @@ mod tests_epinglage {
     /// retirer le port fait rougir ce test.
     #[test]
     fn l_epinglage_memorise_puis_refuse_le_changement() {
-        let bac = Bac::poser();
+        let bac = crate::empreintes::BacAvashHome::poser("rdp-tofu");
         let port = 3389u16;
         let origine = cle_publique_jetable();
         let remplacant = cle_publique_jetable();

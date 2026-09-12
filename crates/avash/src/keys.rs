@@ -146,10 +146,23 @@ pub fn list_keys() -> Result<Vec<KeyEntry>> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // Audit du 12 septembre 2026 (C-SIL-13) : une `.pub` illisible (droits,
+        // octets non UTF-8) donnait une clé sans bouton « copier » ni
+        // déploiement, sans un mot. La liste la montre toujours, et le journal
+        // dit pourquoi.
+        let public_line = match std::fs::read_to_string(&path) {
+            Ok(s) => Some(s.trim().to_string()),
+            Err(e) => {
+                tracing::warn!(
+                    "Clé publique {} illisible : {e}. La clé est listée sans \
+                     ligne publique, donc sans copie ni déploiement.",
+                    path.display()
+                );
+                None
+            }
+        };
         out.push(KeyEntry {
-            public_line: std::fs::read_to_string(&path)
-                .ok()
-                .map(|s| s.trim().to_string()),
+            public_line,
             mode: mode_of(&private),
             path: private.to_string_lossy().into_owned(),
             name,
@@ -274,7 +287,11 @@ pub fn deploy_command(public_line: &str) -> Result<String> {
     if !line.starts_with("ssh-") && !line.starts_with("ecdsa-") {
         return Err(anyhow!(
             "Ceci ne ressemble pas à une clé publique OpenSSH : {}",
-            &line[..line.len().min(24)]
+            // Aperçu en caractères, pas en octets : audit du 12 septembre
+            // 2026 (C-panique-3), `&line[..24]` paniquait quand le 24e octet
+            // tombait au milieu d'un caractère accentué, et `key_deploy`
+            // restait sans réponse.
+            line.chars().take(24).collect::<String>()
         ));
     }
     // L'apostrophe est légitime dans un commentaire (« clé d'Adrien », ou un
@@ -430,6 +447,50 @@ mod tests {
             cmd.contains("'\\''"),
             "l'apostrophe doit être échappée : {cmd}"
         );
+    }
+
+    /// Audit du 12 septembre 2026 (C-panique-3) : un `.pub` au contenu
+    /// accentué (une note, une clé mal collée) faisait paniquer l'aperçu de
+    /// l'erreur, découpé à un indice d'octet au milieu d'un « é ».
+    /// Audit du 12 septembre 2026 (C-couv-3.7) : le 0700 de `~/.ssh` n'était
+    /// asserté nulle part ; `generate_produit_une_paire_utilisable` créait le
+    /// répertoire sans lire ses droits. Test de couverture : il passe sur le
+    /// code actuel et garde la promesse.
+    #[cfg(unix)]
+    #[test]
+    fn le_repertoire_ssh_nait_en_0700() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let garde = crate::testutil::temp_home();
+        let ssh = garde.dir().join(".ssh");
+        assert!(!ssh.exists(), "le décor : un profil sans ~/.ssh");
+        generate("k", "c").unwrap();
+        assert_eq!(
+            std::fs::metadata(&ssh).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    /// Audit du 12 septembre 2026 (C-SIL-13) : une clé publique illisible
+    /// n'est plus avalée en silence, le journal la nomme.
+    #[test]
+    fn une_cle_publique_illisible_est_signalee_au_journal() {
+        let _garde = crate::testutil::temp_home();
+        let dir = ssh_dir().unwrap();
+        std::fs::write(dir.join("abimee"), b"prive").unwrap();
+        std::fs::write(dir.join("abimee.pub"), [0xff, 0xfe, 0xfd]).unwrap();
+        let (cles, journal) = crate::testutil::avertissements_pendant(|| list_keys().unwrap());
+        let cle = cles.iter().find(|k| k.name == "abimee").expect("listée");
+        assert!(cle.public_line.is_none());
+        assert!(
+            journal.iter().any(|l| l.contains("abimee.pub")),
+            "le journal nomme la clé : {journal:?}"
+        );
+    }
+
+    #[test]
+    fn deploy_command_refuse_sans_paniquer_un_texte_accentue() {
+        let e = deploy_command("aééééééééééééé").unwrap_err().to_string();
+        assert!(e.contains("ne ressemble pas"), "{e}");
     }
 
     #[test]

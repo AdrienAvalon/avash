@@ -1,6 +1,10 @@
 //! Sonde manuelle : ouvre les trois types de tunnel sur un vrai sshd et
 //! verifie que des octets les traversent.
 //! Usage : cargo run -p avash --example `tunnel_probe` -- <port> <`chemin_cle`>
+
+// Programme d'essai lancé à la main : un décor qui échoue doit s'arrêter net,
+// d'où les `unwrap` et `expect`, que le lint `unwrap_used` signalerait.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use avash::tunnel::{Tunnel, TunnelDef, TunnelKind};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

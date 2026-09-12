@@ -94,7 +94,7 @@ describe("remoteJoin", () => {
   });
 });
 
-import { parentDir, isPasswordRequired, stripHtml } from "./filters";
+import { parentDir, isPasswordRequired, escapeHtml } from "./filters";
 
 describe("parentDir", () => {
   it("remonte d'un niveau", () => {
@@ -224,19 +224,22 @@ describe("etiquetteHote", () => {
   });
 });
 
-describe("stripHtml", () => {
-  it("retire les caractères d'injection", () => {
-    expect(stripHtml("<img onerror=x>")).toBe("img onerror=x");
-    expect(stripHtml("a & b < c > d")).toBe("a  b  c  d");
+// Audit du 12 septembre 2026 (FS-9, C-front-13) : `stripHtml` supprimait
+// `<`, `>` et `&` au lieu de les échapper. « Aucun hôte ne correspond à
+// « a&b » » s'affichait « ab », et le filtre ne protégeait pas un attribut
+// (guillemets laissés tels quels). Un seul échappeur, correct, pour tout le front.
+describe("escapeHtml", () => {
+  it("echapper_html_conserve_l_esperluette", () => {
+    expect(escapeHtml("a&b")).toBe("a&amp;b");
+    expect(escapeHtml("a & b < c > d")).toBe("a &amp; b &lt; c &gt; d");
   });
   it("laisse le texte normal intact", () => {
-    expect(stripHtml("prod-web 10.0.0.1")).toBe("prod-web 10.0.0.1");
+    expect(escapeHtml("prod-web 10.0.0.1")).toBe("prod-web 10.0.0.1");
   });
-  it("neutralise une tentative de script", () => {
-    const injection = "<script>window.invoke('rm')</script>";
-    const propre = stripHtml(injection);
-    expect(propre).not.toContain("<");
-    expect(propre).not.toContain(">");
+  it("neutralise une tentative de script, y compris dans un attribut", () => {
+    const propre = escapeHtml(`"><script>window.invoke('rm')</script>`);
+    expect(propre).not.toMatch(/[<>"']/);
+    expect(propre).toBe("&quot;&gt;&lt;script&gt;window.invoke(&#39;rm&#39;)&lt;/script&gt;");
   });
 });
 
@@ -323,6 +326,14 @@ describe("osBadge", () => {
   });
   it("sinon Tux", () => {
     expect(osBadge({ id: "mystere", like: [], pretty: "" }).glyph).toBe("");
+  });
+  // Audit du 12 septembre 2026 (FS-7) : la clé vient de /etc/os-release du
+  // serveur. `ID=constructor` rendait `Object` (propriété héritée), donc un
+  // avatar vide, mis en cache dans localStorage.
+  it("une clé héritée d'Object ne passe pas pour une distribution", () => {
+    const tux = osBadge({ id: "mystere", like: [], pretty: "" });
+    expect(osBadge({ id: "constructor", like: ["__proto__"], pretty: "" })).toEqual(tux);
+    expect(osBadge({ id: "toString", like: [], pretty: "" })).toEqual(tux);
   });
 });
 
@@ -437,6 +448,13 @@ describe("sortSftpEntries", () => {
     const src = [e("b", false), e("a", true)];
     sortSftpEntries(src);
     expect(src.map((x) => x.name)).toEqual(["b", "a"]);
+  });
+  // Audit du 12 septembre 2026 (C-front-7) : un Intl.Collator numérique, réutilisé,
+  // remplace localeCompare (dix fois plus lent sur 10 000 entrées) et range les
+  // numéros comme un humain les lit.
+  it("le_tri_place_file2_avant_file10", () => {
+    const got = sortSftpEntries([e("file10", false), e("file2", false), e("file1", false), e("dir10", true), e("dir9", true)]);
+    expect(got.map((x) => x.name)).toEqual(["dir9", "dir10", "file1", "file2", "file10"]);
   });
 });
 
@@ -700,5 +718,94 @@ describe("tailles et dates selon la langue", () => {
     expect(shortDate(hier, now, "en")).toBe("2026-03-12");
     const aujourdhui = Math.floor(new Date(2026, 8, 2, 14, 7).getTime() / 1000);
     expect(shortDate(aujourdhui, now, "en")).toBe("14:07");
+  });
+});
+
+import { estRaccourciApplicatif, ouvrePaletteOuPanneau, classeSante, ilYA, santesARestaurer, libelleSur, SANTE_PERIMEE_MS, SANTE_OUBLIEE_MS } from "./filters";
+
+// Audit du 12 septembre 2026 (C-front-2, C-front-3). Dans un terminal, xterm voit
+// la touche avant l'application : Ctrl+Tab y partait en tabulation (complétion
+// du shell) au lieu de changer d'onglet, Ctrl+W effaçait un mot. À l'inverse,
+// Ctrl+B (préfixe tmux) et Ctrl+K (kill-line de readline) étaient confisqués.
+describe("estRaccourciApplicatif (touche pressée dans un terminal)", () => {
+  const touche = (key: string, mods: Partial<{ ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) =>
+    ({ key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
+
+  it("ctrl_tab_est_un_raccourci_de_l_application", () => {
+    expect(estRaccourciApplicatif(touche("Tab", { ctrlKey: true }))).toBe(true);
+    expect(estRaccourciApplicatif(touche("Tab", { ctrlKey: true, shiftKey: true }))).toBe(true);
+  });
+  it("Ctrl+W et Ctrl+1..9 restent à l'application", () => {
+    expect(estRaccourciApplicatif(touche("w", { ctrlKey: true }))).toBe(true);
+    expect(estRaccourciApplicatif(touche("W", { ctrlKey: true, shiftKey: true }))).toBe(true);
+    for (const k of "123456789") expect(estRaccourciApplicatif(touche(k, { ctrlKey: true }))).toBe(true);
+    expect(estRaccourciApplicatif(touche("0", { ctrlKey: true }))).toBe(false);
+  });
+  it("ctrl_b_et_ctrl_k_partent_au_shell", () => {
+    expect(estRaccourciApplicatif(touche("b", { ctrlKey: true }))).toBe(false);
+    expect(estRaccourciApplicatif(touche("k", { ctrlKey: true }))).toBe(false);
+  });
+  it("ctrl_maj_b_ouvre_le_panneau_depuis_le_terminal", () => {
+    expect(estRaccourciApplicatif(touche("B", { ctrlKey: true, shiftKey: true }))).toBe(true);
+    expect(estRaccourciApplicatif(touche("K", { ctrlKey: true, shiftKey: true }))).toBe(true);
+  });
+  it("sans Ctrl, ni Tab ni une lettre ne sont retenus ; avec Alt, tout passe au shell", () => {
+    expect(estRaccourciApplicatif(touche("Tab"))).toBe(false);
+    expect(estRaccourciApplicatif(touche("w"))).toBe(false);
+    expect(estRaccourciApplicatif(touche("w", { ctrlKey: true, altKey: true }))).toBe(false);
+  });
+  it("Cmd tient lieu de Ctrl sous macOS", () => {
+    expect(estRaccourciApplicatif(touche("Tab", { metaKey: true }))).toBe(true);
+  });
+});
+
+describe("ouvrePaletteOuPanneau (Ctrl+K, Ctrl+B selon le focus)", () => {
+  it("hors terminal, Ctrl+K et Ctrl+B restent ceux de l'application", () => {
+    expect(ouvrePaletteOuPanneau({ shiftKey: false }, false)).toBe(true);
+    expect(ouvrePaletteOuPanneau({ shiftKey: true }, false)).toBe(true);
+  });
+  it("dans un terminal, seule la variante avec Maj agit", () => {
+    expect(ouvrePaletteOuPanneau({ shiftKey: false }, true)).toBe(false);
+    expect(ouvrePaletteOuPanneau({ shiftKey: true }, true)).toBe(true);
+  });
+});
+
+// Audit du 12 septembre 2026 (C-SIL-3) : les voyants de la dernière sonde
+// revenaient de localStorage sans date, et un hôte sondé « joignable » lundi
+// s'affichait vert vendredi, présenté comme actuel.
+describe("santé datée des hôtes", () => {
+  const maintenant = Date.UTC(2026, 8, 12, 12, 0, 0);
+  const joignable = (age: number) => ({ etat: "joignable" as const, latence_ms: 3, quand: maintenant - age });
+  it("un_voyant_de_sante_perime_est_grise_et_date", () => {
+    expect(classeSante(joignable(60_000), maintenant)).toBe("up");
+    expect(classeSante(joignable(SANTE_PERIMEE_MS + 1), maintenant)).toBe("up stale");
+    expect(classeSante({ etat: "injoignable", raison: "x", quand: maintenant - 3 * 86_400_000 }, maintenant)).toBe("down stale");
+    expect(ilYA(3 * 86_400_000, "fr")).toBe("il y a 3 jours");
+    expect(ilYA(2 * 3_600_000, "en")).toBe("2 hours ago");
+  });
+  it("une sonde sans date ne passe pas pour récente", () => {
+    expect(classeSante({ etat: "joignable", latence_ms: 3 }, maintenant)).toBe("up stale");
+    expect(classeSante(undefined, maintenant)).toBe("");
+  });
+  it("rien n'est restauré au-delà de sept jours, ni sans date, ni de forme inattendue", () => {
+    const gardees = santesARestaurer([
+      ["ssh:a", joignable(1000)],
+      ["ssh:b", joignable(SANTE_OUBLIEE_MS + 1)],
+      ["ssh:c", { etat: "joignable", latence_ms: 1 }],
+      ["ssh:d", "n'importe quoi"],
+    ], maintenant);
+    expect(gardees.map(([cle]) => cle)).toEqual(["ssh:a"]);
+  });
+});
+
+// Audit du 12 septembre 2026 (FS-10) : un alias ou un nom de bureau portant un
+// contrôle bidi (U+202E) réordonnait l'affichage de l'onglet et de la barre de
+// titre : « prod‮bd » se lisait « proddb ».
+describe("libelleSur", () => {
+  it("retire les contrôles de direction et les caractères de contrôle", () => {
+    expect(libelleSur("prod\u202ebd")).toBe("prodbd");
+    expect(libelleSur("a\u2066b\u2069c\u200fd")).toBe("abcd");
+    expect(libelleSur("srv\x1b[31m")).toBe("srv [31m");
+    expect(libelleSur("web-1")).toBe("web-1");
   });
 });

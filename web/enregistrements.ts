@@ -6,7 +6,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { $ } from "./etat";
-import { humanSize, shortDate, stripHtml } from "./filters";
+import { humanSize, shortDate } from "./filters";
 import { langue, t } from "./i18n";
 import { notify, notifyErreur } from "./notifications";
 
@@ -18,7 +18,11 @@ function rendre(liste: Info[]) {
   const zone = $("enregistrements-liste");
   zone.innerHTML = "";
   if (liste.length === 0) {
-    zone.innerHTML = `<div class="empty">${stripHtml(t("enregistrements-aucun"))}</div>`;
+    // textContent : plus d'échappement à oublier (audit du 12 septembre 2026, FS-9).
+    const vide = document.createElement("div");
+    vide.className = "empty";
+    vide.textContent = t("enregistrements-aucun");
+    zone.appendChild(vide);
     return;
   }
   for (const e of liste) {

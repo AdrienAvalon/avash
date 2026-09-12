@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 # Écrit les manifestes winget d'une version publiée (packaging/winget/
-# AdrienCros.Avash/<version>/), à partir de l'installeur NSIS et de son
-# empreinte dans le SHA256SUMS de la release GitHub. Ils se soumettent ensuite
-# à microsoft/winget-pkgs (voir RELEASE.md, « winget »).
+# AdrienCros.Avash/<version>/), à partir de l'installeur NSIS de la release
+# GitHub. Ils se soumettent ensuite à microsoft/winget-pkgs (voir RELEASE.md,
+# « winget »).
+#
+# L'empreinte écrite est calculée ici, sur l'installeur téléchargé, après
+# vérification de son attestation de provenance (Sigstore, produite par
+# release.yml sur le tag). Trouvé par l'audit du 12 septembre 2026
+# (C-chaine-10) : elle était recopiée du SHA256SUMS de la release, fichier
+# modifiable, ni signé ni attesté ; remplacer l'installeur et SHA256SUMS sur la
+# page de release donnait un manifeste cohérent avec le binaire substitué.
+# SHA256SUMS doit encore concorder : deux sources d'empreinte qui divergent
+# arrêtent tout. Garde : scripts/tests/winget-manifeste-verifie-la-provenance.sh.
 #
 # Usage : scripts/winget-manifeste.sh <version>     (ex. 0.7.2)
 set -euo pipefail
@@ -10,13 +19,27 @@ cd "$(dirname "$0")/.."
 v="${1:?version attendue, ex. 0.7.2}"
 id="AdrienCros.Avash"
 dossier="packaging/winget/$id/$v"
-url="https://github.com/AdrienAvalon/avash/releases/download/v$v/Avash_${v}_x64-setup.exe"
+depot="AdrienAvalon/avash"
+installeur="Avash_${v}_x64-setup.exe"
+url="https://github.com/$depot/releases/download/v$v/$installeur"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-gh release download "v$v" -D "$tmp" -p SHA256SUMS >/dev/null
-somme="$(grep " Avash_${v}_x64-setup.exe\$" "$tmp/SHA256SUMS" | cut -c1-64 | tr 'a-f' 'A-F')"
-[ ${#somme} -eq 64 ] || { echo "empreinte de Avash_${v}_x64-setup.exe introuvable dans SHA256SUMS" >&2; exit 1; }
-date="$(gh release view "v$v" --json publishedAt --jq '.publishedAt[0:10]')"
+gh release download "v$v" -R "$depot" -D "$tmp" -p "$installeur" -p SHA256SUMS >/dev/null
+# Produit par le workflow Release de ce dépôt, sur ce tag, sur un exécuteur
+# hébergé par GitHub : sinon, pas de manifeste.
+if ! gh attestation verify "$tmp/$installeur" -R "$depot" \
+     --signer-workflow "$depot/.github/workflows/release.yml" \
+     --source-ref "refs/tags/v$v" --deny-self-hosted-runners >/dev/null; then
+  echo "attestation de provenance refusée pour $installeur : manifeste non écrit" >&2
+  exit 1
+fi
+somme="$(sha256sum "$tmp/$installeur" | cut -c1-64 | tr 'a-f' 'A-F')"
+publiee="$(grep " $installeur\$" "$tmp/SHA256SUMS" | cut -c1-64 | tr 'a-f' 'A-F' || true)"
+if [ "$somme" != "$publiee" ]; then
+  echo "SHA256SUMS de la release (${publiee:-absent}) ne correspond pas à l'installeur attesté ($somme) : manifeste non écrit" >&2
+  exit 1
+fi
+date="$(gh release view "v$v" -R "$depot" --json publishedAt --jq '.publishedAt[0:10]')"
 mkdir -p "$dossier"
 
 cat > "$dossier/$id.yaml" <<EOF

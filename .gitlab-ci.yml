@@ -18,6 +18,10 @@
 # démon de l'hôte par le premier job, jamais publiée : les paquets, Node, les
 # composants Rust et les outils cargo y sont figés, au lieu d'être réinstallés
 # par chaque job à chaque passage.
+#
+# Chaque commande cargo porte --locked, comme sur GitHub : on vérifie le
+# Cargo.lock commité, pas celui que cargo réécrirait en silence (audit du
+# 12 septembre 2026, C-chaine-4 ; garde scripts/tests/ci-cargo-locked.sh).
 
 stages: [preparer, verifier, eprouver]
 
@@ -138,16 +142,16 @@ rust:
   script:
     # Le processus RDP est déclaré en ressource embarquée : son binaire doit
     # exister AVANT toute compilation de avash-ui.
-    - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+    - cargo build --locked --release --manifest-path rdp-sidecar/Cargo.toml
     - mkdir -p crates/avash-ui/binaries
     - cp rdp-sidecar/target/release/avash-rdp crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
     - cargo fmt --all --check
-    - cargo clippy --workspace --all-targets -- -D warnings
+    - cargo clippy --locked --workspace --all-targets -- -D warnings
     # clippy ne compile qu'en debug : un bloc sous cfg(debug_assertions) peut
     # laisser une variable inutilisée en release sans que rien ne le signale.
-    - cargo clippy --workspace --release -- -D warnings
-    - cargo test --workspace --all-targets
-    - cargo build --release -p avash-ui
+    - cargo clippy --locked --workspace --release -- -D warnings
+    - cargo test --locked --workspace --all-targets
+    - cargo build --locked --release -p avash-ui
     # Seul job à archiver `target` : il ne garde que ce qu'il vient d'utiliser.
     - scripts/balayer-cibles.sh workspace
 
@@ -158,11 +162,11 @@ processus-rdp:
   script:
     - cd rdp-sidecar
     - cargo fmt --check
-    - cargo clippy --all-targets -- -D warnings
-    - cargo test
+    - cargo clippy --locked --all-targets -- -D warnings
+    - cargo test --locked
     # Le binaire release que rust, bout-en-bout et conformite reprennent du
     # cache : ce job est le seul à archiver les targets hors espace de travail.
-    - cargo build --release
+    - cargo build --locked --release
     # Les correctifs portés sur IronRDP ont leurs propres tests. Ces lignes
     # existaient déjà et ne lançaient RIEN : les manifestes vendorisés portaient
     # « test = false », hérité de l'amont, et quatorze tests passaient pour verts
@@ -175,15 +179,15 @@ processus-rdp:
     # que ce job est le seul à archiver.
     - for s in test-rdp-server test-vnc-server; do
         cargo fmt --check --manifest-path "$s/Cargo.toml" &&
-        cargo clippy --all-targets --manifest-path "$s/Cargo.toml" -- -D warnings &&
-        cargo test --manifest-path "$s/Cargo.toml" &&
-        cargo build --release --manifest-path "$s/Cargo.toml" || exit 1;
+        cargo clippy --locked --all-targets --manifest-path "$s/Cargo.toml" -- -D warnings &&
+        cargo test --locked --manifest-path "$s/Cargo.toml" &&
+        cargo build --locked --release --manifest-path "$s/Cargo.toml" || exit 1;
       done
     # Le paquet ironrdp-server porté : ses tests seuls (test = false retiré le
     # 10 septembre 2026 ; style et lints de l'amont restent les siens), dans un
     # répertoire de construction sous celui du serveur, mis en cache avec lui.
     - CARGO_TARGET_DIR="$CI_PROJECT_DIR/test-rdp-server/target/portes"
-        cargo test --manifest-path test-rdp-server/vendor/ironrdp-server/Cargo.toml
+        cargo test --locked --manifest-path test-rdp-server/vendor/ironrdp-server/Cargo.toml
     # Seul job à archiver ces targets : ils ne gardent que ce qu'il a utilisé.
     - scripts/balayer-cibles.sh sidecar serveurs
 
@@ -195,9 +199,12 @@ dependances:
     # Les avis acceptés sont dans .cargo/audit.toml, lu automatiquement par
     # cargo-audit (audit du 8 septembre 2026 : plus de --ignore à synchroniser).
     - cargo audit --deny unsound
-    - cargo audit --deny unsound --file rdp-sidecar/Cargo.lock
-    - cargo deny check advisories licenses bans sources
-    - cargo deny --manifest-path rdp-sidecar/Cargo.toml check advisories licenses bans sources
+    # Le sidecar depuis son dossier, sous sa propre liste
+    # (rdp-sidecar/.cargo/audit.toml) : lancé d'ici avec --file, c'est celle de
+    # l'espace de travail qui le gouvernait (audit du 12 septembre 2026).
+    - (cd rdp-sidecar && cargo audit --deny unsound)
+    - cargo deny --locked check advisories licenses bans sources
+    - cargo deny --locked --manifest-path rdp-sidecar/Cargo.toml check advisories licenses bans sources
     # Les audits npm vivent ici, avec ceux de cargo, et non dans les jobs qui
     # construisent : le point d'audit du registre a expiré pendant des heures
     # le 2026-09-04, et chaque échec de « front » sautait rust, bout-en-bout
@@ -234,17 +241,17 @@ bout-en-bout:
     - <<: [*cache-hors-workspace, *pull]
     - <<: [*cache-npm, *pull]
   script:
-    - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+    - cargo build --locked --release --manifest-path rdp-sidecar/Cargo.toml
     - mkdir -p crates/avash-ui/binaries
     - cp rdp-sidecar/target/release/avash-rdp crates/avash-ui/binaries/avash-rdp-x86_64-unknown-linux-gnu
-    - cargo build --release -p avash-ui
+    - cargo build --locked --release -p avash-ui
     # Serveur RDP de test et son certificat auto-signé (non versionné) : les
     # scénarios à serveurs locaux tournent ici aussi, comme sur GitHub.
-    - cargo build --release --manifest-path test-rdp-server/Cargo.toml
+    - cargo build --locked --release --manifest-path test-rdp-server/Cargo.toml
     - openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost"
         -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
     # Le serveur VNC de test, pour le scénario VNC.
-    - cargo build --release --manifest-path test-vnc-server/Cargo.toml
+    - cargo build --locked --release --manifest-path test-vnc-server/Cargo.toml
     # Ici le harnais tourne en root (conteneur), et sshd lancé par root exige
     # le répertoire de séparation de privilèges. L'image le crée ; on s'en
     # assure, /run pouvant être remonté.
@@ -286,7 +293,7 @@ conformite:
     XKB_DEFAULT_LAYOUT: "fr"
     DISPOSITION_ATTENDUE: "1036"
   script:
-    - cargo build --release --manifest-path rdp-sidecar/Cargo.toml
+    - cargo build --locked --release --manifest-path rdp-sidecar/Cargo.toml
     - ./scripts/parc-rdp.sh up tous
     - ./scripts/conformite.sh tous
   after_script:

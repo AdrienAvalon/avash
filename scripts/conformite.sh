@@ -120,11 +120,11 @@ eprouver_ssh() {
   export PARC_HOTE="$hote"
   echo "▸ ssh ($hote:$port)"
   # Ce serveur REFUSE la méthode « password » : seul le repli peut aboutir.
-  cargo run -q -p avash --example ssh_conformite -- "$port" essai 'essai-mot-de-passe' \
+  cargo run --locked -q -p avash --example ssh_conformite -- "$port" essai 'essai-mot-de-passe' \
     || echecs=$((echecs+1))
   # SFTP contre un VRAI OpenSSH : les tests d'intégration parlent à un serveur
   # monté en mémoire, c'est-à-dire à notre propre compréhension du protocole.
-  cargo run -q -p avash --example sftp_conformite -- "$port" essai 'essai-mot-de-passe' \
+  cargo run --locked -q -p avash --example sftp_conformite -- "$port" essai 'essai-mot-de-passe' \
     || echecs=$((echecs+1))
 }
 

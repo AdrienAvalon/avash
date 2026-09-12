@@ -47,9 +47,12 @@ RUN curl -fsSLo /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-
 # Chaîne Rust : les deux composants absents de l'image rust:1, puis les outils
 # que les jobs installaient à chaque passage. Ils vivent dans
 # /usr/local/cargo/bin, sur le PATH, indépendamment du CARGO_HOME que les jobs
-# redirigent dans le projet pour mettre le registre en cache.
+# redirigent dans le projet pour mettre le registre en cache. Versions exactes,
+# les mêmes que les workflows GitHub : --locked fige les dépendances d'un
+# outil, pas sa version (audit du 12 septembre 2026, C-chaine-5 ; garde
+# scripts/tests/ci-outils-epingles.sh).
 RUN rustup component add rustfmt clippy \
- && cargo install cargo-audit cargo-deny tauri-driver --locked \
+ && cargo install cargo-audit@0.22.2 cargo-deny@0.20.2 tauri-driver@2.0.6 --locked \
  && rm -rf /usr/local/cargo/registry
 
 # Client Docker statique, pour le job de conformité qui pilote le parc xrdp

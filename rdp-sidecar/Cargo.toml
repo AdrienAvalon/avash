@@ -1,6 +1,6 @@
 [package]
 name = "avash-rdp"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2021"
 # Application, pas bibliothèque : rien n'est publié sur crates.io. Le dire
 # empêche une publication par mégarde, et lève l'avertissement de cargo-deny
@@ -104,4 +104,5 @@ ironrdp-svc = { path = "vendor/ironrdp-svc" }
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
-rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
+# `pem` pour l'identité du serveur TLS 1.0 de `tls_herite::tests`.
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }

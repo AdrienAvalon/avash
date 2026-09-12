@@ -23,7 +23,7 @@ et — côté Windows — signé pour éviter les alertes.
 ## 1. Prérequis
 
 ```
-cargo install tauri-cli --version '^2.0' --locked   # une fois
+cargo install tauri-cli --version 2.11.4 --locked   # une fois (version exacte de la chaîne)
 # Linux : rien d'autre (Tauri télécharge appimagetool au premier build)
 # Windows : Rust (MSVC), Node.js, et WebView2 SDK géré par Tauri
 ```
@@ -161,9 +161,13 @@ suivante, la télécharge et redémarre :
 - Plugins `updater` + `process`, permissions, UI de vérification.
 - Clé publique de signature dans `tauri.conf.json` (`plugins.updater.pubkey`).
 - Endpoint : `https://github.com/AdrienAvalon/avash/releases/latest/download/latest.json`.
-- `bundle.createUpdaterArtifacts: true` — **indispensable** : sans lui, Tauri ne
-  signe rien, même avec la clé. C'était l'une des trois causes d'une mise à jour
-  qui échouait en silence.
+- `bundle.createUpdaterArtifacts: true` dans `tauri.conf.json`, mais **coupé à la
+  construction** (`--config '{"bundle":{"createUpdaterArtifacts":false}}'`) :
+  depuis le 12 septembre 2026, la clé n'entre plus dans l'environnement du build
+  (voir plus bas). Les artefacts de mise à jour sont signés ensuite, un par un,
+  par `cargo tauri signer sign`. Sans signature, pas de mise à jour : c'était
+  l'une des trois causes d'une mise à jour qui échouait en silence, et le job
+  `publier` refuse toujours un manifeste sans signature.
 
 **Clé de signature des updates** (minisign, générée le 29/08) :
 - Privée : `~/.config/avash-release/updater.key` — **hors dépôt, à garder
@@ -197,20 +201,30 @@ suivante, la télécharge et redémarre :
    distribution locale**. Ne pas sauter cette étape : sans elle, on essaie la
    version publiée en ligne pendant que sa propre copie est périmée.
 4. Poser le tag et le pousser : `git tag -a vX.Y.Z -m "…" && git push <remote> vX.Y.Z`.
-   Le workflow fait le reste — les trois plateformes (Linux, Windows, macOS),
-   le manifeste signé, les empreintes, l'attestation, la release.
+   Le workflow fait le reste : les trois plateformes (Linux, Windows, macOS) sont
+   construites **sans aucun secret**, le job `signer` (environnement GitHub
+   `release`) signe les cinq artefacts de mise à jour sans rien compiler, puis
+   `publier` écrit le manifeste, les empreintes, l'attestation et la release.
+   Une fois l'environnement `release` protégé par un relecteur, `signer` et
+   `publier` attendent chacun l'approbation du mainteneur.
 
 Le workflow **échoue volontairement** si aucune signature n'est trouvée : un
 manifeste sans signature ferait échouer la mise à jour sans rien dire, ce qui
 est pire qu'une publication qui s'arrête.
 
-**En local, hors workflow** (rarement utile) :
+**En local, hors workflow** (rarement utile) : construire sans la clé, puis
+signer chaque artefact de mise à jour à part, comme le fait `scripts/release.sh` :
 ```
-export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.config/avash-release/updater.key)"
-export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # si passphrase
-cd crates/avash-ui && NO_STRIP=1 cargo tauri build
+cd crates/avash-ui && NO_STRIP=1 cargo tauri build \
+  --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+  cargo tauri signer sign -f ~/.config/avash-release/updater.key <artefact>
 ```
-`scripts/release.sh` exporte déjà cette clé si elle est présente.
+Le mot de passe doit être posé, même vide : sinon tauri-cli le réclame au
+terminal. Pourquoi deux temps : `cargo tauri build` exécute `beforeBuildCommand`
+(vite et ses greffons), tous les `build.rs` et les macros procédurales, qui
+liraient la clé d'un simple `std::env::var` si elle était dans l'environnement
+(audit du 12 septembre 2026).
 
 ## 8. Canaux de distribution
 

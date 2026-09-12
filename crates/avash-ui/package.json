@@ -1,11 +1,5 @@
 {
   "name": "avash-ui",
-  "version": "0.1.0",
   "private": true,
-  "scripts": {
-    "tauri": "tauri"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2"
-  }
+  "description": "Marqueur du dossier front pour tauri-cli, qui lance beforeBuildCommand (npm --prefix ../../web) depuis le dossier qui contient un package.json. Aucune dépendance : tauri-cli s'installe par cargo, en version exacte (audit du 12 septembre 2026, C-chaine-8)."
 }

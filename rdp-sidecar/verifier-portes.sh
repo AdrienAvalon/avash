@@ -25,7 +25,7 @@ for p in ironrdp-session ironrdp-connector ironrdp-pdu ironrdp-graphics ironrdp-
   # pipefail + set -e arrêtaient le script AVANT le moindre affichage : la porte
   # rougissait sans dire quel paquet ni quel test. On sépare donc exécution et
   # comptage : on capture la sortie, on l'imprime sur échec, puis on compte.
-  if ! sortie=$(cd "$p" && cargo test 2>&1); then
+  if ! sortie=$(cd "$p" && cargo test --locked 2>&1); then
     printf '%s\n' "$sortie" | tail -60 >&2
     echo "échec des tests de $p" >&2
     exit 1

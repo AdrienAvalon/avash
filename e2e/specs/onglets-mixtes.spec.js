@@ -3,7 +3,7 @@
 // Signalé en usage réel sous Windows : une session SSH et un bureau RDP ouverts,
 // on ferme le SSH, et le bureau devient inutilisable — il fallait fermer son
 // onglet et se reconnecter.
-import { startRdpServer, waitForPort, findHostRow, attendreBureauConnecte, doubleCliquer } from "./helpers.js";
+import { startRdpServer, waitForPort, findHostRow, attendreBureauConnecte, doubleCliquer, confirmerFermeture } from "./helpers.js";
 const RDP_PORT = 33893;
 let srv;
 
@@ -44,6 +44,9 @@ describe("Onglets mixtes SSH + RDP", () => {
       const actif = document.querySelector(".tab.active .close");
       actif.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
+    // La session SSH n'est pas forcément déjà live : la question ne vient que si
+    // elle l'est (audit du 12 septembre 2026, C-front-6).
+    if (await browser.execute(() => !!document.querySelector("#confirm-modal.open"))) await confirmerFermeture();
 
     // 4. Le bureau doit redevenir visible et redevenir l'onglet actif.
     await browser.waitUntil(

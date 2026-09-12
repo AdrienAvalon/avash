@@ -316,15 +316,17 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "avash"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "anyhow",
+ "avash",
  "bytes",
+ "data-encoding",
  "dirs 7.0.0",
  "futures",
+ "hmac 0.13.0",
  "keyring",
- "libc",
- "log",
+ "nix 0.26.4",
  "pageant",
  "rand",
  "russh",
@@ -333,15 +335,19 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serialport",
+ "sha1",
  "tokio",
+ "tracing",
  "whoami",
+ "zeroize",
 ]
 
 [[package]]
 name = "avash-ui"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "avash",
+ "nix 0.31.3",
  "open",
  "pageant",
  "serde",
@@ -354,7 +360,10 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-wdio-webdriver",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "whoami",
+ "zeroize",
 ]
 
 [[package]]
@@ -2980,6 +2989,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5132,6 +5147,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sharded-slab"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5981,6 +6005,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread_local"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "tiff"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6297,6 +6330,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
+dependencies = [
+ "sharded-slab",
+ "thread_local",
+ "tracing-core",
 ]
 
 [[package]]

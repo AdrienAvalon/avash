@@ -1,5 +1,9 @@
 //! Sonde manuelle : ouvre un PTY sur un vrai serveur et affiche ce qui arrive.
 //! Usage : cargo run -p avash --example `pty_probe` -- <port> <`chemin_cle`>
+
+// Programme d'essai lancé à la main : un décor qui échoue doit s'arrêter net,
+// d'où les `unwrap` et `expect`, que le lint `unwrap_used` signalerait.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::time::Duration;
 
 #[tokio::main]

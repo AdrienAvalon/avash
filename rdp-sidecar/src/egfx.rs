@@ -24,6 +24,7 @@ use crate::args::TAILLE_MAX;
 use crate::progressif;
 use crate::surface::{Cache, Surface, Zone};
 use crate::trames::RECTS_MAX;
+use crate::verrou::Verrou as _;
 
 /// Trace du canal graphique : évaluée une seule fois, pas à chaque PDU. `var_os`
 /// prend le verrou global de l'environnement et parcourt `environ` ; l'appeler
@@ -245,11 +246,16 @@ fn inspecter_clearcodec(flux: &[u8]) {
     }
 }
 
-/// Un PDU EGFX, en-tête retiré.
+/// Un PDU EGFX, en-tête retiré, emprunté au segment décompressé.
+///
+/// Emprunt et non copie depuis l'audit du 12 septembre 2026 (C-perf-9) :
+/// `decouper` recopiait chaque PDU (`to_vec`) avant `traiter`, qui ne le lit
+/// que par emprunt ; tout le flux graphique reçu passait ainsi une fois de plus
+/// par l'allocateur (588 PDU pour `windows-surfaces-successives`).
 #[derive(Debug)]
-pub struct Pdu {
+pub struct Pdu<'a> {
     pub id: u16,
-    pub charge: Vec<u8>,
+    pub charge: &'a [u8],
 }
 
 /// Découpe un flux décomprimé en PDU.
@@ -257,7 +263,7 @@ pub struct Pdu {
 /// Un segment en contient souvent plusieurs. S'arrêter au premier ferait perdre
 /// silencieusement des images — un défaut qui ne se verrait qu'à l'œil.
 #[must_use]
-pub fn decouper(o: &[u8]) -> Vec<Pdu> {
+pub fn decouper(o: &[u8]) -> Vec<Pdu<'_>> {
     let mut v = Vec::new();
     let mut i = 0usize;
     while i + 8 <= o.len() {
@@ -269,7 +275,7 @@ pub fn decouper(o: &[u8]) -> Vec<Pdu> {
         }
         v.push(Pdu {
             id,
-            charge: o[i + 8..i + n].to_vec(),
+            charge: &o[i + 8..i + n],
         });
         i += n;
     }
@@ -376,7 +382,7 @@ pub fn memoriser(cle: &str, chemin: &std::path::Path) {
         return;
     }
     // On AJOUTE la ligne en O_APPEND au lieu de relire tout le fichier puis le
-    // renommer par-dessus (`atomique::ecrire`). Trouvé par l'audit du 7 septembre
+    // renommer par-dessus (l'ancien `atomique::ecrire`, retiré le 12 septembre 2026). Trouvé par l'audit du 7 septembre
     // 2026 : comme pour `rdp_known_hosts`, deux sidecars (deux onglets RDP ouverts
     // à la suite, restauration d'un groupe) mémorisant des serveurs distincts au
     // même instant lisaient le même `ancien` et le dernier `rename` effaçait la
@@ -569,8 +575,8 @@ impl Egfx {
 
     /// Décrit une commande sur stderr : nom, surfaces, rectangles, codec — ce
     /// qu'il faut pour comprendre une image fausse sans deviner.
-    fn journaliser(p: &Pdu) {
-        let c = &p.charge;
+    fn journaliser(p: &Pdu<'_>) {
+        let c = p.charge;
         let u16le = |i: usize| {
             c.get(i..i + 2)
                 .map_or(0, |o| u16::from_le_bytes([o[0], o[1]]))
@@ -673,11 +679,11 @@ impl Egfx {
     /// Public pour que `tests/` et une cible `fuzz/` puissent enchaîner
     /// `decouper` puis ce traitement sur un flux hostile (audit du 7 septembre
     /// 2026 : jusque-là injoignable hors du crate).
-    pub fn traiter(&mut self, p: &Pdu) -> Option<Vec<u8>> {
+    pub fn traiter(&mut self, p: &Pdu<'_>) -> Option<Vec<u8>> {
         if self.journal {
             Self::journaliser(p);
         }
-        let c = &p.charge;
+        let c = p.charge;
         match p.id {
             CMD_CREATE_SURFACE if c.len() >= 7 => {
                 let id = u16::from_le_bytes([c[0], c[1]]);
@@ -747,7 +753,7 @@ impl Egfx {
                 // plafond et même journal que CreateSurface ci-dessus.
                 match (u16::try_from(l), u16::try_from(h)) {
                     (Ok(l), Ok(h)) if l > 0 && h > 0 && l <= TAILLE_MAX && h <= TAILLE_MAX => {
-                        self.file.lock().unwrap().taille = Some((l, h));
+                        self.file.verrou().taille = Some((l, h));
                     }
                     _ => eprintln!("egfx : ResetGraphics refusé ({l}×{h})"),
                 }
@@ -815,7 +821,7 @@ impl Egfx {
             Some(z) => std::slice::from_ref(z),
             None => zones,
         };
-        let mut sortie = self.file.lock().unwrap();
+        let mut sortie = self.file.verrou();
         for &z in a_publier {
             // La première zone passe toujours : une trame plein écran isolée
             // n'est jamais perdue, seul un flot au-delà du budget cesse d'empiler.
@@ -1041,24 +1047,15 @@ impl Egfx {
                 return;
             }
         };
-        let (ox, oy) = self.origines.get(&id).copied().unwrap_or((0, 0));
-        let mut sortie = self.file.lock().unwrap();
-        for z in zones {
-            let largeur = usize::from(z.largeur);
-            let mut pixels = Vec::with_capacity(largeur * usize::from(z.hauteur) * 4);
-            let stride = usize::from(surface.largeur) * 4;
-            for ligne in 0..usize::from(z.hauteur) {
-                let d = (usize::from(z.y) + ligne) * stride + usize::from(z.x) * 4;
-                pixels.extend_from_slice(&surface.pixels[d..d + largeur * 4]);
-            }
-            sortie.trames.push(Trame {
-                x: ox.saturating_add(z.x),
-                y: oy.saturating_add(z.y),
-                largeur: z.largeur,
-                hauteur: z.hauteur,
-                pixels,
-            });
-        }
+        // Le même chemin que toutes les autres commandes. Trouvé par l'audit du
+        // 12 septembre 2026 (C-panique-2) : ce chemin avait gardé sa propre
+        // boucle, une copie par zone décodée poussée dans la file, sans le
+        // budget ni la boîte englobante de `publier`. Une région porte jusqu'à
+        // 65 535 tuiles de quelques dizaines d'octets : répéter la tuile
+        // (0, 0) empilait 16 Kio par répétition, un gigaoctet pour un seul PDU.
+        // La surface porte déjà l'état final, que `publier` relit par
+        // `extraire` (lectures bornées, plus d'indexation directe).
+        self.publier(id, &zones);
     }
 }
 
@@ -1079,12 +1076,12 @@ pub fn lot_dvc(
 /// L'identifiant du canal, sans le consommer.
 #[must_use]
 pub fn canal_ouvert(canal: &CanalPartage) -> Option<u32> {
-    *canal.lock().unwrap()
+    *canal.verrou()
 }
 
 /// Le PDU d'annonce à émettre, une fois le canal ouvert — et une seule.
 pub fn annonce_a_emettre(canal: &CanalPartage) -> Option<(u32, Vec<u8>)> {
-    let id = canal.lock().unwrap().take()?;
+    let id = canal.verrou().take()?;
     Some((id, caps_advertise()))
 }
 
@@ -1106,7 +1103,7 @@ impl DvcProcessor for Egfx {
     /// `annonce_a_emettre`, appelé depuis la boucle de session.
     fn start(&mut self, channel_id: u32) -> PduResult<Vec<DvcMessage>> {
         eprintln!("egfx : canal ouvert (id {channel_id})");
-        *self.canal.lock().unwrap() = Some(channel_id);
+        *self.canal.verrou() = Some(channel_id);
         Ok(Vec::new())
     }
 
@@ -1188,6 +1185,7 @@ impl std::fmt::Debug for Egfx {
 #[cfg(test)]
 mod tests {
     use super::{annonce_a_emettre, caps_advertise, decouper, CAPVERSION_8, CMD_CAPS_ADVERTISE};
+    use crate::verrou::Verrou;
 
     #[test]
     fn plusieurs_pdu_dans_un_segment_sont_tous_rendus() {
@@ -1265,7 +1263,7 @@ mod tests {
             annonce_a_emettre(&canal).is_none(),
             "aucun canal, rien à dire"
         );
-        *canal.lock().unwrap() = Some(7);
+        *canal.verrou() = Some(7);
         assert_eq!(annonce_a_emettre(&canal).map(|(id, _)| id), Some(7));
         assert!(annonce_a_emettre(&canal).is_none(), "la case est vidée");
     }
@@ -1378,7 +1376,7 @@ mod tests {
     /// restauration d'un groupe — ne doivent en perdre aucun.
     ///
     /// Trouvé par l'audit du 7 septembre 2026 : `memoriser` relisait tout le
-    /// fichier puis renommait un temporaire par-dessus (`atomique::ecrire`) ;
+    /// fichier puis renommait un temporaire par-dessus (l'ancien `atomique::ecrire`, retiré le 12 septembre 2026) ;
     /// comme pour `rdp_known_hosts`, deux processus lisant le même contenu
     /// voyaient le dernier `rename` effacer la ligne de l'autre. Le serveur
     /// perdu recoûtait une reconnexion (l'IronRDP se tait faute de dessin, on
@@ -1423,11 +1421,114 @@ mod tests {
     }
 
     /// Fabrique un PDU du canal graphique à partir de sa charge utile.
-    fn pdu(id: u16, charge: &[u8]) -> super::Pdu {
-        super::Pdu {
-            id,
-            charge: charge.to_vec(),
-        }
+    fn pdu(id: u16, charge: &[u8]) -> super::Pdu<'_> {
+        super::Pdu { id, charge }
+    }
+
+    /// Un bloc du flux progressif (MS-RDPEGFX 2.2.4.2) : type, longueur
+    /// totale, corps.
+    fn bloc(genre: u16, corps: &[u8]) -> Vec<u8> {
+        let mut b = genre.to_le_bytes().to_vec();
+        b.extend_from_slice(&u32::try_from(6 + corps.len()).unwrap().to_le_bytes());
+        b.extend_from_slice(corps);
+        b
+    }
+
+    /// Un flux RemoteFX Progressive d'une région de `tuiles` tuiles simples,
+    /// toutes en (0, 0), quatre octets nuls par composante (le décodeur refuse
+    /// une tuile vide) : 34 octets par tuile, et pourtant une zone de 64×64
+    /// chacune.
+    fn flux_progressif(tuiles: u16) -> Vec<u8> {
+        flux_progressif_en(&vec![(0, 0); usize::from(tuiles)])
+    }
+
+    /// Le même flux, une tuile simple par position `(x_idx, y_idx)` donnée.
+    fn flux_progressif_en(positions: &[(u16, u16)]) -> Vec<u8> {
+        let mut f = bloc(0xCCC0, &[0xCA, 0xAC, 0xCC, 0xCA, 0x00, 0x01]); // SYNC
+        f.extend(bloc(0xCCC3, &[0, 0x40, 0, 0])); // CONTEXT, tuiles de 64
+        f.extend(bloc(0xCCC1, &[0, 0, 0, 0, 1, 0])); // FRAME_BEGIN, une région
+        let tuile = |x: u16, y: u16| {
+            let mut t = vec![0, 0, 0]; // quantificateurs
+            t.extend_from_slice(&x.to_le_bytes());
+            t.extend_from_slice(&y.to_le_bytes());
+            t.push(0); // drapeaux
+            t.extend_from_slice(&[4, 0, 4, 0, 4, 0, 0, 0]); // longueurs Y, Cb, Cr, queue
+            t.extend_from_slice(&[0; 12]); // quatre octets nuls par composante
+            bloc(0xCCC5, &t)
+        };
+        let tuiles: Vec<u8> = positions.iter().flat_map(|&(x, y)| tuile(x, y)).collect();
+        let mut region = vec![0x40, 1, 0, 1, 0, 0]; // 64, un rectangle, un quantificateur
+        region.extend_from_slice(&u16::try_from(positions.len()).unwrap().to_le_bytes());
+        region.extend_from_slice(&u32::try_from(tuiles.len()).unwrap().to_le_bytes());
+        region.extend_from_slice(&[0, 0, 0, 0, 64, 0, 64, 0]);
+        region.extend_from_slice(&[0x66; 5]);
+        region.extend_from_slice(&tuiles);
+        f.extend(bloc(0xCCC4, &region));
+        f.extend(bloc(0xCCC2, &[])); // FRAME_END
+        f
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-panique-2) : le chemin
+    /// RemoteFX Progressive (`decoder_surface`) avait gardé sa propre boucle,
+    /// une copie par zone décodée poussée dans la file, sans le budget ni la
+    /// boîte englobante que `publier` applique depuis le 7 septembre. Une
+    /// région porte jusqu'à 65 535 tuiles de 22 octets : répéter la tuile
+    /// (0, 0) empilait 16 Kio par répétition, un gigaoctet pour un seul PDU, et
+    /// l'OOM du processus avec plusieurs régions dans un segment.
+    #[test]
+    fn une_image_progressive_aux_tuiles_repetees_reste_dans_le_budget() {
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        e.traiter(&pdu(super::CMD_CREATE_SURFACE, &[1, 0, 64, 0, 64, 0, 0x20]));
+        let flux = flux_progressif(2_000);
+        let mut c = vec![1, 0];
+        c.extend_from_slice(&super::CODEC_CAPROGRESSIVE.to_le_bytes());
+        c.extend_from_slice(&[0, 0, 0, 0, 0x20]); // contexte, format
+        c.extend_from_slice(&u32::try_from(flux.len()).unwrap().to_le_bytes());
+        c.extend_from_slice(&flux);
+        e.traiter(&pdu(super::CMD_WIRE_TO_SURFACE_2, &c));
+        let trames = std::mem::take(&mut file.verrou().trames);
+        assert!(!trames.is_empty(), "l'image n'a pas été décodée");
+        assert!(
+            trames.len() <= crate::trames::RECTS_MAX,
+            "{} trames pour une seule tuile répétée",
+            trames.len()
+        );
+        let octets: usize = trames.iter().map(|t| t.pixels.len()).sum();
+        assert!(octets <= super::OCTETS_PUBLIES_MAX, "{octets} octets");
+    }
+
+    /// C-perf-7 (audit du 12 septembre 2026) : chaque tuile 64×64 d'une image
+    /// progressive donnait sa propre allocation et sa propre recopie, 510 pour
+    /// une image 1080p entière. La fusion par ligne de tuiles proposée alors
+    /// est dépassée par le passage de ce chemin dans `publier` (C-panique-2) :
+    /// au-delà de `RECTS_MAX` zones, une seule boîte englobante, donc une seule
+    /// allocation. Une ligne de vingt tuiles part en une zone, et la mesure du
+    /// rejeu des enregistrements est restée la même (voir le rapport).
+    #[test]
+    fn les_tuiles_d_une_meme_ligne_sont_publiees_en_une_zone() {
+        let (mut e, _canal, file) = super::Egfx::nouveau();
+        let largeur = (20u16 * 64).to_le_bytes();
+        e.traiter(&pdu(
+            super::CMD_CREATE_SURFACE,
+            &[1, 0, largeur[0], largeur[1], 64, 0, 0x20],
+        ));
+        let ligne: Vec<(u16, u16)> = (0..20).map(|x| (x, 0)).collect();
+        let flux = flux_progressif_en(&ligne);
+        let mut c = vec![1, 0];
+        c.extend_from_slice(&super::CODEC_CAPROGRESSIVE.to_le_bytes());
+        c.extend_from_slice(&[0, 0, 0, 0, 0x20]);
+        c.extend_from_slice(&u32::try_from(flux.len()).unwrap().to_le_bytes());
+        c.extend_from_slice(&flux);
+        e.traiter(&pdu(super::CMD_WIRE_TO_SURFACE_2, &c));
+        let trames = std::mem::take(&mut file.verrou().trames);
+        assert_eq!(
+            trames.len(),
+            1,
+            "une zone par tuile au lieu d'une par ligne"
+        );
+        let t = &trames[0];
+        assert_eq!((t.x, t.y, t.largeur, t.hauteur), (0, 0, 20 * 64, 64));
+        assert_eq!(t.pixels.len(), 20 * 64 * 64 * 4);
     }
 
     #[test]
@@ -1453,12 +1554,12 @@ mod tests {
         vers_cache.extend_from_slice(&[7, 0]); // emplacement
         vers_cache.extend_from_slice(&[0, 0, 0, 0, 2, 0, 2, 0]); // rect
         e.traiter(&pdu(0x0006, &vers_cache));
-        file.lock().unwrap().trames.clear();
+        file.verrou().trames.clear();
 
         // …puis revient à DEUX endroits. Le compteur vaut 2 sur seize bits.
         let depuis_cache = [7, 0, 0, 0, 2, 0, 4, 0, 0, 0, 6, 0, 2, 0];
         e.traiter(&pdu(0x0007, &depuis_cache));
-        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        let trames = std::mem::take(&mut file.verrou().trames);
         assert_eq!(trames.len(), 2, "deux points de destination, deux zones");
         assert_eq!((trames[0].x, trames[0].y), (4, 0));
         assert_eq!((trames[1].x, trames[1].y), (6, 2));
@@ -1479,7 +1580,7 @@ mod tests {
             0x0004,
             &[0, 0, 0x10, 0x20, 0x30, 0xFF, 1, 0, 0, 0, 0, 0, 4, 0, 4, 0],
         ));
-        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        let trames = std::mem::take(&mut file.verrou().trames);
         assert_eq!(trames.len(), 1);
         assert_eq!(trames[0].pixels[..4], [0x30, 0x20, 0x10, 0xFF]);
     }
@@ -1494,25 +1595,25 @@ mod tests {
             super::CMD_RESET_GRAPHICS,
             &[128, 7, 0, 0, 176, 4, 0, 0],
         ));
-        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        assert_eq!(file.verrou().taille, Some((1920, 1200)));
         // Une dimension nulle est ignorée : l'ancienne taille demeure.
         e.traiter(&pdu(super::CMD_RESET_GRAPHICS, &[0, 0, 0, 0, 176, 4, 0, 0]));
-        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        assert_eq!(file.verrou().taille, Some((1920, 1200)));
         // Au-delà de 65535, try_from échoue : pas de panique, taille inchangée.
         e.traiter(&pdu(super::CMD_RESET_GRAPHICS, &[0, 0, 1, 0, 0, 0, 1, 0]));
-        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        assert_eq!(file.verrou().taille, Some((1920, 1200)));
         // Trouvé par l'audit du 7 septembre 2026 : la plage 8193..=65535 passe
         // `u16::try_from` mais dépasse le plafond 8192 que CreateSurface applique.
         // Sans garde, `etirer` allouait largeur×hauteur×4 (17 Gio pour 65535²) sur
         // simple ordre du serveur. 8193×8193 (0x2001 en u32 LE) doit être écarté.
         e.traiter(&pdu(super::CMD_RESET_GRAPHICS, &[1, 32, 0, 0, 1, 32, 0, 0]));
-        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        assert_eq!(file.verrou().taille, Some((1920, 1200)));
         // 20000×20000 (0x4E20) : encore 1,6 Gio et 400 M d'itérations, écarté aussi.
         e.traiter(&pdu(
             super::CMD_RESET_GRAPHICS,
             &[0x20, 0x4E, 0, 0, 0x20, 0x4E, 0, 0],
         ));
-        assert_eq!(file.lock().unwrap().taille, Some((1920, 1200)));
+        assert_eq!(file.verrou().taille, Some((1920, 1200)));
     }
 
     #[test]
@@ -1554,7 +1655,7 @@ mod tests {
                 0, 0, /* B G R X */ 0, 0, 255, 0, 1, 0, 0, 0, 0, 0, 2, 0, 2, 0,
             ],
         ));
-        file.lock().unwrap().trames.clear();
+        file.verrou().trames.clear();
         // src=0, dst=1, bords [0,0,2,2], 2 destinations : (4,0) et (6,2).
         let mut c = vec![0, 0, 1, 0]; // src, dst
         c.extend_from_slice(&[0, 0, 0, 0, 2, 0, 2, 0]); // bords
@@ -1562,7 +1663,7 @@ mod tests {
         c.extend_from_slice(&[4, 0, 0, 0]); // (4,0)
         c.extend_from_slice(&[6, 0, 2, 0]); // (6,2)
         e.traiter(&pdu(super::CMD_SURFACE_TO_SURFACE, &c));
-        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        let trames = std::mem::take(&mut file.verrou().trames);
         assert_eq!(trames.len(), 2, "deux destinations, deux zones peintes");
         assert_eq!((trames[0].x, trames[0].y), (4, 0));
         assert_eq!((trames[1].x, trames[1].y), (6, 2));
@@ -1584,7 +1685,7 @@ mod tests {
         ));
         e.traiter(&pdu(0x0007, &[3, 0, 9, 9, 1, 0, 0, 0, 0, 0]));
         e.traiter(&pdu(0x000A, &[9, 9]));
-        assert!(file.lock().unwrap().trames.is_empty());
+        assert!(file.verrou().trames.is_empty());
     }
 
     #[test]
@@ -1602,7 +1703,7 @@ mod tests {
             0x0004,
             &[1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 4, 0],
         ));
-        assert!(file.lock().unwrap().trames.is_empty());
+        assert!(file.verrou().trames.is_empty());
         // Le plafond de la résolution négociée reste, lui, une surface légitime.
         e.traiter(&pdu(0x0009, &[3, 0, 0, 0x20, 0, 0x20, 0x21]));
         assert!(e.surfaces.contains_key(&3));
@@ -1705,7 +1806,7 @@ mod tests {
         hors.extend(std::iter::repeat_n(0x7Fu8, charge as usize));
         e.traiter(&pdu(0x0001, &hors));
         assert!(
-            file.lock().unwrap().trames.is_empty(),
+            file.verrou().trames.is_empty(),
             "une image plus large que la surface ne doit rien peindre"
         );
 
@@ -1733,7 +1834,7 @@ mod tests {
         dedans.extend_from_slice(&charge.to_le_bytes());
         dedans.extend(std::iter::repeat_n(0x7Fu8, charge as usize));
         e.traiter(&pdu(0x0001, &dedans));
-        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        let trames = std::mem::take(&mut file.verrou().trames);
         assert_eq!(trames.len(), 1, "une image qui tient est peinte");
         assert_eq!(
             (trames[0].largeur, trames[0].hauteur),
@@ -1764,7 +1865,7 @@ mod tests {
             c.extend_from_slice(&[0, 0, 0, 0, 64, 0, 64, 0]);
         }
         e.traiter(&pdu(super::CMD_SOLIDFILL, &c));
-        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        let trames = std::mem::take(&mut file.verrou().trames);
         assert!(
             trames.len() <= super::RECTS_MAX,
             "mille rectangles ne doivent pas faire mille trames : {}",
@@ -1810,7 +1911,7 @@ mod tests {
         for _ in 0..8 {
             e.traiter(&pdu(super::CMD_SOLIDFILL, &plein));
         }
-        let trames = std::mem::take(&mut file.lock().unwrap().trames);
+        let trames = std::mem::take(&mut file.verrou().trames);
         assert_eq!(
             trames.len(),
             4,

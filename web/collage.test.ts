@@ -76,6 +76,38 @@ describe("effectuerCollage", () => {
     expect(d.colles).toEqual(["a\nb\nc\n"]);
   });
 
+  // Audit sécurité du front du 12 septembre 2026 (FS-1) : xterm 6 encadre le
+  // texte collé sans le filtrer (« ESC[200~ » + texte + « ESC[201~ »). Un
+  // presse-papiers hostile qui embarque « ESC[201~ » referme le bloc avant son
+  // propre saut de ligne, et la suite s'exécute même sur un shell à bracketed
+  // paste, alors que la modale n'annonce qu'un nombre de lignes.
+  it("le collage retire une fin de bracketed paste glissée dans le texte", async () => {
+    const d = deps(true);
+    await effectuerCollage("a\x1b[201~\rb", d.deps);
+    expect(d.confirmations).toEqual([2]);
+    expect(d.colles).toEqual(["a\rb"]);
+  });
+
+  it("le collage retire les caractères de contrôle C0 et C1 sauf tabulation et sauts de ligne", async () => {
+    const d = deps(true);
+    // ESC isolé, BEL, retour arrière, DEL, CSI 8 bits (U+009B) et sa forme de
+    // fin de bracketed paste : aucun ne doit atteindre le terminal.
+    await effectuerCollage("x\x1b]0;titre\x07\ty\x08\x7f\u009b201~z\u0085\r\n", d.deps);
+    expect(d.colles).toEqual(["x]0;titre\tyz\r\n"]);
+    const controle = (c: string) => {
+      const n = c.charCodeAt(0);
+      return (n < 0x20 && n !== 0x09 && n !== 0x0a && n !== 0x0d) || (n >= 0x7f && n <= 0x9f);
+    };
+    expect([...d.colles.join("")].some(controle)).toBe(false);
+  });
+
+  it("ne colle rien si le texte ne contenait que des caractères de contrôle", async () => {
+    const d = deps(true);
+    await effectuerCollage("\x1b[200~\x1b", d.deps);
+    expect(d.colles).toEqual([]);
+    expect(d.confirmations).toEqual([]);
+  });
+
   it("ne colle rien si l'utilisateur refuse", async () => {
     // Le cœur de la défense pastejacking : un refus doit être final.
     const d = deps(false);

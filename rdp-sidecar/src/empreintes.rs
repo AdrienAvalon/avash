@@ -155,7 +155,7 @@ pub(crate) fn memoriser_empreinte(cle: &str, empreinte: &str) -> anyhow::Result<
     };
     // On AJOUTE la ligne en O_APPEND au lieu de réécrire tout le fichier. Trouvé
     // par l'audit du 7 septembre 2026 : la lecture-modification-réécriture (relire
-    // puis renommer un temporaire par-dessus, via `atomique::ecrire`) perdait une
+    // puis renommer un temporaire par-dessus, via l'ancien `atomique::ecrire`, retiré le 12 septembre 2026) perdait une
     // empreinte quand deux sidecars atteignaient ce point ensemble — deux onglets
     // ouverts à la suite lisaient le même contenu et le dernier `rename` effaçait
     // la ligne du premier ; l'atomicité du rename ne couvre pas ce cas, et l'hôte
@@ -217,6 +217,82 @@ mod tests_certificat {
 #[cfg(test)]
 pub(crate) static VERROU_AVASH_HOME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// `AVASH_HOME` posé sur un répertoire jetable le temps d'un test, sous
+/// [`VERROU_AVASH_HOME`], et remis en place à la sortie, même sur panique.
+///
+/// Un seul garde depuis l'audit du 12 septembre 2026 (C-unsafe-3, palier 1) :
+/// le motif « sauvegarder, poser, restaurer » était écrit quatre fois (dont deux
+/// `struct Bac` identiques), en douze blocs `unsafe`, et la version de
+/// `fichiers.rs` ne résistait pas à la panique (un `unwrap` entre la pose et la
+/// restauration laissait la variable pointer sur un dossier effacé pour la
+/// suite du processus). Les champs se détruisent dans l'ordre de déclaration :
+/// `_verrou` en dernier, si bien que la restauration du `Drop` se fait encore
+/// sous le verrou.
+///
+/// **Tout test qui initialise une pile TLS (rcgen, rustls, native-tls) commence
+/// par `BacAvashHome::poser`** : voir le commentaire de sûreté ci-dessous.
+#[cfg(test)]
+pub(crate) struct BacAvashHome {
+    chemin: std::path::PathBuf,
+    precedent: Option<std::ffi::OsString>,
+    _verrou: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl BacAvashHome {
+    /// Prend le verrou, vide `temp_dir()/avash-<nom>-<pid>` et y pointe
+    /// `AVASH_HOME`. Le dossier n'est pas créé : au test de le faire s'il en a
+    /// besoin.
+    pub(crate) fn poser(nom: &str) -> Self {
+        let verrou = VERROU_AVASH_HOME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let chemin = std::env::temp_dir().join(format!("avash-{nom}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&chemin);
+        let precedent = std::env::var_os("AVASH_HOME");
+        // SAFETY: sous VERROU_AVASH_HOME, qui sérialise tous les tests écrivant
+        // cette variable. Les lecteurs Rust passent par std::env (verrou interne
+        // de la std). Les lecteurs C du binaire de test, aws-lc (OPENSSL_ia32cap)
+        // et l'OpenSSL embarqué de native-tls (OPENSSL_CONF), ne lisent
+        // l'environnement qu'à leur initialisation : tout test qui les initialise
+        // (rcgen, rustls, native-tls) le fait après poser(), donc sous ce même
+        // verrou. Tout nouveau test qui touche à TLS doit commencer par
+        // BacAvashHome::poser().
+        unsafe { std::env::set_var("AVASH_HOME", &chemin) };
+        Self {
+            chemin,
+            precedent,
+            _verrou: verrou,
+        }
+    }
+
+    pub(crate) fn chemin(&self) -> &std::path::Path {
+        &self.chemin
+    }
+
+    /// Le fichier de confiance (`rdp_known_hosts`) sous ce foyer.
+    pub(crate) fn fichier_de_confiance(&self) -> std::path::PathBuf {
+        self.chemin
+            .join(".config")
+            .join("avash")
+            .join("rdp_known_hosts")
+    }
+}
+
+#[cfg(test)]
+impl Drop for BacAvashHome {
+    fn drop(&mut self) {
+        match self.precedent.take() {
+            // SAFETY: même invariant que dans `poser` ; `_verrou` n'est rendu
+            // qu'après ce corps (ordre de destruction des champs).
+            Some(v) => unsafe { std::env::set_var("AVASH_HOME", v) },
+            // SAFETY: idem, sous le verrou encore tenu.
+            None => unsafe { std::env::remove_var("AVASH_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&self.chemin);
+    }
+}
+
 #[cfg(test)]
 mod tests_fichier_empreintes {
     use super::chercher_empreinte;
@@ -262,21 +338,10 @@ mod tests_fichier_empreintes {
     fn avash_home_detourne_le_fichier_de_confiance() {
         // Sans cela, la suite bout en bout sous Windows écrirait dans le
         // fichier réel de l'utilisateur : `config_dir()` y ignore HOME.
-        let _verrou = super::VERROU_AVASH_HOME
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let bac = std::env::temp_dir().join(format!("avash-rdp-{}", std::process::id()));
-        let precedent = std::env::var_os("AVASH_HOME");
-        unsafe { std::env::set_var("AVASH_HOME", &bac) };
+        let bac = super::BacAvashHome::poser("rdp");
         let sous_bac = crate::empreintes::chemin_empreintes().expect("un chemin");
-        unsafe {
-            match precedent {
-                Some(v) => std::env::set_var("AVASH_HOME", v),
-                None => std::env::remove_var("AVASH_HOME"),
-            }
-        }
         assert!(
-            sous_bac.starts_with(&bac),
+            sous_bac.starts_with(bac.chemin()),
             "le fichier de confiance doit suivre AVASH_HOME, or il pointe sur {sous_bac:?}"
         );
         assert!(sous_bac.ends_with("rdp_known_hosts"));
@@ -309,52 +374,32 @@ mod tests_fichier_empreintes {
     #[test]
     fn un_rdp_known_hosts_non_utf8_refuse_au_lieu_de_desarmer_le_tofu() {
         use super::{empreinte_memorisee, memoriser_empreinte};
-        let _verrou = super::VERROU_AVASH_HOME
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let bac = std::env::temp_dir().join(format!("avash-rdp-utf8-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&bac);
-        let precedent = std::env::var_os("AVASH_HOME");
-        unsafe { std::env::set_var("AVASH_HOME", &bac) };
+        let _bac = super::BacAvashHome::poser("rdp-utf8");
+        let chemin = super::chemin_empreintes().expect("un chemin");
+        std::fs::create_dir_all(chemin.parent().unwrap()).unwrap();
+        // Une entrée légitime, suivie d'un octet non UTF-8 (0xFF) comme en
+        // laisserait un ré-enregistrement en UTF-16/Latin-1.
+        let octets_abimes = b"srv.exemple:3389 aaaa\n\xff\n";
+        std::fs::write(&chemin, octets_abimes).unwrap();
 
-        let resultat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let chemin = super::chemin_empreintes().expect("un chemin");
-            std::fs::create_dir_all(chemin.parent().unwrap()).unwrap();
-            // Une entrée légitime, suivie d'un octet non UTF-8 (0xFF) comme en
-            // laisserait un ré-enregistrement en UTF-16/Latin-1.
-            let octets_abimes = b"srv.exemple:3389 aaaa\n\xff\n";
-            std::fs::write(&chemin, octets_abimes).unwrap();
+        // Lecture : erreur explicite, jamais « rien de mémorisé ».
+        let lu = empreinte_memorisee("srv.exemple:3389");
+        assert!(
+            lu.is_err(),
+            "un fichier non-UTF-8 doit être une erreur, pas Ok(None) : {lu:?}"
+        );
 
-            // Lecture : erreur explicite, jamais « rien de mémorisé ».
-            let lu = empreinte_memorisee("srv.exemple:3389");
-            assert!(
-                lu.is_err(),
-                "un fichier non-UTF-8 doit être une erreur, pas Ok(None) : {lu:?}"
-            );
-
-            // Mémorisation : erreur AUSSI, et le fichier n'est pas écrasé.
-            let ecrit = memoriser_empreinte("autre.hote:3389", "bbbb");
-            assert!(
-                ecrit.is_err(),
-                "on ne réécrit pas un fichier qu'on n'a pas su lire : {ecrit:?}"
-            );
-            assert_eq!(
-                std::fs::read(&chemin).unwrap(),
-                octets_abimes,
-                "l'empreinte d'origine et le contenu abîmé restent intacts"
-            );
-        }));
-
-        unsafe {
-            match precedent {
-                Some(v) => std::env::set_var("AVASH_HOME", v),
-                None => std::env::remove_var("AVASH_HOME"),
-            }
-        }
-        let _ = std::fs::remove_dir_all(&bac);
-        if let Err(p) = resultat {
-            std::panic::resume_unwind(p);
-        }
+        // Mémorisation : erreur AUSSI, et le fichier n'est pas écrasé.
+        let ecrit = memoriser_empreinte("autre.hote:3389", "bbbb");
+        assert!(
+            ecrit.is_err(),
+            "on ne réécrit pas un fichier qu'on n'a pas su lire : {ecrit:?}"
+        );
+        assert_eq!(
+            std::fs::read(&chemin).unwrap(),
+            octets_abimes,
+            "l'empreinte d'origine et le contenu abîmé restent intacts"
+        );
     }
 
     /// Plusieurs sidecars `avash-rdp` mémorisant un premier contact au même
@@ -363,7 +408,7 @@ mod tests_fichier_empreintes {
     ///
     /// Trouvé par l'audit du 7 septembre 2026 : `memoriser_empreinte` relisait
     /// tout le fichier, ajoutait sa ligne et renommait un temporaire par-dessus
-    /// (`atomique::ecrire`). Deux processus lisant le même contenu voyaient le
+    /// (l'ancien `atomique::ecrire`, retiré le 12 septembre 2026). Deux processus lisant le même contenu voyaient le
     /// dernier `rename` effacer la ligne du premier — l'atomicité du rename ne
     /// couvre pas la lecture-modification-écriture concurrente. L'hôte perdu
     /// redevenait « premier contact » et acceptait n'importe quelle clé à la
@@ -372,53 +417,33 @@ mod tests_fichier_empreintes {
     #[test]
     fn des_premiers_contacts_simultanes_survivent_tous() {
         use super::{chemin_empreintes, chercher_empreinte, memoriser_empreinte};
-        let _verrou = super::VERROU_AVASH_HOME
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let bac = std::env::temp_dir().join(format!("avash-rdp-conc-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&bac);
-        let precedent = std::env::var_os("AVASH_HOME");
-        unsafe { std::env::set_var("AVASH_HOME", &bac) };
-
-        let resultat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            const N: usize = 16;
-            // Tous les fils s'élancent ensemble (barrière) pour maximiser le
-            // recouvrement des lectures-écritures, comme des sidecars lancés à la
-            // suite. Sans le correctif, plusieurs lignes disparaissent.
-            let depart = std::sync::Arc::new(std::sync::Barrier::new(N));
-            let fils: Vec<_> = (0..N)
-                .map(|i| {
-                    let depart = std::sync::Arc::clone(&depart);
-                    std::thread::spawn(move || {
-                        depart.wait();
-                        memoriser_empreinte(&format!("hote{i}:3389"), &format!("fp{i}"))
-                            .expect("mémorisation");
-                    })
+        let _bac = super::BacAvashHome::poser("rdp-conc");
+        const N: usize = 16;
+        // Tous les fils s'élancent ensemble (barrière) pour maximiser le
+        // recouvrement des lectures-écritures, comme des sidecars lancés à la
+        // suite. Sans le correctif, plusieurs lignes disparaissent.
+        let depart = std::sync::Arc::new(std::sync::Barrier::new(N));
+        let fils: Vec<_> = (0..N)
+            .map(|i| {
+                let depart = std::sync::Arc::clone(&depart);
+                std::thread::spawn(move || {
+                    depart.wait();
+                    memoriser_empreinte(&format!("hote{i}:3389"), &format!("fp{i}"))
+                        .expect("mémorisation");
                 })
-                .collect();
-            for f in fils {
-                f.join().expect("fil terminé");
-            }
-            let chemin = chemin_empreintes().expect("un chemin");
-            let contenu = std::fs::read_to_string(&chemin).expect("lecture");
-            for i in 0..N {
-                assert_eq!(
-                    chercher_empreinte(&contenu, &format!("hote{i}:3389")).as_deref(),
-                    Some(format!("fp{i}").as_str()),
-                    "empreinte de hote{i} perdue ; fichier :\n{contenu}"
-                );
-            }
-        }));
-
-        unsafe {
-            match precedent {
-                Some(v) => std::env::set_var("AVASH_HOME", v),
-                None => std::env::remove_var("AVASH_HOME"),
-            }
+            })
+            .collect();
+        for f in fils {
+            f.join().expect("fil terminé");
         }
-        let _ = std::fs::remove_dir_all(&bac);
-        if let Err(p) = resultat {
-            std::panic::resume_unwind(p);
+        let chemin = chemin_empreintes().expect("un chemin");
+        let contenu = std::fs::read_to_string(&chemin).expect("lecture");
+        for i in 0..N {
+            assert_eq!(
+                chercher_empreinte(&contenu, &format!("hote{i}:3389")).as_deref(),
+                Some(format!("fp{i}").as_str()),
+                "empreinte de hote{i} perdue ; fichier :\n{contenu}"
+            );
         }
     }
 }

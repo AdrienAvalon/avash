@@ -2,6 +2,7 @@
 //! v0.1 : connect/auth/exec. v0.2 : `request_pty`.
 //! v0.3 : write stdin réel, `window_change` (resize), `known_hosts` strict.
 
+use crate::Verrou as _;
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -138,13 +139,44 @@ fn est_fichier_ordinaire(chemin: &std::path::Path) -> bool {
 /// Rend `None` sur un `known_hosts` qui n'est pas un fichier ordinaire : c'est
 /// alors à `known_hosts_illisible` de refuser la connexion, avec le verdict qui
 /// nomme la cause. Lire ici valait, sur un tube nommé, un gel silencieux.
-fn marqueur_bloquant(hote: &str) -> Option<String> {
+fn marqueur_bloquant(hote: &str, port: u16) -> Option<String> {
     let chemin = chemin_known_hosts()?;
     if !est_fichier_ordinaire(&chemin) {
         return None;
     }
     let contenu = std::fs::read_to_string(chemin).ok()?;
-    marqueur_bloquant_dans(&contenu, hote)
+    marqueur_bloquant_dans(&contenu, hote, port)
+}
+
+/// Un motif haché de `known_hosts` (`|1|sel|condensat`, écrit par
+/// `HashKnownHosts yes` ou `ssh-keygen -H`) vise-t-il `hote`, ou `[hote]:port`
+/// (la forme qu'OpenSSH hache pour un port non standard) ?
+///
+/// Audit du 12 septembre 2026 (C-reseau-2) : les marqueurs n'étaient reconnus
+/// que sur un nom en clair. `HashKnownHosts yes` est posé par défaut dans
+/// `/etc/ssh/ssh_config` de Debian et d'Ubuntu, et `ssh-keygen -H` hache aussi
+/// les lignes marquées : une clé `@revoked` y passait pour un premier contact,
+/// réapprise et acceptée. Le condensat est un HMAC-SHA1 du nom, clé = le sel.
+/// Un sel ou un condensat illisible est retenu : dans le doute, refuser.
+fn motif_hache_vise(motif: &str, hote: &str, port: u16) -> bool {
+    use hmac::{KeyInit as _, Mac as _};
+    let Some(reste) = motif.strip_prefix("|1|") else {
+        return false;
+    };
+    let mut parties = reste.split('|');
+    let decoder = |p: Option<&str>| p.and_then(|p| data_encoding::BASE64.decode(p.as_bytes()).ok());
+    let (Some(sel), Some(condensat)) = (decoder(parties.next()), decoder(parties.next())) else {
+        return true;
+    };
+    let avec_port = format!("[{hote}]:{port}");
+    let noms = [hote, avec_port.as_str()];
+    noms.iter().any(|nom| {
+        hmac::Hmac::<sha1::Sha1>::new_from_slice(&sel).is_ok_and(|mac| {
+            mac.chain_update(nom.as_bytes())
+                .verify_slice(&condensat)
+                .is_ok()
+        })
+    })
 }
 
 /// Cherche `@revoked` / `@cert-authority` visant `hote` dans un `known_hosts`.
@@ -180,7 +212,7 @@ fn hote_de_motif_known_hosts(motif: &str) -> &str {
     }
 }
 
-fn marqueur_bloquant_dans(contenu: &str, hote: &str) -> Option<String> {
+fn marqueur_bloquant_dans(contenu: &str, hote: &str, port: u16) -> Option<String> {
     for ligne in contenu.lines() {
         let l = ligne.trim();
         if !l.starts_with('@') {
@@ -192,10 +224,13 @@ fn marqueur_bloquant_dans(contenu: &str, hote: &str) -> Option<String> {
             continue;
         }
         let Some(hotes) = mots.next() else { continue };
-        if hotes
-            .split(',')
-            .any(|h| hote_de_motif_known_hosts(h) == hote)
-        {
+        if hotes.split(',').any(|h| {
+            if h.starts_with("|1|") {
+                motif_hache_vise(h, hote, port)
+            } else {
+                hote_de_motif_known_hosts(h) == hote
+            }
+        }) {
             return Some(marqueur.to_owned());
         }
     }
@@ -313,7 +348,10 @@ pub struct ClientAuth {
     pub user: String,
     /// Chemin de la clé privée (OpenSSH). À défaut, l'agent SSH est tenté.
     pub key_path: Option<PathBuf>,
-    pub password: Option<String>,
+    /// Effacé à sa libération, clones compris : audit du 12 septembre 2026
+    /// (C-secrets-2), une `String` ordinaire laissait le mot de passe dans le
+    /// tas jusqu'à réutilisation, donc dans un vidage mémoire ou sur le swap.
+    pub password: Option<zeroize::Zeroizing<String>>,
 }
 
 /// Raison d'un refus de cle d'hote, partagee entre le handler et l'appelant.
@@ -519,7 +557,7 @@ impl russh::client::Handler for AvashAuth {
         let server_public_key = match server_public_key {
             russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => key,
             russh::keys::PublicKeyOrCertificate::Certificate(_) => {
-                *self.verdict.lock().unwrap() = Some(
+                *self.verdict.verrou() = Some(
                     "Ce serveur présente un certificat SSH. Avash ne sait pas \
                      encore les valider et refuse la connexion."
                         .into(),
@@ -541,8 +579,8 @@ impl russh::client::Handler for AvashAuth {
         // sans un mot**, là où ssh(1) refuse catégoriquement. On ne sait pas
         // valider une autorité de certification non plus : dans les deux cas,
         // on refuse plutôt que de faire semblant.
-        if let Some(marqueur) = marqueur_bloquant(&self.host) {
-            *self.verdict.lock().unwrap() = Some(format!(
+        if let Some(marqueur) = marqueur_bloquant(&self.host, self.port) {
+            *self.verdict.verrou() = Some(format!(
                 "~/.ssh/known_hosts porte « {marqueur} » pour {}. Avash ne sait pas \
                  traiter ce marqueur et refuse plutôt que de l'ignorer — ce qui \
                  reviendrait à réapprendre une clé que vous avez marquée.",
@@ -551,11 +589,11 @@ impl russh::client::Handler for AvashAuth {
             return Err(russh::Error::UnknownKey);
         }
         if let Some(verdict) = known_hosts_illisible() {
-            *self.verdict.lock().unwrap() = Some(verdict);
+            *self.verdict.verrou() = Some(verdict);
             return Err(russh::Error::UnknownKey);
         }
         let Some(chemin) = chemin_known_hosts() else {
-            *self.verdict.lock().unwrap() = Some(
+            *self.verdict.verrou() = Some(
                 "Répertoire personnel introuvable : impossible de vérifier \
                  l'identité du serveur. Connexion refusée."
                     .into(),
@@ -566,7 +604,7 @@ impl russh::client::Handler for AvashAuth {
             match russh::keys::known_hosts::known_host_keys_path(&self.host, self.port, &chemin) {
                 Ok(k) => k,
                 Err(e) => {
-                    *self.verdict.lock().unwrap() =
+                    *self.verdict.verrou() =
                         Some(format!("Vérification de la clé d'hôte impossible : {e}"));
                     return Err(russh::Error::UnknownKey);
                 }
@@ -589,7 +627,7 @@ impl russh::client::Handler for AvashAuth {
                 if let Err(reason) =
                     apprendre_cle_hote(&chemin, &self.host, self.port, server_public_key)
                 {
-                    *self.verdict.lock().unwrap() = Some(reason);
+                    *self.verdict.verrou() = Some(reason);
                     return Err(russh::Error::UnknownKey);
                 }
                 Ok(true)
@@ -599,7 +637,7 @@ impl russh::client::Handler for AvashAuth {
             // Dans le doute on refuse — c'est à l'utilisateur de trancher.
             VerdictCle::Changee { ligne: line } => {
                 let fp = server_public_key.fingerprint(russh::keys::HashAlg::Sha256);
-                *self.verdict.lock().unwrap() = Some(format!(
+                *self.verdict.verrou() = Some(format!(
                     "{HOST_KEY_CHANGED} LA CLÉ D'HÔTE A CHANGÉ pour {}:{}.\n\n\
                      Soit le serveur a été réinstallé, soit quelqu'un intercepte \
                      la connexion.\n\n\
@@ -671,7 +709,7 @@ impl russh::client::Handler for AvashAuth {
         reply: russh::client::ChannelOpenHandle,
         _session: &mut russh::client::Session,
     ) -> Result<(), Self::Error> {
-        let dest = self.forwards.lock().unwrap().get(&connected_port).cloned();
+        let dest = self.forwards.verrou().get(&connected_port).cloned();
         let Some(target) = dest else {
             reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
             return Ok(());
@@ -826,9 +864,106 @@ async fn attendre_echeance(echeance: Option<tokio::time::Instant>) {
     }
 }
 
+/// Délai de garde de l'établissement d'UN maillon SSH : TCP, bannière,
+/// échange de clés et authentification, sous une même échéance.
+///
+/// Audit du 12 septembre 2026 (C-SIL-5, C-reseau-1) : rien ne bornait cette
+/// chaîne. Un hôte derrière un pare-feu qui ignore les demandes laissait
+/// « connexion en cours » ~127 s (retransmissions SYN du noyau), et un port qui
+/// accepte le TCP puis se tait (tarpit, service gelé, rebond bloqué) pour
+/// toujours : la modale de déploiement de clé et la ligne de tunnel n'avaient
+/// alors aucune issue. 30 s comme le processus RDP (10 s de TCP et 25 s de
+/// session), par maillon, surchargeable par `AVASH_SSH_DELAI` (secondes).
+const DELAI_CONNEXION_SSH: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Délai de la question « l'agent SSH porte-t-il une identité ? », posée avant
+/// de demander un mot de passe : un agent bloqué ne doit pas figer le
+/// formulaire (audit du 12 septembre 2026, C-SIL-5).
+const DELAI_AGENT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Le délai de connexion en vigueur : `AVASH_SSH_DELAI` s'il vaut un nombre
+/// entier de secondes non nul, 30 s sinon.
+fn delai_connexion() -> std::time::Duration {
+    delai_depuis(std::env::var("AVASH_SSH_DELAI").ok().as_deref())
+}
+
+fn delai_depuis(valeur: Option<&str>) -> std::time::Duration {
+    valeur
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map_or(DELAI_CONNEXION_SSH, std::time::Duration::from_secs)
+}
+
+/// L'étape d'un maillon qui n'a pas abouti dans le délai : le message dit
+/// laquelle, parce que le geste n'est pas le même (hôte éteint, service muet,
+/// agent bloqué).
+#[derive(Clone, Copy)]
+enum Etape {
+    Tcp,
+    CanalDuRebond,
+    Poignee,
+    Authentification,
+}
+
+fn message_delai(host: &str, port: u16, delai: std::time::Duration, etape: Etape) -> String {
+    let duree = if delai.subsec_millis() == 0 {
+        format!("{} s", delai.as_secs())
+    } else {
+        format!("{} ms", delai.as_millis())
+    };
+    let pourquoi = match etape {
+        Etape::Tcp => "connexion TCP sans réponse : hôte éteint, injoignable, ou pare-feu qui ignore la demande ?",
+        Etape::CanalDuRebond => "le rebond n'a pas ouvert le canal vers cet hôte",
+        Etape::Poignee => "TCP accepté mais pas de bannière SSH ni d'échange de clés : est-ce bien un serveur SSH ?",
+        Etape::Authentification => "l'authentification n'a pas abouti : serveur ou agent SSH bloqué ?",
+    };
+    format!("{host}:{port} n'a pas répondu en {duree} ({pourquoi}).")
+}
+
+/// Borne une question posée à l'agent SSH : sans réponse dans le délai, on le
+/// tient pour vide (et on le dit au journal) plutôt que d'attendre sans fin.
+async fn borne_agent(
+    question: impl std::future::Future<Output = bool>,
+    delai: std::time::Duration,
+) -> bool {
+    if let Ok(reponse) = tokio::time::timeout(delai, question).await {
+        reponse
+    } else {
+        tracing::warn!(
+            "L'agent SSH n'a pas répondu en {} ms : on le tient pour vide.",
+            delai.as_millis()
+        );
+        false
+    }
+}
+
+/// Remet un bloc de sortie au canal du terminal SANS attendre : plein, le bloc
+/// est gardé en attente et le pump reste libre de servir le clavier. Rend
+/// `false` si le canal est fermé (l'onglet est parti).
+fn remettre_sortie(
+    out_tx: &mpsc::Sender<Vec<u8>>,
+    bloc: Vec<u8>,
+    en_attente: &mut Option<Vec<u8>>,
+) -> bool {
+    match out_tx.try_send(bloc) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(bloc)) => {
+            *en_attente = Some(bloc);
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+    }
+}
+
 impl AvashSession {
     /// Config russh commune (keepalive : detecte une coupure NAT au lieu de
     /// laisser une session zombie).
+    ///
+    /// Pas d'`inactivity_timeout` (audit du 12 septembre 2026, C-SIL-5) :
+    /// russh l'applique à toute la vie de la session, pas à la seule phase qui
+    /// précède l'authentification, et une session établie est déjà surveillée
+    /// par le keepalive (30 s, trois essais). La phase d'établissement, elle,
+    /// est bornée par l'échéance de `DELAI_CONNEXION_SSH`.
     fn config() -> Arc<russh::client::Config> {
         Arc::new(russh::client::Config {
             keepalive_interval: Some(std::time::Duration::from_secs(30)),
@@ -870,22 +1005,80 @@ impl AvashSession {
         (handler, verdict, forwards, agent_redirige, relais_agent)
     }
 
-    /// Connexion directe (TCP), sans rebond.
+    /// Connexion directe (TCP), sans rebond, bornée par le délai de connexion.
     pub async fn connect(host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
+        Self::connect_borne(host, port, auth, delai_connexion()).await
+    }
+
+    /// [`connect`](Self::connect) sous un délai explicite : TCP, bannière,
+    /// échange de clés et authentification partagent une même échéance.
+    async fn connect_borne(
+        host: &str,
+        port: u16,
+        auth: &ClientAuth,
+        delai: std::time::Duration,
+    ) -> Result<Self> {
+        let echeance = tokio::time::Instant::now() + delai;
+        let socket =
+            match tokio::time::timeout_at(echeance, tokio::net::TcpStream::connect((host, port)))
+                .await
+            {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    return Err(anyhow::Error::new(e))
+                        .with_context(|| format!("Connexion SSH à {host}:{port}"))
+                }
+                Err(_) => return Err(anyhow!(message_delai(host, port, delai, Etape::Tcp))),
+            };
+        // Ce que `russh::client::connect` faisait pour nous avant qu'on ouvre
+        // le TCP nous-mêmes (pour le borner) : pas d'algorithme de Nagle sur
+        // une session interactive (voir `config`).
+        if let Err(e) = socket.set_nodelay(true) {
+            tracing::warn!("TCP_NODELAY refusé sur {host}:{port} : {e}");
+        }
+        Self::etablir(socket, host, port, auth, delai, echeance, false).await
+    }
+
+    /// Bannière, échange de clés et authentification sur un flux déjà ouvert
+    /// (TCP direct ou canal d'un rebond), sous l'échéance du maillon.
+    async fn etablir<S>(
+        flux: S,
+        host: &str,
+        port: u16,
+        auth: &ClientAuth,
+        delai: std::time::Duration,
+        echeance: tokio::time::Instant,
+        via_rebond: bool,
+    ) -> Result<Self>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
         let (handler, verdict, forwards, agent_redirige, relais_agent) = Self::handler(host, port);
-        let mut session = match russh::client::connect(Self::config(), (host, port), handler).await
-        {
-            Ok(s) => s,
-            Err(e) => {
+        let poignee = russh::client::connect_stream(Self::config(), flux, handler);
+        let mut session = match tokio::time::timeout_at(echeance, poignee).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
                 // Un refus de cle d'hote porte un message explicite : on le
                 // remonte tel quel plutot que le "Unknown key" de russh.
-                if let Some(reason) = verdict.lock().unwrap().take() {
+                if let Some(reason) = verdict.verrou().take() {
                     return Err(anyhow!(reason));
                 }
-                return Err(e).with_context(|| format!("Connexion SSH à {host}:{port}"));
+                let ou = if via_rebond { " via le rebond" } else { "" };
+                return Err(e).with_context(|| format!("Connexion SSH à {host}:{port}{ou}"));
             }
+            Err(_) => return Err(anyhow!(message_delai(host, port, delai, Etape::Poignee))),
         };
-        Self::authenticate(&mut session, auth).await?;
+        match tokio::time::timeout_at(echeance, Self::authenticate(&mut session, auth)).await {
+            Ok(issue) => issue?,
+            Err(_) => {
+                return Err(anyhow!(message_delai(
+                    host,
+                    port,
+                    delai,
+                    Etape::Authentification
+                )))
+            }
+        }
         Ok(Self {
             session,
             forwards,
@@ -906,56 +1099,75 @@ impl AvashSession {
         port: u16,
         auth: &ClientAuth,
     ) -> Result<Self> {
+        Self::connect_via_borne(hops, host, port, auth, delai_connexion()).await
+    }
+
+    /// [`connect_via`](Self::connect_via) sous un délai explicite, compté par
+    /// maillon : chaque rebond et la cible ont chacun le leur.
+    async fn connect_via_borne(
+        hops: &[Hop],
+        host: &str,
+        port: u16,
+        auth: &ClientAuth,
+        delai: std::time::Duration,
+    ) -> Result<Self> {
         let Some((first, rest)) = hops.split_first() else {
-            return Self::connect(host, port, auth).await;
+            return Self::connect_borne(host, port, auth, delai).await;
         };
         let mut chain: Vec<AvashSession> = Vec::new();
-        let mut current = Self::connect(&first.addr, first.port, &first.auth)
+        let mut current = Self::connect_borne(&first.addr, first.port, &first.auth, delai)
             .await
             .with_context(|| format!("Rebond {}:{}", first.addr, first.port))?;
         for hop in rest {
             let next = current
-                .connect_hop(&hop.addr, hop.port, &hop.auth)
+                .connect_hop(&hop.addr, hop.port, &hop.auth, delai)
                 .await
                 .with_context(|| format!("Rebond {}:{}", hop.addr, hop.port))?;
             chain.push(current);
             current = next;
         }
-        let mut target = current.connect_hop(host, port, auth).await?;
+        let mut target = current.connect_hop(host, port, auth, delai).await?;
         chain.push(current);
         target.jumps = chain;
         Ok(target)
     }
 
-    /// Ouvre une session SSH sur `host:port` a travers le canal de CE rebond.
-    async fn connect_hop(&self, host: &str, port: u16, auth: &ClientAuth) -> Result<Self> {
-        let channel = self
-            .session
-            .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
-            .await
-            .with_context(|| format!("Le rebond n'a pas pu joindre {host}:{port}"))?;
-        let (handler, verdict, forwards, agent_redirige, relais_agent) = Self::handler(host, port);
-        let mut session =
-            match russh::client::connect_stream(Self::config(), channel.into_stream(), handler)
-                .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    if let Some(reason) = verdict.lock().unwrap().take() {
-                        return Err(anyhow!(reason));
-                    }
-                    return Err(e)
-                        .with_context(|| format!("Connexion SSH à {host}:{port} via le rebond"));
-                }
-            };
-        Self::authenticate(&mut session, auth).await?;
-        Ok(Self {
-            session,
-            forwards,
-            agent_redirige,
-            relais_agent,
-            jumps: Vec::new(),
-        })
+    /// Ouvre une session SSH sur `host:port` a travers le canal de CE rebond,
+    /// sous le délai du maillon.
+    async fn connect_hop(
+        &self,
+        host: &str,
+        port: u16,
+        auth: &ClientAuth,
+        delai: std::time::Duration,
+    ) -> Result<Self> {
+        let echeance = tokio::time::Instant::now() + delai;
+        let ouverture =
+            self.session
+                .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0);
+        let channel = match tokio::time::timeout_at(echeance, ouverture).await {
+            Ok(canal) => {
+                canal.with_context(|| format!("Le rebond n'a pas pu joindre {host}:{port}"))?
+            }
+            Err(_) => {
+                return Err(anyhow!(message_delai(
+                    host,
+                    port,
+                    delai,
+                    Etape::CanalDuRebond
+                )))
+            }
+        };
+        Self::etablir(
+            channel.into_stream(),
+            host,
+            port,
+            auth,
+            delai,
+            echeance,
+            true,
+        )
+        .await
     }
 
     async fn authenticate(
@@ -1010,7 +1222,9 @@ impl AvashSession {
         // si sa méthode n'était tout simplement pas proposée.
         let mut restantes: Vec<&'static str> = Vec::new();
         if let Some(password) = &auth.password {
-            let issue = session.authenticate_password(&auth.user, password).await?;
+            let issue = session
+                .authenticate_password(&auth.user, password.as_str())
+                .await?;
             if issue.success() {
                 return Ok(());
             }
@@ -1026,7 +1240,7 @@ impl AvashSession {
             // en `keyboard-interactive`. OpenSSH bascule tout seul ; nous ne
             // savions pas, et l'utilisateur voyait « authentification échouée »
             // avec un mot de passe pourtant juste.
-            if Self::authenticate_clavier(session, &auth.user, password).await? {
+            if Self::authenticate_clavier(session, &auth.user, password.as_str()).await? {
                 return Ok(());
             }
         }
@@ -1118,14 +1332,31 @@ impl AvashSession {
 
     /// L'agent SSH expose-t-il au moins une identite ? Permet a l'interface de
     /// ne PAS reclamer de mot de passe quand l'agent peut authentifier.
+    ///
+    /// Bornée à 3 s (audit du 12 septembre 2026, C-SIL-5) : un agent qui
+    /// accepte la connexion et ne répond plus figeait la question, donc
+    /// l'ouverture de l'onglet, sans fin.
     pub async fn agent_has_identities() -> bool {
+        borne_agent(Self::identites_agent(), DELAI_AGENT).await
+    }
+
+    /// Le socket de l'agent désigné par `SSH_AUTH_SOCK` porte-t-il une identité ?
+    #[cfg(unix)]
+    async fn identites_sur_socket(chemin: &Path) -> bool {
         use russh::keys::agent::client::AgentClient;
+        let Ok(mut agent) = AgentClient::connect_uds(chemin).await else {
+            return false;
+        };
+        agent_porte_une_identite(&mut agent).await
+    }
+
+    async fn identites_agent() -> bool {
         #[cfg(unix)]
         {
-            let Ok(mut agent) = AgentClient::connect_env().await else {
+            let Some(chemin) = std::env::var_os("SSH_AUTH_SOCK") else {
                 return false;
             };
-            agent_porte_une_identite(&mut agent).await
+            Self::identites_sur_socket(Path::new(&chemin)).await
         }
         #[cfg(windows)]
         {
@@ -1503,19 +1734,40 @@ impl AvashSession {
             // Le resize est optionnel : sa fermeture ne doit pas tuer la session,
             // mais son bras select! doit etre desactive (voir plus bas).
             let mut resize_closed = false;
+            // Contrat K6 de l'audit du 12 septembre 2026 (C-perf-4) : un bloc
+            // de sortie reçu que le canal du terminal, plein, n'a pas encore
+            // pris. Le `out_tx.send(..).await` d'avant se tenait DANS le bras de
+            // sortie : sortie saturée (`cat` d'un gros fichier, front qui ne
+            // suit pas), le pump restait suspendu là et le bras du clavier
+            // n'était plus servi, Ctrl+C compris. Le bloc attend maintenant ici,
+            // le bras de sortie se tait tant qu'il attend (contre-pression vers
+            // le serveur), et le clavier reste servi. Limite de russh 0.63 : si
+            // le pump cesse de lire assez longtemps pour remplir aussi le tampon
+            // du canal côté russh (100 messages), la boucle de session de russh
+            // attend elle-même ; la frappe part alors au premier bloc repris par
+            // le front, que l'accusé `pty_ack` garantit à un débit plancher.
+            let mut en_attente: Option<Vec<u8>> = None;
             loop {
                 tokio::select! {
-                    // Sortie du serveur → front
-                    msg = pump_channel.wait() => {
+                    // Sortie du serveur → front, quand aucun bloc n'attend.
+                    msg = pump_channel.wait(), if en_attente.is_none() => {
                         match msg {
                             Some(russh::ChannelMsg::Data { ref data }) => {
-                                if out_tx.send(data.to_vec()).await.is_err() { break; }
+                                if !remettre_sortie(&out_tx, data.to_vec(), &mut en_attente) { break; }
                             }
                             Some(russh::ChannelMsg::ExtendedData { ref data, .. }) => {
-                                if out_tx.send(data.to_vec()).await.is_err() { break; }
+                                if !remettre_sortie(&out_tx, data.to_vec(), &mut en_attente) { break; }
                             }
                             Some(russh::ChannelMsg::Eof | russh::ChannelMsg::Close) | None => break,
                             Some(_) => {}
+                        }
+                    }
+                    // De la place est revenue dans le canal du terminal : le
+                    // bloc en attente part, et la lecture du serveur reprend.
+                    permis = out_tx.reserve(), if en_attente.is_some() => {
+                        let Ok(permis) = permis else { break };
+                        if let Some(bloc) = en_attente.take() {
+                            permis.send(bloc);
                         }
                     }
                     // Clavier du front → stdin serveur
@@ -1602,10 +1854,7 @@ impl AvashSession {
             port: local_port,
             counters,
         });
-        self.forwards
-            .lock()
-            .unwrap()
-            .insert(u32::from(port), dest.clone());
+        self.forwards.verrou().insert(u32::from(port), dest.clone());
         let bound = self
             .session
             .tcpip_forward(bind_addr, u32::from(port))
@@ -1613,7 +1862,7 @@ impl AvashSession {
             .with_context(|| format!("Le serveur refuse d'écouter sur {bind_addr}:{port}"))?;
         // Port 0 : le serveur a choisi, on retient le vrai numero.
         let bound = if port == 0 && bound != 0 {
-            let mut f = self.forwards.lock().unwrap();
+            let mut f = self.forwards.verrou();
             f.remove(&0);
             f.insert(bound, dest);
             u16::try_from(bound).unwrap_or(0)
@@ -1631,7 +1880,7 @@ impl AvashSession {
 
     /// Annule une redirection distante.
     pub async fn cancel_remote_forward(&self, bind_addr: &str, port: u16) -> Result<()> {
-        self.forwards.lock().unwrap().remove(&u32::from(port));
+        self.forwards.verrou().remove(&u32::from(port));
         self.session
             .cancel_tcpip_forward(bind_addr, u32::from(port))
             .await?;
@@ -1675,13 +1924,34 @@ fn apprendre_cle_hote(
     port: u16,
     cle: &russh::keys::PublicKey,
 ) -> std::result::Result<(), String> {
-    russh::keys::known_hosts::learn_known_hosts_path(host, port, cle, chemin).map_err(|e| {
+    let refus = |e: &dyn std::fmt::Display| {
         format!(
             "Impossible d'enregistrer la clé de {host}:{port} dans {} : {e}. \
              Connexion refusée.",
             chemin.display()
         )
-    })
+    };
+    // Audit du 12 septembre 2026 (C-fs-2) : russh crée `~/.ssh` et
+    // `known_hosts` avec l'umask (0755 et 0644 d'ordinaire). Sur un profil neuf,
+    // l'inventaire des hôtes joints devenait lisible par les autres comptes,
+    // contre la promesse de SECURITY.md (état en 0600 dans un répertoire en
+    // 0700). Le répertoire naît donc ici en 0700, et le fichier est resserré à
+    // 0600 une fois la clé apprise.
+    if let Some(parent) = chemin.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| refus(&e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                    .map_err(|e| refus(&e))?;
+            }
+        }
+    }
+    russh::keys::known_hosts::learn_known_hosts_path(host, port, cle, chemin)
+        .map_err(|e| refus(&e))?;
+    crate::restreindre_au_proprietaire(chemin);
+    Ok(())
 }
 
 /// Coeur testable de [`forget_host_key`], sur un fichier `known_hosts`
@@ -1733,6 +2003,22 @@ pub fn forget_host_key_at(host: &str, port: u16, path: &Path) -> Result<usize> {
 mod tests {
     use super::*;
 
+    /// Audit du 12 septembre 2026 (C-secrets-2) : le mot de passe d'une
+    /// connexion est un type qui s'efface. Ce test ne compile plus si le champ
+    /// redevient une `String` nue.
+    #[test]
+    fn le_mot_de_passe_est_un_type_qui_s_efface() {
+        fn champ(a: &ClientAuth) -> Option<&zeroize::Zeroizing<String>> {
+            a.password.as_ref()
+        }
+        let a = ClientAuth {
+            user: "u".into(),
+            key_path: None,
+            password: Some(zeroize::Zeroizing::new("s3cr3t".into())),
+        };
+        assert_eq!(champ(&a).map(|s| s.as_str()), Some("s3cr3t"));
+    }
+
     #[test]
     fn current_username_ne_rend_jamais_vide() {
         // Un client SSH a toujours besoin d'un nom : le repli garantit une
@@ -1775,6 +2061,69 @@ mod tests_transport_agent {
 mod tests_marqueurs {
     use super::marqueur_bloquant_dans;
 
+    /// Une entrée hachée comme l'écrit `HashKnownHosts yes` : sel aléatoire,
+    /// HMAC-SHA1 du nom, les deux en base64.
+    fn hache(sel: &[u8], nom: &str) -> String {
+        use hmac::{KeyInit as _, Mac as _};
+        let mut mac = hmac::Hmac::<sha1::Sha1>::new_from_slice(sel).unwrap();
+        mac.update(nom.as_bytes());
+        format!(
+            "|1|{}|{}",
+            data_encoding::BASE64.encode(sel),
+            data_encoding::BASE64.encode(&mac.finalize().into_bytes())
+        )
+    }
+
+    const CLE: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGYtest";
+
+    /// Audit du 12 septembre 2026 (C-reseau-2) : sous `HashKnownHosts yes`
+    /// (défaut de Debian et d'Ubuntu), `ssh-keygen -H` hache aussi les lignes
+    /// marquées. Le marqueur n'était reconnu que sur un nom en clair : la clé
+    /// révoquée d'un hôte haché passait pour un premier contact et était
+    /// réapprise.
+    #[test]
+    fn un_marqueur_revoked_sur_un_hote_hache_bloque_la_connexion() {
+        let c = format!("@revoked {} {CLE}\n", hache(b"sel-de-vingt-octets!", "srv"));
+        assert_eq!(
+            marqueur_bloquant_dans(&c, "srv", 22).as_deref(),
+            Some("@revoked")
+        );
+        assert_eq!(
+            marqueur_bloquant_dans(&c, "autre", 22),
+            None,
+            "un autre hôte passe"
+        );
+    }
+
+    /// La forme hachée d'un port non standard est celle de `[hôte]:port`.
+    #[test]
+    fn un_marqueur_sur_un_hote_hache_avec_port_bloque_la_connexion() {
+        let c = format!(
+            "@cert-authority {} {CLE}\n",
+            hache(b"autre-sel-aleatoire", "[srv]:2222")
+        );
+        assert_eq!(
+            marqueur_bloquant_dans(&c, "srv", 2222).as_deref(),
+            Some("@cert-authority")
+        );
+        assert_eq!(
+            marqueur_bloquant_dans(&c, "srv", 22),
+            None,
+            "pas sur un autre port"
+        );
+    }
+
+    /// Un sel ou un condensat illisible : on ne sait pas qui est visé, on
+    /// retient le marqueur plutôt que de réapprendre une clé peut-être marquée.
+    #[test]
+    fn un_marqueur_hache_illisible_est_retenu() {
+        let c = format!("@revoked |1|pas*du*base64|%% {CLE}\n");
+        assert_eq!(
+            marqueur_bloquant_dans(&c, "srv", 22).as_deref(),
+            Some("@revoked")
+        );
+    }
+
     /// `ssh(1)` refuse catégoriquement une clé marquée `@revoked`. russh, lui,
     /// découpe la ligne en hôte « @revoked » — qui ne correspond à rien — et
     /// rend une liste vide : verdict « premier contact », clé révoquée
@@ -1783,7 +2132,7 @@ mod tests_marqueurs {
     fn une_cle_revoquee_est_signalee() {
         let c = "@revoked srv.exemple.com ssh-ed25519 AAAA\n";
         assert_eq!(
-            marqueur_bloquant_dans(c, "srv.exemple.com").as_deref(),
+            marqueur_bloquant_dans(c, "srv.exemple.com", 22).as_deref(),
             Some("@revoked")
         );
     }
@@ -1793,7 +2142,7 @@ mod tests_marqueurs {
     fn une_autorite_de_certification_est_signalee() {
         let c = "@cert-authority *.interne,srv.exemple.com ssh-rsa AAAA\n";
         assert_eq!(
-            marqueur_bloquant_dans(c, "srv.exemple.com").as_deref(),
+            marqueur_bloquant_dans(c, "srv.exemple.com", 22).as_deref(),
             Some("@cert-authority")
         );
     }
@@ -1802,7 +2151,7 @@ mod tests_marqueurs {
     fn un_hote_sans_marqueur_ne_bloque_rien() {
         let c = "@revoked autre.exemple.com ssh-ed25519 AAAA\n\
                  srv.exemple.com ssh-ed25519 BBBB\n";
-        assert_eq!(marqueur_bloquant_dans(c, "srv.exemple.com"), None);
+        assert_eq!(marqueur_bloquant_dans(c, "srv.exemple.com", 22), None);
     }
 
     #[test]
@@ -1813,7 +2162,7 @@ mod tests_marqueurs {
             "# commentaire\n",
             "@inconnu srv k v\n",
         ] {
-            assert_eq!(marqueur_bloquant_dans(c, "srv"), None, "{c:?}");
+            assert_eq!(marqueur_bloquant_dans(c, "srv", 22), None, "{c:?}");
         }
     }
 
@@ -1830,7 +2179,7 @@ mod tests_marqueurs {
             "@revoked autre,[srv.exemple.com]:2222 ssh-ed25519 AAAA\n",
         ] {
             assert_eq!(
-                marqueur_bloquant_dans(c, "srv.exemple.com").as_deref(),
+                marqueur_bloquant_dans(c, "srv.exemple.com", 22).as_deref(),
                 Some("@revoked"),
                 "{c:?}"
             );
@@ -1844,10 +2193,10 @@ mod tests_marqueurs {
     fn un_ipv6_litteral_n_est_pas_tronque() {
         let c = "@revoked 2001:db8::1 ssh-ed25519 AAAA\n";
         assert_eq!(
-            marqueur_bloquant_dans(c, "2001:db8::1").as_deref(),
+            marqueur_bloquant_dans(c, "2001:db8::1", 22).as_deref(),
             Some("@revoked")
         );
-        assert_eq!(marqueur_bloquant_dans(c, "2001"), None);
+        assert_eq!(marqueur_bloquant_dans(c, "2001", 22), None);
     }
 }
 
@@ -2093,7 +2442,7 @@ mod tests_known_hosts_illisible {
         let ssh = dir.dir().join(".ssh");
         std::fs::create_dir_all(&ssh).unwrap();
         creer_tube_nomme(&ssh.join("known_hosts"));
-        let marqueur = sous_delai(|| marqueur_bloquant("srv.exemple.com"))
+        let marqueur = sous_delai(|| marqueur_bloquant("srv.exemple.com", 22))
             .expect("la recherche de marqueur ne doit pas se bloquer sur un tube nommé");
         assert_eq!(
             marqueur, None,
@@ -2182,12 +2531,14 @@ mod tests_known_hosts_illisible {
     }
 
     /// `mkfifo(3)` : il n'y a pas de tube nommé dans la bibliothèque standard.
+    /// Par `nix` et non par un bloc `unsafe` de FFI libc (audit du 12 septembre
+    /// 2026, C-unsafe-5) : `nix` est déjà compilé pour `serialport`, et son
+    /// `mkfifo` construit lui-même le chemin terminé par un octet nul.
     #[cfg(unix)]
     fn creer_tube_nomme(chemin: &std::path::Path) {
-        use std::os::unix::ffi::OsStrExt as _;
-        let brut = std::ffi::CString::new(chemin.as_os_str().as_bytes()).unwrap();
-        let code = unsafe { libc::mkfifo(brut.as_ptr(), 0o600) };
-        assert_eq!(code, 0, "mkfifo a échoué sur {}", chemin.display());
+        use nix::sys::stat::Mode;
+        nix::unistd::mkfifo(chemin, Mode::S_IRUSR | Mode::S_IWUSR)
+            .unwrap_or_else(|e| panic!("mkfifo a échoué sur {} : {e}", chemin.display()));
     }
 }
 
@@ -2327,5 +2678,168 @@ mod tests_garde_agent {
             relais.lock().unwrap().is_empty(),
             "la garde doit vider la liste des relais pour ne pas les accumuler"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_delai {
+    use super::{borne_agent, delai_depuis, AvashSession, ClientAuth, DELAI_CONNEXION_SSH};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn le_delai_de_connexion_se_regle_par_l_environnement() {
+        assert_eq!(delai_depuis(None), DELAI_CONNEXION_SSH);
+        assert_eq!(delai_depuis(Some("5")), Duration::from_secs(5));
+        assert_eq!(delai_depuis(Some(" 2 ")), Duration::from_secs(2));
+        for invalide in ["", "0", "-3", "abc", "1.5"] {
+            assert_eq!(
+                delai_depuis(Some(invalide)),
+                DELAI_CONNEXION_SSH,
+                "{invalide:?}"
+            );
+        }
+    }
+
+    /// Un port qui accepte le TCP et ne dit jamais rien (tarpit, service gelé).
+    async fn serveur_muet() -> u16 {
+        let ecoute = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = ecoute.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut gardees = Vec::new();
+            while let Ok((flux, _)) = ecoute.accept().await {
+                gardees.push(flux);
+            }
+        });
+        port
+    }
+
+    /// Audit du 12 septembre 2026 (C-SIL-5, C-reseau-1) : sans délai, un
+    /// serveur muet laissait l'onglet sur « connexion en cours » pour toujours.
+    #[tokio::test]
+    async fn un_serveur_muet_fait_echouer_la_connexion_ssh_en_temps_borne() {
+        let port = serveur_muet().await;
+        let auth = ClientAuth {
+            user: "u".into(),
+            key_path: None,
+            password: None,
+        };
+        let debut = Instant::now();
+        let issue =
+            AvashSession::connect_borne("127.0.0.1", port, &auth, Duration::from_millis(400)).await;
+        let Err(e) = issue else {
+            panic!("un serveur muet ne doit pas donner de session")
+        };
+        assert!(
+            debut.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            debut.elapsed()
+        );
+        let e = e.to_string();
+        assert!(
+            e.contains(&format!("127.0.0.1:{port}")),
+            "l'hôte est nommé : {e}"
+        );
+        assert!(e.contains("bannière"), "l'étape est nommée : {e}");
+    }
+
+    /// Le délai vaut par maillon : un rebond joignable qui ouvre son canal vers
+    /// une cible muette échoue lui aussi en temps borné, en nommant la cible.
+    #[tokio::test]
+    async fn un_rebond_vers_un_serveur_muet_echoue_en_temps_borne() {
+        use crate::testutil::serveur_ssh::{lancer_serveur, temp_key_path};
+        let _garde = crate::testutil::temp_home(); // known_hosts du bac à sable
+        let rebond = lancer_serveur().await;
+        let muet = serveur_muet().await;
+        let auth = ClientAuth {
+            user: "testuser".into(),
+            key_path: Some(temp_key_path()),
+            password: None,
+        };
+        let hop = super::Hop {
+            addr: "127.0.0.1".into(),
+            port: rebond.port,
+            auth: auth.clone(),
+        };
+        let debut = Instant::now();
+        let issue = AvashSession::connect_via_borne(
+            &[hop],
+            "127.0.0.1",
+            muet,
+            &auth,
+            Duration::from_millis(800),
+        )
+        .await;
+        let Err(e) = issue else {
+            panic!("une cible muette ne doit pas donner de session")
+        };
+        assert!(
+            debut.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            debut.elapsed()
+        );
+        let e = format!("{e:#}");
+        assert!(
+            e.contains(&format!("127.0.0.1:{muet}")),
+            "la cible est nommée : {e}"
+        );
+        assert!(e.contains("bannière"), "{e}");
+    }
+
+    /// Un agent SSH qui accepte la connexion et ne répond plus ne fige pas la
+    /// question des identités : elle rend « aucune » dans le délai.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn un_agent_muet_ne_fige_pas_la_question_des_identites() {
+        let dir = std::env::temp_dir().join(format!("avash-agent-muet-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("agent.sock");
+        let ecoute = tokio::net::UnixListener::bind(&chemin).unwrap();
+        tokio::spawn(async move {
+            let mut gardees = Vec::new();
+            while let Ok((flux, _)) = ecoute.accept().await {
+                gardees.push(flux);
+            }
+        });
+        let debut = Instant::now();
+        let reponse = borne_agent(
+            AvashSession::identites_sur_socket(&chemin),
+            Duration::from_millis(300),
+        )
+        .await;
+        assert!(!reponse, "un agent muet ne porte aucune identité");
+        assert!(
+            debut.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            debut.elapsed()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod tests_apprentissage {
+    /// Audit du 12 septembre 2026 (C-fs-2) : sur un profil neuf, russh créait
+    /// `~/.ssh` et `known_hosts` avec l'umask, l'inventaire des hôtes joints
+    /// lisible par les autres comptes.
+    #[cfg(unix)]
+    #[test]
+    fn la_cle_apprise_sur_un_profil_neuf_laisse_ssh_en_0700_et_known_hosts_en_0600() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let garde = crate::testutil::temp_home();
+        let ssh = garde.dir().join(".ssh");
+        let chemin = ssh.join("known_hosts");
+        assert!(!ssh.exists(), "le décor : un profil sans ~/.ssh");
+        let cle =
+            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+                .unwrap()
+                .public_key()
+                .clone();
+        super::apprendre_cle_hote(&chemin, "srv", 22, &cle).unwrap();
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&ssh), 0o700, "~/.ssh");
+        assert_eq!(mode(&chemin), 0o600, "known_hosts");
     }
 }

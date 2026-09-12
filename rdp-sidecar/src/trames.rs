@@ -11,6 +11,14 @@ use ironrdp::session::image::DecodedImage;
 /// ce nombre de rectangles que cette fusion-ci ramène la zone sale.
 pub(crate) const RECTS_MAX: usize = 8;
 
+/// `[23]` REPRISE, du processus vers l'interface, sans charge : un nouveau
+/// tour de connexion commence (redirection de serveur, ou reprise avec le
+/// canal graphique) alors qu'un `[1] CONNECTED` est déjà parti. L'interface
+/// repasse l'onglet en « connexion » ; le `[1]` du tour suivant le remet en
+/// direct. Audit du 12 septembre 2026 (C-SIL-10) : le type 23 était libre
+/// dans les deux sens (voir l'en-tête de `main.rs`).
+pub(crate) const REPRISE: u8 = 23;
+
 /// Nouvelle taille d'écran annoncée par le serveur : ne remplace l'image que si
 /// la taille change vraiment, et dit s'il faut l'annoncer à l'interface.
 ///

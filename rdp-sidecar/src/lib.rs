@@ -21,7 +21,6 @@
 
 pub mod acces_local;
 pub mod args;
-pub mod atomique;
 pub mod capture;
 pub mod connexion;
 pub mod disque;
@@ -37,5 +36,6 @@ pub mod son;
 pub mod surface;
 pub mod tls_herite;
 pub mod trames;
+pub mod verrou;
 pub mod vnc;
 pub mod vnc_tls;

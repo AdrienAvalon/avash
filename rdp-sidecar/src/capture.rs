@@ -1,6 +1,7 @@
 //! Capture d'écran (`--shot`) : une trame, un PNG, et l'on sort.
 
 use crate::session::{annonce_egfx, Suite};
+use crate::verrou::Verrou as _;
 use crate::{egfx, magnetoscope};
 use anyhow::{Context, Result};
 use ironrdp::graphics::image_processing::PixelFormat;
@@ -120,7 +121,7 @@ fn peindre_en_attente(
     image: &mut DecodedImage,
     dessine: &std::sync::atomic::AtomicBool,
 ) -> bool {
-    let sortie = std::mem::take(&mut *file.lock().unwrap());
+    let sortie = std::mem::take(&mut *file.verrou());
     if let Some((nl, nh)) = sortie.taille {
         if (nl, nh) != (image.width(), image.height()) {
             *image = DecodedImage::new(PixelFormat::RgbA32, nl, nh);
@@ -152,6 +153,7 @@ pub fn ecrire_png(image: &DecodedImage, path: &str) -> Result<()> {
 mod tests {
     use super::peindre_en_attente;
     use crate::egfx::{FilePartagee, Sortie, Trame};
+    use crate::verrou::Verrou;
     use ironrdp::graphics::image_processing::PixelFormat;
     use ironrdp::session::image::DecodedImage;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -165,7 +167,7 @@ mod tests {
     fn la_trame_du_dernier_pdu_est_peinte_avant_l_ecriture() {
         let mut image = DecodedImage::new(PixelFormat::RgbA32, 2, 2);
         let file = FilePartagee::default();
-        file.lock().unwrap().trames.push(Trame {
+        file.verrou().trames.push(Trame {
             x: 0,
             y: 0,
             largeur: 2,
@@ -198,7 +200,7 @@ mod tests {
         let mut image = DecodedImage::new(PixelFormat::RgbA32, 2, 2);
         let file = FilePartagee::default();
         {
-            let mut s: std::sync::MutexGuard<'_, Sortie> = file.lock().unwrap();
+            let mut s: std::sync::MutexGuard<'_, Sortie> = file.verrou();
             s.taille = Some((4, 3));
             s.trames.push(Trame {
                 x: 3,

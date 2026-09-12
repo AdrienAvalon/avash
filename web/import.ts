@@ -6,7 +6,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { type Host } from "./filters";
+import { escapeHtml, type Host } from "./filters";
 import { $ } from "./etat";
 import { notify, notifyErreur } from "./notifications";
 import { loadHosts } from "./main";
@@ -38,10 +38,6 @@ let bureaux: Bureau[] = [];
 
 const modal = () => $("import-modal");
 const liste = () => $("import-list");
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-}
 
 function rendre(bilan: Bilan) {
   candidats = bilan.candidats;

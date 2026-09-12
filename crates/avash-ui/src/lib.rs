@@ -1,13 +1,11 @@
 //! Avash GUI — coquille Tauri 2. Sessions PTY multi-onglets côté Rust.
 
 pub mod commands;
+pub mod journal;
 pub mod langue;
 pub mod rdp;
 
 pub use commands::*;
-
-use std::collections::HashMap;
-use std::sync::Mutex;
 
 /// Un fichier déposé sur la fenêtre est un geste de l'utilisateur que le natif
 /// voit avant la webview : c'est ici qu'il est retenu comme chemin désigné
@@ -28,26 +26,81 @@ fn retenir_un_depot<R: tauri::Runtime>(fenetre: &tauri::Window<R>, evenement: &t
     }
 }
 
+/// Dit pourquoi l'application ne s'est pas lancée, et rend le code de sortie.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-panique-9) : `.run(..).expect(..)`
+/// paniquait sur stderr, que Windows ne montre pas en release
+/// (`windows_subsystem = "windows"`). `WebView2` absente ou `WebKitGTK` cassé,
+/// l'application ne s'ouvrait pas, sans un mot. Le message part sur `sortie`
+/// (stderr) et au journal ; sous Windows, `run` ouvre en plus une boîte native.
+pub(crate) fn rapporter_echec_lancement(
+    erreur: &dyn std::fmt::Display,
+    sortie: &mut dyn std::io::Write,
+) -> (String, i32) {
+    let message = format!("Avash n'a pas pu démarrer : {erreur}");
+    tracing::error!("{message}");
+    let _ = writeln!(sortie, "{message}");
+    (message, 1)
+}
+
+/// Boîte de message native pour un échec de lancement : sans console, c'est le
+/// seul endroit où l'utilisateur Windows peut lire la cause.
+#[cfg(windows)]
+fn boite_echec_lancement(message: &str) {
+    const MB_ICONERROR: u32 = 0x0000_0010;
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut std::ffi::c_void,
+            texte: *const u16,
+            titre: *const u16,
+            genre: u32,
+        ) -> i32;
+    }
+    let large = |s: &str| {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let (texte, titre) = (large(message), large("Avash"));
+    // SAFETY: `texte` et `titre` sont des tampons UTF-16 terminés par un zéro,
+    // vivants pendant tout l'appel (liés au-dessus) ; une fenêtre parente nulle
+    // est admise par l'API, qui ne conserve aucun des pointeurs.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            texte.as_ptr(),
+            titre.as_ptr(),
+            MB_ICONERROR,
+        );
+    }
+}
+
+/// Les états partagés par les commandes : magasins des sessions, tunnels,
+/// bureaux, transferts, chemins désignés, accusés du terminal (contrat K6),
+/// signalement du trousseau (K1) et moteur de rendu (K8).
+fn gerer_les_etats<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder
+        .manage(commands::SessionStore::default())
+        .manage(commands::TunnelStore::default())
+        .manage(rdp::RdpStore::default())
+        .manage(commands::TransfertsStore::default())
+        .manage(commands::ChoixLocaux::default())
+        .manage(commands::Accuses::default())
+        .manage(commands::TrousseauSignale::default())
+        .manage(commands::RenduTerminal::default())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Le journal d'abord : tout ce qui suit peut avoir à y écrire (C-SIL-2).
+    journal::installer();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .manage(commands::SessionStore {
-            inner: Mutex::new(HashMap::new()),
-            annules: Mutex::new(std::collections::HashSet::new()),
-            en_cours: Mutex::new(std::collections::HashSet::new()),
-        })
-        .manage(commands::TunnelStore {
-            inner: Mutex::new(HashMap::new()),
-            en_cours: Mutex::new(std::collections::HashSet::new()),
-            annules: Mutex::new(std::collections::HashSet::new()),
-        })
-        .manage(rdp::RdpStore::default())
-        .manage(commands::TransfertsStore::default())
-        .manage(commands::ChoixLocaux::default())
+        .plugin(tauri_plugin_clipboard_manager::init());
+    let builder = gerer_les_etats(builder)
         .on_window_event(retenir_un_depot)
         // Quatre commandes ont été retirées de cette liste : `run_command`,
         // `snippet_vars`, `password_known`, puis `enregistrement_en_cours`
@@ -81,6 +134,7 @@ pub fn run() {
             commands::host_needs_password,
             commands::pty_open_manual,
             commands::pty_write,
+            commands::pty_ack,
             commands::pty_resize,
             commands::pty_close,
             commands::sftp_realpath,
@@ -102,6 +156,7 @@ pub fn run() {
             commands::enregistrements_ouvrir_dossier,
             commands::hosts_health,
             commands::diagnostic_exporter,
+            commands::diagnostic_noter_rendu,
             commands::onglets_memoriser,
             commands::onglets_memorises,
             commands::serie_ports,
@@ -147,5 +202,28 @@ pub fn run() {
             commands::snippet_send
         ])
         .run(tauri::generate_context!())
-        .expect("erreur au lancement d'Avash");
+        .unwrap_or_else(|e| {
+            let (message, code) = rapporter_echec_lancement(&e, &mut std::io::stderr());
+            #[cfg(windows)]
+            boite_echec_lancement(&message);
+            #[cfg(not(windows))]
+            let _ = message;
+            std::process::exit(code);
+        });
+}
+
+#[cfg(test)]
+mod tests_lancement {
+    use super::rapporter_echec_lancement;
+
+    /// Audit du 12 septembre 2026 (C-panique-9) : un échec de lancement se dit
+    /// en clair et rend le code 1, au lieu d'une panique invisible sous Windows.
+    #[test]
+    fn un_echec_de_lancement_se_dit_sans_panique() {
+        let mut sortie = Vec::new();
+        let (message, code) = rapporter_echec_lancement(&"WebView2 absente", &mut sortie);
+        assert_eq!(code, 1);
+        assert!(message.contains("WebView2 absente"), "{message}");
+        assert_eq!(String::from_utf8(sortie).unwrap(), format!("{message}\n"));
+    }
 }

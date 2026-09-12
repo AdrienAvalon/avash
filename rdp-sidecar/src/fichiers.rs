@@ -17,6 +17,7 @@
 //! les tailles annoncées ne servent qu'à l'affichage et à borner les requêtes,
 //! jamais à allouer.
 
+use crate::verrou::Verrou as _;
 use anyhow::{Context, Result};
 use ironrdp::cliprdr::pdu::{
     ClipboardFileAttributes, FileContentsFlags, FileContentsRequest, FileContentsResponse,
@@ -180,8 +181,16 @@ pub(crate) fn dossier_par_defaut() -> PathBuf {
 /// `PathBuf::push("C:evil.exe")` remplace le chemin construit par un chemin
 /// relatif au disque courant (donc au cwd du sidecar), hors du dossier de
 /// réception. On valide donc chaque composant nous-mêmes.
+///
+/// Ni point ni espace en fin de nom (audit du 12 septembre 2026, C-sidecar-9) :
+/// le test amont des noms de périphérique compare le radical avant le premier
+/// point, si bien que `CON ` le passait, et Windows retire points et espaces
+/// finaux : c'est vers le périphérique qu'on aurait écrit.
 fn composant_sur(c: &str) -> bool {
-    if c.contains([':', '/', '\\', '\0']) || ironrdp::cliprdr::is_windows_device_name(c) {
+    if c.contains([':', '/', '\\', '\0'])
+        || c.ends_with(['.', ' '])
+        || ironrdp::cliprdr::is_windows_device_name(c)
+    {
         return false;
     }
     if c.chars().any(caractere_trompeur) {
@@ -342,11 +351,14 @@ async fn ouvrir_travail(base: &Path) -> std::io::Result<(PathBuf, tokio::fs::Fil
 }
 
 /// Un fichier en cours de réception.
+///
+/// `fichier` précède `partiel` : les champs se détruisent dans l'ordre de
+/// déclaration, et Windows refuse de supprimer un fichier encore ouvert.
 struct EnCours {
     index: usize,
-    partiel: PathBuf,
-    cible: PathBuf,
     fichier: tokio::fs::File,
+    partiel: Partiel,
+    cible: PathBuf,
     taille: u64,
     /// Prochaine position à demander.
     demande: u64,
@@ -391,11 +403,12 @@ impl Reception {
         data_id: Option<u32>,
         premier_flux: u32,
     ) -> Self {
+        // Saturé : voir `octets_annonces`.
         let total = fichiers
             .iter()
             .filter(|d| !est_dossier(d))
             .map(|d| d.file_size.unwrap_or(0))
-            .sum();
+            .fold(0u64, u64::saturating_add);
         Self {
             dossier,
             fichiers,
@@ -420,6 +433,13 @@ impl Reception {
 
     pub(crate) fn erreurs(&self) -> &[String] {
         &self.erreurs
+    }
+
+    /// Cette requête appartient-elle au fichier en cours ?
+    fn suit(&self, stream_id: u32) -> bool {
+        self.en_cours
+            .as_ref()
+            .is_some_and(|e| e.flux_taille == Some(stream_id) || e.en_vol.contains_key(&stream_id))
     }
 
     pub(crate) fn progression(&self) -> Progression {
@@ -490,9 +510,7 @@ impl Reception {
         // comptés « réussis » (bilan « 0 erreur »). Pour `None`, on demande
         // d'abord la taille par FILECONTENTS_SIZE (plus bas).
         if d.file_size == Some(0) {
-            tokio::fs::File::create(&cible)
-                .await
-                .with_context(|| format!("création de {}", cible.display()))?;
+            creer_vide(&cible).await?;
             return Ok(None);
         }
         let mut base = cible.as_os_str().to_owned();
@@ -512,9 +530,9 @@ impl Reception {
             .with_context(|| format!("création de {}", base.display()))?;
         self.en_cours = Some(EnCours {
             index,
-            partiel,
-            cible,
             fichier,
+            partiel: Partiel::nouveau(partiel),
+            cible,
             taille: d.file_size.unwrap_or(0),
             demande: 0,
             recu: 0,
@@ -564,7 +582,11 @@ impl Reception {
             return Vec::new();
         };
         let mut reqs = Vec::new();
-        while e.en_vol.len() < EN_VOL && e.demande < e.taille {
+        // `flux_ids` compte avec `en_vol` : trouvé le 12 septembre 2026, la
+        // borne ne regardait que `en_vol`, rempli seulement après cette boucle,
+        // si bien que toutes les plages du fichier partaient d'un coup (voir le
+        // test `un_gros_fichier_ne_met_jamais_plus_de_en_vol_requetes_en_vol`).
+        while e.en_vol.len() + flux_ids.len() < EN_VOL && e.demande < e.taille {
             let longueur =
                 u32::try_from((e.taille - e.demande).min(u64::from(MORCEAU))).unwrap_or(MORCEAU);
             flux_ids.push((e.demande, longueur));
@@ -607,13 +629,16 @@ impl Reception {
             // sans FD_FILESIZE : 8 octets, taille en petit-boutien (2.2.5.4).
             e.flux_taille = None;
             let taille = donnees
-                .filter(|d| d.len() == 8)
-                .map(|d| u64::from_le_bytes(d[..8].try_into().expect("8 octets")));
+                .and_then(|d| <[u8; 8]>::try_from(d).ok())
+                .map(u64::from_le_bytes);
             let Some(taille) = taille else {
                 // Toujours pas de taille : on ne peut pas recevoir ce fichier,
                 // et on le signale au lieu de le compter « réussi » (0 octet).
-                let e = self.en_cours.take().expect("en cours");
-                let _ = tokio::fs::remove_file(&e.partiel).await;
+                // Le `.part` part avec `e` (voir `Partiel`).
+                let e = self
+                    .en_cours
+                    .take()
+                    .expect("invariant : en_cours vient d'être emprunté ci-dessus");
                 self.erreurs.push(format!(
                     "{} : taille inconnue",
                     chemin_relatif(&self.fichiers[e.index])
@@ -621,10 +646,29 @@ impl Reception {
                 self.termines += 1;
                 return self.demarrer().await;
             };
+            // Audit du 12 septembre 2026 (C-sidecar-7) : l'utilisateur a accepté
+            // un fichier affiché à 0 octet (taille non annoncée) ; la réponse
+            // SIZE fixait ensuite n'importe quelle taille, et le serveur
+            // remplissait le disque un mégaoctet à la fois. Ce qui ne tient pas
+            // dans l'espace libre du dossier est refusé avant toute plage.
+            let libres = crate::disque::octets_libres(&self.dossier);
+            if taille > libres {
+                let e = self
+                    .en_cours
+                    .take()
+                    .expect("invariant : en_cours vient d'être emprunté ci-dessus");
+                self.erreurs.push(format!(
+                    "{} : taille annoncée après coup ({taille} octets) plus grande que \
+                     l'espace libre du dossier ({libres} octets)",
+                    chemin_relatif(&self.fichiers[e.index])
+                ));
+                self.termines += 1;
+                return self.demarrer().await;
+            }
             e.taille = taille;
             // La taille annoncée manquait au total (comptée 0) : on la rattrape
             // pour que la progression n'affiche plus 0 pour ce fichier.
-            self.total += taille;
+            self.total = self.total.saturating_add(taille);
             if taille == 0 {
                 // Le distant confirme un fichier vide : le `.part` (vide) est
                 // promu tel quel.
@@ -667,8 +711,11 @@ impl Reception {
             }
         }
         if let Some(raison) = echec {
-            let e = self.en_cours.take().expect("en cours");
-            let _ = tokio::fs::remove_file(&e.partiel).await;
+            // Le `.part` part avec `e` (voir `Partiel`).
+            let e = self
+                .en_cours
+                .take()
+                .expect("invariant : en_cours est emprunté par `e` juste au-dessus");
             self.erreurs.push(format!(
                 "{} : {raison}",
                 chemin_relatif(&self.fichiers[e.index])
@@ -690,24 +737,169 @@ impl Reception {
     /// démarre le suivant. Un échec de vidage ou de renommage retire le `.part`
     /// et devient une erreur du bilan.
     async fn promouvoir_et_suivre(&mut self) -> Vec<FileContentsRequest> {
-        let mut e = self.en_cours.take().expect("en cours");
+        let Some(mut e) = self.en_cours.take() else {
+            return self.demarrer().await;
+        };
         let fin = async {
             e.fichier.flush().await.context("vidage")?;
             drop(e.fichier);
-            tokio::fs::rename(&e.partiel, &e.cible)
+            promouvoir(&e.partiel.chemin, &e.cible)
                 .await
-                .with_context(|| format!("renommage vers {}", e.cible.display()))
+                .with_context(|| format!("promotion vers {}", e.cible.display()))
         }
         .await;
-        if let Err(err) = fin {
-            let _ = tokio::fs::remove_file(&e.partiel).await;
-            self.erreurs.push(format!(
+        match fin {
+            Ok(_) => e.partiel.promu(),
+            // Le `.part` part avec `e.partiel` (voir `Partiel`).
+            Err(err) => self.erreurs.push(format!(
                 "{} : {err:#}",
                 chemin_relatif(&self.fichiers[e.index])
-            ));
+            )),
         }
         self.termines += 1;
         self.demarrer().await
+    }
+}
+
+/// Les requêtes d'une réception, encodées par `encoder` pour le canal. Une
+/// requête que le canal refuse (`None`) compte son fichier en échec, au lieu
+/// d'attendre une réponse qui ne viendra jamais ; les requêtes qui suivent
+/// alors (le fichier suivant) passent par le même chemin.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-6) : la boucle de session
+/// perdait en silence une requête refusée par la bibliothèque (« clipboard
+/// channel is not in Ready state », après une FormatList du distant au mauvais
+/// moment). La réception gardait un `streamId` que personne ne servirait : elle
+/// ne finissait jamais, aucune autre n'était possible dans la session, et le
+/// `.part` restait sur le disque. Le cas était traité pour l'offre, jamais pour
+/// la réception.
+pub(crate) async fn preparer_requetes<M>(
+    r: &mut Reception,
+    reqs: Vec<FileContentsRequest>,
+    mut encoder: impl FnMut(FileContentsRequest) -> Option<M>,
+) -> Vec<M> {
+    let mut file: std::collections::VecDeque<FileContentsRequest> = reqs.into();
+    let mut messages = Vec::new();
+    while let Some(req) = file.pop_front() {
+        // Les autres requêtes d'un fichier déjà compté en échec ne partent pas.
+        if !r.suit(req.stream_id) {
+            continue;
+        }
+        let flux = req.stream_id;
+        match encoder(req) {
+            Some(m) => messages.push(m),
+            None => file.extend(r.recevoir(flux, None).await),
+        }
+    }
+    messages
+}
+
+/// Le total des tailles annoncées, saturé.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-14, C-panique-7) : les
+/// `u64` du distant étaient additionnés sans saturation. Deux descripteurs à
+/// 2^63 faisaient paniquer le processus en debug (tests, fuzz, binaires
+/// instrumentés de la couverture) dès que le distant copiait des fichiers,
+/// sans le moindre geste de l'utilisateur ; en publication, le total bouclait.
+pub(crate) fn octets_annonces(liste: &[FileDescriptor]) -> u64 {
+    liste
+        .iter()
+        .filter_map(|d| d.file_size)
+        .fold(0u64, u64::saturating_add)
+}
+
+/// Crée un fichier vide à `cible`, ou sous un nom dérivé si la place est prise
+/// entre-temps : jamais de troncature. Rend le chemin retenu.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-8) : `File::create`
+/// tronquait une cible apparue entre le choix du nom et la création.
+async fn creer_vide(cible: &Path) -> Result<PathBuf> {
+    let mut chemin = cible.to_path_buf();
+    for _ in 0..16 {
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&chemin)
+            .await
+        {
+            Ok(_) => return Ok(chemin),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                chemin = sans_collision(cible);
+            }
+            Err(e) => return Err(e).with_context(|| format!("création de {}", chemin.display())),
+        }
+    }
+    anyhow::bail!("création de {} : le nom reste pris", cible.display())
+}
+
+/// Promeut le fichier de travail `partiel` en `cible` sans jamais remplacer un
+/// fichier existant. Rend le nom retenu, dérivé (« (2) »…) si `cible` est
+/// apparue pendant le transfert.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-3) : le renommage final
+/// (`rename(2)`, `MoveFileExW` avec remplacement sous Windows) écrasait une
+/// cible apparue depuis le choix du nom : deux onglets qui reçoivent
+/// `rapport.pdf`, ou un téléchargement du navigateur qui se termine sous ce
+/// nom pendant un long transfert. Un lien physique, lui, échoue si le nom est
+/// pris ; on retire ensuite le nom de travail. Sur un système de fichiers sans
+/// liens physiques (FAT, exFAT, certains partages SMB), repli sur le renommage
+/// après un dernier test du nom : la fenêtre de course se réduit à ce test.
+async fn promouvoir(partiel: &Path, cible: &Path) -> std::io::Result<PathBuf> {
+    let mut chemin = cible.to_path_buf();
+    for _ in 0..16 {
+        match tokio::fs::hard_link(partiel, &chemin).await {
+            Ok(()) => {
+                tokio::fs::remove_file(partiel).await?;
+                return Ok(chemin);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                chemin = sans_collision(cible);
+            }
+            Err(_) if occupe(&chemin) => chemin = sans_collision(cible),
+            Err(_) => {
+                tokio::fs::rename(partiel, &chemin).await?;
+                return Ok(chemin);
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("{} : le nom reste pris", cible.display()),
+    ))
+}
+
+/// Le fichier de travail (`.part`) d'une réception : retiré du disque s'il
+/// n'a pas été promu, quelle que soit la façon dont la réception s'arrête.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-15) : le `.part` était
+/// retiré sur refus et sur échec de promotion, mais pas quand la session se
+/// terminait au milieu d'un transfert (WebSocket fermé, serveur qui
+/// raccroche) : les `<nom>.part` s'accumulaient dans les téléchargements, et
+/// un serveur qui raccroche laissait un fichier tronqué au nom prévisible.
+struct Partiel {
+    chemin: PathBuf,
+    a_retirer: bool,
+}
+
+impl Partiel {
+    fn nouveau(chemin: PathBuf) -> Self {
+        Self {
+            chemin,
+            a_retirer: true,
+        }
+    }
+
+    /// Le nom de travail a été promu : il ne nous appartient plus.
+    fn promu(mut self) {
+        self.a_retirer = false;
+    }
+}
+
+impl Drop for Partiel {
+    fn drop(&mut self) {
+        if self.a_retirer {
+            let _ = std::fs::remove_file(&self.chemin);
+        }
     }
 }
 
@@ -737,7 +929,7 @@ impl Designations {
 
     /// Retient un chemin désigné par l'utilisateur.
     pub fn designer(&self, chemin: PathBuf) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.verrou();
         if !g.contains(&chemin) {
             g.push(chemin);
         }
@@ -745,7 +937,7 @@ impl Designations {
 
     /// Ce chemin a-t-il été désigné tel quel ?
     pub fn est_designe(&self, chemin: &Path) -> bool {
-        self.inner.lock().unwrap().iter().any(|c| c == chemin)
+        self.inner.verrou().iter().any(|c| c == chemin)
     }
 }
 
@@ -932,24 +1124,12 @@ mod tests {
     /// système. Sous le verrou partagé avec les autres tests qui la posent.
     #[test]
     fn sous_avash_home_la_reception_reste_sous_le_foyer() {
-        let _verrou = crate::empreintes::VERROU_AVASH_HOME
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let foyer = std::env::temp_dir().join(format!("avash-fichiers-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&foyer);
+        let bac = crate::empreintes::BacAvashHome::poser("fichiers-foyer");
+        let foyer = bac.chemin().to_path_buf();
         std::fs::create_dir_all(&foyer).unwrap();
-        let precedent = std::env::var_os("AVASH_HOME");
-        unsafe { std::env::set_var("AVASH_HOME", &foyer) };
         let sous_foyer = super::dossier_par_defaut();
         std::fs::create_dir_all(foyer.join("Downloads")).unwrap();
         let sous_downloads = super::dossier_par_defaut();
-        unsafe {
-            match precedent {
-                Some(v) => std::env::set_var("AVASH_HOME", v),
-                None => std::env::remove_var("AVASH_HOME"),
-            }
-        }
-        let _ = std::fs::remove_dir_all(&foyer);
         assert_eq!(sous_foyer, foyer);
         assert_eq!(sous_downloads, foyer.join("Downloads"));
     }
@@ -1627,6 +1807,201 @@ mod tests {
             })
             .await;
         assert!(inconnu.is_error());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod tests_bornes_reception {
+    use super::{
+        composant_sur, creer_vide, octets_annonces, preparer_requetes, Reception, MORCEAU,
+    };
+    use ironrdp::cliprdr::pdu::{ClipboardFileAttributes, FileContentsFlags, FileDescriptor};
+    use std::path::PathBuf;
+
+    fn temp(nom: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("avash-bornes-{}-{nom}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn fichier(nom: &str, taille: u64) -> FileDescriptor {
+        FileDescriptor::new(nom)
+            .with_file_size(taille)
+            .with_attributes(ClipboardFileAttributes::NORMAL)
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-6) : quand la
+    /// bibliothèque refusait une requête de contenu (« clipboard channel is not
+    /// in Ready state », après une FormatList du distant au mauvais moment),
+    /// elle était perdue en silence. `Reception` gardait un `streamId` que
+    /// personne ne servirait : la réception ne finissait jamais, aucune autre
+    /// n'était possible dans la session, et le `.part` restait sur le disque.
+    #[tokio::test]
+    async fn une_requete_de_contenu_refusee_par_le_canal_termine_le_fichier_au_lieu_de_bloquer() {
+        let d = temp("refus-canal");
+        let mut r = Reception::nouvelle(d.clone(), vec![fichier("f", 10)], None, 1);
+        let reqs = r.demarrer().await;
+        assert!(!reqs.is_empty());
+        let envoyes = preparer_requetes(&mut r, reqs, |_| None::<()>).await;
+        assert!(envoyes.is_empty());
+        assert!(
+            r.terminee(),
+            "la réception attend une réponse qui ne viendra pas"
+        );
+        assert_eq!(r.erreurs().len(), 1, "{:?}", r.erreurs());
+        assert!(!d.join("f.part").exists() && !d.join("f").exists());
+        // Contrôle : un canal qui accepte tout reçoit toutes les requêtes.
+        let mut r = Reception::nouvelle(d.clone(), vec![fichier("g", 10)], None, 1);
+        let reqs = r.demarrer().await;
+        let n = reqs.len();
+        assert_eq!(preparer_requetes(&mut r, reqs, Some).await.len(), n);
+        assert!(!r.terminee());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-14, C-panique-7) :
+    /// les tailles annoncées par le distant étaient additionnées sans
+    /// saturation. Deux descripteurs à 2^63 faisaient paniquer le processus en
+    /// debug (tests, fuzz, binaires instrumentés de la couverture) dès que le
+    /// distant copiait des fichiers, sans geste de l'utilisateur, et donnaient
+    /// un total faux en publication.
+    #[test]
+    fn des_tailles_annoncees_gigantesques_ne_font_pas_deborder_le_total() {
+        let enormes = vec![
+            fichier("a", u64::MAX / 2 + 1),
+            fichier("b", u64::MAX / 2 + 1),
+        ];
+        assert_eq!(octets_annonces(&enormes), u64::MAX);
+        let r = Reception::nouvelle(PathBuf::from("/nulle-part"), enormes, None, 1);
+        assert_eq!(r.progression().total, u64::MAX);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-7) : un fichier
+    /// annoncé sans taille s'affiche à 0 octet ; l'utilisateur accepte, puis la
+    /// réponse SIZE fixait la taille à n'importe quelle valeur, et le serveur
+    /// remplissait le disque un mégaoctet à la fois. Une taille qui ne tient
+    /// pas dans l'espace libre du dossier devient une erreur, sans une requête
+    /// de plage.
+    #[tokio::test]
+    async fn une_taille_size_deraisonnable_devient_une_erreur_sans_requete_de_plage() {
+        let d = temp("size-demesuree");
+        let desc =
+            FileDescriptor::new("mystere.bin").with_attributes(ClipboardFileAttributes::NORMAL);
+        let mut r = Reception::nouvelle(d.clone(), vec![desc], None, 1);
+        let reqs = r.demarrer().await;
+        assert_eq!(reqs[0].flags, FileContentsFlags::SIZE);
+        let suite = r
+            .recevoir(reqs[0].stream_id, Some(&u64::MAX.to_le_bytes()))
+            .await;
+        assert!(
+            suite.is_empty(),
+            "{} requêtes de plage pour une taille démesurée",
+            suite.len()
+        );
+        assert!(r.terminee());
+        assert_eq!(r.erreurs().len(), 1, "{:?}", r.erreurs());
+        assert!(!d.join("mystere.bin").exists() && !d.join("mystere.bin.part").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-3) : « rien n'écrase
+    /// un fichier existant » n'était vrai qu'au démarrage de la réception. Le
+    /// nom final se choisit avant le transfert, et le renommage final
+    /// remplaçait une cible apparue entre-temps : deux onglets qui reçoivent
+    /// `rapport.pdf`, ou un téléchargement du navigateur qui se termine sous ce
+    /// nom pendant un long transfert, et le premier fichier était écrasé.
+    #[tokio::test]
+    async fn un_fichier_apparu_pendant_la_reception_n_est_pas_ecrase() {
+        let d = temp("apparu");
+        let mut r = Reception::nouvelle(d.clone(), vec![fichier("f", 4)], None, 1);
+        let reqs = r.demarrer().await;
+        assert_eq!(reqs.len(), 1);
+        // Apparu entre le choix du nom et la fin du transfert.
+        std::fs::write(d.join("f"), b"local").unwrap();
+        for q in reqs {
+            assert!(r.recevoir(q.stream_id, Some(b"recu")).await.is_empty());
+        }
+        assert!(r.terminee() && r.erreurs().is_empty(), "{:?}", r.erreurs());
+        assert_eq!(std::fs::read(d.join("f")).unwrap(), b"local", "écrasé");
+        assert_eq!(std::fs::read(d.join("f (2)")).unwrap(), b"recu");
+        assert!(!d.join("f.part").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-8) : un fichier
+    /// annoncé vide était créé par `File::create`, qui TRONQUE une cible
+    /// existante, juste après le test du nom libre. Un fichier apparu entre les
+    /// deux était vidé.
+    #[tokio::test]
+    async fn un_fichier_vide_annonce_ne_tronque_pas_un_fichier_apparu_entre_temps() {
+        let d = temp("vide");
+        std::fs::write(d.join("f"), b"local").unwrap();
+        let cree = creer_vide(&d.join("f")).await.unwrap();
+        assert_eq!(std::fs::read(d.join("f")).unwrap(), b"local", "tronqué");
+        assert_eq!(cree, d.join("f (2)"));
+        assert!(std::fs::read(&cree).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-9) : le test amont des
+    /// noms de périphérique compare le radical avant le premier point ; `CON `
+    /// (espace finale) le passait, et Windows retire les points et espaces
+    /// finaux : c'est bien vers le périphérique qu'on aurait écrit.
+    #[test]
+    fn un_nom_a_fin_blanche_est_refuse_a_la_reception() {
+        for c in ["CON ", "nom.", "nom ", "aux.", "rapport.pdf "] {
+            assert!(!composant_sur(c), "{c:?} accepté");
+        }
+        assert!(composant_sur("nom.txt"));
+        assert!(composant_sur(".cache"));
+    }
+
+    /// Trouvé le 12 septembre 2026 en écrivant le test de C-sidecar-7 : sur le
+    /// code d'alors, une taille SIZE de `u64::MAX` a fait tuer le binaire de
+    /// test par le noyau (22 Gio résidents). `remplir` bornait sa boucle par
+    /// `en_vol.len() < EN_VOL`, mais `en_vol` ne se remplissait qu'APRÈS la
+    /// boucle : toutes les plages du fichier partaient d'un coup, un million
+    /// de requêtes pour un tébioctet annoncé, 2^44 pour `u64::MAX`. Le test
+    /// existant ne demandait que deux morceaux, sous la borne. Ici 64 Mio : de
+    /// quoi voir le défaut sans mettre la mémoire en danger.
+    #[tokio::test]
+    async fn un_gros_fichier_ne_met_jamais_plus_de_en_vol_requetes_en_vol() {
+        let d = temp("en-vol");
+        let taille = u64::from(MORCEAU) * 64;
+        let mut r = Reception::nouvelle(d.clone(), vec![fichier("gros", taille)], None, 1);
+        let reqs = r.demarrer().await;
+        assert_eq!(reqs.len(), super::EN_VOL, "requêtes émises d'un coup");
+        // Une réponse libère une place, et une seule requête la reprend.
+        let q = &reqs[0];
+        let suite = r
+            .recevoir(q.stream_id, Some(&vec![0u8; q.requested_size as usize]))
+            .await;
+        assert_eq!(suite.len(), 1);
+        drop(r);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-15) : le `.part`
+    /// était retiré sur refus et sur échec de promotion, pas quand la session
+    /// se termine au milieu d'un transfert (WebSocket fermé, serveur qui
+    /// raccroche). Les `<nom>.part` s'accumulaient dans les téléchargements.
+    #[tokio::test]
+    async fn une_reception_abandonnee_ne_laisse_pas_de_part() {
+        let d = temp("abandon");
+        let taille = u64::from(MORCEAU) * 2;
+        let mut r = Reception::nouvelle(d.clone(), vec![fichier("f", taille)], None, 1);
+        let reqs = r.demarrer().await;
+        assert!(reqs.len() >= 2);
+        let q = &reqs[0];
+        let _ = r
+            .recevoir(q.stream_id, Some(&vec![1u8; q.requested_size as usize]))
+            .await;
+        assert!(d.join("f.part").exists(), "la réception est en cours");
+        drop(r);
+        assert!(!d.join("f.part").exists(), "le .part survit à l'abandon");
+        assert!(!d.join("f").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

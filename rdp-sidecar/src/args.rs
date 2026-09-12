@@ -4,7 +4,6 @@
 #[cfg(unix)]
 use crate::empreintes::repertoire_configuration;
 use anyhow::{Context, Result};
-use std::io::BufRead as _;
 
 pub struct Args {
     pub host: String,
@@ -45,18 +44,98 @@ pub struct Args {
     pub(crate) lecteur: Option<String>,
 }
 
-struct Pa(Vec<String>);
+impl Args {
+    /// Le processus vit-il pour son parent ? Tout lancement sauf la capture
+    /// d'écran (`--shot`), qui se joue à la main ou par un script fermant
+    /// l'entrée standard juste après le mot de passe. Voir `main.rs`.
+    #[must_use]
+    pub fn lie_au_parent(&self) -> bool {
+        self.shot.is_none()
+    }
+}
+
+/// Options qui prennent une valeur. Une clé consomme toujours l'argument qui
+/// la suit, même s'il commence par un tiret : c'est une valeur, jamais un
+/// drapeau (audit du 12 septembre 2026, C-injection-1).
+const OPTIONS_A_VALEUR: &[&str] = &[
+    "--host",
+    "--port",
+    "-u",
+    "--username",
+    "--domain",
+    "--layout",
+    "--width",
+    "--height",
+    "--scale",
+    "--shot",
+    "--enregistrer",
+    "--lecteur",
+];
+
+/// Drapeaux, reconnus seulement en position de clé.
+const DRAPEAUX: &[&str] = &["--vnc", "--sans-nla", "--tls-herite", "--sans-son"];
+
+/// La ligne de commande lue position par position.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-injection-1) : l'ancien
+/// mini-parseur cherchait un drapeau à toutes les positions, valeurs comprises.
+/// Un utilisateur nommé `--tls-herite` (un `rdp.yaml` importé suffit) faisait
+/// accepter les suites TLS héritées sans le consentement que ce drapeau
+/// représente, un hôte nommé `--sans-nla` faisait renoncer à NLA. Désormais
+/// une clé consomme sa valeur, un drapeau n'est reconnu qu'en position de clé,
+/// et tout argument inconnu est refusé : c'est ce qui rend visible un `-p`
+/// resté dans un script.
+struct Pa {
+    valeurs: Vec<(String, String)>,
+    drapeaux: Vec<String>,
+}
 
 impl Pa {
+    fn analyser(args: &[String]) -> Result<Self> {
+        let mut valeurs = Vec::new();
+        let mut drapeaux = Vec::new();
+        let mut suite = args.iter();
+        while let Some(a) = suite.next() {
+            if a == "-p" || a == "--password" {
+                // Audit du 12 septembre 2026 (C-secrets-3) : en argument, le mot
+                // de passe se lit dans /proc/<pid>/cmdline et le gestionnaire
+                // des tâches. Le refus ne répète pas la valeur qui suit.
+                anyhow::bail!(
+                    "{a} n'est plus accepté : le mot de passe se lit sur l'entrée standard \
+                     (première ligne), jamais en argument, où tout compte du poste le lirait \
+                     dans la liste des processus."
+                );
+            }
+            if OPTIONS_A_VALEUR.contains(&a.as_str()) {
+                let v = suite
+                    .next()
+                    .with_context(|| format!("{a} attend une valeur"))?;
+                valeurs.push((a.clone(), v.clone()));
+            } else if DRAPEAUX.contains(&a.as_str()) {
+                drapeaux.push(a.clone());
+            } else if a.starts_with('-') {
+                anyhow::bail!("argument inconnu : {a}");
+            } else {
+                // Une valeur orpheline n'est pas répétée : ce pourrait être un
+                // secret tapé au mauvais endroit.
+                anyhow::bail!("valeur inattendue, sans option qui la précède");
+            }
+        }
+        Ok(Self { valeurs, drapeaux })
+    }
+
+    /// La première valeur donnée pour cette clé.
     fn opt(&self, k: &str) -> Option<String> {
-        self.0
+        self.valeurs
             .iter()
-            .position(|a| a == k)
-            .and_then(|i| self.0.get(i + 1).cloned())
+            .find(|(cle, _)| cle == k)
+            .map(|(_, v)| v.clone())
     }
+
     fn drapeau(&self, k: &str) -> bool {
-        self.0.iter().any(|a| a == k)
+        self.drapeaux.iter().any(|d| d == k)
     }
+
     fn req2(&self, k1: &str, k2: &str) -> Result<String> {
         self.opt(k1)
             .or_else(|| self.opt(k2))
@@ -64,24 +143,21 @@ impl Pa {
     }
 }
 
-/// Mot de passe : depuis `-p/--password` s'il est fourni (utile pour `--shot`),
-/// sinon lu sur la première ligne de stdin (le parent le transmet ainsi pour
-/// ne pas l'exposer dans /proc/<pid>/cmdline).
-fn read_password(a: &Pa) -> Result<String> {
-    if let Some(p) = a.opt("-p").or_else(|| a.opt("--password")) {
-        return Ok(p);
-    }
+/// Mot de passe : la première ligne de l'entrée standard. Le parent le
+/// transmet ainsi pour ne pas l'exposer dans /proc/<pid>/cmdline ; `--shot`
+/// aussi (`printf '%s\n' "$MDP" | avash-rdp --shot …`). L'option `-p` a
+/// disparu (audit du 12 septembre 2026, C-secrets-3).
+fn lire_mot_de_passe(entree: &mut impl std::io::BufRead) -> Result<String> {
     let mut line = String::new();
-    std::io::stdin()
-        .lock()
+    entree
         .read_line(&mut line)
         .context("lecture du mot de passe sur stdin")?;
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
 
 pub fn parse_args() -> Result<Args> {
-    let a = Pa(std::env::args().skip(1).collect());
-    let pass = read_password(&a)?;
+    let a = Pa::analyser(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let pass = lire_mot_de_passe(&mut std::io::stdin().lock())?;
     parse_args_de_pa(&a, pass, disposition_detectee)
 }
 
@@ -94,7 +170,7 @@ pub fn parse_args() -> Result<Args> {
 /// injecte donc une disposition fixe (`us`) plutôt que la détection réelle.
 #[cfg(test)]
 pub(crate) fn parse_args_de(args: &[&str], pass: &str) -> Result<Args> {
-    let pa = Pa(args.iter().map(|s| (*s).to_owned()).collect());
+    let pa = Pa::analyser(&args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())?;
     parse_args_de_pa(&pa, pass.to_owned(), || 0x0000_0409)
 }
 
@@ -103,8 +179,19 @@ pub(crate) fn parse_args_de(args: &[&str], pass: &str) -> Result<Args> {
 /// passent une valeur fixe pour rester déterministes et hors hôte.
 fn parse_args_de_pa(a: &Pa, pass: String, detecter: impl FnOnce() -> u32) -> Result<Args> {
     let vnc = a.drapeau("--vnc");
+    let host = a.opt("--host").context("argument requis : --host")?;
+    // Audit du 12 septembre 2026 (C-sidecar-12) : l'adresse est inscrite telle
+    // quelle dans `rdp_known_hosts` (« hôte:port empreinte », une ligne par
+    // hôte). Une espace y désarme le TOFU, un saut de ligne y écrit une ligne
+    // arbitraire. Le cœur la valide déjà (`RdpHost::validate`), mais un
+    // lancement manuel ou par `AVASH_RDP_BIN` passait à côté : le processus la
+    // juge lui-même.
+    anyhow::ensure!(
+        !host.is_empty() && !host.chars().any(|c| c.is_whitespace() || c.is_control()),
+        "adresse refusée ({host:?}) : vide, ou porteuse d'une espace ou d'un caractère de contrôle"
+    );
     Ok(Args {
-        host: a.opt("--host").context("argument requis : --host")?,
+        host,
         port: a
             .opt("--port")
             .and_then(|s| s.parse().ok())
@@ -274,6 +361,50 @@ fn disposition_macos_depuis_id(id: &str) -> Option<u32> {
     disposition_pour_code(code)
 }
 
+/// Délai laissé à une sonde de la disposition clavier (localectl, defaults,
+/// reg) : bien plus qu'il n'en faut à un poste en bonne santé (quelques
+/// dizaines de millisecondes), bien moins qu'un onglet figé.
+const DELAI_SONDE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Sortie standard d'une sonde du poste, ou `None` si elle ne se lance pas ou
+/// ne rend pas la main dans `delai`.
+///
+/// Trouvé par l'audit du 12 septembre 2026 (C-SIL-13) : `localectl status` était
+/// lancé et attendu sans borne, avant tout réseau. Un systemd-localed qui ne
+/// répond pas (bus système saturé, conteneur sans systemd qui attend le délai
+/// de D-Bus) laissait l'onglet en « connexion » sans un mot. La sortie est lue
+/// par un fil ; passé le délai, la sonde est tuée et l'on se passe d'elle,
+/// comme de toute sonde qui échoue. Qu'elle ait fini ou non, l'enfant est
+/// récolté : pas de processus zombie derrière nous.
+fn sortie_bornee(
+    commande: &mut std::process::Command,
+    delai: std::time::Duration,
+) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let mut enfant = commande
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let Some(mut sortie) = enfant.stdout.take() else {
+        let _ = enfant.kill();
+        let _ = enfant.wait();
+        return None;
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut octets = Vec::new();
+        let lu = sortie.read_to_end(&mut octets).map(|_| octets);
+        let _ = tx.send(lu);
+    });
+    let recu = rx.recv_timeout(delai);
+    let _ = enfant.kill();
+    let _ = enfant.wait();
+    recu.ok()?.ok()
+}
+
 /// Disposition du poste, ou 0 si on ne sait pas — mieux vaut le défaut du
 /// serveur qu'une disposition inventée.
 fn disposition_detectee() -> u32 {
@@ -288,16 +419,16 @@ fn disposition_detectee() -> u32 {
     // éventuel XKB_DEFAULT_LAYOUT égaré.
     #[cfg(target_os = "macos")]
     {
-        if let Some(v) = std::process::Command::new("defaults")
-            .args([
+        if let Some(v) = sortie_bornee(
+            std::process::Command::new("defaults").args([
                 "read",
                 "com.apple.HIToolbox",
                 "AppleCurrentKeyboardLayoutInputSourceID",
-            ])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|t| disposition_macos_depuis_id(t.trim()))
+            ]),
+            DELAI_SONDE,
+        )
+        .and_then(|o| String::from_utf8(o).ok())
+        .and_then(|t| disposition_macos_depuis_id(t.trim()))
         {
             return v;
         }
@@ -322,33 +453,36 @@ fn disposition_detectee() -> u32 {
         {
             return v;
         }
-        if let Some(v) = std::process::Command::new("localectl")
-            .arg("status")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|t| {
-                t.lines()
-                    .find_map(|l| l.trim().strip_prefix("X11 Layout:"))
-                    .and_then(disposition_pour_code)
-            })
-        {
+        if let Some(v) = sortie_bornee(
+            std::process::Command::new("localectl").arg("status"),
+            DELAI_SONDE,
+        )
+        .and_then(|o| String::from_utf8(o).ok())
+        .and_then(|t| {
+            t.lines()
+                .find_map(|l| l.trim().strip_prefix("X11 Layout:"))
+                .and_then(disposition_pour_code)
+        }) {
             return v;
         }
     }
     #[cfg(windows)]
     {
-        if let Some(v) = std::process::Command::new("reg")
-            .args(["query", r"HKCU\Keyboard Layout\Preload", "/v", "1"])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|t| {
-                t.split_whitespace()
-                    .last()
-                    .and_then(|v| u32::from_str_radix(v, 16).ok())
-            })
-        {
+        if let Some(v) = sortie_bornee(
+            std::process::Command::new("reg").args([
+                "query",
+                r"HKCU\Keyboard Layout\Preload",
+                "/v",
+                "1",
+            ]),
+            DELAI_SONDE,
+        )
+        .and_then(|o| String::from_utf8(o).ok())
+        .and_then(|t| {
+            t.split_whitespace()
+                .last()
+                .and_then(|v| u32::from_str_radix(v, 16).ok())
+        }) {
             return v;
         }
     }
@@ -378,7 +512,7 @@ mod tests_detection_injectee {
     use super::{parse_args_de_pa, Pa};
 
     fn pa(args: &[&str]) -> Pa {
-        Pa(args.iter().map(|s| (*s).to_owned()).collect())
+        Pa::analyser(&args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>()).unwrap()
     }
 
     /// Trouvé par l'audit du 7 septembre 2026 : `parse_args_de` sondait la
@@ -626,5 +760,111 @@ mod tests_enregistrement {
         assert_eq!(plafond_depuis(Some("0")), PLAFOND_DEFAUT);
         assert_eq!(plafond_depuis(Some("beaucoup")), PLAFOND_DEFAUT);
         assert_eq!(plafond_depuis(Some("-5")), PLAFOND_DEFAUT);
+    }
+}
+
+#[cfg(test)]
+mod tests_ligne_de_commande {
+    use super::{parse_args_de, sortie_bornee};
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-injection-1) : le mini-parseur
+    /// cherchait un drapeau à TOUTES les positions, valeurs comprises. Un
+    /// `rdp.yaml` importé dont l'utilisateur vaut `--tls-herite` faisait
+    /// renoncer aux suites modernes sans consentement, un hôte nommé
+    /// `--sans-nla` renonçait à NLA. Une clé consomme sa valeur, et un drapeau
+    /// n'est reconnu qu'en position de clé.
+    #[test]
+    fn une_valeur_d_option_n_est_jamais_un_drapeau() {
+        let a = parse_args_de(&["--host", "--sans-nla", "-u", "--tls-herite"], "p").unwrap();
+        assert_eq!(a.host, "--sans-nla");
+        assert_eq!(a.user, "--tls-herite");
+        assert!(
+            !a.sans_nla && !a.tls_herite && !a.vnc && !a.sans_son,
+            "une valeur a été prise pour un drapeau"
+        );
+        // Contrôle positif : en position de clé, le drapeau reste un drapeau.
+        let a = parse_args_de(
+            &["--host", "h", "--sans-nla", "-u", "x", "--tls-herite"],
+            "p",
+        )
+        .unwrap();
+        assert!(a.sans_nla && a.tls_herite);
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-secrets-3) : `-p` et
+    /// `--password` restaient acceptés (« utile pour `--shot` »), et tout usage
+    /// manuel exposait le mot de passe dans `/proc/<pid>/cmdline` et le
+    /// gestionnaire des tâches. Il ne se lit plus que sur l'entrée standard, et
+    /// l'option est refusée avec un message qui le dit, sans répéter la valeur.
+    #[test]
+    fn le_mot_de_passe_n_est_jamais_lu_des_arguments() {
+        for cle in ["-p", "--password"] {
+            let Err(e) = parse_args_de(&["--host", "h", "-u", "x", cle, "secret"], "") else {
+                panic!("{cle} a été accepté en argument");
+            };
+            let m = format!("{e:#}");
+            assert!(m.contains("entrée standard"), "{m}");
+            assert!(
+                !m.contains("secret"),
+                "le refus répète le mot de passe : {m}"
+            );
+        }
+    }
+
+    /// Une faute de frappe (`--hsot`) ou une option disparue ne passe plus en
+    /// silence : c'est ce qui fait qu'un `-p` resté dans un script se voit.
+    #[test]
+    fn un_argument_inconnu_ou_sans_valeur_est_refuse() {
+        assert!(parse_args_de(&["--hsot", "h", "-u", "x"], "p").is_err());
+        assert!(parse_args_de(&["--host", "h", "-u"], "p").is_err());
+        assert!(parse_args_de(&["--host", "h", "-u", "x", "reste"], "p").is_err());
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-sidecar-12) : le processus
+    /// s'en remettait au cœur (`RdpHost::validate`) pour l'adresse qu'il inscrit
+    /// dans `rdp_known_hosts`. Un lancement manuel (`AVASH_RDP_BIN`) contournait
+    /// la garde : une espace désarme le TOFU, un saut de ligne écrit une ligne
+    /// arbitraire dans le fichier de confiance.
+    #[test]
+    fn une_adresse_a_blanc_est_refusee_par_le_sidecar_lui_meme() {
+        for h in ["a b", "a\tb", "a\nb", "a\rb", "a\0b", ""] {
+            assert!(
+                parse_args_de(&["--host", h, "-u", "u"], "p").is_err(),
+                "{h:?} a été accepté"
+            );
+        }
+        assert!(parse_args_de(&["--host", "srv.exemple", "-u", "u"], "p").is_ok());
+        assert!(parse_args_de(&["--host", "fe80::1", "-u", "u"], "p").is_ok());
+    }
+
+    /// Trouvé par l'audit du 12 septembre 2026 (C-SIL-13) : `localectl status`
+    /// était lancé et attendu sans borne pour deviner la disposition, avant
+    /// tout réseau ; un systemd-localed qui ne répond pas laissait l'onglet en
+    /// « connexion » sans un mot. La sonde est abandonnée passé son délai.
+    #[cfg(unix)]
+    #[test]
+    fn une_sonde_qui_ne_rend_pas_la_main_est_abandonnee() {
+        let debut = std::time::Instant::now();
+        let sortie = sortie_bornee(
+            std::process::Command::new("sleep").arg("6"),
+            std::time::Duration::from_millis(200),
+        );
+        assert!(sortie.is_none(), "une sonde trop lente ne rend rien");
+        assert!(
+            debut.elapsed() < std::time::Duration::from_secs(3),
+            "la sonde a été attendue {:?}",
+            debut.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn une_sonde_rapide_rend_sa_sortie() {
+        let s = sortie_bornee(
+            std::process::Command::new("sh").args(["-c", "echo 'X11 Layout: fr'"]),
+            std::time::Duration::from_secs(5),
+        )
+        .expect("une sortie");
+        assert_eq!(String::from_utf8(s).unwrap().trim(), "X11 Layout: fr");
     }
 }

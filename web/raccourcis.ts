@@ -6,6 +6,10 @@ import { closeSession, focusSession } from "./main";
 import { keysOpen } from "./cles";
 import { manualOpen, manualSyncSaveRow } from "./connexion-directe";
 import { basculerPartage } from "./vue-partagee";
+import { askConfirm } from "./dialogues";
+import { libelleSur } from "./filters";
+import { t } from "./i18n";
+import { confirmerFermetureOnglet } from "./prefs";
 
 // ---------- Raccourcis d'onglets ----------
 
@@ -26,10 +30,30 @@ export function focusTab(t: { kind: "ssh" | "rdp"; id: number }) {
   if (t.kind === "ssh") focusSession(t.id);
   else focusRdp(t.id);
 }
+/** Ferme un onglet (croix, Ctrl+W). Un onglet vivant, session SSH ou série
+ *  ouverte ou bureau connecté, demande d'abord confirmation ; fermé ou en
+ *  connexion, il se ferme sans question.
+ *
+ *  Audit du 12 septembre 2026 (C-front-6) : toutes les actions destructrices
+ *  passaient par une confirmation, sauf la fermeture d'une session vivante,
+ *  irréversible pour ce qui tourne dedans. Une croix visée un peu trop à
+ *  droite, ou Ctrl+W par réflexe readline, tuait une migration en cours.
+ *  « Ne plus demander » se règle à la palette (`prefs.ts`). */
+export async function fermerOnglet(o: { kind: "ssh" | "rdp"; id: number }): Promise<void> {
+  const ssh = o.kind === "ssh" ? state.sessions.get(o.id) : undefined;
+  const rdp = o.kind === "rdp" ? rdpSessions.get(o.id) : undefined;
+  const vivant = ssh ? ssh.etat === "live" && !ssh.closed : rdp?.etat === "live";
+  if (vivant && confirmerFermetureOnglet()) {
+    const nom = ssh?.alias ?? rdp?.tab.querySelector(".label")?.textContent ?? "";
+    const ok = await askConfirm(t("onglet-fermer-question", { nom: libelleSur(nom) }), { ok: t("fermer-l-onglet-maj") });
+    if (!ok) return;
+  }
+  if (o.kind === "ssh") closeSession(o.id);
+  else closeRdp(o.id);
+}
 function closeActiveTab() {
   if (state.active === null) return;
-  if (rdpSessions.has(state.active)) closeRdp(state.active);
-  else closeSession(state.active);
+  void fermerOnglet({ kind: rdpSessions.has(state.active) ? "rdp" : "ssh", id: state.active });
 }
 
 // Ctrl+Maj+E : l'onglet suivant côte à côte, ou la vue partagée refermée (le
@@ -47,11 +71,14 @@ window.addEventListener("keydown", (e) => {
 }, true);
 
 window.addEventListener("keydown", (e) => {
+  // Les modificateurs d'abord : le balayage du document qui suit coûtait à
+  // chaque frappe (88 ms par touche mesurés sous jsdom avec 10 000 entrées
+  // SFTP, relevé par la voie FRONT-B de l'audit du 12 septembre 2026).
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
   // Ne pas capturer pendant qu'un formulaire OU la palette est ouvert :
   // l'utilisateur y tape, Ctrl+W fermerait un onglet sous ses doigts.
   if (document.querySelector(".modal-backdrop.open, .palette-backdrop.open")) return;
-  const mod = e.ctrlKey || e.metaKey;
-  if (!mod) return;
 
   if (e.key.toLowerCase() === "w" && state.active !== null) {
     e.preventDefault();

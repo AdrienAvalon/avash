@@ -5,7 +5,235 @@ Toutes les modifications notables d'Avash sont consignées dans ce fichier.
 Le format s'inspire de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/),
 et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
-## [Non publié]
+## [0.13.0] - 2026-09-12
+
+### Sécurité
+
+- **Un texte collé ne peut plus refermer le collage protégé et exécuter une
+  commande.** Le collage encadre le texte des marqueurs du bracketed paste pour
+  que le shell distant attende une validation. Un presse-papiers qui contenait
+  lui-même `ESC[201~` refermait ce bloc, et le retour chariot suivant exécutait
+  ce qui venait après, même sur un shell protégé, pendant que la modale
+  annonçait sagement « Coller 3 lignes ? ». Le collage retire désormais tous les
+  caractères de contrôle sauf tabulation, retour chariot et saut de ligne. Maj+Inser,
+  Ctrl+Inser, le clic du milieu et le menu du navigateur passent par la même
+  confirmation que Ctrl+Maj+V au lieu d'aller droit au terminal. Le même motif
+  est retiré des snippets (`terminal_payload`).
+- **Les marqueurs `@revoked` et `@cert-authority` sont reconnus sur un
+  `known_hosts` haché.** Avec `HashKnownHosts yes`, défaut de Debian et d'Ubuntu,
+  `ssh-keygen -H` hache aussi les lignes marquées. Avash ne comparait qu'un nom
+  d'hôte en clair : une clé révoquée passait pour un premier contact et était
+  réapprise. Le condensat HMAC-SHA1 est maintenant vérifié pour `hôte` et
+  `[hôte]:port`, et une ligne marquée illisible bloque la connexion.
+- **Un mot de passe à saut de ligne est refusé avant d'être mémorisé.** Écrit tel
+  quel dans le protocole du processus de bureau distant, il y injectait des
+  lignes. Le trousseau refuse désormais tout secret contenant `\n`, `\r` ou un
+  octet nul.
+- **Les écritures de configuration ne suivent plus un lien symbolique posé à la
+  place du fichier temporaire.** Le temporaire avait un nom prévisible (numéro de
+  processus et compteur) et s'ouvrait en suivant un lien : dans un répertoire
+  partagé, par exemple pour l'export du diagnostic, un autre compte pouvait faire
+  écraser un fichier de la victime. Le nom est désormais aléatoire et le fichier
+  créé en exclusivité.
+- **Au premier contact sur un profil neuf, `~/.ssh` naît en 0700 et
+  `known_hosts` en 0600.** La bibliothèque SSH les créait avec le masque par
+  défaut, lisibles par les autres comptes, contrairement à ce que promet
+  SECURITY.md.
+- **Les mots de passe sont effacés de la mémoire à leur libération.** Ils
+  vivaient dans des chaînes ordinaires, clonées puis relâchées sans effacement :
+  un vidage mémoire conservé par systemd-coredump pouvait en garder la trace.
+- **Un mot de passe RDP ou VNC à saut de ligne ne peut plus faire désigner un
+  fichier que l'utilisateur n'a jamais choisi.** Le protocole d'entrée du
+  processus de bureau distant lit une ligne pour le mot de passe puis des
+  lignes `AUTORISE <chemin>` : un mot de passe piégé injectait ses propres
+  désignations, ce que `choix_locaux` avait justement été construit pour
+  empêcher. Refusé dès l'écriture (cœur) et avant tout lancement du processus
+  (interface).
+- **Le dossier partagé d'un bureau distant se choisit par la boîte native, plus
+  par un champ texte libre.** Un script dans la page pouvait jusque-là faire
+  partager n'importe quel dossier existant (le répertoire personnel compris) en
+  lecture, écriture et suppression. Le champ est désormais en lecture seule,
+  rempli par un bouton « Choisir… » qui appelle la désignation native, avec un
+  bouton pour la retirer.
+- **L'export du diagnostic ouvre sa propre boîte « Enregistrer sous ».** Il
+  acceptait un chemin absolu quelconque venu de la page et remplaçait la cible
+  sans confirmation ; il ouvre désormais lui-même la boîte native.
+- **Le téléchargement SFTP n'accepte plus un chemin local imposé par la
+  page**, un paramètre qu'aucun appel du front n'utilise et qui permettait
+  d'écrire un fichier reçu du serveur n'importe où sur le disque.
+- **La barrière de contenu de la page est resserrée.** La politique de
+  sécurité du contenu ferme désormais `base-uri`, `form-action` et `frame-src`,
+  et ne cite plus `ws://localhost` (le front ne joint que `127.0.0.1`) ; les
+  capacités accordées à la page se limitent à ce qu'elle utilise réellement
+  (plus de boîtes de fichiers ni d'inspecteur accessibles depuis un script).
+- **Un flux ZGFX ou une image RemoteFX Progressive hostile ne peut plus faire
+  gonfler la mémoire du processus de bureau distant à plusieurs gigaoctets**
+  pour quelques centaines de kilooctets reçus : la somme d'un message
+  multi-segments est désormais plafonnée avant décompression, et le chemin
+  progressif applique le même budget que le reste du canal graphique.
+- **Le repli vers les suites TLS héritées n'accepte plus, sans le dire, un
+  protocole antérieur à TLS 1.2.** L'utilisateur consent à d'anciennes suites,
+  pas à un protocole plus ancien : Windows Server 2012 R2, le cas visé, parle
+  TLS 1.2.
+- **Le mot de passe du processus de bureau distant ne s'accepte plus en
+  argument de ligne de commande** (`-p`/`--password`), lisible dans la liste
+  des processus ; il ne se lit plus que sur l'entrée standard.
+- **Un hôte ou un utilisateur qui ressemble à une option de ligne de commande
+  ne peut plus être pris pour un drapeau.** Le mini-parseur du processus de
+  bureau distant confondait valeurs et drapeaux selon leur position ; un
+  utilisateur nommé `--sans-nla` faisait renoncer à NLA sans consentement.
+- **Le canal local du processus de bureau distant n'admet plus une page
+  servie par un autre service du poste** (`http://localhost`) dans le binaire
+  publié ; cette exception ne reste ouverte qu'en développement.
+
+### Terminal, SSH et SFTP
+
+- **Une connexion SSH qui ne répond pas échoue au bout de 30 secondes, par
+  maillon.** Rien ne bornait l'établissement : un hôte derrière un pare-feu qui
+  jette les paquets laissait l'onglet sur « connexion en cours » deux minutes, et
+  un service qui accepte la connexion sans jamais parler, pour toujours. Chaque
+  étape (TCP, bannière et échange de clés, authentification, canal d'un rebond)
+  a désormais son échéance, le message nomme `hôte:port` et l'étape en cause, et
+  `AVASH_SSH_DELAI` la règle. Un agent SSH muet ne fige plus l'ouverture (3 s).
+- **Les frappes, Ctrl+C compris, passent même quand la sortie sature.** Quand le
+  terminal recevait plus vite qu'il n'affichait, la boucle du canal SSH attendait
+  pour livrer la sortie et n'écoutait plus le clavier : pendant le `cat` d'un gros
+  fichier, Ctrl+C restait sans effet jusqu'à la fin.
+- **Les dossiers de petits fichiers ne se transfèrent plus un par un.** Chaque
+  petit fichier coûtait cinq allers-retours strictement séquentiels : mille
+  fichiers de 4 Kio à 30 ms d'aller-retour prenaient deux minutes et demie, quel
+  que soit le débit. Quatre fichiers sont désormais en vol, en téléchargement, en
+  envoi et en copie d'hôte à hôte, et un petit fichier lit ses attributs une fois
+  au lieu de deux. Une erreur arrête proprement les autres fichiers, sans laisser
+  de partiel.
+- **Arrêter un tunnel libère aussitôt son port local.** La fermeture n'attendait
+  pas la fin de la tâche d'écoute : relancer le tunnel juste après échouait sur
+  « adresse déjà utilisée ». Pendant l'ouverture d'un tunnel, le bouton devient
+  « Annuler ».
+- **La file des transferts SFTP ne se reconstruit plus à chaque progression.**
+  Elle était refaite toutes les 80 ms : le bouton « Annuler » disparaissait sous
+  le focus et sous le clic, au point de manquer l'annulation d'un transfert
+  rapide. Seuls le texte et la barre de la ligne concernée bougent désormais. La
+  navigation au clavier dans un dossier de dix mille entrées ne touche plus que
+  deux entrées par flèche.
+- **Un `~/.ssh/config` illisible n'est plus confondu avec une configuration
+  vide.** Absent, il donne une liste vide ; illisible (droits, encodage), une
+  erreur qui dit pourquoi. Des `Include` qui s'incluent mutuellement par motif ne
+  figent plus la liste des hôtes : chaque fichier est lu une fois, 256 au plus.
+- **Petites justesses.** Une énumération des ports série qui échoue le dit au
+  lieu d'annoncer « aucun port ». Une clé privée en 400 ou 700 ne déclenche plus
+  d'avertissement de droits : OpenSSH ne refuse que si le groupe ou les autres y
+  ont accès. Déployer un `.pub` au texte accentué rend une erreur au lieu de
+  faire tomber la commande. L'échec de la mémorisation du mot de passe d'un
+  tunnel est signalé, comme une progression SFTP indisponible. L'enregistrement
+  asciicast ne fait plus un appel système par bloc reçu.
+
+### Bureau distant
+
+- **La pastille d'un bureau RDP ou VNC s'éteint quand le serveur coupe.** Elle
+  restait verte tant que l'onglet n'était pas fermé à la main, un faux
+  « connecté » exactement contraire au cap du projet. Le titre de fenêtre ne
+  nomme plus non plus un bureau fermé.
+- **Une reprise ou une redirection en cours de session se voit désormais.**
+  Le sidecar l'annonce (message `[23]`), l'onglet repasse en connexion avec
+  « Reprise de la connexion… » au lieu d'un canevas noir sans un mot pendant
+  jusqu'à trente-cinq secondes.
+- **Le presse-papiers d'un bureau distant en arrière-plan n'écrase plus celui
+  du poste pendant qu'on travaille ailleurs** : il n'est appliqué qu'au retour
+  sur son onglet.
+- **Le lecteur partagé résiste à un serveur hostile.** Il refuse désormais
+  d'ouvrir plus de 512 fichiers ou dossiers à la fois (au lieu de vider les
+  descripteurs du processus), ne remplace plus un fichier apparu entre-temps
+  au même nom, refuse une position ou une fin de fichier au-delà de l'espace
+  disque libre, un motif d'énumération démesuré, les noms réservés de Windows
+  et une fin de nom par un point ou une espace, et ne laisse plus supprimer le
+  dossier partagé lui-même. Un fichier reçu par le presse-papiers ne peut plus
+  écraser un fichier apparu pendant le transfert.
+  Un texte copié depuis un bureau VNC est désormais borné avant d'être relayé
+  à l'interface, comme il l'était déjà en RDP.
+- **Fermer l'onglet pendant l'établissement d'un bureau distant est reconnu
+  comme une annulation**, plus comme un échec de connexion générique.
+- **Un bureau en cours de connexion affiche « Connexion à … »** avec un
+  bouton Annuler, plutôt qu'un rectangle noir.
+- **Les liens du terminal (`OSC 8`) s'ouvrent par le même chemin que les
+  autres**, vers le navigateur du système, plutôt que par la boîte de
+  confirmation intégrée au terminal.
+
+### Interface
+
+- **L'application publiée écrit désormais un journal**
+  (`~/.config/avash/journal/avash.log`, borné à deux fichiers d'un mégaoctet,
+  jamais de secret). Un rapport « l'onglet est resté figé » était jusque-là
+  invérifiable ; les dernières lignes du journal rejoignent l'export du
+  diagnostic.
+- **Un trousseau de mots de passe verrouillé ou indisponible ne fige plus la
+  fenêtre.** Les commandes qui l'interrogent, comme celles qui lancent un
+  processus externe, s'exécutent désormais hors du fil qui dessine
+  l'interface ; le mainteneur est prévenu une fois par lancement plutôt que de
+  voir chaque connexion redemander un mot de passe « sans raison ».
+- **Une panique isolée dans une commande ne condamne plus toutes les
+  suivantes.** Les verrous partagés de l'état de l'application se
+  récupèrent désormais même après avoir été laissés dans un état incohérent.
+- **Un échec au lancement (WebView2 absent, WebKitGTK cassé) se dit
+  clairement** au lieu de disparaître silencieusement, surtout sensible sous
+  Windows en version publiée.
+- **La barre latérale ne se reconstruit plus à chaque changement d'état.**
+  Elle recréait jusqu'à toutes ses lignes et leurs écouteurs à l'ouverture
+  d'une session, au changement d'onglet ou à la réception du logo d'un
+  système : sur un grand parc, cela perdait le focus et le défilement, et
+  pouvait faire tomber un double-clic dans le vide pendant qu'une session
+  s'ouvrait. Seules les lignes concernées sont désormais mises à jour.
+- **Dans un terminal, Ctrl+B et Ctrl+K sont laissés au shell distant**
+  (préfixe tmux, effacement readline) ; le panneau SFTP et la palette de
+  commandes s'y ouvrent par Ctrl+Maj+B et Ctrl+Maj+K. Ctrl+Tab, Ctrl+W et
+  Ctrl+1 à Ctrl+9 ne partent plus au shell avant d'agir.
+- **Fermer un onglet vivant (croix ou Ctrl+W) demande confirmation**, comme
+  toutes les autres actions destructrices de l'application ; un réglage
+  « Ne plus demander » est disponible dans la palette.
+- **Le flux du terminal est désormais régulé entre le cœur et la fenêtre** :
+  chaque tranche de sortie est accusée par le front avant l'envoi de la
+  suivante, pour qu'un débit massif (un gros fichier affiché d'un coup) ne
+  fasse plus grossir la file d'attente de la fenêtre sans limite ni retarder
+  un Ctrl+C.
+- **Petites justesses de l'interface.** Les quatre écoutes d'événements posées
+  au démarrage partent désormais en parallèle. La police grasse du terminal ne
+  charge plus qu'à la première session ouverte, et la police régulière est
+  préchargée. Les ascenseurs suivent le thème clair et le curseur ne clignote
+  plus si le système demande moins d'animations. La navigation au clavier
+  dans un dossier SFTP de dix mille entrées ne coûte plus proportionnellement
+  à sa taille, et le tri des noms de fichiers place « fichier2 » avant
+  « fichier10 ». La croix de fermeture d'un onglet et les pastilles de dossier
+  sont plus grandes et visibles au repos.
+
+### Chaîne d'intégration et garde-fous
+
+- **La clé qui signe les mises à jour n'entre plus dans l'environnement du
+  build.** `cargo tauri build` exécute le code de chaque dépendance
+  (`beforeBuildCommand`, `build.rs`, macros procédurales), qui aurait lu la clé
+  d'un simple `std::env::var` : une seule dépendance compromise suffisait à signer
+  une mise à jour que tous les postes installés accepteraient. Les bundles sont
+  désormais construits sans aucun secret, et un job `signer`, qui ne compile ni
+  n'installe rien, signe les cinq artefacts de mise à jour. `signer` et `publier`
+  tournent dans l'environnement GitHub `release`, qui peut exiger l'approbation
+  du mainteneur. L'archive macOS de mise à jour est reproduite à l'identique par
+  `scripts/archiver-app-macos.sh`.
+- **Toutes les commandes cargo des chaînes, de `check.sh` et du hook sont en
+  `--locked`, et les outils en version exacte.** Sans `--locked`, cargo pouvait
+  réécrire `Cargo.lock` sur l'exécuteur, et le SBOM attesté décrivait un autre
+  graphe que celui livré. tauri-cli 2.11.4, cargo-audit, cargo-deny,
+  tauri-driver, cargo-fuzz, cargo-llvm-cov, cargo-mutants et gitleaks sont
+  épinglés.
+- **Provenance vérifiée avant winget.** `winget-manifeste.sh` télécharge
+  l'installeur, vérifie son attestation Sigstore et calcule lui-même l'empreinte ;
+  `SHA256SUMS` est désormais attesté comme les binaires. `flathub-sources.sh`
+  exécute un générateur épinglé et confronte sa sortie aux verrous.
+- **Moins de jetons exposés, moins de faux verdicts.** Aucun checkout ne garde le
+  jeton GitHub dans `.git/config` ; `@claude` ne répond qu'aux auteurs du dépôt et
+  la revue automatique ignore les PR de fork. L'audit du processus RDP rend le
+  même résultat quel que soit le dossier d'où on le lance, et `npm-audit.sh`
+  décide sur le rapport JSON au lieu de prendre un avis de sécurité pour une
+  panne du registre. Quinze nouveaux gardes dans `scripts/tests/` verrouillent
+  ces règles.
 
 ### Validation
 

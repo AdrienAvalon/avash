@@ -20,8 +20,13 @@ fn main() {
         tauri_build::build();
         return;
     }
-    let manifeste = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("windows-app-manifest.xml");
+    // Cargo pose toujours CARGO_MANIFEST_DIR pour un script de construction :
+    // son absence voudrait dire un build hors de Cargo, qu'on ne sait pas
+    // mener. `expect` plutôt que `unwrap` : le message dit laquelle manque.
+    let manifeste = std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR posée par Cargo"),
+    )
+    .join("windows-app-manifest.xml");
     println!("cargo:rerun-if-changed={}", manifeste.display());
     println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
     println!(

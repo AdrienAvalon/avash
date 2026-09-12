@@ -8,7 +8,7 @@ et `window.prompt()` renvoie toujours `null` — deux pièges invisibles en unit
 ## Prérequis (une fois)
 
 ```bash
-cargo install tauri-driver --locked
+cargo install tauri-driver --version 2.0.6 --locked
 # WebKitWebDriver : fourni par webkitgtk-6.0 (Arch/CachyOS : « paru -S webkitgtk-6.0 »)
 # Le driver 6.0 pilote l'app même liée à webkit2gtk-4.1.
 cd e2e && npm install
@@ -68,7 +68,7 @@ VNC sur `35900` (`vnc.spec.js`, mot de passe `test`, image connue qui réagit
 aux entrées) et `35903`/`35904` (`vnc-tls`, VeNCrypt derrière son terminateur
 TLS).
 
-## Couverture (78 scénarios, 37 fichiers)
+## Couverture (81 scénarios, 37 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|

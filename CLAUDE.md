@@ -12,6 +12,10 @@ ce qui n'est pas ici n'existe pas pour eux.
   Identifiants techniques et termes consacrés restent tels quels.
 - Orthographe complète, accents compris. Pas de tirets cadratins dans la prose.
 - Tutoiement avec le mainteneur.
+- Un bloc `unsafe` porte un commentaire `// SAFETY:` (préfixe anglais collé
+  aux deux-points, seul reconnu par clippy `undocumented_unsafe_blocks` ;
+  `SAFETY :` et `Sûreté :` sont refusés). La justification, en français,
+  nomme l'invariant et l'endroit du code qui le garantit.
 
 ## Disposition du dépôt
 

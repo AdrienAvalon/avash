@@ -32,7 +32,7 @@ fn chemin() -> Result<std::path::PathBuf, String> {
 }
 
 /// Écrit la liste (atomiquement, en 0600) ; une liste vide retire le fichier.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn onglets_memoriser(onglets: Vec<OngletMemorise>) -> Result<(), String> {
     let chemin = chemin()?;
     if onglets.is_empty() {
@@ -52,7 +52,7 @@ pub fn onglets_memoriser(onglets: Vec<OngletMemorise>) -> Result<(), String> {
 
 /// La liste mémorisée ; un fichier absent ou illisible vaut « rien » : on ne
 /// bloque pas un lancement pour une mémoire cassée.
-#[tauri::command]
+#[tauri::command(async)]
 #[must_use]
 pub fn onglets_memorises() -> Vec<OngletMemorise> {
     let Ok(chemin) = chemin() else {

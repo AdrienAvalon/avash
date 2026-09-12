@@ -8,9 +8,11 @@
 //! est enregistrée**, jamais les frappes : un mot de passe tapé à l'invite d'un
 //! `sudo` n'apparaît pas à l'écran, il ne doit pas apparaître dans le fichier.
 //!
-//! Le fichier naît en 0600 dans le répertoire de configuration, et chaque
-//! événement est écrit et vidé aussitôt : une coupure laisse un enregistrement
-//! tronqué mais lisible jusqu'à la dernière ligne complète.
+//! Le fichier naît en 0600 dans le répertoire de configuration. Chaque
+//! événement part dans un tampon, vidé par [`Enregistreur::vider`] au rythme
+//! où l'interface émet vers le terminal (au plus toutes les 8 ms) : une
+//! coupure laisse un enregistrement tronqué mais lisible jusqu'à la dernière
+//! ligne complète, sans un appel système par bloc reçu.
 
 use anyhow::{Context, Result};
 use std::io::Write as _;
@@ -228,14 +230,18 @@ impl Enregistreur {
         // contenu et perdre le « \n » ; l'événement suivant se collait alors à
         // cette ligne, et la relecture s'arrête à la première ligne illisible —
         // tout ce qui suivait disparaissait, pas seulement la lacune.
+        //
+        // Plus de vidage ici : contrat K4 de l'audit du 12 septembre 2026
+        // (C-perf-6). Le `flush` par ligne faisait un `write(2)` par bloc SSH
+        // reçu, des milliers par seconde sous un `cat` enregistré, sur le fil
+        // qui relaie le terminal. Le vidage passe par `vider`, et l'erreur d'un
+        // disque plein y est vue au plus une émission plus tard. Le tampon, lui,
+        // peut encore écrire ici quand il déborde : l'erreur est alors vue
+        // aussitôt.
         let mut ligne = Vec::with_capacity(contenu.len() + 1);
         ligne.extend_from_slice(contenu.as_bytes());
         ligne.push(b'\n');
-        let ecriture = self
-            .fichier
-            .write_all(&ligne)
-            .and_then(|()| self.fichier.flush());
-        if let Err(e) = ecriture {
+        if let Err(e) = self.fichier.write_all(&ligne) {
             let message = format!("écriture de l'enregistrement impossible : {e}");
             self.erreur = Some(message.clone());
             return Err(anyhow::anyhow!(message));
@@ -253,10 +259,30 @@ impl Enregistreur {
         self.ligne(&ev.to_string())
     }
 
-    /// Le terminal a changé de taille.
+    /// Le terminal a changé de taille. Vidé aussitôt : l'événement est rare.
     pub fn redimension(&mut self, cols: u32, rows: u32) -> Result<()> {
         let ev = serde_json::json!([self.secondes(), "r", format!("{cols}x{rows}")]);
-        self.ligne(&ev.to_string())
+        self.ligne(&ev.to_string())?;
+        self.vider()?;
+        Ok(())
+    }
+
+    /// Vide le tampon vers le fichier. À appeler à chaque émission vers le
+    /// terminal et à l'arrêt (contrat K4 de l'audit du 12 septembre 2026).
+    ///
+    /// Une erreur est retenue comme dans `ligne` : l'enregistrement est
+    /// condamné, chaque sortie et chaque vidage suivants la redisent, et
+    /// `arreter` la signale au lieu de rendre le chemin d'un fichier lacunaire.
+    pub fn vider(&mut self) -> std::io::Result<()> {
+        if let Some(e) = &self.erreur {
+            return Err(std::io::Error::other(e.clone()));
+        }
+        if let Err(e) = self.fichier.flush() {
+            let message = format!("écriture de l'enregistrement impossible : {e}");
+            self.erreur = Some(message.clone());
+            return Err(std::io::Error::other(message));
+        }
+        Ok(())
     }
 
     /// Où l'enregistrement s'écrit.
@@ -635,6 +661,68 @@ mod tests {
             e.arreter().is_err(),
             "arreter doit signaler que le fichier est incomplet"
         );
+    }
+
+    /// Un écrivain qui compte ses appels et ses vidages, et peut refuser.
+    struct Compteur {
+        ecritures: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        refuse: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl std::io::Write for Compteur {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            use std::sync::atomic::Ordering::SeqCst;
+            if self.refuse.load(SeqCst) {
+                return Err(std::io::Error::other("No space left on device"));
+            }
+            self.ecritures.fetch_add(1, SeqCst);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Contrat K4 de l'audit du 12 septembre 2026 (C-perf-6) : chaque bloc de
+    /// sortie faisait un `write(2)` (vidage par ligne), des milliers par
+    /// seconde sous un `cat` enregistré. Les lignes restent désormais dans le
+    /// tampon jusqu'à `vider`, que l'interface appelle à chaque émission vers
+    /// le terminal ; une écriture refusée y est vue, pas plus tard, et condamne
+    /// l'enregistrement comme avant.
+    #[test]
+    fn une_ecriture_refusee_est_vue_au_vidage_suivant_pas_plus_tard() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let ecritures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let refuse = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut e = Enregistreur::depuis_ecrivain(
+            Box::new(Compteur {
+                ecritures: ecritures.clone(),
+                refuse: refuse.clone(),
+            }),
+            PathBuf::from("/inexistant/compte.cast"),
+            "h",
+            80,
+            24,
+        )
+        .unwrap();
+        for _ in 0..50 {
+            e.sortie("x").unwrap();
+        }
+        assert_eq!(
+            ecritures.load(SeqCst),
+            0,
+            "cinquante blocs ne font aucun appel à l'écrivain avant le vidage"
+        );
+        e.vider().unwrap();
+        assert_eq!(ecritures.load(SeqCst), 1, "un vidage, une écriture");
+        refuse.store(true, SeqCst);
+        e.sortie("y")
+            .expect("tamponné : l'erreur n'est pas encore connue");
+        assert!(e.vider().is_err(), "le vidage suivant voit le disque plein");
+        refuse.store(false, SeqCst);
+        assert!(e.sortie("z").is_err(), "condamné après un refus");
+        assert!(e.vider().is_err(), "et chaque vidage le redit");
+        assert!(e.arreter().is_err());
     }
 
     #[test]

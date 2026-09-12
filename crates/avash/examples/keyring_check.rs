@@ -1,3 +1,7 @@
+// Programme d'essai lancé à la main : un décor qui échoue doit s'arrêter net,
+// d'où les `unwrap` et `expect`, que le lint `unwrap_used` signalerait.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 fn main() {
     let acc = "avash-verification-reelle@test:22";
     match avash::secrets::save(acc, "mot-de-passe-de-test") {

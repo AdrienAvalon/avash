@@ -42,35 +42,48 @@ TRIPLE="$(rustc -vV | sed -n 's/host: //p')"
 # le suffixe sur la cible, comme EXE_SUFFIX côté cœur (rdp.rs).
 EXT=""
 case "$TRIPLE" in *windows*) EXT=.exe ;; esac
-( cd "$ROOT/rdp-sidecar" && cargo build --release )
+( cd "$ROOT/rdp-sidecar" && cargo build --locked --release )
 mkdir -p "$UI/binaries"
 cp -v "$ROOT/rdp-sidecar/target/release/avash-rdp$EXT" "$UI/binaries/avash-rdp-$TRIPLE$EXT"
 
 # 2) Build des bundles pour la plateforme courante.
 step "Build des bundles Tauri"
 if ! cargo tauri --version >/dev/null 2>&1; then
-  echo "cargo-tauri absent. Installe-le : cargo install tauri-cli --version '^2.0' --locked" >&2
+  echo "cargo-tauri absent. Installe-le : cargo install tauri-cli --version 2.11.4 --locked" >&2
   exit 1
 fi
 
-# La configuration demande des artefacts de mise à jour : Tauri s'arrête alors
-# s'il ne trouve pas la clé de signature. Elle vit hors du dépôt, chez le
-# mainteneur. Sans elle, on construit quand même — un binaire non signé reste
-# utilisable en local, il ne peut simplement pas servir de mise à jour.
-CLE_MAJ="${AVASH_UPDATER_KEY:-$HOME/.config/avash-release/updater.key}"
-if [ -f "$CLE_MAJ" ]; then
-  TAURI_SIGNING_PRIVATE_KEY="$(cat "$CLE_MAJ")"
-  export TAURI_SIGNING_PRIVATE_KEY
-  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}"
-  echo "  clé de signature : $CLE_MAJ"
-else
-  echo "  ⚠ clé de signature absente ($CLE_MAJ) : artefacts non signés" >&2
-fi
+# Construction SANS la clé de signature : createUpdaterArtifacts est coupé, Tauri
+# ne signe rien et ne la réclame pas. Trouvé par l'audit du 12 septembre 2026
+# (C-chaine-1) : ce script exportait la clé avant `cargo tauri build`, qui
+# exécute vite, chaque build.rs et chaque macro procédurale ; n'importe
+# laquelle de ces dépendances la lisait par un simple getenv. La signature
+# vient après, par `signer sign`, seule commande à lire la clé.
 # Les bundles d'une version précédente restent dans target/ : sans ce ménage,
 # la collecte ramassait aussi les deb et rpm de la 0.7.2 à côté de la 0.8.0.
 rm -rf "$ROOT/target/release/bundle"
 # NO_STRIP : le strip embarqué par linuxdeploy ne gère pas .relr.dyn (libs récentes).
-( cd "$UI" && NO_STRIP=1 cargo tauri build )
+# `-- --locked` va à cargo : le binaire est fait du Cargo.lock commité.
+( cd "$UI" && NO_STRIP=1 cargo tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked )
+
+# 2.5) Signature des artefacts de mise à jour, à côté de chacun (<fichier>.sig).
+#      La clé vit hors du dépôt, chez le mainteneur ; elle est lue par son
+#      chemin, par la seule commande qui signe. Sans elle, on continue : un
+#      binaire non signé reste utilisable en local, il ne peut simplement pas
+#      servir de mise à jour. Le mot de passe est toujours posé, fût-il vide :
+#      absent, tauri-cli le demanderait au terminal.
+step "Signature des artefacts de mise à jour"
+CLE_MAJ="${AVASH_UPDATER_KEY:-$HOME/.config/avash-release/updater.key}"
+if [ -f "$CLE_MAJ" ]; then
+  echo "  clé de signature : $CLE_MAJ"
+  while IFS= read -r -d '' f; do
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}" \
+      cargo tauri signer sign -f "$CLE_MAJ" "$f" >/dev/null
+    echo "  signé : $(basename "$f")"
+  done < <(find "$ROOT/target/release/bundle" -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*-setup.exe' \) -print0)
+else
+  echo "  ⚠ clé de signature absente ($CLE_MAJ) : artefacts non signés" >&2
+fi
 
 # 3) Rassembler les artefacts dans dist-release/.
 step "Collecte des artefacts"

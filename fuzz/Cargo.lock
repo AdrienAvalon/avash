@@ -294,8 +294,10 @@ name = "avash"
 version = "0.12.2"
 dependencies = [
  "anyhow",
+ "data-encoding",
  "dirs",
  "futures",
+ "hmac",
  "keyring",
  "pageant",
  "rand",
@@ -305,8 +307,11 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serialport",
+ "sha1 0.11.0",
  "tokio",
+ "tracing",
  "whoami",
+ "zeroize",
 ]
 
 [[package]]

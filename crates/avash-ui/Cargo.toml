@@ -38,6 +38,13 @@ avash = { path = "../avash" }
 tokio = { version = "1", features = ["full"] }
 whoami = "2"
 open = "5.4.2"
+zeroize = "1"
+# Journal de l'application (audit du 12 septembre 2026, C-SIL-2) : l'application
+# publiée n'écrivait nulle part, et tout échec sans remontée IPC disparaissait.
+# `tracing-appender` n'est pas pris : il ne sait tourner que par date, et le
+# journal doit rester borné en taille (deux fichiers d'un mégaoctet).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
@@ -55,6 +62,21 @@ pageant = "0.2"
 # `AppHandle` sans fenêtre, donc exercer les commandes et le magasin de sessions
 # — la logique d'annulation pendant une connexion n'avait aucun test unitaire.
 tauri = { version = "2", features = ["test"] }
+# Temps figé (`start_paused`) : les tests du relais de sortie mesurent la
+# fenêtre de regroupement et le filet de contre-pression sans dormir pour de
+# vrai, et le délai de garde de l'annonce du sidecar (60 s) s'éprouve en un
+# instant. Audit du 12 septembre 2026.
+tokio = { version = "1", features = ["full", "test-util"] }
+# Pseudo-terminal pour les tests de `serie_open` (audit du 12 septembre 2026,
+# C-couv-5) : l'esclave tient lieu de port série, le maître de l'équipement.
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.31", features = ["term", "fs", "user"] }
+# Serveur SSH+SFTP en mémoire du cœur (`avash::testutil::serveur_ssh`), pour
+# éprouver les commandes SFTP, tunnels et dépôt de clé contre une vraie session
+# (`commands/tests_reseau.rs`). Dépendance de développement seulement : le
+# résolveur 2 ne l'unifie pas dans la construction d'un binaire publié. Audit
+# du 12 septembre 2026 (C-couv-4).
+avash = { path = "../avash", features = ["outils-de-test"] }
 
 [[bench]]
 name = "utf8"

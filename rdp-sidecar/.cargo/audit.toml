@@ -1,0 +1,21 @@
+# Vulnérabilités connues du processus RDP, examinées et acceptées.
+#
+# cargo-audit ne lit sa configuration que dans ./.cargo/audit.toml, donc dans
+# le dossier d'où on le lance (puis dans $CARGO_HOME/audit.toml). Trouvé par
+# l'audit du 12 septembre 2026 (C-chaine-12) : sans ce fichier, un audit lancé
+# dans rdp-sidecar/ signalait RUSTSEC-2023-0071, pendant que la chaîne, lancée
+# depuis la racine avec --file, lisait la liste de l'espace de travail ; le
+# verdict dépendait du répertoire. Les trois chaînes auditent désormais le
+# sidecar depuis ce dossier, sous cette liste.
+#
+# Source jumelle : rdp-sidecar/deny.toml, qui ne peut rien accepter qui ne soit
+# ici (garde : scripts/tests/audit-config-centralise.sh).
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 : rsa, canal auxiliaire temporel Marvin, sans correctif
+    # amont. Côté sidecar, `rsa` arrive par picky (tiré par sspi et
+    # ironrdp-connector), pour vérifier des signatures X.509 : aucune clé
+    # privée RSA côté client, donc pas la surface que vise Marvin. Même
+    # justification que rdp-sidecar/deny.toml.
+    "RUSTSEC-2023-0071",
+]

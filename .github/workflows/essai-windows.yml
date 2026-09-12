@@ -7,8 +7,12 @@
 # contrôleur de domaine du parc qu'un avash ouvert dans une session RDP ne
 # perd plus de tuiles dans son canvas (2026-09-03).
 #
-# La clé de signature des mises à jour est nécessaire à Tauri pour construire
-# (createUpdaterArtifacts) ; le .sig produit n'est pas publié.
+# Aucune clé de signature ici. Jusqu'au 12 septembre 2026, ce job recevait la
+# clé privée de la mise à jour automatique pour un .sig jeté aussitôt, dans
+# l'environnement d'un build qui exécute vite, chaque build.rs et chaque macro
+# procédurale (audit du 12 septembre 2026, C-chaine-1). Il construit désormais
+# comme la release : createUpdaterArtifacts coupé, Tauri ne signe rien et ne
+# réclame aucune clé. Garde : scripts/tests/release-cle-signature-hors-build.sh.
 name: Essai Windows
 
 on:
@@ -26,6 +30,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -50,7 +55,7 @@ jobs:
 
       - name: Processus RDP
         working-directory: rdp-sidecar
-        run: cargo build --release
+        run: cargo build --locked --release
 
       - name: Placer le sidecar
         shell: pwsh
@@ -59,15 +64,16 @@ jobs:
           Copy-Item rdp-sidecar/target/release/avash-rdp.exe `
             crates/avash-ui/binaries/avash-rdp-x86_64-pc-windows-msvc.exe
 
+      # Version exacte, la même que release.yml (garde ci-outils-epingles.sh).
       - name: Outil Tauri
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo install tauri-cli --version 2.11.4 --locked
 
+      # shell bash : le JSON de --config passe tel quel, sans les règles de
+      # guillemets de PowerShell. `-- --locked` va à cargo.
       - name: Bundle Tauri
         working-directory: crates/avash-ui
-        run: cargo tauri build
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: cargo tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
 
       - name: Installeur d'essai
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

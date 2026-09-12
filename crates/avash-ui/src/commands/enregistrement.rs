@@ -1,6 +1,7 @@
 //! Enregistrement de session (asciicast) : démarrer, arrêter, lister.
 
 use super::{finaliser_enregistrement, Enregistrement, SessionStore};
+use avash::Verrou as _;
 use tauri::AppHandle;
 
 pub(crate) fn enregistreur_de(
@@ -9,8 +10,7 @@ pub(crate) fn enregistreur_de(
 ) -> Option<Enregistrement> {
     state
         .inner
-        .lock()
-        .unwrap()
+        .verrou()
         .get(&id)
         .map(|h| h.enregistreur.clone())
 }
@@ -21,7 +21,7 @@ pub(crate) fn enregistreur_de(
 /// `etat_initial` est l'écran tel qu'il est au moment de démarrer, sérialisé
 /// par le front (séquences d'échappement comprises) : sans lui, un
 /// enregistrement lancé en cours de session rejouait à partir d'un écran noir.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn enregistrement_demarrer(
     state: tauri::State<'_, SessionStore>,
     id: u64,
@@ -30,13 +30,13 @@ pub fn enregistrement_demarrer(
     etat_initial: Option<String>,
 ) -> Result<String, String> {
     let (enregistreur, label) = {
-        let store = state.inner.lock().unwrap();
+        let store = state.inner.verrou();
         let h = store
             .get(&id)
             .ok_or_else(|| format!("Session {id} inconnue"))?;
         (h.enregistreur.clone(), h.label.clone())
     };
-    let mut slot = enregistreur.lock().unwrap();
+    let mut slot = enregistreur.verrou();
     if let Some(en_cours) = slot.as_ref() {
         return Ok(en_cours.chemin().display().to_string());
     }
@@ -60,7 +60,7 @@ pub fn enregistrement_demarrer(
 
 /// Les enregistrements existants, du plus récent au plus ancien.
 #[must_use]
-#[tauri::command]
+#[tauri::command(async)]
 pub fn enregistrements_lister() -> Vec<avash::enregistrement::Info> {
     avash::enregistrement::repertoire()
         .map(|d| avash::enregistrement::lister(&d))
@@ -69,18 +69,24 @@ pub fn enregistrements_lister() -> Vec<avash::enregistrement::Info> {
 
 /// Ouvre le répertoire des enregistrements dans le gestionnaire de fichiers,
 /// en le créant s'il n'existe pas encore.
+///
+/// `open::that` attend le lanceur du système : hors du fil principal (audit
+/// du 12 septembre 2026, C-SIL-7).
 #[tauri::command]
-pub fn enregistrements_ouvrir_dossier() -> Result<String, String> {
-    let dir =
-        avash::enregistrement::repertoire().ok_or("répertoire de configuration introuvable")?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{e:#}"))?;
-    open::that(&dir).map_err(|e| format!("Ouverture impossible : {e}"))?;
-    Ok(dir.display().to_string())
+pub async fn enregistrements_ouvrir_dossier() -> Result<String, String> {
+    super::bloquant(|| {
+        let dir =
+            avash::enregistrement::repertoire().ok_or("répertoire de configuration introuvable")?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{e:#}"))?;
+        open::that(&dir).map_err(|e| format!("Ouverture impossible : {e}"))?;
+        Ok(dir.display().to_string())
+    })
+    .await
 }
 
 /// Arrête l'enregistrement et rend le chemin du fichier ; `None` s'il n'y en
 /// avait pas.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn enregistrement_arreter(
     state: tauri::State<'_, SessionStore>,
     id: u64,
@@ -88,7 +94,7 @@ pub fn enregistrement_arreter(
     let Some(enregistreur) = enregistreur_de(&state, id) else {
         return Err(format!("Session {id} inconnue"));
     };
-    let pris = enregistreur.lock().unwrap().take();
+    let pris = enregistreur.verrou().take();
     match pris {
         Some(e) => e
             .arreter()
@@ -103,8 +109,7 @@ pub fn enregistrement_arreter(
 #[tauri::command]
 pub fn enregistrement_en_cours(state: tauri::State<'_, SessionStore>, id: u64) -> Option<String> {
     enregistreur_de(&state, id).and_then(|e| {
-        e.lock()
-            .unwrap()
+        e.verrou()
             .as_ref()
             .map(|x| x.chemin().display().to_string())
     })
@@ -121,14 +126,14 @@ pub async fn pty_close<R: tauri::Runtime>(
     // `open_on_target` (inner puis annules) : sans cela les deux pouvaient
     // s'entrelacer et laisser une session vivante sans onglet.
     let handle = {
-        let mut inner = state.inner.lock().unwrap();
+        let mut inner = state.inner.verrou();
         let h = inner.remove(&id);
         // On ne note l'annulation que si une connexion est RÉELLEMENT en cours.
         // Sans cette condition, fermer un onglet dont la connexion avait déjà
         // échoué semait un identifiant qui figeait, après rechargement de la
         // fenêtre, l'onglet qui en héritait.
-        if h.is_none() && state.en_cours.lock().unwrap().contains(&id) {
-            state.annules.lock().unwrap().insert(id);
+        if h.is_none() && state.en_cours.verrou().contains(&id) {
+            state.annules.verrou().insert(id);
         }
         h
     };

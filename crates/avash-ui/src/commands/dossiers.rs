@@ -2,20 +2,20 @@
 
 /// Liste des dossiers connus (registre ; les dossiers dérivés des hôtes sont
 /// ajoutés côté front).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn folders_list() -> Result<Vec<String>, String> {
     avash::folders::list().map_err(|e| format!("{e:#}"))
 }
 
 /// Crée un dossier (et ses ancêtres).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn folder_create(path: String) -> Result<Vec<String>, String> {
     avash::folders::create(&path).map_err(|e| format!("{e:#}"))
 }
 
 /// Supprime un dossier : ses hôtes (et ceux des sous-dossiers) reviennent à la
 /// racine, puis le dossier et ses descendants sont retirés du registre.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn folder_delete(path: String) -> Result<Vec<String>, String> {
     avash::folders::delete_core(
         &avash::ssh_config_path(),
@@ -27,7 +27,7 @@ pub fn folder_delete(path: String) -> Result<Vec<String>, String> {
 }
 
 /// Renomme un dossier et remappe ses hôtes (et sous-dossiers).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn folder_rename(from: String, to: String) -> Result<Vec<String>, String> {
     avash::folders::rename_core(
         &avash::ssh_config_path(),
@@ -41,7 +41,7 @@ pub fn folder_rename(from: String, to: String) -> Result<Vec<String>, String> {
 
 /// Range un hôte SSH dans un dossier (déplacement). Le dossier cible est
 /// enregistré s'il est nouveau.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn host_set_folder(alias: String, folder: String) -> Result<(), String> {
     let norm = avash::folders::normalize(&folder);
     avash::set_host_folder(alias.trim(), &norm).map_err(|e| format!("{e:#}"))?;
@@ -58,6 +58,14 @@ pub fn host_set_folder(alias: String, folder: String) -> Result<(), String> {
 /// session RDP s'ouvre le plus souvent à la souris : sans interrogation du
 /// système, le bureau distant démarrerait avec ses propres verrous, et le pavé
 /// numérique paraîtrait éteint alors qu'il est allumé côté utilisateur.
+///
+/// **Reste synchrone**, seule exception à la règle « hors du fil principal »
+/// de l'audit du 12 septembre 2026 (C-SIL-7, C-unsafe-5) : sous Windows,
+/// `GetKeyState` rend l'état des bascules du fil APPELANT ; une commande
+/// synchrone s'exécute sur le fil de la webview, celui qui reçoit le clavier.
+/// Déplacée sur un fil tokio, elle pourrait rendre un état périmé. Sous Linux
+/// elle lit quelques fichiers de `/sys`, en mémoire. Un test refuse de
+/// compiler si elle devient `async` (`keyboard_locks_reste_une_commande_synchrone`).
 #[tauri::command]
 #[must_use]
 pub fn keyboard_locks() -> Option<u8> {
@@ -105,14 +113,19 @@ fn lock_bits() -> Option<u8> {
     // `#[link]` explicite : ne pas dépendre du hasard qu'une autre caisse du
     // graphe lie déjà user32 — sinon la panne serait une erreur d'édition de
     // liens à la release, pas une erreur de compilation.
+    //
+    // SAFETY: GetKeyState n'a ni pointeur ni précondition ; un code virtuel
+    // inconnu rend 0. Déclarée `safe fn` (audit du 12 septembre 2026,
+    // C-unsafe-5) : l'appel n'a plus besoin de bloc. L'état des bascules est
+    // celui du fil appelant : `keyboard_locks` doit rester synchrone.
     #[link(name = "user32")]
     unsafe extern "system" {
-        fn GetKeyState(virtual_key: i32) -> i16;
+        safe fn GetKeyState(virtual_key: i32) -> i16;
     }
     const VK_CAPITAL: i32 = 0x14;
     const VK_NUMLOCK: i32 = 0x90;
     const VK_SCROLL: i32 = 0x91;
-    let actif = |vk: i32| unsafe { GetKeyState(vk) } & 1 != 0;
+    let actif = |vk: i32| GetKeyState(vk) & 1 != 0;
     Some(
         u8::from(actif(VK_NUMLOCK))
             | (u8::from(actif(VK_CAPITAL)) << 1)
@@ -125,7 +138,22 @@ fn lock_bits() -> Option<u8> {
     None // macOS : pas d'interface simple, on s'en remet aux événements clavier.
 }
 
-#[cfg(all(test, target_os = "linux"))]
+/// La commande reste synchrone (voir `keyboard_locks`) : si elle devenait
+/// `async`, son type ne serait plus `fn() -> Option<u8>` et ce test ne
+/// compilerait plus. Audit du 12 septembre 2026 (C-unsafe-5).
+#[cfg(test)]
+mod tests_synchrone {
+    #[test]
+    fn keyboard_locks_reste_une_commande_synchrone() {
+        let synchrone: fn() -> Option<u8> = super::keyboard_locks;
+        let _ = synchrone();
+    }
+}
+
+// `cfg(test)` seul d'abord, la plateforme ensuite : clippy ne reconnaît pas
+// `cfg(all(test, …))` comme un module de test (`allow-unwrap-in-tests`).
+#[cfg(test)]
+#[cfg(target_os = "linux")]
 mod tests_verrous {
     use super::lock_bits_from_leds;
     use std::path::{Path, PathBuf};

@@ -38,6 +38,10 @@ export type Session = {
   serialiser: SerializeAddon;
   /** Session terminee cote serveur : le clavier ne part plus au shell. */
   closed: boolean;
+  /** Où en est la session, tel que l'onglet l'affiche. La barre latérale et la
+   *  confirmation de fermeture le lisent ici, plus dans les classes CSS de
+   *  l'onglet (audit du 12 septembre 2026, C-front-1 et C-front-6). */
+  etat: "connecting" | "live" | "closed";
   /** Rouvre la meme cible dans ce meme onglet (Entree apres deconnexion). */
   reconnect: (() => Promise<void>) | null;
   /** Dossier distant courant du panneau SFTP, propre a chaque onglet. */
@@ -85,13 +89,18 @@ export const state = {
   folders: [] as string[],
   /** Dernière sonde de santé, par clé de ligne (`ssh:alias`, `rdp:id`). */
   sante: new Map<string, Sante>(),
+  /** Moteur de rendu des terminaux, `null` avant le premier (diagnostic, C-front-14). */
+  rendu: null as "webgl" | "dom" | null,
 };
 
-/** Ce qu'une sonde de santé a vu d'un hôte (voir `hosts_health`). */
-export type Sante =
+/** Ce qu'une sonde de santé a vu d'un hôte (voir `hosts_health`), et quand :
+ *  `quand` (ms depuis l'époque) est posé par le front à la réception, absent
+ *  des sondes mémorisées avant l'audit du 12 septembre 2026 (C-SIL-3). */
+export type Sante = (
   | { etat: "joignable"; latence_ms: number }
   | { etat: "injoignable"; raison: string }
-  | { etat: "inconnu"; raison: string };
+  | { etat: "inconnu"; raison: string }
+) & { quand?: number };
 
 /** Dossiers repliés (persisté par machine). */
 export const collapsedFolders = new Set<string>(

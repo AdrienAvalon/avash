@@ -14,8 +14,11 @@ export function setFontSize(px: number) {
   state.terminalFontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
   for (const s of state.sessions.values()) {
     s.term.options.fontSize = state.terminalFontSize;
+    // `fit()` déclenche `onResize`, qui envoie la taille au shell après une
+    // courte accalmie (main.ts) : le `pty_resize` direct qui suivait doublait
+    // l'IPC pour chaque session et chaque cran (audit du 12 septembre 2026,
+    // C-front-13).
     s.fit.fit();
-    invoke("pty_resize", { id: s.id, cols: s.term.cols, rows: s.term.rows }).catch(() => {});
   }
 }
 

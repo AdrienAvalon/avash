@@ -28,10 +28,21 @@ pub const VITESSES: &[u32] = &[
 ];
 
 /// Les ports du poste, triés par chemin.
-#[must_use]
-pub fn lister_ports() -> Vec<PortSerie> {
-    let mut ports: Vec<PortSerie> = serialport::available_ports()
-        .unwrap_or_default()
+///
+/// Contrat K2 de l'audit du 12 septembre 2026 (C-SIL-12) : une énumération qui
+/// échoue (droits sur `/dev`, erreur de `serialport`) rend une erreur, et non
+/// une liste vide que le formulaire affichait comme « aucun port série ».
+pub fn lister_ports() -> Result<Vec<PortSerie>> {
+    ports_depuis(serialport::available_ports())
+}
+
+/// Le cœur de [`lister_ports`], sur le résultat d'une énumération : de quoi
+/// éprouver le cas d'échec sans casser `/dev`.
+fn ports_depuis(
+    enumeration: serialport::Result<Vec<serialport::SerialPortInfo>>,
+) -> Result<Vec<PortSerie>> {
+    let mut ports: Vec<PortSerie> = enumeration
+        .map_err(|e| anyhow!("Énumération des ports série impossible : {e}"))?
         .into_iter()
         .map(|p| PortSerie {
             description: match &p.port_type {
@@ -51,7 +62,7 @@ pub fn lister_ports() -> Vec<PortSerie> {
         .collect();
     ports.sort_by(|a, b| a.chemin.cmp(&b.chemin));
     ports.dedup_by(|a, b| a.chemin == b.chemin);
-    ports
+    Ok(ports)
 }
 
 /// Ce que l'on vérifie d'un chemin avant d'ouvrir : quelque chose qui
@@ -196,38 +207,59 @@ mod tests {
         assert!(ouvrir("/dev/null", 0).is_err(), "vitesse nulle refusée");
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
-    /// Un pseudo-terminal : le maître comme fichier, l'esclave par son chemin.
-    fn pty() -> (std::fs::File, String) {
-        use std::os::fd::FromRawFd as _;
-        let mut m: libc::c_int = 0;
-        let mut s: libc::c_int = 0;
-        // SAFETY : openpty écrit deux descripteurs valides dans m et s ; les
-        // pointeurs restants sont facultatifs (nom, termios, taille).
-        let rc = unsafe {
-            libc::openpty(
-                &raw mut m,
-                &raw mut s,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
-            )
+    /// Contrat K2 de l'audit du 12 septembre 2026 (C-SIL-12) : une
+    /// énumération qui échoue (droits sur `/dev`, erreur de `serialport`)
+    /// n'est pas un poste sans port. `unwrap_or_default` la rendait
+    /// indistinguable, et le formulaire disait « aucun port série ».
+    #[test]
+    fn une_enumeration_en_erreur_ne_vaut_pas_zero_port() {
+        let e = ports_depuis(Err(serialport::Error::new(
+            serialport::ErrorKind::Unknown,
+            "lecture de /dev refusée",
+        )))
+        .unwrap_err();
+        assert!(e.to_string().contains("lecture de /dev refusée"), "{e}");
+        let port = |nom: &str| serialport::SerialPortInfo {
+            port_name: nom.into(),
+            port_type: serialport::SerialPortType::Unknown,
         };
-        assert_eq!(rc, 0, "openpty");
-        // SAFETY : s est un descripteur ouvert que ptsname sait nommer.
-        let nom = unsafe { std::ffi::CStr::from_ptr(libc::ptsname(m)) }
-            .to_string_lossy()
-            .into_owned();
-        // SAFETY : s vient d'openpty et n'est possédé par personne d'autre ;
-        // on le referme ici, la session rouvre l'esclave par son chemin.
-        unsafe { libc::close(s) };
-        // SAFETY : m vient d'openpty, ouvert et non partagé.
-        (unsafe { std::fs::File::from_raw_fd(m) }, nom)
+        let ports = ports_depuis(Ok(vec![
+            port("/dev/ttyUSB1"),
+            port("/dev/ttyUSB0"),
+            port("/dev/ttyUSB1"),
+        ]))
+        .unwrap();
+        let chemins: Vec<&str> = ports.iter().map(|p| p.chemin.as_str()).collect();
+        assert_eq!(
+            chemins,
+            ["/dev/ttyUSB0", "/dev/ttyUSB1"],
+            "triés, sans doublon"
+        );
+        assert!(ports_depuis(Ok(Vec::new())).unwrap().is_empty());
+    }
+
+    /// Un pseudo-terminal : le maître, possédé (fermé à sa chute), et
+    /// l'esclave par son chemin, que la session rouvre elle-même.
+    ///
+    /// Audit du 12 septembre 2026 (C-unsafe-1) : quatre blocs `unsafe` de FFI
+    /// libc faisaient ce travail, dont un `CStr::from_ptr(ptsname(m))` sans
+    /// test du pointeur nul, sur le tampon statique non réentrant de
+    /// `ptsname(3)`. `nix` (déjà compilé pour `serialport`) donne des types
+    /// possédants et `ptsname_r`, réentrant, qui rend une erreur au lieu d'un
+    /// pointeur nul : plus un seul `unsafe`.
+    #[cfg(target_os = "linux")]
+    fn pty() -> (nix::pty::PtyMaster, String) {
+        use nix::fcntl::OFlag;
+        let maitre = nix::pty::posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("posix_openpt");
+        nix::pty::grantpt(&maitre).expect("grantpt");
+        nix::pty::unlockpt(&maitre).expect("unlockpt");
+        let nom = nix::pty::ptsname_r(&maitre).expect("ptsname_r");
+        (maitre, nom)
     }
 
     /// Ce qui est écrit ressort par le maître du pseudo-terminal, et ce que
     /// le maître écrit arrive par `out_rx` ; fermer `in_tx` termine tout.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn une_session_lit_et_ecrit_sur_un_pseudo_terminal() {
         use std::io::{Read as _, Write as _};

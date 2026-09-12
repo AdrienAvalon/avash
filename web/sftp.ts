@@ -9,6 +9,10 @@ import { $, type Session, state, ciblesDeCopie } from "./etat";
 import { askConfirm, askText } from "./dialogues";
 import { placerMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { langue, t } from "./i18n";
+import {
+  aLancer, appliquerProgression, boutonAnnulerVisible, conclure, detailTransfert, effacableAuClic,
+  nouveauTransfert, pourcentage, type Progression, type SorteTransfert, type Transfert as TransfertDe,
+} from "./sftp-transferts";
 
 // ===== SFTP =====
 
@@ -25,62 +29,40 @@ export const sftp = {
 // L'identifiant est choisi ici et suit le transfert jusque dans le cœur, qui
 // le rappelle dans chaque événement de progression et le retrouve pour
 // l'annuler.
+// Les états et les décisions de la file vivent dans sftp-transferts.ts, testés
+// sans DOM ; ici, le câblage (lancer, conclure, annuler) et le rendu.
+type Transfert = TransfertDe<Session>;
 
-type Transfert = {
-  id: number;
-  kind: "download" | "upload" | "copie";
-  nom: string;
-  fichier: string;
-  fait: number;
-  total: number;
-  termines: number;
-  nombre: number;
-  etat: "attente" | "en-cours" | "fini" | "erreur" | "annule";
-  vitesse: number;
-  message: string;
-  lancer: () => Promise<string>;
-  /** Pour la vitesse : dernier point mesuré. */
-  dernierT: number;
-  dernierFait: number;
-  /** Session d'origine, pour rafraîchir sa liste à la fin. */
-  session: Session;
-  /** Copie directe (scp menée par l'hôte source) : le cœur n'inscrit aucun
-   *  drapeau et n'émet aucune progression pour elle. Trouvé par l'audit du
-   *  7 septembre 2026 : sans ce repère la ligne offrait un bouton « Annuler »
-   *  sans effet et restait bloquée à « 0 o ». */
-  direct: boolean;
-};
-
-const PARALLELE = 3;
 const file: Transfert[] = [];
 let prochainTransfert = 1;
 
+// Audit du 12 septembre 2026 (C-front-9, C-SIL-13) : l'échec de l'écoute de la
+// progression était avalé (`.catch(() => {})`) ; les lignes restaient à « … »
+// jusqu'à la fin, sans un mot. On retient le motif et on le dit au premier
+// transfert, ou dès le refus si un transfert tourne déjà.
+let ecouteIndisponible: string | null = null;
+let ecouteSignalee = false;
+function signalerEcouteIndisponible(): void {
+  if (ecouteIndisponible === null || ecouteSignalee || file.length === 0) return;
+  ecouteSignalee = true;
+  sftpStatus(`⚠️ ${t("sftp-progression-indisponible", { e: ecouteIndisponible })}`, "err");
+}
+
 /** Ajoute un transfert à la file et lance ce qui peut l'être. */
-function ajouterTransfert(kind: Transfert["kind"], nom: string, session: Session, lancer: (id: number) => Promise<string>, direct = false): void {
-  const id = prochainTransfert++;
-  file.push({
-    id, kind, nom, fichier: "", fait: 0, total: 0, termines: 0, nombre: 1,
-    etat: "attente", vitesse: 0, message: "", lancer: () => lancer(id),
-    dernierT: 0, dernierFait: 0, session, direct,
-  });
+function ajouterTransfert(kind: SorteTransfert, nom: string, session: Session, lancer: (id: number) => Promise<string>, direct = false): void {
+  file.push(nouveauTransfert(prochainTransfert++, kind, nom, session, lancer, direct));
   rendreTransferts();
   planifier();
+  signalerEcouteIndisponible();
 }
 
 function planifier(): void {
-  for (const x of file) {
-    if (x.etat !== "attente") continue;
-    if (file.filter((y) => y.etat === "en-cours").length >= PARALLELE) break;
+  for (const x of aLancer(file)) {
     x.etat = "en-cours";
     x.dernierT = performance.now();
     void x.lancer().then(
-      (message) => { x.etat = "fini"; x.message = message; x.fait = x.total || x.fait; terminer(x); },
-      (err) => {
-        const texte = String(err);
-        x.etat = texte.includes("Transfert annulé") ? "annule" : "erreur";
-        x.message = texte;
-        terminer(x);
-      },
+      (message) => { conclure(x, { ok: true, message }); terminer(x); },
+      (err) => { conclure(x, { ok: false, erreur: String(err) }); terminer(x); },
     );
   }
   rendreTransferts();
@@ -92,7 +74,7 @@ function terminer(x: Transfert): void {
   if (sftpSession() === x.session && (x.kind === "upload" || x.kind === "copie") && x.etat === "fini") void sftpNavigate(x.session.sftpPath || ".");
   if (x.etat === "fini") {
     sftpStatus(`✅ ${x.nom} : ${x.message}`, "ok");
-    window.setTimeout(() => { const i = file.indexOf(x); if (i >= 0 && x.etat === "fini") { file.splice(i, 1); rendreTransferts(); } }, 8000);
+    window.setTimeout(() => { if (x.etat === "fini") retirerTransfert(x); }, 8000);
   } else if (x.etat === "annule") {
     sftpStatus(`${x.nom} : ${t("sftp-transfert-annule")}`, "");
   } else {
@@ -101,63 +83,95 @@ function terminer(x: Transfert): void {
   planifier();
 }
 
+function retirerTransfert(x: Transfert): void {
+  const i = file.indexOf(x);
+  if (i < 0) return;
+  file.splice(i, 1);
+  rendreTransferts();
+}
+
+// ----- Rendu de la file -----
+//
+// Audit du 12 septembre 2026 (C-front-5) : `rendreTransferts` vidait la zone et
+// recréait chaque ligne à chaque événement de progression (cadencés à 80 ms par
+// le cœur, trois transferts en parallèle). Le bouton « Annuler » disparaissait
+// sous le focus : au clavier, Tab jusqu'à lui puis Entrée était impossible ; à
+// la souris, un appui sur l'ancien bouton et un relâcher sur le nouveau ne
+// faisaient pas de clic. La transition CSS de la barre ne jouait jamais. Les
+// lignes sont désormais indexées par transfert : créées une fois, mises à jour
+// en place, retirées quand le transfert quitte la file ; la progression ne
+// touche que le texte de détail et la largeur de la barre de SA ligne.
+
+type Ligne = { el: HTMLElement; det: HTMLElement; barre: HTMLElement; bouton: HTMLButtonElement };
+const lignes = new Map<number, Ligne>();
+
+function creerLigne(x: Transfert): Ligne {
+  const el = document.createElement("div");
+  el.setAttribute("role", "listitem");
+  el.innerHTML = `<span class="nm"></span><button type="button" class="btn-mini" hidden></button><span class="det"></span><span class="barre"><span></span></span>`;
+  const fleche = x.kind === "download" ? "⬇︎" : x.kind === "upload" ? "⬆︎" : "⇄";
+  el.querySelector(".nm")!.textContent = `${fleche} ${x.nom}`;
+  const bouton = el.querySelector("button") as HTMLButtonElement;
+  bouton.addEventListener("click", (ev) => {
+    // Le clic ne remonte pas à la ligne : une ligne en attente, passée
+    // « annulée » à l'instant par annulerTransfert, deviendrait effaçable et
+    // disparaîtrait dans la foulée, sans que l'utilisateur voie l'annulation.
+    ev.stopPropagation();
+    void annulerTransfert(x);
+  });
+  // Une ligne terminée s'efface d'un clic ; l'état est lu au moment du clic,
+  // l'écouteur étant posé une fois pour toute la vie de la ligne.
+  el.addEventListener("click", () => { if (effacableAuClic(x.etat)) retirerTransfert(x); });
+  return { el, det: el.querySelector(".det") as HTMLElement, barre: el.querySelector(".barre > span") as HTMLElement, bouton };
+}
+
+/** Met une ligne à l'image de son transfert sans rien recréer ; chaque
+ *  propriété n'est écrite que si elle change. */
+function majLigne(l: Ligne, x: Transfert): void {
+  const classe = `sftp-transfert ${x.etat}`;
+  if (l.el.className !== classe) l.el.className = classe;
+  const det = detailTransfert(x);
+  if (l.det.textContent !== det) l.det.textContent = det;
+  const largeur = `${pourcentage(x)}%`;
+  if (l.barre.style.width !== largeur) l.barre.style.width = largeur;
+  // Pas de bouton sur une copie directe en cours : l'hôte source mène le scp,
+  // rien ici ne peut l'interrompre (ni l'effacer d'un clic : il tourne).
+  const visible = boutonAnnulerVisible(x.etat, x.kind, x.direct);
+  if (l.bouton.hidden === visible) l.bouton.hidden = !visible;
+  const libelle = t("sftp-annuler");
+  if (visible && l.bouton.textContent !== libelle) {
+    l.bouton.textContent = libelle;
+    l.bouton.title = libelle;
+  }
+  const curseur = effacableAuClic(x.etat) ? "pointer" : "";
+  if (l.el.style.cursor !== curseur) l.el.style.cursor = curseur;
+}
+
 /** Dessine la file ; les lignes finies s'effacent d'elles-mêmes, les erreurs
  *  et les annulations restent jusqu'à un clic. */
 function rendreTransferts(): void {
   const zone = $("sftp-transferts");
-  zone.innerHTML = "";
-  for (const x of file) {
-    const el = document.createElement("div");
-    el.className = `sftp-transfert ${x.etat}`;
-    el.setAttribute("role", "listitem");
-    const fleche = x.kind === "download" ? "⬇︎" : x.kind === "upload" ? "⬆︎" : "⇄";
-    const pct = x.total ? Math.round((x.fait / x.total) * 100) : 0;
-    let det: string;
-    if (x.etat === "en-cours" && x.direct && x.kind === "copie") {
-      // Copie directe : aucun événement de progression (scp chez la source),
-      // « 0 o » laissait croire à un transfert figé — on dit ce qui se passe.
-      det = t("sftp-copie-directe-en-cours");
-    } else if (x.etat === "en-cours") {
-      const vit = x.vitesse > 0 ? ` · ${humanSize(Math.round(x.vitesse), langue())}/s` : "";
-      det = x.nombre > 1
-        ? `${t("sftp-elements-faits", { fait: humanSize(x.fait, langue()), total: humanSize(x.total, langue()), termines: x.termines, nombre: x.nombre })}${vit}${x.fichier ? ` · ${x.fichier}` : ""}`
-        : `${humanSize(x.fait, langue())}${x.total ? ` / ${humanSize(x.total, langue())}` : ""}${vit}`;
-    } else if (x.etat === "attente") det = "…";
-    else if (x.etat === "fini") det = t("sftp-transfert-fini");
-    else if (x.etat === "annule") det = t("sftp-transfert-annule");
-    else det = x.message;
-    el.innerHTML = `<span class="nm"></span><button type="button" class="btn-mini" hidden></button><span class="det"></span><span class="barre"><span></span></span>`;
-    el.querySelector(".nm")!.textContent = `${fleche} ${x.nom}`;
-    el.querySelector(".det")!.textContent = det;
-    (el.querySelector(".barre > span") as HTMLElement).style.width = `${x.etat === "fini" ? 100 : pct}%`;
-    const bouton = el.querySelector("button") as HTMLButtonElement;
-    if (boutonAnnulerVisible(x.etat, x.kind, x.direct)) {
-      bouton.hidden = false;
-      bouton.textContent = t("sftp-annuler");
-      bouton.title = t("sftp-annuler");
-      bouton.addEventListener("click", () => annulerTransfert(x));
-    } else if (x.etat !== "en-cours" && x.etat !== "attente") {
-      // Une ligne terminée s'efface d'un clic.
-      el.style.cursor = "pointer";
-      el.addEventListener("click", () => { const i = file.indexOf(x); if (i >= 0) { file.splice(i, 1); rendreTransferts(); } });
-    }
-    // Sinon (copie directe en cours) : ni bouton — l'hôte source mène le scp,
-    // rien ici ne peut l'interrompre — ni clic d'effacement (le scp tourne).
-    zone.appendChild(el);
+  const presents = new Set(file.map((x) => x.id));
+  for (const [id, l] of lignes) {
+    if (presents.has(id)) continue;
+    l.el.remove();
+    lignes.delete(id);
   }
-}
-
-/** Le bouton « Annuler » n'a de sens que si l'annulation peut aboutir.
- *
- *  Extrait pour le test (audit du 7 septembre 2026). Une copie directe *en
- *  cours* est menée par scp chez l'hôte source : le cœur ne lève aucun drapeau,
- *  sftp_annuler rend false et rien ne s'arrête — proposer le bouton mentait.
- *  Tant qu'elle *attend* son tour, en revanche, l'annulation est purement
- *  locale (le scp n'a pas démarré) et le bouton reste légitime. */
-export function boutonAnnulerVisible(etat: Transfert["etat"], kind: Transfert["kind"], direct: boolean): boolean {
-  if (etat === "attente") return true;
-  if (etat === "en-cours") return !(direct && kind === "copie");
-  return false;
+  let precedent: Element | null = null;
+  for (const x of file) {
+    let l = lignes.get(x.id);
+    if (!l) {
+      l = creerLigne(x);
+      lignes.set(x.id, l);
+    }
+    majLigne(l, x);
+    // Ne déplacer que ce qui n'est pas à sa place : un nœud réinséré perd le
+    // focus. La file n'ajoute qu'en fin et ne fait que retirer, donc seules les
+    // lignes neuves s'insèrent.
+    const place: Element | null = precedent ? precedent.nextElementSibling : zone.firstElementChild;
+    if (place !== l.el) zone.insertBefore(l.el, place);
+    precedent = l.el;
+  }
 }
 
 export async function annulerTransfert(x: Transfert): Promise<void> {
@@ -168,9 +182,9 @@ export async function annulerTransfert(x: Transfert): Promise<void> {
     return;
   }
   // Trouvé par l'audit du 7 septembre 2026 : le booléen rendu par sftp_annuler
-  // était jeté. Quand il vaut false — aucun transfert inscrit sous cet id : la
-  // fenêtre entre le clic et inscrire() (ouverture du canal en attente du verrou
-  // de session), ou une copie directe non interruptible — le clic restait sans
+  // était jeté. Quand il vaut false (aucun transfert inscrit sous cet id : la
+  // fenêtre entre le clic et inscrire(), ouverture du canal en attente du verrou
+  // de session, ou une copie directe non interruptible), le clic restait sans
   // le moindre effet ni mot. On le dit désormais au lieu de laisser croire à une
   // annulation qui n'a pas eu lieu.
   let ok: boolean;
@@ -179,25 +193,13 @@ export async function annulerTransfert(x: Transfert): Promise<void> {
   if (!ok) sftpStatus(t("sftp-annulation-impossible", { nom: x.nom }), "err");
 }
 
-/** Un événement de progression du cœur, rapporté à sa ligne. */
-function progressionTransfert(p: { transfert: number; fichier: string; done: number; total: number; termines: number; nombre: number }): void {
+/** Un événement de progression du cœur, rapporté à sa ligne et à elle seule. */
+function progressionTransfert(p: Progression): void {
   const x = file.find((y) => y.id === p.transfert);
   if (!x) return;
-  const maintenant = performance.now();
-  const dt = (maintenant - x.dernierT) / 1000;
-  if (dt >= 0.5) {
-    const instant = (p.done - x.dernierFait) / dt;
-    // Lissée : une moyenne mobile, pour que le chiffre ne tremble pas.
-    x.vitesse = x.vitesse > 0 ? x.vitesse * 0.6 + instant * 0.4 : instant;
-    x.dernierT = maintenant;
-    x.dernierFait = p.done;
-  }
-  x.fichier = p.nombre > 1 ? p.fichier : "";
-  x.fait = p.done;
-  x.total = p.total;
-  x.termines = p.termines;
-  x.nombre = p.nombre;
-  rendreTransferts();
+  appliquerProgression(x, p, performance.now());
+  const l = lignes.get(x.id);
+  if (l) majLigne(l, x);
 }
 
 function sftpSession(): Session | null {
@@ -259,6 +261,12 @@ async function sftpNavigate(path: string) {
       return n.cloneNode(true);
     };
     const lot = document.createDocumentFragment();
+    // Un seul `Date`, une seule lecture de la langue et du rappel des gestes
+    // pour tout le lot : chaque entrée en faisait trois et deux formatages de
+    // plus (audit du 12 septembre 2026, C-front-7).
+    const maintenant = new Date();
+    const lang = langue();
+    const gestes = ` — ${t("gestes-ligne")}`;
     sorted.forEach((e, i) => {
       const el = gabarit.cloneNode(true) as HTMLElement;
       el.className = "sftp-entry" + (e.is_dir ? " dir" : "");
@@ -271,12 +279,14 @@ async function sftpNavigate(path: string) {
       el.setAttribute("aria-label", e.name);
       el.firstChild!.appendChild(icone(fileIconName(e.name, e.is_dir)));
       el.querySelector(".nm")!.textContent = e.name;
-      el.querySelector(".sz")!.textContent = e.is_dir ? shortDate(e.modified, new Date(), langue()) : humanSize(e.size, langue());
+      const date = shortDate(e.modified, maintenant, lang);
+      const taille = e.is_dir ? "" : humanSize(e.size, lang);
+      el.querySelector(".sz")!.textContent = e.is_dir ? date : taille;
       // Les gestes clavier sont rappelés dans l'infobulle, seul endroit où les découvrir.
       el.title = (e.is_dir
-        ? t("sftp-titre-dossier", { nom: e.name, date: shortDate(e.modified, new Date(), langue()) || "?" })
-        : t("sftp-titre-fichier", { nom: e.name, taille: humanSize(e.size, langue()), date: shortDate(e.modified, new Date(), langue()) || "?" }))
-        + ` — ${t("gestes-ligne")}`;
+        ? t("sftp-titre-dossier", { nom: e.name, date: date || "?" })
+        : t("sftp-titre-fichier", { nom: e.name, taille, date: date || "?" }))
+        + gestes;
       lot.appendChild(el);
     });
     list.appendChild(lot);
@@ -289,6 +299,8 @@ async function sftpNavigate(path: string) {
     // tabindex=0 partout aurait exigé des milliers de Tab sur /usr/bin.
     const premier = list.querySelector<HTMLElement>(".sftp-entry");
     if (premier) premier.tabIndex = 0;
+    navClavier.focalisable = premier;
+    navClavier.surlignee = null;
     sftpStatus(t(entries.length > 1 ? "sftp-elements" : "sftp-element", { n: entries.length }));
   } catch (e) {
     // Trouvé par l'audit du 7 septembre 2026 : même garde anti-course que le
@@ -310,6 +322,9 @@ async function sftpNavigate(path: string) {
  */
 let sftpLot: { entries: SftpEntry[]; path: string } = { entries: [], path: "" };
 let sftpDelegueBranche = false;
+/** L'entrée qui porte l'unique arrêt de tabulation et celle qui est surlignée :
+ *  retenues pour que la navigation ne touche que l'ancienne et la nouvelle. */
+const navClavier = { focalisable: null as HTMLElement | null, surlignee: null as HTMLElement | null };
 function sftpDelegue(list: HTMLElement, entries: SftpEntry[], path: string): void {
   sftpLot = { entries, path };
   if (sftpDelegueBranche) return;
@@ -354,13 +369,23 @@ function sftpDelegue(list: HTMLElement, entries: SftpEntry[], path: string): voi
   // délégué plutôt qu'un par ligne : /usr/bin (~4000 entrées) en poserait autant.
   //
   // Le focus surligne l'entrée (`.hl`, distincte de la sélection `.sel`) et lui
-  // donne l'unique arrêt de tabulation.
+  // donne l'unique arrêt de tabulation. Audit du 12 septembre 2026 (C-front-7) :
+  // ce gestionnaire réécrivait le tabindex de TOUTES les entrées et cherchait
+  // `.hl` dans toute la liste ; sur 10 000 entrées, chaque flèche coûtait
+  // 10 000 écritures. On ne touche plus que l'ancienne entrée et la nouvelle.
   list.addEventListener("focusin", (ev) => {
     const el = (ev.target as HTMLElement).closest<HTMLElement>(".sftp-entry");
     if (!el) return;
-    for (const n of list.querySelectorAll(".sftp-entry.hl")) n.classList.remove("hl");
-    el.classList.add("hl");
-    for (const n of list.querySelectorAll<HTMLElement>(".sftp-entry")) n.tabIndex = n === el ? 0 : -1;
+    if (navClavier.surlignee !== el) {
+      navClavier.surlignee?.classList.remove("hl");
+      el.classList.add("hl");
+      navClavier.surlignee = el;
+    }
+    if (navClavier.focalisable !== el) {
+      if (navClavier.focalisable) navClavier.focalisable.tabIndex = -1;
+      el.tabIndex = 0;
+      navClavier.focalisable = el;
+    }
   });
   // Enter = double-clic (naviguer ou télécharger) ; Maj+F10 et la touche Menu
   // ouvrent le menu au bord de l'entrée ; les flèches, Origine et Fin déplacent.
@@ -388,17 +413,18 @@ function sftpDelegue(list: HTMLElement, entries: SftpEntry[], path: string): voi
     if (!el) return;
     if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); activer(el); return; }
     if (ev.key === "ContextMenu" || (ev.key === "F10" && ev.shiftKey)) { ev.preventDefault(); ouvrirMenu(el); return; }
-    const entrees = [...list.querySelectorAll<HTMLElement>(".sftp-entry")];
-    const i = entrees.indexOf(el);
+    // Voisins directs plutôt que la liste entière reparcourue à chaque flèche
+    // (C-front-7) : la liste ne contient que des entrées, dans l'ordre affiché.
     const vise =
-      ev.key === "ArrowDown" ? i + 1
-      : ev.key === "ArrowUp" ? i - 1
-      : ev.key === "Home" ? 0
-      : ev.key === "End" ? entrees.length - 1
-      : null;
-    if (vise === null) return;
+      ev.key === "ArrowDown" ? el.nextElementSibling
+      : ev.key === "ArrowUp" ? el.previousElementSibling
+      : ev.key === "Home" ? list.firstElementChild
+      : ev.key === "End" ? list.lastElementChild
+      : undefined;
+    if (vise === undefined) return;
     ev.preventDefault();
-    entrees[Math.max(0, Math.min(vise, entrees.length - 1))]?.focus();
+    // Au bord de la liste, pas de voisin : le focus reste où il est.
+    if (vise instanceof HTMLElement && vise.classList.contains("sftp-entry")) vise.focus();
   });
 }
 
@@ -701,18 +727,25 @@ $("sftp-path").addEventListener("keydown", (e) => {
     ($("sftp-path") as HTMLInputElement).blur();
   }
 });
+// Ctrl+B est le préfixe de tmux : quand un terminal a le focus, la touche
+// appartient au distant (audit du 12 septembre 2026, politique commune avec les
+// raccourcis de main.ts). Ctrl+Maj+B ouvre le panneau partout ; hors terminal,
+// Ctrl+B reste accepté.
 document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
-    e.preventDefault();
-    sftpToggle();
-  }
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== "b") return;
+  if (!e.shiftKey && document.activeElement?.closest(".xterm")) return;
+  e.preventDefault();
+  sftpToggle();
 });
 
 // ----- Progression des transferts -----
 
-listen<{ id: number; transfert: number; name: string; kind: string; fichier: string; done: number; total: number; termines: number; nombre: number }>("sftp-progress", (ev) => {
+listen<Progression>("sftp-progress", (ev) => {
   progressionTransfert(ev.payload);
-}).catch(() => {});
+}).catch((e) => {
+  ecouteIndisponible = String(e);
+  signalerEcouteIndisponible();
+});
 
 // ----- Glisser-deposer depuis le bureau -----
 //

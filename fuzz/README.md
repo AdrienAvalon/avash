@@ -25,7 +25,7 @@ fuzzing va plus loin, plus longtemps.
 
 ```bash
 rustup toolchain install nightly --profile minimal
-cargo install cargo-fuzz --locked
+cargo install cargo-fuzz --version 0.13.2 --locked
 
 ./fuzz.sh                 # chaque cible 60 s, depuis les graines
 DUREE=600 ./fuzz.sh       # plus longtemps

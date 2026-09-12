@@ -4,6 +4,10 @@
 //! tenaient qu'à la relecture. On lance le vrai binaire, dans un répertoire
 //! personnel isolé par `AVASH_HOME`.
 
+// L'aide `bac` déroule son décor par `unwrap`, que `allow-unwrap-in-tests` ne
+// couvre pas hors d'une fonction `#[test]`.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::process::Command;
 
 fn bac(nom: &str) -> std::path::PathBuf {
@@ -52,6 +56,22 @@ fn sans_config_lisible_le_code_de_sortie_est_1_et_le_conseil_donne() {
     assert_eq!(sortie.status.code(), Some(1));
     let err = String::from_utf8_lossy(&sortie.stderr);
     assert!(err.contains("~/.ssh/config"), "{err}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Audit du 12 septembre 2026 (C-SIL-4, contrat K5) : `parse_ssh_config`
+/// rend désormais une liste vide pour un fichier absent. `avash list` garde
+/// son conseil et son code 1 dans ce cas (test ci-dessus), et un fichier
+/// présent mais illisible (ici un répertoire à sa place) sort aussi en 1, avec
+/// le détail de l'erreur.
+#[test]
+fn un_config_illisible_sort_en_1_avec_le_detail() {
+    let home = bac("illisible");
+    std::fs::create_dir_all(home.join(".ssh/config")).unwrap();
+    let sortie = avash(&home, &["list"]);
+    assert_eq!(sortie.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&sortie.stderr);
+    assert!(err.contains("Détail"), "{err}");
     let _ = std::fs::remove_dir_all(&home);
 }
 

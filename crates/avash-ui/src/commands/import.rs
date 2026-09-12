@@ -88,7 +88,7 @@ fn lectures_par_defaut() -> (Vec<avash::import::Lecture>, Vec<String>) {
 /// Sans `chemin`, les emplacements habituels ; avec, un répertoire de
 /// sessions `PuTTY` ou un fichier `MobaXterm.ini` / `.mxtsessions` désigné par
 /// l'utilisateur. Rien n'est écrit.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_scan(chemin: Option<String>) -> Result<BilanImport, String> {
     let (lectures, consultes) = match chemin.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
         None => lectures_par_defaut(),
@@ -191,8 +191,18 @@ pub fn import_scan(chemin: Option<String>) -> Result<BilanImport, String> {
 /// que refusé. Une clé `PuTTY` est convertie avec `puttygen` dans `~/.ssh` quand
 /// l'outil est là ; sinon, ou en cas d'échec, l'hôte est écrit sans clé et
 /// l'avertissement le dit.
+///
+/// Hors du fil principal (audit du 12 septembre 2026, C-SIL-7) : la boucle
+/// lance `puttygen` et l'attend, clé après clé.
 #[tauri::command]
-pub fn import_apply(
+pub async fn import_apply(
+    hosts: Vec<HoteAImporter>,
+    bureaux: Vec<avash::import::BureauImporte>,
+) -> Result<BilanApply, String> {
+    super::bloquant(move || appliquer_import(hosts, bureaux)).await
+}
+
+fn appliquer_import(
     hosts: Vec<HoteAImporter>,
     bureaux: Vec<avash::import::BureauImporte>,
 ) -> Result<BilanApply, String> {
@@ -281,7 +291,7 @@ pub fn import_apply(
 
 #[cfg(test)]
 mod tests_import {
-    use super::{import_apply, import_scan, HoteAImporter};
+    use super::{appliquer_import as import_apply, import_scan, HoteAImporter};
     use crate::commands::tests::with_ssh_config;
 
     /// Un répertoire `PuTTY` désigné est lu, les alias sont libres, et un hôte

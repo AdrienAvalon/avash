@@ -45,7 +45,18 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn cmd_list() {
-    let hosts = match parse_ssh_config() {
+    // Contrat K5 de l'audit du 12 septembre 2026 : `parse_ssh_config` rend une
+    // liste vide pour un fichier absent. `avash list` garde son conseil et son
+    // code 1 dans ce cas : on le lui dit comme une erreur.
+    let chemin = avash::ssh_config_path();
+    let lu = parse_ssh_config().and_then(|h| {
+        if h.is_empty() && !chemin.exists() {
+            Err(anyhow::anyhow!("{} n'existe pas", chemin.display()))
+        } else {
+            Ok(h)
+        }
+    });
+    let hosts = match lu {
         Ok(h) => h,
         Err(e) => {
             eprintln!("\n  😼 Avash n'a trouvé aucun ~/.ssh/config lisible.");

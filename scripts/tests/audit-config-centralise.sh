@@ -79,8 +79,64 @@ for f in check.sh .github/workflows/ci.yml .gitlab-ci.yml; do
   fi
 done
 
+# 6. Le processus RDP a sa propre configuration, lue quand on l'audite depuis
+# son dossier. Trouvé par l'audit du 12 septembre 2026 (C-chaine-12) : sans
+# rdp-sidecar/.cargo/audit.toml, `cargo audit` lancé dans rdp-sidecar/
+# signalait RUSTSEC-2023-0071, alors que la chaîne, lancée depuis la racine
+# avec --file, lisait la liste de l'espace de travail : le verdict dépendait du
+# répertoire. Les chaînes auditent maintenant le sidecar depuis son dossier,
+# et sa liste obéit aux mêmes règles que celle de la racine face à son
+# deny.toml.
+if [[ ! -f rdp-sidecar/.cargo/audit.toml ]]; then
+  echo "  ✗ rdp-sidecar/.cargo/audit.toml manquant : l'audit du sidecar dépend du dossier d'où on le lance" >&2
+  echecs=1
+else
+  avis_audit_rdp="$(grep -oE '"RUSTSEC-[0-9]{4}-[0-9]{4}"' rdp-sidecar/.cargo/audit.toml | tr -d '"' | sort -u)"
+  avis_deny_rdp="$(grep -oE '"RUSTSEC-[0-9]{4}-[0-9]{4}"' rdp-sidecar/deny.toml | tr -d '"' | sort -u)"
+  mentions_deny_rdp="$(grep -oE 'RUSTSEC-[0-9]{4}-[0-9]{4}' rdp-sidecar/deny.toml | sort -u)"
+  while read -r avis; do
+    [[ -n "$avis" ]] || continue
+    if ! grep -qx "$avis" <<<"$avis_audit_rdp"; then
+      echo "  ✗ rdp-sidecar/deny.toml ignore $avis, absent de rdp-sidecar/.cargo/audit.toml" >&2
+      echecs=1
+    fi
+  done <<<"$avis_deny_rdp"
+  while read -r avis; do
+    [[ -n "$avis" ]] || continue
+    if ! grep -qx "$avis" <<<"$avis_deny_rdp" && ! grep -qx "$avis" <<<"$mentions_deny_rdp"; then
+      echo "  ✗ rdp-sidecar/.cargo/audit.toml ignore $avis, que rdp-sidecar/deny.toml n'ignore pas sans dire pourquoi" >&2
+      echecs=1
+    fi
+  done <<<"$avis_audit_rdp"
+fi
+
+# 7. Les trois chaînes auditent le sidecar depuis son dossier : lancé depuis la
+# racine avec --file, c'est la liste de l'espace de travail qui le gouverne.
+for f in check.sh .github/workflows/ci.yml .gitlab-ci.yml; do
+  if grep -n 'cargo audit' "$f" | grep -q -- '--file rdp-sidecar/Cargo.lock'; then
+    echo "  ✗ $f : le sidecar est audité depuis la racine (--file), sous la liste de l'espace de travail" >&2
+    echecs=1
+  fi
+  if ! grep -qE '(cd rdp-sidecar.*cargo audit|"\$SIDECAR" cargo audit)' "$f"; then
+    echo "  ✗ $f : aucun audit du sidecar lancé depuis rdp-sidecar/" >&2
+    echecs=1
+  fi
+done
+
+# 8. Même verdict partout, constaté : si cargo-audit et sa base d'avis sont
+# présents, l'audit lancé depuis rdp-sidecar/ doit passer, hors ligne.
+base="${CARGO_HOME:-$HOME/.cargo}/advisory-db"
+if cargo audit --version >/dev/null 2>&1 && [[ -d "$base" ]]; then
+  if ! (cd rdp-sidecar && cargo audit --no-fetch --deny unsound >/dev/null 2>&1); then
+    echo "  ✗ cargo audit lancé depuis rdp-sidecar/ échoue (config du sidecar absente ou avis nouveau)" >&2
+    echecs=1
+  fi
+else
+  echo "  • cargo-audit ou sa base absents : verdict du sidecar depuis son dossier non rejoué"
+fi
+
 if [[ "$echecs" -ne 0 ]]; then
   exit 1
 fi
 
-echo "  ✓ avis cargo-audit centralisés dans .cargo/audit.toml, deny.toml sans avis inconnu ni écart muet, sans --ignore résiduel"
+echo "  ✓ avis cargo-audit centralisés (racine et sidecar), deny.toml sans avis inconnu ni écart muet, sans --ignore résiduel, sidecar audité depuis son dossier"

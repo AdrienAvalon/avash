@@ -1,5 +1,7 @@
 // Logique pure du front, extraite de main.ts pour etre testable sans DOM.
 
+import type { Sante } from "./etat";
+
 export type Host = {
   alias: string;
   hostname: string | null;
@@ -150,14 +152,116 @@ export function etiquetteHote(h: Pick<Host, "alias" | "hostname" | "user" | "por
 }
 
 /**
- * Retire les caractères qui permettraient d'injecter du HTML.
+ * Échappe un texte pour l'insérer dans du HTML, contenu comme attribut.
  *
- * Utilisé partout où du texte non maîtrisé (filtre de recherche) est inséré
- * via innerHTML. Une chaîne de recherche contenant `<img onerror=...>`
- * exécuterait du code dans la webview, qui a accès à `invoke`.
+ * Audit du 12 septembre 2026 (FS-9, C-front-13) : il y avait deux échappeurs.
+ * `stripHtml` supprimait `<`, `>` et `&` au lieu de les échapper (« a&b »
+ * s'affichait « ab ») et laissait passer les guillemets, donc ne protégeait pas
+ * un attribut ; `import.ts` gardait pour lui une version correcte. Il n'en reste
+ * qu'une, celle-ci. Là où c'est possible, `textContent` vaut encore mieux.
  */
-export function stripHtml(text: string): string {
-  return text.replace(/[<>&]/g, "");
+export function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
+
+/**
+ * Libellé d'onglet ou de barre de titre, sans rien qui ment sur ce qu'on lit.
+ *
+ * Audit du 12 septembre 2026 (FS-10) : un alias de `~/.ssh/config` ou un nom de
+ * bureau portant un contrôle de direction (U+202A à U+202E, U+2066 à U+2069)
+ * réordonnait l'affichage : « prod‮bd » se lisait « proddb ». Les marques de
+ * direction (U+200E, U+200F, U+061C) partent avec, et les caractères de
+ * contrôle comme pour un message écrit dans le terminal.
+ */
+export function libelleSur(s: string): string {
+  return nettoyerPourTerminal(s).replace(/[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c]/g, "");
+}
+
+// ---------- Raccourcis clavier dans un terminal ----------
+
+/** Ce que les décisions de raccourci lisent d'un `KeyboardEvent`. */
+export type Touche = { key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean };
+
+/**
+ * Cette touche, pressée dans un terminal, appartient-elle à l'application ?
+ * Vrai : xterm ne doit pas l'envoyer au shell, elle remonte aux écouteurs de la
+ * fenêtre (raccourcis.ts, sftp.ts, palette).
+ *
+ * Audit du 12 septembre 2026 (C-front-2, C-front-3). xterm voit la touche avant
+ * l'application et la consomme : Ctrl+Tab partait en tabulation (complétion du
+ * shell, « Display all 2000 possibilities? ») au lieu de changer d'onglet,
+ * Ctrl+W effaçait un mot. À l'inverse Ctrl+B, préfixe de tmux, et Ctrl+K,
+ * kill-line de readline, emacs, zsh et fish, étaient confisqués sans recours.
+ * Décision : dans un terminal, le panneau SFTP et la palette passent à
+ * Ctrl+Maj+B et Ctrl+Maj+K (comme Tabby et WezTerm réservent Ctrl+Maj+lettre),
+ * Ctrl+B et Ctrl+K vont au shell.
+ */
+export function estRaccourciApplicatif(e: Touche): boolean {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return false;
+  if (e.key === "Tab") return true;
+  const k = e.key.toLowerCase();
+  if (k === "w") return true;
+  if (/^[1-9]$/.test(e.key)) return true;
+  return e.shiftKey && (k === "b" || k === "k");
+}
+
+/**
+ * Ctrl+K (palette) ou Ctrl+B (panneau SFTP) doit-il agir ? Hors terminal, oui ;
+ * dans un terminal, seulement avec Maj : sans elle, la touche est au shell.
+ * Voir `estRaccourciApplicatif`.
+ */
+export function ouvrePaletteOuPanneau(e: { shiftKey: boolean }, dansUnTerminal: boolean): boolean {
+  return e.shiftKey || !dansUnTerminal;
+}
+
+// ---------- Santé des hôtes ----------
+
+/** Au-delà, un voyant de sonde est montré grisé et daté : ce n'est plus l'état actuel. */
+export const SANTE_PERIMEE_MS = 3_600_000;
+/** Au-delà, une sonde mémorisée n'est plus restaurée au lancement. */
+export const SANTE_OUBLIEE_MS = 7 * 86_400_000;
+
+/**
+ * Classe du voyant d'un hôte d'après sa dernière sonde : `up`, `down`, avec
+ * `stale` si elle a plus d'une heure (ou pas de date), rien sans sonde.
+ *
+ * Audit du 12 septembre 2026 (C-SIL-3) : la sonde mémorisée revenait telle
+ * quelle à chaque lancement, sans date, et la sonde au démarrage est coupée
+ * par défaut ; un hôte vu joignable lundi restait vert vendredi.
+ */
+export function classeSante(s: Sante | undefined, maintenant: number): string {
+  if (!s) return "";
+  const base = s.etat === "joignable" ? "up" : "down";
+  return santePerimee(s, maintenant) ? `${base} stale` : base;
+}
+
+/** La sonde a-t-elle plus d'une heure, ou aucune date ? */
+export function santePerimee(s: Sante, maintenant: number): boolean {
+  return typeof s.quand !== "number" || maintenant - s.quand > SANTE_PERIMEE_MS;
+}
+
+/** « il y a 3 jours », « 2 hours ago » : l'unité la plus grande qui tienne. */
+export function ilYA(ms: number, langue: "fr" | "en"): string {
+  const f = new Intl.RelativeTimeFormat(langue, { numeric: "auto" });
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return f.format(-s, "second");
+  if (s < 3600) return f.format(-Math.floor(s / 60), "minute");
+  if (s < 86_400) return f.format(-Math.floor(s / 3600), "hour");
+  return f.format(-Math.floor(s / 86_400), "day");
+}
+
+/** Les sondes mémorisées qui méritent encore d'être montrées : datées, de moins
+ *  de sept jours, et de la forme attendue (le stockage a pu être altéré). */
+export function santesARestaurer(entrees: [string, unknown][], maintenant: number): [string, Sante][] {
+  const out: [string, Sante][] = [];
+  for (const [cle, v] of entrees) {
+    if (typeof cle !== "string" || !v || typeof v !== "object") continue;
+    const s = v as Sante;
+    if (s.etat !== "joignable" && s.etat !== "injoignable" && s.etat !== "inconnu") continue;
+    if (typeof s.quand !== "number" || maintenant - s.quand > SANTE_OUBLIEE_MS) continue;
+    out.push([cle, s]);
+  }
+  return out;
 }
 
 // ---------- Tunnels ----------
@@ -286,8 +390,10 @@ const OS_BADGES: Record<string, { glyph: string; color: string }> = {
 
 export function osBadge(os: OsInfo): { glyph: string; color: string } {
   for (const key of [os.id, ...os.like]) {
-    const b = OS_BADGES[key];
-    if (b) return b;
+    // `Object.hasOwn` : la clé vient de /etc/os-release du serveur, et
+    // `ID=constructor` rendait `Object` (propriété héritée), donc un avatar
+    // vide mis en cache (audit du 12 septembre 2026, FS-7).
+    if (Object.hasOwn(OS_BADGES, key)) return OS_BADGES[key];
   }
   return OS_BADGES.linux;
 }
@@ -297,10 +403,16 @@ export function osBadge(os: OsInfo): { glyph: string; color: string } {
 
 export type SftpEntry = { name: string; is_dir: boolean; size: number; modified: number | null };
 
-/** Tri d'affichage : dossiers d'abord, puis ordre alphabétique. */
+/** Comparateur de noms réutilisé : `localeCompare` reconstruisait ses règles à
+ *  chaque comparaison, soit ~130 000 fois pour trier 10 000 entrées, dix fois
+ *  plus lent ; `numeric` range `file2` avant `file10`. Audit du 12 septembre
+ *  2026 (C-front-7). */
+const COLLATEUR = new Intl.Collator(undefined, { numeric: true });
+
+/** Tri d'affichage : dossiers d'abord, puis ordre alphabétique (numéros compris). */
 export function sortSftpEntries(entries: SftpEntry[]): SftpEntry[] {
   return [...entries].sort(
-    (a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || a.name.localeCompare(b.name),
+    (a, b) => (b.is_dir ? 1 : 0) - (a.is_dir ? 1 : 0) || COLLATEUR.compare(a.name, b.name),
   );
 }
 

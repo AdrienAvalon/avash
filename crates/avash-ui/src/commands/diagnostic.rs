@@ -30,6 +30,42 @@ pub struct Faits {
     pub variables: Vec<(String, String)>,
     /// Identifiant de session et dernières lignes du processus de bureau distant.
     pub sessions_rdp: Vec<(u64, String)>,
+    /// Le moteur de rendu du terminal que le front a retenu (`webgl` ou
+    /// `dom`), contrat K8 : sans lui, un « le terminal rame » ne se tranchait
+    /// pas (audit du 12 septembre 2026, C-front-14).
+    pub rendu_terminal: String,
+    /// Les dernières lignes du journal de l'application (C-SIL-2).
+    pub journal: String,
+}
+
+/// Lignes du journal jointes au diagnostic : de quoi dater et situer un
+/// défaut, sans en faire un fichier à relire pendant une heure.
+const JOURNAL_LIGNES: usize = 60;
+
+/// Le moteur de rendu du terminal, tel que le front l'a signalé.
+#[derive(Default)]
+pub struct RenduTerminal(std::sync::Mutex<Option<String>>);
+
+/// Le front signale le moteur de rendu de son terminal : « webgl » quand
+/// l'extension WebGL s'est chargée, « dom » après un repli (contexte perdu,
+/// WebGL indisponible). Contrat K8 de l'audit du 12 septembre 2026.
+///
+/// Seules ces deux valeurs sont retenues : le texte finit dans un fichier que
+/// l'utilisateur joint à un ticket, la page n'a pas à y écrire ce qu'elle veut.
+/// Synchrone : une écriture en mémoire, sans disque ni trousseau.
+#[tauri::command]
+pub fn diagnostic_noter_rendu(
+    etat: tauri::State<'_, RenduTerminal>,
+    rendu: String,
+) -> Result<(), String> {
+    use avash::Verrou as _;
+    match rendu.as_str() {
+        "webgl" | "dom" => {
+            *etat.0.verrou() = Some(rendu);
+            Ok(())
+        }
+        _ => Err(format!("Moteur de rendu inconnu : {rendu}")),
+    }
 }
 
 /// Les variables rapportées. `AVASH_*` sont les nôtres (aucune ne porte de
@@ -55,6 +91,7 @@ pub fn collecter(
     version: &str,
     webview: Option<String>,
     sessions_rdp: Vec<(u64, String)>,
+    rendu_terminal: Option<String>,
 ) -> Faits {
     Faits {
         version: version.to_owned(),
@@ -76,6 +113,12 @@ pub fn collecter(
             .filter_map(|v| std::env::var(v).ok().map(|val| ((*v).to_owned(), val)))
             .collect(),
         sessions_rdp,
+        rendu_terminal: rendu_terminal
+            .unwrap_or_else(|| "inconnu (aucun terminal ouvert depuis le lancement)".to_owned()),
+        journal: crate::journal::repertoire().map_or_else(
+            || "répertoire de configuration introuvable".to_owned(),
+            |d| crate::journal::dernieres_lignes(&d, JOURNAL_LIGNES),
+        ),
     }
 }
 
@@ -244,6 +287,7 @@ pub fn composer(f: &Faits) -> String {
     let _ = writeln!(t, "- webview : {}", f.webview);
     let _ = writeln!(t, "- emballage : {}", f.emballage);
     let _ = writeln!(t, "- processus de bureau distant : {}", f.sidecar);
+    let _ = writeln!(t, "- Rendu du terminal : {}", f.rendu_terminal);
     let _ = writeln!(t, "\n## Système");
     let _ = writeln!(t, "- système : {}", f.systeme);
     let _ = writeln!(t, "- session graphique : {}", f.session_graphique);
@@ -276,27 +320,71 @@ pub fn composer(f: &Faits) -> String {
             let _ = writeln!(t, "{lignes}");
         }
     }
+    let _ = writeln!(t, "\n## Journal");
+    let _ = writeln!(t, "{}", f.journal);
     t
 }
 
-/// Écrit le diagnostic à `chemin` (choisi par l'utilisateur dans une boîte
-/// d'enregistrement), en 0600 et d'un seul tenant, et rend le chemin écrit.
+/// Ouvre la boîte « Enregistrer sous » native, écrit le diagnostic à l'endroit
+/// choisi et rend le chemin écrit ; `None` si l'utilisateur a annulé.
+///
+/// Contrat K13 (audit de sécurité du 12 septembre 2026, C-ipc-3) : la commande
+/// prenait un chemin venu de la page et remplaçait la cible par `rename`. Un
+/// script de la webview écrasait ainsi `~/.bashrc` par le texte du
+/// diagnostic. Le chemin vient désormais de la boîte native, ouverte ici, où
+/// c'est l'utilisateur qui confirme le remplacement d'un fichier existant.
+/// Appel du front : `invoke("diagnostic_exporter")`, sans argument.
 #[tauri::command]
-pub fn diagnostic_exporter<R: tauri::Runtime>(
+pub async fn diagnostic_exporter<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
-    rdp: tauri::State<'_, crate::rdp::RdpStore>,
-    chemin: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt as _;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name("avash-diagnostic.txt")
+        .add_filter("Texte", &["txt"])
+        .save_file(move |c| {
+            let _ = tx.send(c);
+        });
+    let choisi = rx
+        .await
+        .map_err(|_| "La boîte d'enregistrement s'est fermée sans répondre.".to_owned())?;
+    let Some(chemin) = choisi.and_then(|f| f.into_path().ok()) else {
+        return Ok(None);
+    };
+    // Collecte (fichiers, trousseau, processus) et écriture hors des fils du
+    // runtime (C-SIL-7).
+    super::bloquant(move || ecrire_diagnostic(&app, chemin))
+        .await
+        .map(Some)
+}
+
+/// Écrit le diagnostic à `chemin`, en 0600 et d'un seul tenant, et rend le
+/// chemin écrit. Séparé de la boîte de dialogue pour être testé.
+pub(crate) fn ecrire_diagnostic<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    chemin: std::path::PathBuf,
 ) -> Result<String, String> {
-    let chemin = std::path::PathBuf::from(chemin);
+    use avash::Verrou as _;
+    use tauri::Manager as _;
     // Un chemin relatif dépendrait du répertoire courant de l'application,
     // qui n'est pas celui que l'utilisateur voit dans la boîte de dialogue.
     if !chemin.is_absolute() {
         return Err("Le chemin du diagnostic doit être absolu.".to_owned());
     }
+    let rendu = app
+        .try_state::<RenduTerminal>()
+        .and_then(|r| r.0.verrou().clone());
+    let sessions = app
+        .try_state::<crate::rdp::RdpStore>()
+        .map(|r| crate::rdp::journaux(&r))
+        .unwrap_or_default();
     let faits = collecter(
         &app.package_info().version.to_string(),
         tauri::webview_version().ok(),
-        crate::rdp::journaux(&rdp),
+        sessions,
+        rendu,
     );
     avash::ecrire_atomiquement(&chemin, composer(&faits).as_bytes()).map_err(|e| e.to_string())?;
     Ok(chemin.display().to_string())
@@ -304,8 +392,8 @@ pub fn diagnostic_exporter<R: tauri::Runtime>(
 
 #[cfg(test)]
 mod tests_diagnostic {
-    use super::{collecter, composer, diagnostic_exporter, Faits};
-    use crate::commands::tests::with_ssh_config;
+    use super::{collecter, composer, diagnostic_noter_rendu, ecrire_diagnostic, Faits};
+    use crate::commands::tests::{app_de_test, with_ssh_config};
     use tauri::Manager as _;
 
     fn faits() -> Faits {
@@ -323,6 +411,8 @@ mod tests_diagnostic {
             agent: "SSH_AUTH_SOCK présent".into(),
             variables: vec![("AVASH_LANGUE".into(), "fr".into())],
             sessions_rdp: vec![(3, "connecté\nfermé par le serveur".into())],
+            rendu_terminal: "webgl".into(),
+            journal: "WARN trousseau indisponible".into(),
         }
     }
 
@@ -341,6 +431,8 @@ mod tests_diagnostic {
             "    AVASH_LANGUE=fr",
             "- ~/.ssh/config : 2 hôte(s)",
             "### session 3\nconnecté\nfermé par le serveur",
+            "- Rendu du terminal : webgl",
+            "## Journal\nWARN trousseau indisponible",
         ] {
             assert!(t.contains(attendu), "manque « {attendu} » dans :\n{t}");
         }
@@ -364,7 +456,7 @@ mod tests_diagnostic {
         let _g = with_ssh_config(
             "Host secret-prod\n  HostName 203.0.113.9\n  IdentityFile ~/.ssh/k\n  #Folder: prod\n\nHost bastion\n  HostName 203.0.113.1\n\nHost cache\n  HostName 10.0.0.9\n  ProxyJump bastion\n",
         );
-        let f = collecter("1.2.3", None, Vec::new());
+        let f = collecter("1.2.3", None, Vec::new(), None);
         assert_eq!(
             f.config_ssh,
             "3 hôte(s), 1 dossier(s), 1 derrière un rebond, 1 avec une clé déclarée"
@@ -399,40 +491,63 @@ mod tests_diagnostic {
         );
     }
 
-    /// La commande écrit le fichier d'un seul tenant, en 0600, et refuse un
-    /// chemin relatif.
+    /// L'écriture se fait d'un seul tenant, en 0600, et refuse un chemin
+    /// relatif ; le moteur de rendu signalé par le front y figure.
     #[test]
     fn la_commande_ecrit_le_fichier_en_0600_et_refuse_un_chemin_relatif() {
         let _g = with_ssh_config("Host a\n  HostName 10.0.0.1\n");
-        let app = tauri::test::mock_builder()
-            .manage(crate::rdp::RdpStore::default())
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
-            .expect("application factice");
-        let dir = std::env::temp_dir().join(format!("avash-diag-{}", std::process::id()));
+        let app = app_de_test();
+        diagnostic_noter_rendu(app.state::<super::RenduTerminal>(), "dom".into()).unwrap();
+        let dir = avash::repertoire_personnel().unwrap().join("export");
         std::fs::create_dir_all(&dir).unwrap();
         let chemin = dir.join("diagnostic.txt");
-        let rendu = diagnostic_exporter(
-            app.handle().clone(),
-            app.state::<crate::rdp::RdpStore>(),
-            chemin.display().to_string(),
-        )
-        .unwrap();
+        let rendu = ecrire_diagnostic(app.handle(), chemin.clone()).unwrap();
         assert_eq!(rendu, chemin.display().to_string());
         let texte = std::fs::read_to_string(&chemin).unwrap();
         assert!(texte.starts_with("# Diagnostic Avash "), "{texte}");
         assert!(texte.contains("1 hôte(s)"), "{texte}");
+        assert!(texte.contains("- Rendu du terminal : dom"), "{texte}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
             let mode = std::fs::metadata(&chemin).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "mode {mode:o}");
         }
-        assert!(diagnostic_exporter(
-            app.handle().clone(),
-            app.state::<crate::rdp::RdpStore>(),
-            "relatif/diag.txt".to_owned()
-        )
-        .is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(ecrire_diagnostic(app.handle(), "relatif/diag.txt".into()).is_err());
+    }
+
+    /// Contrat K8 : seules « webgl » et « dom » sont retenues ; la page n'écrit
+    /// pas un texte libre dans un fichier joint à un ticket.
+    #[test]
+    fn le_rendu_du_terminal_n_accepte_que_webgl_ou_dom() {
+        let app = app_de_test();
+        let etat = || app.state::<super::RenduTerminal>();
+        assert!(diagnostic_noter_rendu(etat(), "webgl".into()).is_ok());
+        assert!(diagnostic_noter_rendu(etat(), "<script>".into()).is_err());
+        let f = collecter("1", None, Vec::new(), None);
+        assert!(
+            f.rendu_terminal.starts_with("inconnu"),
+            "{}",
+            f.rendu_terminal
+        );
+    }
+
+    /// Audit du 12 septembre 2026 (C-SIL-2) : après un avertissement, le
+    /// diagnostic exporté porte la ligne du journal.
+    #[test]
+    fn le_diagnostic_contient_le_journal() {
+        let _g = with_ssh_config("");
+        let dir = crate::journal::repertoire().unwrap();
+        tracing::subscriber::with_default(
+            crate::journal::abonne(
+                dir,
+                crate::journal::TAILLE_MAX,
+                crate::journal::niveau(None),
+            ),
+            || tracing::warn!("témoin du diagnostic"),
+        );
+        let t = composer(&collecter("1", None, Vec::new(), None));
+        let journal = t.split("## Journal").nth(1).unwrap_or_default();
+        assert!(journal.contains("témoin du diagnostic"), "{t}");
     }
 }

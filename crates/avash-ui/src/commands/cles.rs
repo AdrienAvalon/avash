@@ -5,13 +5,13 @@ use avash::ssh::AvashSession;
 use avash::SshHost;
 
 /// Liste les clés de `~/.ssh` utilisables pour un déploiement.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn keys_list() -> Result<Vec<avash::keys::KeyEntry>, String> {
     avash::keys::list_keys().map_err(|e| format!("{e:#}"))
 }
 
 /// Génère une paire ed25519 dans `~/.ssh`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn key_generate(
     name: String,
     comment: Option<String>,
@@ -65,7 +65,7 @@ pub async fn key_deploy(
 ///
 /// L'hôte devient alors utilisable avec `ssh`, `scp`, `rsync` — pas seulement
 /// dans Avash. Le mot de passe n'est jamais écrit : ce fichier est en clair.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn host_save(
     alias: String,
     addr: String,

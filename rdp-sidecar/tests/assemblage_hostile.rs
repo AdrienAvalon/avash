@@ -36,7 +36,7 @@ fn un_flux_egfx_hostile_ne_fait_pas_paniquer_le_traitement() {
     // CreateSurface(id = 1, 64 × 64, format 0x21).
     e.traiter(&Pdu {
         id: 0x0009,
-        charge: vec![1, 0, 64, 0, 64, 0, 0x21],
+        charge: &[1, 0, 64, 0, 64, 0, 0x21],
     });
 
     // Un segment de départ portant plusieurs commandes plausibles, puis on le

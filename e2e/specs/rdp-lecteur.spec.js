@@ -9,10 +9,10 @@
 // plus dès que l'utilisateur coupe le son.
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { startRdpServer, waitForPort, attendreBureauConnecte } from "./helpers.js";
+import { startRdpServer, waitForPort, attendreBureauConnecte, confirmerFermeture } from "./helpers.js";
 
 const PORT = 33895;
 const CONTENU = "Bonjour depuis le poste.\nDeuxième ligne, avec des accents : é à ü.\n";
@@ -23,6 +23,23 @@ function dossierPartage() {
   writeFileSync(join(d, "bonjour.txt"), CONTENU);
   writeFileSync(join(d, "autre.bin"), Buffer.from([1, 2, 3]));
   return d;
+}
+
+/** Enregistre dans rdp.yaml du bac à sable un bureau qui partage `dossier`.
+ *
+ *  Contrat K12 (audit du 12 septembre 2026, C-ipc-1) : `rdp_open` ne sert plus
+ *  un dossier que la page a simplement écrit dans le champ. Il doit venir de
+ *  la boîte native, qu'aucun pilote ne conduit, ou être celui que rdp.yaml
+ *  enregistre déjà pour ce bureau (adresse, port, utilisateur), relu à chaque
+ *  ouverture. Le scénario pose donc ce bureau dans le fichier, remis à zéro à
+ *  chaque fichier de tests (`seedSandbox`), puis passe par le formulaire. */
+function enregistrerBureauAvecPartage(dossier) {
+  const conf = join(process.env.AVASH_E2E_SANDBOX, ".config", "avash");
+  mkdirSync(conf, { recursive: true, mode: 0o700 });
+  writeFileSync(join(conf, "rdp.yaml"), [
+    "- id: e2e-lecteur", "  name: e2e-lecteur", "  host: 127.0.0.1", `  port: ${PORT}`, "  user: test",
+    "  width: 0", "  height: 0", "  folder: ''", `  partage: '${dossier.replace(/'/g, "''")}'`, "",
+  ].join("\n"), { mode: 0o600 });
 }
 
 /** Attend que les lignes du serveur contiennent `attendu`. */
@@ -64,6 +81,7 @@ describe("RDP — lecteur partagé (redirection de lecteur)", () => {
 
   it("le dossier du formulaire est servi au distant, qui le lit et y écrit", async () => {
     dossier = dossierPartage();
+    enregistrerBureauAvecPartage(dossier);
     await $("#manual-btn").click();
     await $("#manual-modal").waitForDisplayed({ timeout: 5000 });
     await browser.execute(() => {
@@ -95,6 +113,8 @@ describe("RDP — lecteur partagé (redirection de lecteur)", () => {
     // sans quoi, sur une machine chargée, le sidecar attend son tour au-delà
     // du délai (vu en suite complète, 35 fichiers en parallèle).
     await browser.execute(() => document.querySelector(".tab.active .close")?.click());
+    // Bureau connecté : la fermeture se confirme (audit du 12 septembre 2026, C-front-6).
+    await confirmerFermeture();
     await browser.waitUntil(async () => (await $$(".rdp-container")).length === 0, { timeout: 5000 });
     lignes.length = 0;
     rmSync(dossier, { recursive: true, force: true });

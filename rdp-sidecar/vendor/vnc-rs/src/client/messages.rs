@@ -195,8 +195,10 @@ impl ServerMsg {
                 let mut padding = [0; 3];
                 reader.read_exact(&mut padding).await?;
                 let len = reader.read_u32().await?;
-                // Même borne que les décodeurs : la longueur vient du serveur.
-                let mut buffer_str = crate::codec::tampon(len as usize)?;
+                // Borne propre au texte (audit du 12 septembre 2026) : la
+                // longueur vient du serveur, et celle des pixels (256 Mio)
+                // était bien trop large pour un presse-papiers.
+                let mut buffer_str = crate::codec::tampon_texte(len as usize)?;
                 reader.read_exact(&mut buffer_str).await?;
                 // Latin-1, un octet par caractère (voir ClientCutText).
                 Ok(Self::ServerCutText(
