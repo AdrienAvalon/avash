@@ -371,14 +371,19 @@ export function waitForPort(port, timeout = 30000) {
  *  joint au message plutôt que de laisser un échec muet — c'est ce qui manquait
  *  pour comprendre les rares échecs intermittents de ces scénarios.
  */
-export async function attendreBureauConnecte(quoi = "le bureau RDP") {
+export async function attendreBureauConnecte(quoi = "le bureau RDP", libelle = null) {
   try {
-    // L'onglet ACTIF doit être vivant, pas n'importe lequel. Trouvé par la CI
-    // Windows du 12 septembre 2026 (enregistrer-et-connecter.spec.js) : une
-    // session SSH encore ouverte par le scénario précédent satisfaisait
-    // l'attente sur-le-champ, et le libellé lu ensuite était le sien, le
-    // bureau n'ayant pas encore pris la main sur un exécuteur plus lent.
-    await browser.waitUntil(async () => (await $$(".tab.active .state.live")).length > 0, {
+    // L'onglet ACTIF doit être vivant, et quand le scénario connaît son nom,
+    // c'est celui-là. Trouvé par la CI Windows du 12 septembre 2026
+    // (enregistrer-et-connecter.spec.js) : la session SSH laissée vivante par
+    // le scénario précédent satisfaisait l'attente sur-le-champ, y compris
+    // « onglet actif vivant », tant que le bureau n'avait pas encore pris la
+    // main sur un exécuteur plus lent ; le libellé lu ensuite était le sien.
+    await browser.waitUntil(async () => browser.execute((attendu) => {
+      const actif = document.querySelector(".tab.active");
+      if (!actif?.querySelector(".state.live")) return false;
+      return attendu === null || actif.querySelector(".label")?.textContent === attendu;
+    }, libelle), {
       timeout: 20000,
       timeoutMsg: `${quoi} ne s'est jamais connecté`,
     });

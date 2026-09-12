@@ -103,7 +103,7 @@ describe("Enregistrer un bureau RDP puis se connecter", () => {
     }, NOM);
     await $("#m-submit").click();
 
-    await attendreBureauConnecte();
+    await attendreBureauConnecte("le bureau RDP", NOM);
     const libelle = await browser.execute(() =>
       document.querySelector(".tab.active .label")?.textContent ?? null);
     expect(libelle).toBe(NOM);
@@ -143,7 +143,7 @@ describe("Enregistrer un bureau VNC puis se connecter", () => {
     }, NOM);
     await $("#m-submit").click();
 
-    await attendreBureauConnecte("le bureau VNC");
+    await attendreBureauConnecte("le bureau VNC", NOM);
     const libelle = await browser.execute(() =>
       document.querySelector(".tab.active .label")?.textContent ?? null);
     expect(libelle).toBe(NOM);
