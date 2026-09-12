@@ -857,6 +857,35 @@ pub(crate) fn poignee_avec_clavier(
     (h, clavier)
 }
 
+/// Régression vue par la suite bout en bout le 12 septembre 2026
+/// (enregistrement.spec.js) : depuis que l'enregistreur ne vide plus son
+/// tampon à chaque ligne (contrat K4), le démarrage n'écrivait rien sur le
+/// disque avant la première sortie du terminal. L'en-tête et l'état initial
+/// de l'écran doivent y être dès le retour de la commande.
+#[tokio::test]
+async fn le_demarrage_d_un_enregistrement_est_deja_sur_le_disque() {
+    let _g = with_ssh_config("");
+    let app = app_de_test();
+    let state = app.state::<SessionStore>();
+    enregistrer_session(&state, 7, poignee(1)).unwrap();
+    let chemin = enregistrement_demarrer(
+        app.state::<SessionStore>(),
+        7,
+        80,
+        24,
+        Some("$ ecran-initial".into()),
+    )
+    .unwrap();
+    let contenu = std::fs::read_to_string(&chemin).unwrap();
+    let lignes: Vec<&str> = contenu.lines().collect();
+    assert_eq!(
+        lignes.len(),
+        2,
+        "en-tête et état initial attendus : {contenu:?}"
+    );
+    assert!(lignes[1].contains("ecran-initial"), "{contenu:?}");
+}
+
 /// Démarrer, écrire par le chemin du pump, arrêter : le fichier existe,
 /// se relit, et un second démarrage pendant l'enregistrement rend le même
 /// chemin au lieu d'en ouvrir un autre.

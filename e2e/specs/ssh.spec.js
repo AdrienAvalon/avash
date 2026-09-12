@@ -1,6 +1,7 @@
 // Connexion SSH RÉELLE : double-clic sur l'hôte « test-ssh » semé, servi par le
 // sshd local (auth par clé). Valide toute la chaîne UI → russh → PTY.
 import { attendreSessionLive, doubleCliquerHote, ecouterSortiePty, fermerOngletActif, sortiePty, taperDansLeTerminal } from "./helpers.js";
+import { EMBARQUE } from "../wdio.conf.js";
 
 describe("SSH — connexion réelle (sshd local)", () => {
   it("double-clic sur test-ssh ouvre une session live", async () => {
@@ -39,11 +40,21 @@ describe("SSH — connexion réelle (sshd local)", () => {
     await browser.keys(["Control", "b"]);
     await taperDansLeTerminal("zv");
     await browser.keys("Enter");
-    await browser.waitUntil(async () => (await sortiePty()).includes("mzvk"), {
-      timeout: 10000,
-      timeoutMsg: "Ctrl+B n'a pas atteint le shell distant",
-    });
-    expect(await $("#sftp-panel").isDisplayed()).toBe(false);
+    // Le serveur WebDriver embarqué (Windows, macOS) ne synthétise que keydown
+    // et keyup, sans le code de touche d'où xterm tire le caractère de
+    // contrôle : le shell n'y reçoit jamais 0x02, quelle que soit
+    // l'application (vu en CI Windows le 12 septembre 2026). On y vérifie
+    // seulement que l'application n'a pas confisqué la touche.
+    if (!EMBARQUE) {
+      await browser.waitUntil(async () => (await sortiePty()).includes("mzvk"), {
+        timeout: 10000,
+        timeoutMsg: "Ctrl+B n'a pas atteint le shell distant",
+      });
+    }
+    // Le panneau fait toujours partie de la page, replié : son ouverture tient
+    // à la classe `open` (voir `sftpToggle` et sftp.spec.js), pas à sa
+    // visibilité, que WebDriver voit vraie même panneau fermé.
+    expect((await $("#sftp-panel").getAttribute("class")) ?? "").not.toContain("open");
   });
 
   // Audit du 12 septembre 2026 (C-front-6) : fermer une session vivante ne

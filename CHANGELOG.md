@@ -5,6 +5,32 @@ Toutes les modifications notables d'Avash sont consignées dans ce fichier.
 Le format s'inspire de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/),
 et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+### Corrigé
+
+- **Un enregistrement asciicast se voit de nouveau sur le disque dès son
+  démarrage.** Depuis la 0.13.0, l'enregistreur vide son tampon au rythme des
+  messages du terminal plutôt qu'à chaque ligne : l'en-tête et l'état initial
+  de l'écran restaient en mémoire jusqu'à la première sortie. Le fichier final
+  était complet, mais un enregistrement lancé sur un écran calme paraissait
+  vide, et une fermeture brutale avant toute sortie perdait l'état initial. Le
+  démarrage vide désormais le tampon. Trouvé le jour même par la suite bout en
+  bout, sous Windows comme sous Linux.
+
+### Validation
+
+- Après la première exécution de la 0.13.0 sur les trois systèmes : le module
+  de tests réseau de l'interface est réservé à Unix, comme la fonctionnalité de
+  test du cœur qu'il utilise ; la mesure de trames de la conformité passe le
+  mot de passe sur l'entrée standard ; deux imports inutilisés sous Windows
+  sont retirés.
+- Trois scénarios de bout en bout mesuraient mal. L'attente d'un bureau
+  connecté se contentait d'une session SSH déjà vivante ; la fermeture du
+  panneau SFTP était jugée à sa visibilité plutôt qu'à sa classe `open` ; le
+  serveur WebDriver embarqué ne sait pas produire le caractère de contrôle de
+  Ctrl+B, dont seul le routage est vérifié sur ce chemin.
+
 ## [0.13.0] - 2026-09-12
 
 ### Sécurité

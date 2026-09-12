@@ -42,16 +42,27 @@ pub fn enregistrement_demarrer(
     }
     let mut e = avash::enregistrement::Enregistreur::demarrer(&label, cols, rows)
         .map_err(|e| format!("{e:#}"))?;
-    if let Some(ecran) = etat_initial.filter(|s| !s.is_empty()) {
-        if let Err(err) = e.sortie(&ecran) {
-            // Trouvé par l'audit du 7 septembre 2026 : si la toute première
-            // écriture échoue (disque plein), le fichier déjà créé par
-            // `create_new` resterait sur le disque, vide ou réduit à
-            // l'en-tête, et s'afficherait dans la liste comme un enregistrement
-            // valide. On le retire avant de remonter l'erreur.
-            let _ = std::fs::remove_file(e.chemin());
-            return Err(format!("{err:#}"));
-        }
+    // Le démarrage se voit tout de suite sur le disque : l'en-tête et, s'il y a
+    // lieu, l'état initial de l'écran. Depuis que l'enregistreur ne vide plus
+    // son tampon à chaque ligne mais au rythme des messages du terminal
+    // (contrat K4, audit du 12 septembre 2026), rien n'était écrit avant la
+    // première sortie : un enregistrement lancé sur un écran calme restait
+    // vide sur le disque (régression vue par la suite bout en bout,
+    // enregistrement.spec.js, le jour même).
+    let premiere = etat_initial
+        .filter(|s| !s.is_empty())
+        .map_or(Ok(()), |ecran| {
+            e.sortie(&ecran).map_err(|err| format!("{err:#}"))
+        })
+        .and_then(|()| e.vider().map_err(|err| err.to_string()));
+    if let Err(err) = premiere {
+        // Trouvé par l'audit du 7 septembre 2026 : si la toute première
+        // écriture échoue (disque plein), le fichier déjà créé par
+        // `create_new` resterait sur le disque, vide ou réduit à
+        // l'en-tête, et s'afficherait dans la liste comme un enregistrement
+        // valide. On le retire avant de remonter l'erreur.
+        let _ = std::fs::remove_file(e.chemin());
+        return Err(err);
     }
     let chemin = e.chemin().display().to_string();
     *slot = Some(e);

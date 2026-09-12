@@ -373,7 +373,12 @@ export function waitForPort(port, timeout = 30000) {
  */
 export async function attendreBureauConnecte(quoi = "le bureau RDP") {
   try {
-    await browser.waitUntil(async () => (await $$(".state.live")).length > 0, {
+    // L'onglet ACTIF doit être vivant, pas n'importe lequel. Trouvé par la CI
+    // Windows du 12 septembre 2026 (enregistrer-et-connecter.spec.js) : une
+    // session SSH encore ouverte par le scénario précédent satisfaisait
+    // l'attente sur-le-champ, et le libellé lu ensuite était le sien, le
+    // bureau n'ayant pas encore pris la main sur un exécuteur plus lent.
+    await browser.waitUntil(async () => (await $$(".tab.active .state.live")).length > 0, {
       timeout: 20000,
       timeoutMsg: `${quoi} ne s'est jamais connecté`,
     });
