@@ -43,6 +43,14 @@ unused_async_trait_impl = "allow"
 # de terminal). Les cas dangereux sont traites au cas par cas.
 cast_possible_truncation = "allow"
 cast_precision_loss = "allow"
+# Une panique en production est un défaut, pas une gestion d'erreur. Bloquants
+# par le `-D warnings` de check.sh, du hook et de la CI ; les tests les
+# autorisent (clippy.toml), les exemples et utilitaires de test par un
+# `#![allow]` en tête de fichier. L'audit du 12 septembre 2026 avait tout
+# préparé sans les déclarer ici : fait le 13, scripts/tests/lint-panique-declare.sh
+# empêche désormais qu'ils disparaissent sans bruit.
+unwrap_used = "warn"
+expect_used = "warn"
 
 [profile.release]
 opt-level = 3

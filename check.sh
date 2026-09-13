@@ -155,6 +155,9 @@ run "garde : dialogues natifs préfixés proscrits" "$ROOT" ./scripts/tests/guar
 # qui s'arrêtait à la première cible, une publication qui n'attendait pas la
 # sécurité — les trois causes des deux ratés de la 0.10.0.
 run "garde : marqueurs Rust proscrits" "$ROOT" ./scripts/tests/guard-marqueurs-rust.sh
+# Trouvé le 13 septembre 2026 : l'audit de la veille annonçait `unwrap_used`
+# bloquant sans l'avoir déclaré ; clippy ne voit pas un lint absent.
+run "lints unwrap et expect déclarés" "$ROOT" ./scripts/tests/lint-panique-declare.sh
 # Trouvé par l'audit du 9 septembre 2026 : une commande Tauri restait exposée à
 # la webview sans qu'aucun appel du front ne l'utilise, malgré la règle écrite
 # en commentaire dans lib.rs. La liste est désormais comparée aux appels.

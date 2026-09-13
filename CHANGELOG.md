@@ -30,6 +30,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   panneau SFTP était jugée à sa visibilité plutôt qu'à sa classe `open` ; le
   serveur WebDriver embarqué ne sait pas produire le caractère de contrôle de
   Ctrl+B, dont seul le routage est vérifié sur ce chemin.
+- **`unwrap` et `expect` sont refusés en production, pour de bon.** L'audit du
+  12 septembre les avait retirés et annonçait le lint `unwrap_used` bloquant,
+  sans l'avoir déclaré : cinq `expect` restaient (le choix d'un alias libre à
+  l'import, le script de construction Windows, trois dans la réception de
+  fichiers du bureau distant). Ils sont réécrits sans panique possible, les
+  lints `unwrap_used` et `expect_used` sont déclarés pour l'espace de travail et
+  pour le sidecar, bloquants comme tout clippy, et une garde de `check.sh`
+  vérifie qu'ils le restent. Aucun changement de comportement.
 
 ## [0.13.0] - 2026-09-12
 

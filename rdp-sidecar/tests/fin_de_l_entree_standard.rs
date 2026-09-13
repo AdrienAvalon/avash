@@ -12,6 +12,11 @@
 //! aboutit (file d'attente du noyau) et plus rien ne répond, si bien que le
 //! processus resterait 25 s dans sa négociation s'il ne regardait pas stdin.
 
+// Les aides (`lancer`, le serveur muet) déroulent leur décor par `unwrap` et
+// `expect`, que `allow-unwrap-in-tests` ne couvre pas hors d'une fonction
+// `#[test]`.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::io::Write as _;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};

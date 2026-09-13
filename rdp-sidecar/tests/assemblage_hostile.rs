@@ -10,6 +10,10 @@
 //! ils sont la garde rapide (mutation déterministe) qu'une cible `fuzz/`
 //! guidée par la couverture prolongera.
 
+// L'aide `encadrer` construit ses segments par `unwrap`, que
+// `allow-unwrap-in-tests` ne couvre pas hors d'une fonction `#[test]`.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use avash_rdp::disque::correspond;
 use avash_rdp::egfx::{decouper, Egfx, Pdu};
 

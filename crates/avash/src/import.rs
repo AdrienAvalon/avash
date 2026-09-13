@@ -98,10 +98,17 @@ pub fn alias_libre(base: &str, pris: &[String]) -> String {
     if !pris.iter().any(|p| p == base) {
         return base.to_string();
     }
-    (2..=u32::MAX)
-        .map(|n| format!("{base}-{n}"))
-        .find(|c| !pris.iter().any(|p| p == c))
-        .expect("quatre milliards de suffixes ne sont jamais tous pris")
+    // Pour n alias pris, `nom-2` … `nom-(n+2)` font n+1 candidats distincts :
+    // l'un au moins est libre, la boucle s'arrête toujours. Écrit ainsi plutôt
+    // qu'un `find(…).expect(…)` sur un intervalle fini (lint `unwrap_used`).
+    let mut n: usize = 2;
+    loop {
+        let candidat = format!("{base}-{n}");
+        if !pris.contains(&candidat) {
+            return candidat;
+        }
+        n += 1;
+    }
 }
 
 /// Rend la clé à écrire dans `IdentityFile`, ou `None` si c'est une `.ppk` :

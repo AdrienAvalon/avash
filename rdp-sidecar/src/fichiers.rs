@@ -634,17 +634,7 @@ impl Reception {
             let Some(taille) = taille else {
                 // Toujours pas de taille : on ne peut pas recevoir ce fichier,
                 // et on le signale au lieu de le compter « réussi » (0 octet).
-                // Le `.part` part avec `e` (voir `Partiel`).
-                let e = self
-                    .en_cours
-                    .take()
-                    .expect("invariant : en_cours vient d'être emprunté ci-dessus");
-                self.erreurs.push(format!(
-                    "{} : taille inconnue",
-                    chemin_relatif(&self.fichiers[e.index])
-                ));
-                self.termines += 1;
-                return self.demarrer().await;
+                return self.abandonner_en_cours("taille inconnue").await;
             };
             // Audit du 12 septembre 2026 (C-sidecar-7) : l'utilisateur a accepté
             // un fichier affiché à 0 octet (taille non annoncée) ; la réponse
@@ -653,17 +643,12 @@ impl Reception {
             // dans l'espace libre du dossier est refusé avant toute plage.
             let libres = crate::disque::octets_libres(&self.dossier);
             if taille > libres {
-                let e = self
-                    .en_cours
-                    .take()
-                    .expect("invariant : en_cours vient d'être emprunté ci-dessus");
-                self.erreurs.push(format!(
-                    "{} : taille annoncée après coup ({taille} octets) plus grande que \
-                     l'espace libre du dossier ({libres} octets)",
-                    chemin_relatif(&self.fichiers[e.index])
-                ));
-                self.termines += 1;
-                return self.demarrer().await;
+                return self
+                    .abandonner_en_cours(&format!(
+                        "taille annoncée après coup ({taille} octets) plus grande que \
+                         l'espace libre du dossier ({libres} octets)"
+                    ))
+                    .await;
             }
             e.taille = taille;
             // La taille annoncée manquait au total (comptée 0) : on la rattrape
@@ -711,17 +696,7 @@ impl Reception {
             }
         }
         if let Some(raison) = echec {
-            // Le `.part` part avec `e` (voir `Partiel`).
-            let e = self
-                .en_cours
-                .take()
-                .expect("invariant : en_cours est emprunté par `e` juste au-dessus");
-            self.erreurs.push(format!(
-                "{} : {raison}",
-                chemin_relatif(&self.fichiers[e.index])
-            ));
-            self.termines += 1;
-            return self.demarrer().await;
+            return self.abandonner_en_cours(&raison).await;
         }
         let complet = self
             .en_cours
@@ -731,6 +706,24 @@ impl Reception {
             return self.promouvoir_et_suivre().await;
         }
         self.remplir()
+    }
+
+    /// Abandonne le fichier en cours : la raison entre au bilan, le `.part`
+    /// part avec lui (voir `Partiel`), il compte pour terminé et le suivant
+    /// démarre. Appelée par `recevoir` là où `en_cours` vient d'être emprunté :
+    /// le `let … else` remplace trois `take().expect("invariant …")` que le lint
+    /// `expect_used` refuse (13 septembre 2026), sans rien changer à l'ordre :
+    /// le `.part` est retiré après le démarrage du suivant, comme avant.
+    async fn abandonner_en_cours(&mut self, raison: &str) -> Vec<FileContentsRequest> {
+        let Some(e) = self.en_cours.take() else {
+            return Vec::new();
+        };
+        self.erreurs.push(format!(
+            "{} : {raison}",
+            chemin_relatif(&self.fichiers[e.index])
+        ));
+        self.termines += 1;
+        self.demarrer().await
     }
 
     /// Promeut le fichier en cours (`.part` → cible), le compte terminé, et

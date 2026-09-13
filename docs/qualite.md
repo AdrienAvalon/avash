@@ -20,7 +20,8 @@ conformité RDP contre de vrais serveurs).
 | Bout en bout (WebdriverIO) | 81 | l'application réelle : connexions SSH, RDP et VNC effectives, SFTP, enregistrement asciicast, santé des hôtes, presse-papiers RDP, dossiers, import PuTTY, langue, modales, tunnels, snippets, accessibilité, navigation au clavier, **audit axe-core sur les deux thèmes** — tous en intégration continue, serveurs locaux compris |
 
 S'y ajoutent `clippy` en mode strict — **en profil debug et en profil release**,
-qui ne voient pas le même code — ESLint typé, stylelint, knip (code mort),
+qui ne voient pas le même code, sans aucun `unwrap` ni `expect` hors des tests
+(lints `unwrap_used` et `expect_used`, sidecar compris) — ESLint typé, stylelint, knip (code mort),
 `cargo audit`, `cargo deny` et `npm audit` sur tous les arbres de dépendances,
 et une garde qui interdit les motifs dangereux. Sur le dépôt : CodeQL,
 gitleaks, le Scorecard de l'OpenSSF et Dependabot (voir

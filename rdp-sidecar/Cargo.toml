@@ -75,6 +75,12 @@ strip = true
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 
+# Même règle que l'espace de travail (voir son Cargo.toml) : pas de panique en
+# production. Le clippy.toml de la racine autorise unwrap et expect en test.
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
 
 [patch.crates-io]
 ironrdp-session = { path = "vendor/ironrdp-session" }
