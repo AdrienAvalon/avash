@@ -133,10 +133,10 @@ enchaîne validation, construction et empreintes.
 ### Premier lancement, en trois gestes
 
 1. Vos hôtes de `~/.ssh/config` sont déjà dans la barre latérale ; **double-clic**
-   pour ouvrir un terminal, `Ctrl+B` pour le panneau de fichiers.
+   pour ouvrir un terminal, `Ctrl+Maj+B` pour le panneau de fichiers.
 2. **Connexion directe** pour un serveur SSH ou un bureau RDP qui n'y est pas
    encore ; cochez « enregistrer » et il y reste, au format d'OpenSSH.
-3. `Ctrl+K` pour tout le reste : hôtes, tunnels, snippets, langue, santé des
+3. `Ctrl+Maj+K` pour tout le reste : hôtes, tunnels, snippets, langue, santé des
    hôtes, enregistrements. Le mot de passe, une seule fois : il va au trousseau.
 
 ## Au quotidien
@@ -147,11 +147,14 @@ enchaîne validation, construction et empreintes.
 
 | Raccourci | Action |
 |---|---|
-| `Ctrl+K` | Palette de commandes : hôtes, actions, langue, santé, enregistrements |
-| `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Fermer, suivant, aller à un onglet |
-| `Ctrl+B` | Panneau de fichiers (SFTP) |
+| `Ctrl+Maj+K` | Palette de commandes : hôtes, actions, langue, santé, enregistrements |
+| `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Fermer (confirmation si la session est ouverte), suivant, aller à un onglet |
+| `Ctrl+Maj+B` | Panneau de fichiers (SFTP) |
 | `Ctrl+Maj+E` | Vue partagée : deux onglets côte à côte |
 | `↑` `↓` `Entrée` `Maj+F10` | La barre latérale entière au clavier |
+
+Hors d'un terminal, `Ctrl+K` et `Ctrl+B` suffisent ; dans un terminal, ils
+restent au shell distant (préfixe tmux, effacement de fin de ligne readline).
 
 <div align="center">
 <img src="docs/captures/sftp.png" alt="Le panneau SFTP à côté du terminal : un dossier de sauvegardes, un transfert terminé dans la file" width="880">

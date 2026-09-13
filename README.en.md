@@ -134,10 +134,10 @@ runs validation, build and checksums in one go.
 ### First launch, in three moves
 
 1. Your hosts from `~/.ssh/config` are already in the sidebar; **double-click**
-   to open a terminal, `Ctrl+B` for the file panel.
+   to open a terminal, `Ctrl+Shift+B` for the file panel.
 2. **Direct connection** for an SSH server or an RDP desktop that is not there
    yet; tick "save" and it stays, in OpenSSH's own format.
-3. `Ctrl+K` for everything else: hosts, tunnels, snippets, language, host
+3. `Ctrl+Shift+K` for everything else: hosts, tunnels, snippets, language, host
    health, recordings. The password, once: it goes to the keyring.
 
 ## Day to day
@@ -148,11 +148,14 @@ runs validation, build and checksums in one go.
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+K` | Command palette: hosts, actions, language, health, recordings |
-| `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Close, next, go to a tab |
-| `Ctrl+B` | File panel (SFTP) |
+| `Ctrl+Shift+K` | Command palette: hosts, actions, language, health, recordings |
+| `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Close (asks first if the session is live), next, go to a tab |
+| `Ctrl+Shift+B` | File panel (SFTP) |
 | `Ctrl+Shift+E` | Split view: two tabs side by side |
 | `↑` `↓` `Enter` `Shift+F10` | The whole sidebar from the keyboard |
+
+Outside a terminal, `Ctrl+K` and `Ctrl+B` are enough; inside one, they stay
+with the remote shell (tmux prefix, readline's kill to end of line).
 
 <div align="center">
 <img src="docs/captures/sftp.png" alt="The SFTP panel next to the terminal: a backups folder, a finished transfer in the queue" width="880">
