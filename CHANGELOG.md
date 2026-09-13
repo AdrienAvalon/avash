@@ -5,7 +5,7 @@ Toutes les modifications notables d'Avash sont consignées dans ce fichier.
 Le format s'inspire de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/),
 et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
-## [Non publié]
+## [0.13.1] - 2026-09-14
 
 ### Corrigé
 
@@ -2681,7 +2681,12 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.11.1...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.13.1
+[0.13.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.13.0
+[0.12.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.12.2
+[0.12.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.12.1
+[0.12.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.12.0
 [0.11.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.11.1
 [0.11.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.11.0
 [0.10.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.10.1
