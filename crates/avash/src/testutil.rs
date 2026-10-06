@@ -109,6 +109,22 @@ impl Drop for HomeGuard {
     }
 }
 
+/// Mémorise `cle` pour `host:port` dans `chemin` sous le verrou d'écriture de
+/// `known_hosts` du cœur. Les tests qui écrivent dans le `known_hosts` PARTAGÉ
+/// passent par ici plutôt que par `learn_known_hosts_path` : un ajout direct
+/// pouvait être effacé par l'oubli d'un test parallèle (le test
+/// `un_rebond_a_cle_changee_garde_le_marqueur_sous_le_format_alterne` rougissait
+/// ainsi sous charge, 2026-09-13 et 2026-10-06).
+pub fn memoriser_cle_hote(
+    host: &str,
+    port: u16,
+    cle: &russh::keys::PublicKey,
+    chemin: &std::path::Path,
+) -> anyhow::Result<()> {
+    crate::ssh::ajouter_a_known_hosts(host, port, cle, chemin)
+        .map_err(|e| anyhow::anyhow!("known_hosts : {e}"))
+}
+
 /// Bascule le répertoire personnel sur un répertoire vierge, propre à ce test.
 #[must_use]
 pub fn temp_home() -> HomeGuard {

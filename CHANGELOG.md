@@ -9,6 +9,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Sécurité
 
+- **Une clé d'hôte apprise ne se perd plus quand on en oublie une autre au même
+  moment.** Oublier une clé lisait `known_hosts`, le filtrait puis le
+  remplaçait : une clé apprise entre-temps (premier contact dans un autre
+  onglet) disparaissait. Comme le premier contact mémorise sans rien demander,
+  l'hôte redevenait inconnu, et une interception à la connexion suivante serait
+  passée inaperçue. L'apprentissage et l'oubli prennent désormais le même
+  verrou. Le test qui fait courir les deux perdait 64 à 81 clés sur 150 ; il
+  n'en perd plus aucune. C'était aussi la cause du test d'intégration instable
+  `un_rebond_a_cle_changee_garde_le_marqueur_sous_le_format_alterne`, dont les
+  écritures passent maintenant par le même verrou.
 - **rustls 0.23.45** (RUSTSEC-2026-0285 : messages de poignée de main TLS 1.3
   acceptés d'un niveau de chiffrement à l'autre), dans l'application, où il
   sert à la mise à jour automatique, et dans le processus de bureau distant.

@@ -366,7 +366,7 @@ async fn changed_host_key_is_refused() {
     // dans le vrai profil, la vérification ne le voyait pas, et la connexion
     // était acceptée comme un premier contact.
     let known_hosts = avash::ssh::chemin_known_hosts().expect("chemin known_hosts");
-    russh::keys::known_hosts::learn_known_hosts_path("127.0.0.1", port, &decoy_pub, &known_hosts)
+    avash::testutil::memoriser_cle_hote("127.0.0.1", port, &decoy_pub, &known_hosts)
         .expect("ecriture known_hosts");
 
     // Le serveur presente sa vraie cle : elle differe de celle memorisee.
@@ -382,13 +382,8 @@ async fn changed_host_key_is_refused() {
     // (un simple ajout) : `juger_cle_hote` accepte une clé parmi plusieurs, donc
     // un futur serveur de test qui hérite du port est reconnu, et le leurre peut
     // rester sans nuire.
-    russh::keys::known_hosts::learn_known_hosts_path(
-        "127.0.0.1",
-        port,
-        CLE_HOTE.public_key(),
-        &known_hosts,
-    )
-    .expect("apprentissage de la vraie clé");
+    avash::testutil::memoriser_cle_hote("127.0.0.1", port, CLE_HOTE.public_key(), &known_hosts)
+        .expect("apprentissage de la vraie clé");
 
     // Le message doit etre exploitable tel quel dans l'interface : un
     // "Unknown key" opaque ne dit pas a l'utilisateur ce qui se passe ni quoi
@@ -1275,13 +1270,8 @@ async fn un_rebond_a_cle_changee_garde_le_marqueur_sous_le_format_alterne() {
                              // Fausse clé mémorisée pour le REBOND : sa clé d'hôte « a changé ».
     let decoy = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
     let known_hosts = avash::ssh::chemin_known_hosts().unwrap();
-    russh::keys::known_hosts::learn_known_hosts_path(
-        "127.0.0.1",
-        jump_port,
-        decoy.public_key(),
-        &known_hosts,
-    )
-    .unwrap();
+    avash::testutil::memoriser_cle_hote("127.0.0.1", jump_port, decoy.public_key(), &known_hosts)
+        .unwrap();
 
     let hop = avash::ssh::Hop {
         addr: "127.0.0.1".into(),
