@@ -167,6 +167,7 @@ run "IPC : commandes exposées toutes appelées" "$ROOT" ./scripts/tests/ipc-com
 run "docs : compteurs de tests partout" "$ROOT" ./scripts/tests/compteurs-tests-partout.sh
 run "fuzz : toutes les cibles jouées" "$ROOT" ./scripts/tests/fuzz-continue-toutes-cibles.sh
 run "release : publier attend la sécurité" "$ROOT" ./scripts/tests/release-publier-attend-securite.sh
+run "CI : main jamais annulée, groupes Dependabot" "$ROOT" ./scripts/tests/ci-main-et-groupes-dependabot.sh
 # Trouvé le 9 septembre 2026 : le texte d'une invite du serveur atteignait les
 # marqueurs internes (donc l'oubli d'une clé d'hôte) et le terminal (donc ses
 # séquences ANSI). Les deux barrières se vérifient de bout en bout.

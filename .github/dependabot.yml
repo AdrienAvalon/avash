@@ -39,9 +39,22 @@ updates:
   - package-ecosystem: npm
     directory: /e2e
     schedule: { interval: monthly }
+    groups:
+      # Les paquets @wdio/* sortent ensemble et partagent e2e/package-lock.json :
+      # proposés un par un (#46 à #49, octobre 2026), chaque fusion mettait les
+      # autres en conflit sur le verrou, et l'un d'eux devenait sans objet.
+      wdio: { patterns: ["@wdio/*", "webdriverio"] }
+      e2e-mineur: { update-types: [minor, patch] }
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly, day: monday }
+    groups:
+      # Les trois étapes de codeql-action (init, analyze, upload-sarif) doivent
+      # rester à la même version : proposées séparément (#37, #39, #40,
+      # octobre 2026), init et analyze désaccordées faisaient échouer CodeQL, et
+      # il a fallu les regrouper à la main (#57). Toutes versions confondues.
+      codeql: { patterns: ["github/codeql-action/*"] }
+      actions-mineur: { update-types: [minor, patch] }
   # L'image de base de la chaîne GitLab est épinglée par empreinte
   # (ci/Dockerfile) : c'est Dependabot qui propose la suivante.
   - package-ecosystem: docker

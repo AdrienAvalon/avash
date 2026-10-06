@@ -5,6 +5,19 @@ Toutes les modifications notables d'Avash sont consignées dans ce fichier.
 Le format s'inspire de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/),
 et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+### Validation
+
+- Les exécutions CI et Sécurité de `main` ne sont plus annulées par la poussée
+  suivante : GitHub compte une exécution annulée comme un échec, et le badge
+  CI affichait « failing » sans qu'aucun test ait échoué. Les PR gardent
+  l'annulation.
+- Dependabot regroupe les trois étapes de codeql-action, qui doivent rester à
+  la même version, et les paquets `@wdio/*` de la suite bout en bout, qui se
+  mettaient en conflit sur leur verrou commun. Garde
+  `scripts/tests/ci-main-et-groupes-dependabot.sh`.
+
 ## [0.13.2] - 2026-10-06
 
 ### Sécurité
