@@ -1919,6 +1919,31 @@ pub fn forget_host_key(host: &str, port: u16) -> Result<usize> {
     forget_host_key_at(host, port, &path)
 }
 
+/// Sérialise, dans le processus, toute écriture de `known_hosts` : l'apprentissage
+/// d'une clé (ajout en fin de fichier) et l'oubli (lecture, filtrage, puis
+/// remplacement atomique). Sans lui, une clé apprise entre la lecture et le
+/// remplacement d'un oubli disparaissait, et l'hôte redevenait un premier
+/// contact, mémorisé sans rien demander (régression vue en CI, reproduite par
+/// `une_cle_apprise_pendant_un_oubli_n_est_jamais_perdue` : 64 à 81 clés
+/// perdues sur 150). Le processus suffit : tous les onglets y vivent. Deux
+/// processus Avash simultanés (interface et `avash run`) n'en profitent pas,
+/// comme ssh(1), qui n'en prend aucun.
+static ECRITURE_KNOWN_HOSTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Ajoute `cle` à `chemin` sous [`ECRITURE_KNOWN_HOSTS`]. Seul point d'ajout
+/// du crate ; les tests d'intégration y passent aussi par
+/// `testutil::memoriser_cle_hote`, sans quoi leurs ajouts directs dans le
+/// `known_hosts` partagé couraient encore avec les oublis verrouillés.
+pub(crate) fn ajouter_a_known_hosts(
+    host: &str,
+    port: u16,
+    cle: &russh::keys::PublicKey,
+    chemin: &Path,
+) -> std::result::Result<(), russh::keys::Error> {
+    let _ecriture = ECRITURE_KNOWN_HOSTS.verrou();
+    russh::keys::known_hosts::learn_known_hosts_path(host, port, cle, chemin)
+}
+
 /// Apprend la clé d'hôte au premier contact en l'ajoutant à `chemin`
 /// (`known_hosts`). Cœur testable sur un chemin explicite, comme
 /// [`forget_host_key_at`] : rend, en cas d'échec d'écriture, le verdict prêt à
@@ -1954,8 +1979,7 @@ fn apprendre_cle_hote(
             }
         }
     }
-    russh::keys::known_hosts::learn_known_hosts_path(host, port, cle, chemin)
-        .map_err(|e| refus(&e))?;
+    ajouter_a_known_hosts(host, port, cle, chemin).map_err(|e| refus(&e))?;
     crate::restreindre_au_proprietaire(chemin);
     Ok(())
 }
@@ -1963,6 +1987,7 @@ fn apprendre_cle_hote(
 /// Coeur testable de [`forget_host_key`], sur un fichier `known_hosts`
 /// explicite (evite toute dependance a `HOME` dans les tests).
 pub fn forget_host_key_at(host: &str, port: u16, path: &Path) -> Result<usize> {
+    let _ecriture = ECRITURE_KNOWN_HOSTS.verrou();
     let lines: Vec<usize> = russh::keys::known_hosts::known_host_keys_path(host, port, path)
         .map_err(|e| anyhow!("Lecture de known_hosts : {e}"))?
         .into_iter()
@@ -2852,5 +2877,50 @@ mod tests_apprentissage {
         let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&ssh), 0o700, "~/.ssh");
         assert_eq!(mode(&chemin), 0o600, "known_hosts");
+    }
+
+    /// Régression vue en CI (GitLab le 2026-09-13, hook pre-commit le
+    /// 2026-10-06) : `forget_host_key_at` lit `known_hosts` puis le remplace par
+    /// sa copie filtrée ; une clé apprise entre les deux disparaissait. Le
+    /// premier contact mémorisant sans rien demander, l'hôte dont la clé s'est
+    /// perdue redevenait inconnu, et une interception à la connexion suivante
+    /// passait inaperçue. Dans l'application : oublier la clé d'un hôte dans un
+    /// onglet pendant qu'un autre en joint un nouveau.
+    #[test]
+    fn une_cle_apprise_pendant_un_oubli_n_est_jamais_perdue() {
+        const N: u16 = 150;
+        let garde = crate::testutil::temp_home();
+        let chemin = garde.dir().join("known_hosts");
+        let cle = || {
+            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+                .unwrap()
+                .public_key()
+                .clone()
+        };
+        // Le décor : N clés à oublier, une par port, pour que chaque oubli
+        // réécrive vraiment le fichier.
+        for port in 1..=N {
+            super::apprendre_cle_hote(&chemin, "oublie", port, &cle()).unwrap();
+        }
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                for port in 1..=N {
+                    super::forget_host_key_at("oublie", port, &chemin).unwrap();
+                }
+            });
+            s.spawn(|| {
+                for port in 1..=N {
+                    super::apprendre_cle_hote(&chemin, "appris", port, &cle()).unwrap();
+                }
+            });
+        });
+        let perdues: Vec<u16> = (1..=N)
+            .filter(|&p| {
+                russh::keys::known_hosts::known_host_keys_path("appris", p, &chemin)
+                    .unwrap()
+                    .is_empty()
+            })
+            .collect();
+        assert_eq!(perdues, [] as [u16; 0], "clés apprises perdues (ports)");
     }
 }
