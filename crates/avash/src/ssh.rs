@@ -2029,7 +2029,7 @@ mod tests {
     fn current_username_ne_rend_jamais_vide() {
         // Un client SSH a toujours besoin d'un nom : le repli garantit une
         // valeur non vide meme sans compte systeme lisible.
-        assert!(!current_username().is_empty());
+        assert_ne!(current_username(), "");
     }
 }
 

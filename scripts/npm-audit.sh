@@ -22,6 +22,11 @@
 #   - tout le reste (ENOLOCK, sortie illisible) est une erreur, sans réessai.
 # Garde : scripts/tests/npm-audit-avis-non-confondu-avec-panne.sh.
 #
+# Avis acceptés : scripts/npm-audit-acceptes.txt, jumeau de .cargo/audit.toml
+# (ajouté le 2026-10-06 pour braces, GHSA-vfj7-8cjw-p6xm, sans correctif amont).
+# Un paquet ne sort du compte que s'il n'est vulnérable QUE par des avis
+# acceptés, propagation comprise. Garde : le même script de test.
+#
 # Usage : npm-audit.sh <niveau> [tolerer-registre]
 #   niveau : low, moderate, high ou critical.
 #   tolerer-registre : après trois essais, une panne du registre est un
@@ -51,15 +56,39 @@ let d;
 try { d = JSON.parse(require("fs").readFileSync(0, "utf8")); } catch { console.log("illisible"); process.exit(0); }
 if (d && d.auditReportVersion && d.metadata && d.metadata.vulnerabilities) {
   const v = d.metadata.vulnerabilities;
-  const n = niveaux.slice(seuil).reduce((s, k) => s + (v[k] || 0), 0);
-  console.log(`avis ${n}`);
-  console.log(`npm audit : ${n} avis au niveau ${process.argv[1]} ou au-dessus (relevé : ${niveaux.map((k) => `${k} ${v[k] || 0}`).join(", ")})`);
-  for (const [nom, a] of Object.entries(d.vulnerabilities || {})) {
-    if (niveaux.indexOf(a.severity) >= seuil) {
-      const titres = (a.via || []).filter((x) => typeof x === "object").map((x) => x.title).join(" ; ");
-      console.log(`  ${a.severity} : ${nom}${titres ? " (" + titres + ")" : ""}`);
+  // Gravité effective d’un paquet : la plus haute de ses avis NON acceptés et
+  // de celles de ses dépendances vulnérables (via sous forme de nom). Point
+  // fixe, croissant donc fini : sans avis accepté, on retrouve la gravité npm.
+  const acceptes = new Set(process.argv[2].split(",").filter(Boolean));
+  const ghsa = (x) => String(x.url || "").split("/").pop();
+  const paquets = d.vulnerabilities || {};
+  const eff = Object.fromEntries(Object.keys(paquets).map((k) => [k, -1]));
+  const vus = new Map();
+  for (let change = true; change; ) {
+    change = false;
+    for (const [nom, a] of Object.entries(paquets)) {
+      let g = -1;
+      for (const x of a.via || []) {
+        if (typeof x === "object" && acceptes.has(ghsa(x))) vus.set(ghsa(x), x.title);
+        else g = Math.max(g, typeof x === "object" ? niveaux.indexOf(x.severity) : (eff[x] ?? -1));
+      }
+      if (g > eff[nom]) { eff[nom] = g; change = true; }
     }
   }
+  const retenus = Object.keys(paquets).filter((k) => eff[k] >= seuil);
+  // Sans avis écarté, le compte reste celui du relevé npm, comme avant la
+  // liste ; « écarté » : npm, qui ignore la liste, sort alors en erreur, et
+  // c’est attendu.
+  const n = vus.size ? retenus.length : niveaux.slice(seuil).reduce((s, k) => s + (v[k] || 0), 0);
+  console.log(`avis ${n}${vus.size ? " écarté" : ""}`);
+  console.log(`npm audit : ${n} avis au niveau ${process.argv[1]} ou au-dessus (relevé npm : ${niveaux.map((k) => `${k} ${v[k] || 0}`).join(", ")})`);
+  for (const nom of vus.size ? retenus : Object.keys(paquets).filter((k) => niveaux.indexOf(paquets[k].severity) >= seuil)) {
+    const a = paquets[nom];
+    const titres = (a.via || []).filter((x) => typeof x === "object" && !acceptes.has(ghsa(x))).map((x) => x.title).join(" ; ");
+    console.log(`  ${niveaux[vus.size ? eff[nom] : niveaux.indexOf(a.severity)]} : ${nom}${titres ? " (" + titres + ")" : ""}`);
+  }
+  for (const [id, titre] of vus) console.log(`  accepté : ${id} (${titre}), voir scripts/npm-audit-acceptes.txt`);
+  for (const id of acceptes) if (!vus.has(id)) console.log(`  avis accepté absent de cet audit : ${id}, à retirer de la liste s’il ne sort plus d’aucun arbre`);
 } else if (d && typeof d.error === "object" && d.error !== null) {
   const code = d.error.code || "";
   const reseau = /^(E\d{3}|ENOAUDIT|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ESOCKETTIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|ENETUNREACH|EHOSTUNREACH)$/;
@@ -72,8 +101,13 @@ if (d && d.auditReportVersion && d.metadata && d.metadata.vulnerabilities) {
 } else {
   console.log("illisible");
 }
-' "$niveau"
+' "$niveau" "$acceptes"
 }
+
+# Avis acceptés (identifiants GHSA en début de ligne), voir le fichier.
+# NPM_AUDIT_ACCEPTES : autre liste, pour la garde.
+liste="${NPM_AUDIT_ACCEPTES:-$(dirname "${BASH_SOURCE[0]}")/npm-audit-acceptes.txt}"
+acceptes="$(grep -oE '^GHSA(-[0-9a-z]{4}){3}' "$liste" | paste -sd, -)" || acceptes=""
 
 journal="$(mktemp)"
 trap 'rm -f "$journal"' EXIT
@@ -84,9 +118,9 @@ for essai in 1 2 3; do
   verdict="$(head -n1 <<<"$lecture")"
   resume="$(tail -n +2 <<<"$lecture")"
   case "$verdict" in
-    "avis 0")
+    "avis 0"|"avis 0 écarté")
       printf '%s\n' "$resume"
-      if [ "$code" -ne 0 ]; then
+      if [ "$code" -ne 0 ] && [ "$verdict" = "avis 0" ]; then
         echo "npm audit : code $code sans avis au niveau demandé ni panne reconnue" >&2
         cat "$journal" >&2
         exit 1

@@ -799,7 +799,7 @@ mod tests_drapeaux {
     /// après son drapeau.
     #[test]
     fn les_drapeaux_du_sidecar_suivent_les_options() {
-        assert!(drapeaux(Options::default(), None).is_empty());
+        assert_eq!(drapeaux(Options::default(), None), [] as [String; 0]);
         let tout = Options {
             sans_nla: true,
             tls_herite: true,

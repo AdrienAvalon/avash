@@ -1666,7 +1666,7 @@ mod tests_bandes {
                 assert_eq!(w[0].1, w[1].0, "trou ou recouvrement : {w:?}");
             }
         }
-        assert!(bandes(0).is_empty());
+        assert_eq!(bandes(0), [] as [(u64, u64); 0]);
     }
 
     /// Une carte ne vaut que pour le même fichier : même taille, même date.

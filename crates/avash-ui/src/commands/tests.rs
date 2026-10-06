@@ -2295,13 +2295,13 @@ fn snippet_vars_rend_les_variables_dans_l_ordre_sans_doublon() {
 #[test]
 fn snippet_list_lit_le_fichier_du_bac_a_sable() {
     let _g = with_ssh_config("");
-    assert!(snippet_list().unwrap().is_empty());
+    assert_eq!(snippet_list().unwrap(), [] as [avash::snippet::Snippet; 0]);
     let s = snippet_save(None, "n".into(), "c".into(), true, None).unwrap();
     let liste = snippet_list().unwrap();
     assert_eq!(liste.len(), 1);
     assert_eq!(liste[0].id, s.id);
     snippet_delete(s.id).unwrap();
-    assert!(snippet_list().unwrap().is_empty());
+    assert_eq!(snippet_list().unwrap(), [] as [avash::snippet::Snippet; 0]);
 }
 
 // ---------- Petites promesses (C-couv-7) ----------
@@ -2365,7 +2365,7 @@ async fn une_definition_de_tunnel_exige_un_alias_declare_et_un_type_connu() {
     tunnel_def_delete(app.state::<TunnelStore>(), d.id)
         .await
         .unwrap();
-    assert!(tunnel_defs().unwrap().is_empty());
+    assert_eq!(tunnel_defs().unwrap(), [] as [avash::tunnel::TunnelDef; 0]);
 }
 
 #[test]

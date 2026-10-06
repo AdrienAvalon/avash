@@ -235,7 +235,7 @@ mod tests {
             ["/dev/ttyUSB0", "/dev/ttyUSB1"],
             "triés, sans doublon"
         );
-        assert!(ports_depuis(Ok(Vec::new())).unwrap().is_empty());
+        assert_eq!(ports_depuis(Ok(Vec::new())).unwrap(), [] as [PortSerie; 0]);
     }
 
     /// Un pseudo-terminal : le maître, possédé (fermé à sa chute), et

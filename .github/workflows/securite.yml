@@ -64,8 +64,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Version du binaire que l'action télécharge : sans elle, une valeur
           # codée dans l'action, invisible ici (audit du 12 septembre 2026,
-          # C-chaine-13). La même dans release.yml.
-          GITLEAKS_VERSION: "8.24.3"
+          # C-chaine-13). La même dans release.yml. 8.24.3 → 8.30.1 le
+          # 2026-10-06 : la 8.24.3 n'appliquait pas l'allowlist de
+          # .gitleaks.toml au jeton de test de rdp-sidecar/src/acces_local.rs
+          # et rougissait chaque passage hebdomadaire depuis le 14 septembre
+          # (vérifié avec les deux binaires officiels sur tout l'historique).
+          GITLEAKS_VERSION: "8.30.1"
 
   scorecard:
     name: OpenSSF Scorecard

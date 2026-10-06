@@ -97,7 +97,7 @@ mod tests {
         let out = "NAME=\"Debian GNU/Linux\"\nID=debian\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nVERSION_ID=\"12\"\n";
         let i = parse_probe_output(out).unwrap();
         assert_eq!(i.id, "debian");
-        assert!(i.like.is_empty());
+        assert_eq!(i.like, [] as [String; 0]);
         assert_eq!(i.pretty, "Debian GNU/Linux 12 (bookworm)");
     }
 

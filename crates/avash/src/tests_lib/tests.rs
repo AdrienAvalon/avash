@@ -201,7 +201,7 @@ fn tags_lus_et_reecrits() {
 fn tags_hors_bloc_host_ignores() {
     // Un #Tags avant tout Host ne s'attache a rien.
     let h = parse_config_str("#Tags: orphelin\nHost a\n  HostName x\n");
-    assert!(h[0].tags.is_empty());
+    assert_eq!(h[0].tags, [] as [String; 0]);
 }
 
 #[test]
@@ -228,9 +228,9 @@ fn split_proxy_jump_decoupe_une_chaine() {
 
 #[test]
 fn split_proxy_jump_gere_none_et_vide() {
-    assert!(split_proxy_jump("none").is_empty());
-    assert!(split_proxy_jump("").is_empty());
-    assert!(split_proxy_jump("  ,  ").is_empty());
+    assert_eq!(split_proxy_jump("none"), [] as [HopSpec; 0]);
+    assert_eq!(split_proxy_jump(""), [] as [HopSpec; 0]);
+    assert_eq!(split_proxy_jump("  ,  "), [] as [HopSpec; 0]);
 }
 
 // Trouvé par l'audit du 7 septembre 2026 : un bastion IPv6 littéral s'écrit
