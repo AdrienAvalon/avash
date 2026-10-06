@@ -5,6 +5,36 @@ Toutes les modifications notables d'Avash sont consignées dans ce fichier.
 Le format s'inspire de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/),
 et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+### Sécurité
+
+- **rustls 0.23.45** (RUSTSEC-2026-0285 : messages de poignée de main TLS 1.3
+  acceptés d'un niveau de chiffrement à l'autre), dans l'application, où il
+  sert à la mise à jour automatique, et dans le processus de bureau distant.
+- **cryptoki 0.12.1** dans le processus de bureau distant (RUSTSEC-2026-0286 :
+  lecture hors limites en décodant `CKA_ALLOWED_MECHANISMS` d'un jeton PKCS#11).
+- Dépendances de développement du front et de la suite bout en bout remontées
+  (`npm audit fix`). Reste braces (GHSA-vfj7-8cjw-p6xm), sans aucune version
+  corrigée, qui n'arrive que par stylelint, mocha et chokidar, jamais livrés :
+  il est accepté et justifié dans `scripts/npm-audit-acceptes.txt`, jumeau de
+  `.cargo/audit.toml`. `scripts/npm-audit.sh` n'écarte un paquet que s'il n'est
+  vulnérable que par des avis acceptés, propagation comprise ; un autre avis
+  sur le même chemin compte toujours (garde étendue).
+
+### Validation
+
+- gitleaks 8.24.3 → 8.30.1 dans les audits de sécurité et de publication : la
+  8.24.3 n'appliquait pas l'allowlist au jeton de test du processus de bureau
+  distant et rougissait chaque passage hebdomadaire depuis le 14 septembre.
+- Clippy de Rust 1.99 (`assert_is_empty`) : les 20 assertions de vacuité des
+  tests comparent désormais à une liste vide, pour que l'échec affiche le
+  contenu inattendu.
+- Le test de la langue du bouton de confirmation vide le focus différé (30 ms)
+  d'`askConfirm` avant de finir : sur un exécuteur de CI, jsdom pouvait être
+  démonté avant, et le minuteur levait « document is not defined » (vu sur la
+  PR Dependabot #51).
+
 ## [0.13.1] - 2026-09-14
 
 ### Corrigé

@@ -776,7 +776,7 @@ mod tests {
             s.host.identity_file.as_deref(),
             Some("/home/a/.ssh/id_ed25519")
         );
-        assert!(s.remarques.is_empty());
+        assert_eq!(s.remarques, [] as [String; 0]);
     }
 
     #[test]

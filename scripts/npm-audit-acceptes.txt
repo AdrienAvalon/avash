@@ -1,0 +1,19 @@
+# Avis npm connus, examinés et acceptés (lus par scripts/npm-audit.sh).
+#
+# Jumeau de .cargo/audit.toml pour les arbres npm (web/ et e2e/) : un avis ne
+# s'accepte ici que s'il n'a aucun correctif amont ET ne peut pas atteindre ce
+# qu'Avash livre. Un paquet n'est retiré du compte que s'il n'est vulnérable
+# QUE par des avis acceptés, propagation comprise (stylelint → micromatch →
+# braces) : tout autre avis sur le même chemin compte toujours. Un avis
+# accepté qui ne sort plus de l'audit est signalé, pour qu'on le retire.
+#
+# Format : un identifiant GHSA en début de ligne, le reste est commentaire.
+
+# GHSA-vfj7-8cjw-p6xm — braces, épuisement de pile par des motifs très
+# imbriqués (high, publié le 2026-09-18). Toutes les versions touchées, aucun
+# correctif (dernière version 3.0.3, mai 2024). N'arrive que par l'outillage
+# de développement : stylelint (web/, lint des feuilles de style du dépôt) et
+# mocha/chokidar (e2e/), qui ne développent que nos propres motifs de
+# fichiers, jamais une entrée venue de l'extérieur, et ne partent pas avec
+# l'application (le front livré est le bundle Vite). Accepté le 2026-10-06.
+GHSA-vfj7-8cjw-p6xm

@@ -339,7 +339,7 @@ async fn sftp_sur_la_session_du_terminal_ne_rouvre_pas_de_connexion() {
         .await
         .expect("le PTY n'a plus répondu après l'ouverture du SFTP")
         .expect("PTY fermé");
-    assert!(!echo.is_empty());
+    assert_ne!(echo, [] as [u8; 0]);
 
     assert_eq!(
         connexions.load(Ordering::SeqCst),

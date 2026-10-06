@@ -37,6 +37,12 @@ beforeAll(async () => {
 
 describe("confirmation : le bouton par défaut suit la langue", () => {
   it("en interface anglaise, le bouton de confirmation affiche « Confirm »", () => {
+    // askConfirm arme un focus différé de 30 ms. Régression vue en CI le
+    // 2026-10-05 (PR Dependabot #51, jsdom 30.1) : le test, synchrone, finissait
+    // avant lui, jsdom était démonté, et le minuteur levait « document is not
+    // defined », que vitest compte comme un échec du fichier. Faux minuteurs,
+    // vidés avant de rendre la main.
+    vi.useFakeTimers();
     setLangue("en"); // appliquerLangue pose « Confirm » via data-i18n="confirmer"
     // On n'attend pas la promesse (elle ne se tient qu'au clic) : askConfirm
     // écrit le libellé de façon synchrone, il suffit de le lire aussitôt.
@@ -44,6 +50,8 @@ describe("confirmation : le bouton par défaut suit la langue", () => {
     // Écrit en dur « Confirmer » avant le correctif : restait français.
     expect($("confirm-ok").textContent).toBe("Confirm");
     expect($("confirm-ok").textContent).toBe(EN["confirmer"]);
+    vi.runAllTimers();
+    vi.useRealTimers();
     setLangue("fr");
   });
 });

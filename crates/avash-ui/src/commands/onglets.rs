@@ -77,7 +77,7 @@ mod tests_onglets {
     #[test]
     fn la_memoire_se_relit_dans_l_ordre_et_s_efface_sur_une_liste_vide() {
         let _g = with_ssh_config("");
-        assert!(onglets_memorises().is_empty());
+        assert_eq!(onglets_memorises(), [] as [OngletMemorise; 0]);
         let liste = vec![
             OngletMemorise::Ssh {
                 alias: "web-1".into(),
@@ -92,7 +92,7 @@ mod tests_onglets {
         onglets_memoriser(liste.clone()).unwrap();
         assert_eq!(onglets_memorises(), liste);
         onglets_memoriser(Vec::new()).unwrap();
-        assert!(onglets_memorises().is_empty());
+        assert_eq!(onglets_memorises(), [] as [OngletMemorise; 0]);
         // Effacer deux fois ne se plaint pas.
         onglets_memoriser(Vec::new()).unwrap();
     }
@@ -108,7 +108,7 @@ mod tests_onglets {
             .join("onglets.json");
         std::fs::create_dir_all(chemin.parent().unwrap()).unwrap();
         std::fs::write(&chemin, b"{pas du json").unwrap();
-        assert!(onglets_memorises().is_empty());
+        assert_eq!(onglets_memorises(), [] as [OngletMemorise; 0]);
         let trop: Vec<OngletMemorise> = (0..100)
             .map(|i| OngletMemorise::Ssh {
                 alias: format!("h{i}"),

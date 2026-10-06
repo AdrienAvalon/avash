@@ -334,7 +334,7 @@ mod tests {
     fn persistance_upsert_relecture_remove() {
         let p = temp_file();
         let _ = std::fs::remove_file(&p);
-        assert!(load_snippets_from(&p).unwrap().is_empty());
+        assert_eq!(load_snippets_from(&p).unwrap(), [] as [Snippet; 0]);
         let a = Snippet::new("Bilan", "df -h", true, "sys");
         let b = Snippet::new("Logs", "journalctl -u {{svc}} -f", false, "sys");
         upsert_snippet_in(&p, a.clone()).unwrap();

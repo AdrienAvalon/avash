@@ -489,7 +489,7 @@ mod tests {
     fn fichier_absent_donne_une_liste_vide() {
         let p = temp_file();
         let _ = std::fs::remove_file(&p);
-        assert!(load_defs_from(&p).unwrap().is_empty());
+        assert_eq!(load_defs_from(&p).unwrap(), [] as [TunnelDef; 0]);
     }
 
     #[test]

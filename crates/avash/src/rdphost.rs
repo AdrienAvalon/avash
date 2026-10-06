@@ -337,7 +337,7 @@ mod tests {
     fn persistance_aller_retour() {
         let p = temp();
         let _ = std::fs::remove_file(&p);
-        assert!(load_hosts_from(&p).unwrap().is_empty());
+        assert_eq!(load_hosts_from(&p).unwrap(), [] as [RdpHost; 0]);
         let a = RdpHost::new("A", "10.0.0.1", 3389, "u", 1280, 800);
         let mut b = RdpHost::new("B", "10.0.0.2", 3390, "v", 1920, 1080);
         upsert_host_in(&p, a.clone()).unwrap();

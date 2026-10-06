@@ -44,16 +44,33 @@ case "$STUB_SCENARIO" in
   sans-verrou) echo '{"error": {"code": "ENOLOCK", "summary": "This command requires an existing lockfile.", "detail": ""}}'; exit 1 ;;
   haute)       rapport 0 2 "prototype pollution"; exit "$(code_pour 0 2)" ;;
   incoherent)  rapport 0 0 ""; exit 1 ;;
+  # Chaîne vue le 2026-10-06 : stylelint → micromatch → braces, avis sans
+  # correctif amont. « autre » ajoute un second avis, non accepté, sur stylelint.
+  accepte|autre)
+    autre=""; [ "$STUB_SCENARIO" = autre ] && autre=', {"title": "autre faille", "severity": "high", "url": "https://github.com/advisories/GHSA-zzzz-zzzz-zzzz"}'
+    cat <<JSON
+{"auditReportVersion": 2,
+ "vulnerabilities": {
+   "braces": {"name": "braces", "severity": "high", "via": [{"title": "pile", "severity": "high", "url": "https://github.com/advisories/GHSA-aaaa-bbbb-cccc"}]},
+   "micromatch": {"name": "micromatch", "severity": "high", "via": ["braces"]},
+   "stylelint": {"name": "stylelint", "severity": "high", "via": ["micromatch"$autre]}},
+ "metadata": {"vulnerabilities": {"info": 0, "low": 0, "moderate": 0, "high": 3, "critical": 0, "total": 3}}}
+JSON
+    exit "$(code_pour 0 3)" ;;
 esac
 STUB
 chmod +x "$bac/stub/npm"
+
+: > "$bac/aucun"
+printf '# commentaire GHSA-zzzz-zzzz-zzzz ignoré\nGHSA-aaaa-bbbb-cccc  accepté pour la garde\n' > "$bac/liste"
+liste="$bac/aucun"
 
 echecs=0
 jouer() { # <scénario> <code attendu : 0 ou non-zéro> <appels attendus> <args…>
   local scenario="$1" attendu="$2" appels="$3"; shift 3
   : > "$bac/compte"
   local code=0
-  env PATH="$bac/stub:$PATH" STUB_SCENARIO="$scenario" STUB_COMPTE="$bac/compte" NPM_AUDIT_PAUSE=0 \
+  env PATH="$bac/stub:$PATH" STUB_SCENARIO="$scenario" STUB_COMPTE="$bac/compte" NPM_AUDIT_PAUSE=0 NPM_AUDIT_ACCEPTES="$liste" \
     bash scripts/npm-audit.sh "$@" >/dev/null 2>&1 || code=$?
   local n; n="$(wc -l < "$bac/compte")"
   if { [ "$attendu" = 0 ] && [ "$code" -ne 0 ]; } || { [ "$attendu" != 0 ] && [ "$code" -eq 0 ]; }; then
@@ -74,7 +91,15 @@ jouer haute       0 1 critical                    # sous le seuil demandé
 jouer haute       1 1 high                        # au seuil
 jouer incoherent  1 1 high                        # npm échoue sans rapport ni panne lisible
 
+# Avis acceptés (scripts/npm-audit-acceptes.txt) : écartés avec leur
+# propagation, jamais au détriment d'un autre avis sur le même chemin.
+jouer accepte     1 1 high                        # sans liste, la chaîne compte
+liste="$bac/liste"
+jouer accepte     0 1 high                        # avis accepté seul : écarté, propagation comprise
+jouer autre       1 1 high                        # un second avis sur stylelint compte toujours
+jouer autre       1 1 high tolerer-registre       # écarter un avis ne rend pas le reste tolérable
+
 if [ "$echecs" -ne 0 ]; then
   exit 1
 fi
-echo "  ✓ npm-audit.sh décide sur la structure de npm audit --json : un avis n'est jamais pris pour une panne"
+echo "  ✓ npm-audit.sh décide sur la structure de npm audit --json : un avis n'est jamais pris pour une panne, un avis accepté n'écarte que lui-même"
