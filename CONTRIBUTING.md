@@ -350,6 +350,17 @@ flux RDP au fil — est dit sans détour dans
 
 ## Exécuteur GitLab
 
+**En pause depuis le 6 octobre 2026.** Le 2 octobre, l'exécuteur 18 a été
+rattaché au projet `nyx-hydra`, étiqueté `nyx`, et `run_untagged` coupé : les
+travaux d'avash, sans étiquette, ne trouvaient plus d'exécuteur
+(`stuck_pending_no_matching_runners` sur le premier job, `image-ci`), et chaque
+poussée vers GitLab envoyait un « pipeline failed ». Le mainteneur a choisi de
+couper la CI/CD du projet sur GitLab (`builds_access_level=disabled`) : GitLab
+reste un miroir du code, GitHub Actions joue tout, conformité xrdp comprise.
+Pour la rétablir : réactiver CI/CD dans les réglages du projet, puis soit
+`run_untagged` sur l'exécuteur 18, soit des étiquettes sur les travaux de
+`.gitlab-ci.yml`. Ce qui suit décrit la chaîne telle qu'elle tournait.
+
 Le dépôt est poussé sur GitHub **et** sur GitLab. Pendant longtemps seul GitHub
 vérifiait quoi que ce soit : GitLab recevait chaque poussée sans rien contrôler,
 et le miroir avait pris cinquante commits de retard. La chaîne équivalente de

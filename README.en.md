@@ -215,8 +215,8 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1950 tests** on every commit, on two independent pipelines (GitHub Actions on
-Linux, Windows and macOS; a GitLab mirror with real xrdp servers):
+**1950 tests** on every commit, on GitHub Actions (Linux, Windows and macOS,
+including conformance against real xrdp servers):
 
 | Level | Tests | In a word |
 |---|---:|---|

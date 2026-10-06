@@ -25,10 +25,11 @@ qui ne voient pas le même code, sans aucun `unwrap` ni `expect` hors des tests
 `cargo audit`, `cargo deny` et `npm audit` sur tous les arbres de dépendances,
 et une garde qui interdit les motifs dangereux. Sur le dépôt : CodeQL,
 gitleaks, le Scorecard de l'OpenSSF et Dependabot (voir
-[CONTRIBUTING.md](../CONTRIBUTING.md)). Deux chaînes indépendantes jouent tout
-cela à chaque poussée : GitHub Actions (Linux, Windows, macOS) et le miroir
-GitLab, sur un exécuteur du mainteneur (Linux, conformité RDP contre de vrais
-serveurs xrdp comprise).
+[CONTRIBUTING.md](../CONTRIBUTING.md)). GitHub Actions joue tout cela à chaque
+poussée (Linux, Windows, macOS, conformité RDP contre de vrais serveurs xrdp
+comprise). La chaîne GitLab, sur un exécuteur du mainteneur, est en pause
+depuis le 6 octobre 2026 (voir [CONTRIBUTING.md](../CONTRIBUTING.md),
+« Exécuteur GitLab »).
 
 ### Accessibilité : un juge extérieur
 

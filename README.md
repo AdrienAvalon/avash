@@ -214,8 +214,8 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1950 tests** à chaque commit, sur deux chaînes indépendantes (GitHub Actions
-sur Linux, Windows et macOS ; un miroir GitLab avec de vrais serveurs xrdp) :
+**1950 tests** à chaque commit, sur GitHub Actions (Linux, Windows et macOS,
+conformité contre de vrais serveurs xrdp comprise) :
 
 | Niveau | Tests | En un mot |
 |---|---:|---|
