@@ -74,7 +74,7 @@ jobs:
             rdp-sidecar
             test-rdp-server
             test-vnc-server
-      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+      - uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
         with:
           tool: cargo-llvm-cov@0.9.1
       - name: tauri-driver
@@ -131,7 +131,7 @@ jobs:
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+      - uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
         with:
           tool: cargo-mutants@27.1.0
       # Les modules qui décident de la sécurité : la session SSH (clés d'hôte,
