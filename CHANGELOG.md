@@ -34,6 +34,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   d'`askConfirm` avant de finir : sur un exécuteur de CI, jsdom pouvait être
   démonté avant, et le minuteur levait « document is not defined » (vu sur la
   PR Dependabot #51).
+- codeql-action 4.37.9 → 4.38.2, ses trois étapes ensemble (`init`,
+  `analyze`, `upload-sarif`) : Dependabot les proposait séparément (#37, #39,
+  #40), et `init` et `analyze` à des versions différentes faisaient échouer
+  CodeQL.
 
 ## [0.13.1] - 2026-09-14
 

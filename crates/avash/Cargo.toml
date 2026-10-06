@@ -102,11 +102,12 @@ avash = { path = ".", features = ["outils-de-test"] }
 # servait. Le journal du cœur passe par `tracing`.
 
 # Un pseudo-terminal pour éprouver la session série sans matériel, et un tube
-# nommé pour les tests de `known_hosts` : `nix` 0.26 est déjà compilé dans
-# l'arbre (tiré par `serialport`, fonctionnalités `term` et `fs`), et ses
-# fonctions `posix_openpt`, `ptsname_r` et `mkfifo` remplacent les blocs
-# `unsafe` de FFI libc que les tests portaient (audit du 12 septembre 2026,
-# C-unsafe-1 et C-unsafe-5).
+# nommé pour les tests de `known_hosts` : les fonctions `posix_openpt`,
+# `ptsname_r` et `mkfifo` de `nix` remplacent les blocs `unsafe` de FFI libc
+# que les tests portaient (audit du 12 septembre 2026, C-unsafe-1 et
+# C-unsafe-5). Choisi à l'origine en 0.26 parce que `serialport` la compile
+# déjà ; passé en 0.31 (Dependabot #35, 2026-10-06), version que l'interface
+# compile aussi pour ses propres besoins : aucune nouvelle copie dans l'arbre.
 [target.'cfg(unix)'.dev-dependencies]
 nix = { version = "0.31", default-features = false, features = ["term", "fs"] }
 
