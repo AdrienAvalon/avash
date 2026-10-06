@@ -108,7 +108,7 @@ avash = { path = ".", features = ["outils-de-test"] }
 # `unsafe` de FFI libc que les tests portaient (audit du 12 septembre 2026,
 # C-unsafe-1 et C-unsafe-5).
 [target.'cfg(unix)'.dev-dependencies]
-nix = { version = "0.26", default-features = false, features = ["term", "fs"] }
+nix = { version = "0.31", default-features = false, features = ["term", "fs"] }
 
 [lints]
 workspace = true
