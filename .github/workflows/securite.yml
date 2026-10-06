@@ -19,12 +19,17 @@ on:
     - cron: "17 6 * * 1" # chaque lundi : les règles évoluent, pas seulement le code
 
 # Une poussée qui en suit une autre de près rend la précédente sans objet : on
-# annule ce qui tourne encore pour la même branche, et les exécuteurs Windows et
+# annule ce qui tourne encore pour la même branche (hors main, voir plus bas), et les exécuteurs Windows et
 # macOS — les plus rares — vont au dernier commit. Une exécution planifiée ou
 # une PR a son propre groupe.
 concurrency:
   group: securite-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+  # Jamais sur main : une exécution annulée y compte comme un échec pour le
+  # badge du README, qui a affiché « failing » le 2026-10-06 après trois
+  # poussées rapprochées (fusion, publication 0.13.2, canaux) sans qu'aucun
+  # test ait échoué. Chaque commit de main garde son verdict ; les PR, elles,
+  # continuent d'annuler l'exécution que leur nouveau commit rend caduque.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions: read-all
 
