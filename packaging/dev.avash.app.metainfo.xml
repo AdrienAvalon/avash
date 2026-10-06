@@ -69,6 +69,9 @@
   </keywords>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.13.2" date="2026-10-06">
+      <url>https://github.com/AdrienAvalon/avash/releases/tag/v0.13.2</url>
+    </release>
     <release version="0.13.1" date="2026-09-14">
       <url>https://github.com/AdrienAvalon/avash/releases/tag/v0.13.1</url>
     </release>
