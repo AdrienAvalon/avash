@@ -224,7 +224,7 @@ conformité contre de vrais serveurs xrdp comprise) :
 | Processus RDP | 237 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
 | Serveurs de test | 32 | côté serveur RDPDR (décodeurs écrits à la main, automate du scénario, dialogue complet avec le canal client) et serveur VNC |
 | Paquets IronRDP et vnc-rs portés | 634 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
-| Front (Vitest) | 420 | logique pure, keysyms VNC, traductions |
+| Front (Vitest) | 421 | logique pure, keysyms VNC, traductions |
 | Bout en bout (WebdriverIO) | 81 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo

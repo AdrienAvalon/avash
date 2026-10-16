@@ -147,6 +147,24 @@ describe("état d'un bureau", () => {
     expect(zone.querySelector(".rdp-connexion")).toBeNull();
   });
 
+  it("une_coupure_annule_les_minuteurs_de_redimensionnement", async () => {
+    // Le rejeu de 120 ms posé par [1] survivait à la coupure : `sendResize`
+    // relisait la taille d'un onglet mort (vu le 12 octobre 2026 en CI, où il
+    // partait après la fin du fichier de test, `window` déjà détruit).
+    const { ws } = await ouvrir("b5");
+    vi.useFakeTimers();
+    try {
+      ws.recoit(1, ...u16(1280), ...u16(800));
+      const mesure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+      ws.onclose!();
+      vi.advanceTimersByTime(5000);
+      expect(mesure).not.toHaveBeenCalled();
+      mesure.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("annuler_depuis_l_incrustation_ferme_l_onglet", () => {
     invoke.mockImplementation((cmd: string) => cmd === "rdp_open" ? new Promise(() => {}) : Promise.resolve(undefined));
     void rdp.openRdp({ host: "10.0.0.9", port: 3389, user: "moi", password: "", hostId: "b4", name: "lent" });

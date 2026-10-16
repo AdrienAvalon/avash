@@ -225,7 +225,7 @@ including conformance against real xrdp servers):
 | RDP process | 237 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
 | Test servers | 32 | server-side RDPDR (hand-written decoders, scenario state machine, full dialogue with the client channel) and the VNC server |
 | Vendored IronRDP and vnc-rs crates | 634 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
-| Front (Vitest) | 420 | pure logic, VNC keysyms, translations |
+| Front (Vitest) | 421 | pure logic, VNC keysyms, translations |
 | End to end (WebdriverIO) | 81 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo
