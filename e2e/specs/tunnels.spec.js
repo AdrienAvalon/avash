@@ -1,6 +1,6 @@
 import { createConnection } from "node:net";
 import { EMBARQUE, LOCAL_SERVERS, SSH_PORT } from "../wdio.conf.js";
-import { trouverLigne } from "./helpers.js";
+import { cliquerDansLigne, trouverLigne } from "./helpers.js";
 
 /** La bannière que sert un port TCP (ce qu'un serveur SSH envoie en premier). */
 function banniere(port) {
@@ -22,6 +22,7 @@ function banniere(port) {
 describe("Tunnels — démarrer un tunnel local vers le sshd du harnais", () => {
   const PORT_LOCAL = 18081;
   const findRow = () => trouverLigne("#tunnel-list .tunnel-row", ".tname", "Tunnel sshd");
+  const cliquer = (act) => cliquerDansLigne("#tunnel-list .tunnel-row", ".tname", "Tunnel sshd", act);
 
   before(function () { if (!LOCAL_SERVERS) this.skip(); });
 
@@ -33,13 +34,13 @@ describe("Tunnels — démarrer un tunnel local vers le sshd du harnais", () => 
     const row = await findRow().catch(() => null);
     if (row) {
       if ((await row.getAttribute("class")).includes("alive")) {
-        await row.$('[data-act="toggle"]').click();
+        await cliquer("toggle");
         await browser.pause(1000);
       }
-      await (await findRow()).$('[data-act="delete"]').click();
+      await cliquer("delete");
       await $("#confirm-modal").waitForDisplayed({ timeout: 5000 });
       await $("#confirm-ok").click();
-      await browser.waitUntil(async () => (await findRow()) === null, { timeout: 8000 });
+      await browser.waitUntil(async () => (await findRow()) === null, { timeout: 8000, timeoutMsg: "tunnel sshd pas supprimé" });
     }
     await $("#t-close").click();
     await browser.waitUntil(async () => !(await $("#tunnels-modal").isDisplayed()), { timeout: 5000 });
@@ -66,7 +67,7 @@ describe("Tunnels — démarrer un tunnel local vers le sshd du harnais", () => 
     await browser.waitUntil(async () => (await findRow()) !== null, { timeout: 8000, timeoutMsg: "tunnel non listé" });
 
     // Démarrer : « test-ssh » s'authentifie par clé, aucun mot de passe demandé.
-    await (await findRow()).$('[data-act="toggle"]').click();
+    await cliquer("toggle");
     await browser.waitUntil(async () => ((await (await findRow())?.getAttribute("class")) ?? "").includes("alive"),
       { timeout: 20000, timeoutMsg: "le tunnel n'est pas passé « vivant »" }).catch(async (e) => {
         // L'erreur que la ligne affiche vaut mieux qu'un délai muet.
@@ -91,7 +92,7 @@ describe("Tunnels — démarrer un tunnel local vers le sshd du harnais", () => 
     }
 
     // Arrêter : le port ne répond plus.
-    await (await findRow()).$('[data-act="toggle"]').click();
+    await cliquer("toggle");
     await browser.waitUntil(async () => !((await (await findRow())?.getAttribute("class")) ?? "alive").includes("alive"),
       { timeout: 10000, timeoutMsg: "le tunnel ne s'est pas arrêté" });
     await expect(banniere(PORT_LOCAL)).rejects.toThrow();
@@ -115,7 +116,7 @@ describe("Tunnels — créer puis supprimer une définition", () => {
     const findRow = () => trouverLigne("#tunnel-list .tunnel-row", ".tname", "Tunnel E2E");
     await browser.waitUntil(async () => (await findRow()) !== null, { timeout: 8000, timeoutMsg: "tunnel non listé" });
 
-    await (await findRow()).$('[data-act="delete"]').click();
+    await cliquerDansLigne("#tunnel-list .tunnel-row", ".tname", "Tunnel E2E", "delete");
     await $("#confirm-modal").waitForDisplayed({ timeout: 5000 });
     await $("#confirm-ok").click();
     await browser.waitUntil(async () => (await findRow()) === null, { timeout: 8000, timeoutMsg: "tunnel pas supprimé" });

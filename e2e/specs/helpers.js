@@ -22,6 +22,34 @@ export async function trouverLigne(selecteurLigne, selecteurNom, texte) {
   return null;
 }
 
+/** Clique le bouton `data-act` de la ligne nommée `texte`, en UNE exécution
+ *  dans la page : la ligne est trouvée et le bouton cliqué sans qu'un rendu
+ *  puisse s'intercaler. Réessaie tant que la ligne manque ou que le bouton est
+ *  désactivé (ligne gelée pendant un démarrage).
+ *
+ *  Pourquoi : la liste des tunnels est reconstruite toutes les 1,5 s. Trouver
+ *  la ligne puis cliquer en deux commandes WebDriver laissait le clic tomber
+ *  sur un bouton déjà retiré de la page. WebKitWebDriver (Linux) le signale
+ *  par une erreur d'élément périmé ; le serveur WebDriver embarqué (Windows)
+ *  perdait le clic sans rien dire. Vu deux fois en CI Windows le 16 octobre
+ *  2026 : « le tunnel ne s'est pas arrêté », puis une suppression jamais
+ *  faite dans le nettoyage de tunnels.spec.js. */
+export async function cliquerDansLigne(selecteurLigne, selecteurNom, texte, act, timeout = 8000) {
+  await browser.waitUntil(
+    () => browser.execute((sl, sn, tx, a) => {
+      for (const r of document.querySelectorAll(sl)) {
+        if (r.querySelector(sn)?.textContent !== tx) continue;
+        const b = r.querySelector(`[data-act="${a}"]`);
+        if (!b || b.disabled) return false;
+        b.click();
+        return true;
+      }
+      return false;
+    }, selecteurLigne, selecteurNom, texte, act),
+    { timeout, timeoutMsg: `bouton « ${act} » de la ligne « ${texte} » introuvable ou désactivé` },
+  );
+}
+
 // Localise une ligne d'hôte par son alias (SSH) ou une ligne de dossier par son nom.
 // La liste est peuplée de façon asynchrone au démarrage : on patiente au lieu de
 // conclure à l'absence sur la toute première interrogation.
