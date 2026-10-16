@@ -27,6 +27,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Validation
 
+- Le scénario bout en bout des tunnels ne perd plus ses clics sous Windows :
+  la liste est reconstruite toutes les 1,5 s, et trouver la ligne puis
+  cliquer en deux commandes WebDriver laissait le clic tomber sur un bouton
+  déjà retiré, ce que le serveur WebDriver embarqué taisait (« le tunnel ne
+  s'est pas arrêté », suppression jamais faite au nettoyage, vus en CI le
+  16 octobre 2026). `cliquerDansLigne` trouve la ligne et clique dans une
+  seule exécution dans la page.
 - La mesure de couverture ne tombe plus sur un profil abîmé : quand le pilote
   WebDriver tue l'application pendant la réécriture de son profil, le
   `.profraw` reste tronqué, et llvm-profdata refusait toute la fusion après
