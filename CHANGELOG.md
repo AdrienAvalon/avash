@@ -7,6 +7,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Sécurité
+
+- **rustls 0.23.46** (RUSTSEC-2026-0346 à 0349, publiés le 14 octobre 2026 :
+  `Debug` des valeurs de session client qui exposait des secrets TLS, données
+  envoyées au serveur externe après un refus ECH, décompression Brotli de
+  certificat jusqu'à 1 Gio avant authentification, ServerHello non
+  authentifié qui ramenait les connexions suivantes à un échange de clés
+  classique), dans l'application, où il sert à la mise à jour automatique, et
+  dans le processus de bureau distant. Les serveurs de test suivent.
+
 ### Corrigé
 
 - Un bureau distant coupé ou fermé n'essaie plus de se redimensionner : les
