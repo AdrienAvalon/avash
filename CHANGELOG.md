@@ -7,6 +7,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- Un bureau distant coupé ou fermé n'essaie plus de se redimensionner : les
+  minuteurs de redimensionnement (attente pendant le glissé, rejeu après la
+  connexion, filet de 3 s) survivaient à la session et relisaient la taille
+  d'un onglet mort. Vu en CI le 12 octobre 2026, où le rejeu partait après la
+  fin d'un fichier de test Vitest.
+
 ### Validation
 
 - Les exécutions CI et Sécurité de `main` ne sont plus annulées par la poussée

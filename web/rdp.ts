@@ -444,6 +444,12 @@ export async function openRdp(cible: RdpTarget) {
     window.removeEventListener("scroll", invaliderRect, true);
     document.removeEventListener("visibilitychange", surVisibiliteCachee);
     detacherDpr?.();
+    // Les minuteurs de redimensionnement (débounce, rejeu après [1], filet de
+    // 3 s) survivaient à la session : `sendResize` tournait encore sur un
+    // onglet fermé. Vu le 12 octobre 2026 en CI : le rejeu de 120 ms posé par
+    // [1] partait après la fin d'un fichier de test, `window` déjà détruit.
+    window.clearTimeout(resizeTimer);
+    window.clearTimeout(resizeGuard);
   };
   // Mouvements souris throttlés au rAF : un seul paquet par frame d'affichage.
   let movePending = false;
