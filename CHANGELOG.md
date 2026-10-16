@@ -27,6 +27,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Validation
 
+- La mesure de couverture ne tombe plus sur un profil abîmé : quand le pilote
+  WebDriver tue l'application pendant la réécriture de son profil, le
+  `.profraw` reste tronqué, et llvm-profdata refusait toute la fusion après
+  une suite bout en bout verte (workflow qualité du 16 octobre 2026).
+  `scripts/ecarter-profils-abimes.sh` met de côté, avant le rapport, les
+  profils refusés pris un à un. Garde `scripts/tests/ecarter-profils-abimes.sh`.
 - Les exécutions CI et Sécurité de `main` ne sont plus annulées par la poussée
   suivante : GitHub compte une exécution annulée comme un échec, et le badge
   CI affichait « failing » sans qu'aucun test ait échoué. Les PR gardent

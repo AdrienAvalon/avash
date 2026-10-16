@@ -168,6 +168,9 @@ run "docs : compteurs de tests partout" "$ROOT" ./scripts/tests/compteurs-tests-
 run "fuzz : toutes les cibles jouées" "$ROOT" ./scripts/tests/fuzz-continue-toutes-cibles.sh
 run "release : publier attend la sécurité" "$ROOT" ./scripts/tests/release-publier-attend-securite.sh
 run "CI : main jamais annulée, groupes Dependabot" "$ROOT" ./scripts/tests/ci-main-et-groupes-dependabot.sh
+# Trouvé le 16 octobre 2026 : un profil abîmé par l'arrêt de l'application
+# faisait refuser toute la fusion de la couverture après une suite verte.
+run "couverture : profils abîmés écartés" "$ROOT" ./scripts/tests/ecarter-profils-abimes.sh
 # Trouvé le 9 septembre 2026 : le texte d'une invite du serveur atteignait les
 # marqueurs internes (donc l'oubli d'une clé d'hôte) et le terminal (donc ses
 # séquences ANSI). Les deux barrières se vérifient de bout en bout.

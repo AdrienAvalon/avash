@@ -76,6 +76,11 @@ titre "Suite bout en bout sur les binaires instrumentés"
 AVASH_RDP_BIN="$racine/rdp-sidecar/target/release/avash-rdp" \
   bash -c 'cd e2e && xvfb-run -a npm test'
 
+# Un arrêt par le pilote pendant la réécriture du profil laisse un .profraw
+# abîmé, et un seul suffit à faire refuser toute la fusion (16 octobre 2026).
+titre "Profils abîmés écartés"
+"$racine/scripts/ecarter-profils-abimes.sh" target rdp-sidecar/target
+
 titre "Rapport : espace de travail (cœur, interface)"
 cargo llvm-cov report --release --summary-only | tee "$sortie/espace-de-travail.txt"
 cargo llvm-cov report --release --html --output-dir "$sortie/espace-de-travail"
