@@ -93,7 +93,30 @@ impl SftpHandle {
 
     async fn sous_systeme(session: &mut AvashSession) -> Result<SftpSession> {
         let channel = session.open_sftp_channel().await?;
-        SftpSession::new(channel.into_stream())
+        // Une requête à la fois par fichier, en lecture comme en écriture.
+        // russh-sftp 4 lit et écrit en avance (seize requêtes en vol par
+        // fichier, par défaut) ; or le parallélisme est déjà fait ici, par
+        // bandes, et la reprise repose sur ce qu'on sait acquitté : la carte
+        // des bandes reçues et le point de contrôle des envois. Avec la
+        // lecture anticipée, une bande débordait sur la suivante (octets relus
+        // dans une bande déjà faite) et une annulation laissait des requêtes
+        // en vol qui faisaient expirer la suivante (trois tests d'intégration
+        // rouges à la montée du 21 novembre 2026).
+        //
+        // Taille des écritures : russh-sftp 4 préfère 32 Kio par paquet là où
+        // la 2 prenait la limite annoncée par le serveur (ou la taille maximale
+        // du paquet). Avec une seule écriture en vol, 32 Kio multiplierait les
+        // allers-retours par huit : on garde l'ancienne règle en alignant la
+        // préférence sur la taille maximale du paquet, le serveur restant
+        // maître par `limits@openssh.com`.
+        let defaut = russh_sftp::client::Config::default();
+        let reglages = russh_sftp::client::Config {
+            max_concurrent_reads: 1,
+            max_concurrent_writes: 1,
+            max_write_packet_len: defaut.max_packet_len,
+            ..defaut
+        };
+        SftpSession::new_with_config(channel.into_stream(), reglages)
             .await
             .context("Ouverture sous-système SFTP")
     }
