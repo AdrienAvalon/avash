@@ -4,15 +4,19 @@
 
 :root {
   color-scheme: light dark;
-  --fond: #0f1117;
-  --fond-2: #161a24;
-  --fond-3: #1d2230;
-  --texte: #e8e9ee;
-  --texte-2: #a9adb9;
-  --accent: #8b7cf6;
-  --accent-2: #b7adff;
+  /* Identité « Encre et menthe », la même que l'application (novembre 2026). */
+  --fond: #0c0f14;
+  --fond-2: #10141b;
+  --fond-3: #171d27;
+  --texte: #e8ebf1;
+  --texte-2: #a3abb9;
+  --accent: #4ade9f;
+  --accent-2: #86efc0;
+  /* Encre posée sur un aplat d'accent : sombre sur la menthe, blanche sur le
+     vert profond du thème clair. */
+  --sur-accent: #06130d;
   --ok: #3ddc84;
-  --bord: #262b3a;
+  --bord: #283040;
   --rayon: 14px;
   --max: 1080px;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
@@ -27,8 +31,9 @@
     --fond-3: #eeeef6;
     --texte: #171923;
     --texte-2: #555b6e;
-    --accent: #6b5ce7;
-    --accent-2: #4d3fc7;
+    --accent: #0f7a52;
+    --accent-2: #0b6846;
+    --sur-accent: #fff;
     --bord: #dcdde8;
   }
 }
@@ -123,7 +128,7 @@ p { margin: 0 0 1rem; }
   align-items: center;
   gap: 0.5rem;
   background: var(--accent);
-  color: #fff;
+  color: var(--sur-accent);
   font-weight: 600;
   padding: 0.75rem 1.3rem;
   border-radius: 999px;
@@ -260,7 +265,7 @@ ul.liste li strong { color: var(--texte); }
   cursor: pointer;
 }
 
-.onglets button[aria-selected="true"] { color: #fff; background: var(--accent); border-color: transparent; }
+.onglets button[aria-selected="true"] { color: var(--sur-accent); background: var(--accent); border-color: transparent; }
 
 .panneau { display: none; }
 .panneau[data-actif] { display: block; }
