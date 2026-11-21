@@ -11,7 +11,7 @@ application, which reads your `~/.ssh/config` as it is.
 
 [Website](https://adrienavalon.github.io/avash/en/) · [Français](README.md) · [English](README.en.md)
 
-[![Version](https://img.shields.io/github/v/release/AdrienAvalon/avash?label=version&color=8b7cf6)](https://github.com/AdrienAvalon/avash/releases/latest)
+[![Version](https://img.shields.io/github/v/release/AdrienAvalon/avash?label=version&color=0f7a52)](https://github.com/AdrienAvalon/avash/releases/latest)
 [![winget](https://img.shields.io/winget/v/AdrienCros.Avash?label=winget&color=0078d4)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/AdrienCros/Avash)
 [![Downloads](https://img.shields.io/github/downloads/AdrienAvalon/avash/total?label=downloads&color=2ea44f)](https://github.com/AdrienAvalon/avash/releases)
 [![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-platforms-informational)](#install)

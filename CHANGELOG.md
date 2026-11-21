@@ -37,6 +37,9 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   nommées au survol et pour les lecteurs d'écran.
 - Titres et marque en Space Grotesk, embarquée (13 Ko, SIL OFL 1.1) : Avash
   ne fait toujours aucune requête réseau pour s'afficher.
+- Vitrine, captures du README et aperçu social aux nouvelles couleurs ;
+  l'aperçu social a désormais sa source (`scripts/apercu-social.sh`).
+  L'animation de démonstration n'est pas encore refaite.
 
 ### Sécurité
 
