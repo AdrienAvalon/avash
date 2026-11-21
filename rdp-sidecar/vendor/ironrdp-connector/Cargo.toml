@@ -81,9 +81,13 @@ version = "0.15"
 version = "0.9"
 features = ["std"]
 
+# Sans la fonctionnalité `scard` (ouverture de session par carte à puce), que
+# l'amont active : Avash ne s'authentifie que par nom et mot de passe, et elle
+# tirait winscard, cryptoki, iso7816 et heapless 0.7.17, ce dernier visé par
+# neuf avis « unsound » le 18 novembre 2026 (RUSTSEC-2026-0574 à 0582). Voir
+# vendor/README.md.
 [dependencies.sspi]
 version = "0.21"
-features = ["scard"]
 
 [dependencies.tracing]
 version = "0.1"

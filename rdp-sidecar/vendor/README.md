@@ -167,6 +167,26 @@ précoces, autodétection — passaient pour verts sans jamais tourner, ni en lo
 ni en intégration continue, y compris derrière les lignes `cargo test -p
 ironrdp-session` du fichier de CI, qui ne lançaient rien. Réactivé.
 
+## `ironrdp-connector` — sans l'ouverture de session par carte à puce
+
+Dans `Cargo.toml`, `src/lib.rs`, `src/credssp.rs` et `src/connection.rs`.
+L'amont active la fonctionnalité `scard` de sspi pour proposer
+`Credentials::SmartCard`. Avash ne s'authentifie que par nom et mot de passe :
+cette voie n'était jamais empruntée, mais elle faisait entrer dans le processus
+de bureau distant `winscard`, `cryptoki`, `iso7816` et `heapless` 0.7.17.
+
+Le 18 novembre 2026, neuf avis « unsound » ont été publiés contre `heapless`
+(RUSTSEC-2026-0574 à 0582 : libération puis réutilisation, états incohérents,
+course dans la pile sans verrou), corrigés seulement en 0.9.4 quand `iso7816`
+retient la 0.7. La chaîne a rougi le 21 novembre. Plutôt qu'accepter neuf avis
+pour du code qu'on n'appelle pas, le paquet porté perd la variante
+`SmartCard`, la structure `SmartCardIdentity`, le drapeau
+`PASSWORD_IS_SC_PIN` et les deux fonctions qui lisaient le nom dans le
+certificat de la carte : les quatre paquets quittent l'arbre.
+
+À rétablir le jour où Avash voudra la carte à puce, et pas avant qu'`iso7816`
+ait quitté `heapless` 0.7.
+
 ## `ironrdp-connector` — la connexion reste suspendue sans fin
 
 Dans `src/connection.rs`. La détection automatique des caractéristiques réseau

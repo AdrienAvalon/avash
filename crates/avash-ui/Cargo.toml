@@ -50,7 +50,16 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-clipboard-manager = "2"
-tauri-plugin-wdio-webdriver = { version = "1.3", optional = true }
+# Épinglé sur la 1.5.0. La 1.5.1 réécrit l'émulation du clavier et du pointeur
+# (`key_input`, `pointer_input`) : sous Windows et macOS, seuls systèmes où ce
+# serveur sert, Maj+Tab dans la boîte de connexion directe n'atteint plus
+# l'interrupteur de protocole mais le dernier bouton, et le scénario
+# d'accessibilité « l'interrupteur segmenté montre le focus clavier » rougit
+# (PR #86, 21 novembre 2026), alors que le pilote natif de Linux, avec de
+# vraies touches, le passe. Reproduit sur Linux par E2E_EMBARQUE=1 : vert en
+# 1.5.0, rouge en 1.5.1, tout le reste égal. Outil de test, jamais livré : à
+# réessayer à la version suivante.
+tauri-plugin-wdio-webdriver = { version = "=1.5.0", optional = true }
 
 # Pageant (agent SSH de PuTTY) : le diagnostic le sonde pour ne pas annoncer
 # « aucun agent » sur un poste où seul Pageant tourne (il n'expose pas le tube

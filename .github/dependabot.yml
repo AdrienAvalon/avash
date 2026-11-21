@@ -9,6 +9,14 @@ updates:
     schedule: { interval: weekly, day: monday }
     groups:
       cargo-mineur: { update-types: [minor, patch] }
+    ignore:
+      # Serveur WebDriver embarqué de la suite bout en bout, épinglé sur la
+      # 1.5.0 : la 1.5.1 réécrit l'émulation du clavier et casse Maj+Tab dans
+      # une boîte de dialogue (reproduit sur Linux le 21 novembre 2026, voir
+      # crates/avash-ui/Cargo.toml). Une version à la fois : retirer cette
+      # entrée pour essayer la suivante.
+      - dependency-name: tauri-plugin-wdio-webdriver
+        versions: ["1.5.1"]
   - package-ecosystem: cargo
     directory: /rdp-sidecar
     schedule: { interval: weekly, day: monday }
