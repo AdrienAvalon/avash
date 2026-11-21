@@ -914,7 +914,6 @@ mod tests_configuration {
                 assert_eq!(username, "69<;349v");
                 assert_eq!(password, "secret");
             }
-            autre => panic!("identifiants inattendus : {autre:?}"),
         }
         assert!(
             c.request_data.is_some(),
@@ -945,7 +944,6 @@ mod tests_configuration {
                     "le mot de passe saisi doit servir à CredSSP"
                 );
             }
-            autre => panic!("identifiants inattendus : {autre:?}"),
         }
         assert_eq!(
             c.domain.as_deref(),
@@ -972,7 +970,6 @@ mod tests_configuration {
                     "le blob chiffré ne doit pas servir à CredSSP"
                 );
             }
-            autre => panic!("identifiants inattendus : {autre:?}"),
         }
     }
 
@@ -1000,7 +997,6 @@ mod tests_configuration {
                 assert_eq!(username, "adrien");
                 assert_eq!(password, "mdp");
             }
-            autre => panic!("identifiants inattendus : {autre:?}"),
         }
         assert_eq!(c.domain.as_deref(), Some("TEST"));
         assert!(c.request_data.is_none());

@@ -33,6 +33,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   bandes reçues, point de contrôle des envois) reposent sur ce qui est
   réellement acquitté. La taille des écritures reste celle qu'annonce le
   serveur. Les poignées de fichier sont des octets opaques, plus des chaînes.
+- **Le bureau distant n'embarque plus la carte à puce.** L'ouverture de
+  session RDP par carte à puce, qu'Avash n'emploie pas, faisait entrer
+  `heapless` 0.7.17 dans le processus de bureau distant ; neuf avis « unsound »
+  l'ont visé le 18 novembre 2026 (RUSTSEC-2026-0574 à 0582). Cette voie est
+  retirée du connecteur porté : `heapless`, `winscard`, `cryptoki` et
+  `iso7816` quittent l'arbre.
 - **pageant 0.2.5** (Windows) : tampon de trame non borné sur une longueur
   annoncée par le pair (GHSA-662x-8wvj-2276).
 - **zip 9.8.1** (dépendance de la mise à jour automatique, depuis la 4.6.1) :
@@ -74,6 +80,9 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   de Flathub, le canal le plus en retrait, vérifiée par une compilation
   complète. La chaîne, passée à Rust 1.100, refusait sept écritures
   `map(…).unwrap_or_default()` que son clippy veut en `map_or_default`.
+- Le serveur WebDriver embarqué (Windows, macOS) reste en 1.5.0 : la 1.5.1
+  réécrit l'émulation du clavier et fait échouer Maj+Tab dans une boîte de
+  dialogue, ce qu'un essai sur Linux par le même serveur a reproduit.
 - Front : stylelint 18 (la règle `declaration-block-single-line-max-declarations`,
   que la configuration coupait, n'existe plus) et jsdom 31. TypeScript reste
   en 6 : typescript-eslint n'accepte pas encore la 7.

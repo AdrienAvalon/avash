@@ -989,10 +989,6 @@ fn create_client_info_pdu(config: &Config, client_addr: &SocketAddr) -> rdp::Cli
         flags |= ClientInfoFlags::AUTOLOGON;
     }
 
-    if let crate::Credentials::SmartCard { .. } = &config.credentials {
-        flags |= ClientInfoFlags::PASSWORD_IS_SC_PIN;
-    }
-
     if !config.enable_audio_playback {
         flags |= ClientInfoFlags::NO_AUDIO_PLAYBACK;
     }

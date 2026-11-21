@@ -92,19 +92,10 @@ pub struct BitmapConfig {
     pub codecs: BitmapCodecs,
 }
 
-#[derive(Debug, Clone)]
-pub struct SmartCardIdentity {
-    /// DER-encoded X509 certificate
-    pub certificate: Vec<u8>,
-    /// Smart card reader name
-    pub reader_name: String,
-    /// Smart card key container name
-    pub container_name: String,
-    /// Smart card CSP name
-    pub csp_name: String,
-    /// DER-encoded RSA 2048-bit private key
-    pub private_key: Vec<u8>,
-}
+// Avash : l'ouverture de session par carte à puce (`SmartCardIdentity`,
+// `Credentials::SmartCard`) est retirée de ce paquet porté. Elle n'est pas
+// utilisée et imposait la fonctionnalité `scard` de sspi, donc heapless 0.7.17
+// (voir Cargo.toml et vendor/README.md).
 
 #[derive(Debug, Clone)]
 pub enum Credentials {
@@ -112,24 +103,18 @@ pub enum Credentials {
         username: String,
         password: String,
     },
-    SmartCard {
-        pin: String,
-        config: Option<SmartCardIdentity>,
-    },
 }
 
 impl Credentials {
     fn username(&self) -> Option<&str> {
         match self {
             Self::UsernamePassword { username, .. } => Some(username),
-            Self::SmartCard { .. } => None, // Username is ultimately provided by the smart card certificate.
         }
     }
 
     fn secret(&self) -> &str {
         match self {
             Self::UsernamePassword { password, .. } => password,
-            Self::SmartCard { pin, .. } => pin,
         }
     }
 }
