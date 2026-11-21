@@ -38,9 +38,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Image épinglée sur ubuntu-24.04, pas ubuntu-latest : quand ubuntu-latest
+  # est passée à la 26.04 (novembre 2026), le paquet webkit2gtk-driver y avait
+  # disparu (remplacé par webkitgtk-webdriver) et les jobs bout en bout
+  # tombaient à l'installation. Les références de régression visuelle
+  # dépendent aussi des polices de l'image, et le binaire publié
+  # (release.yml) de sa glibc : la montée se décide, elle ne se subit pas.
   build:
     name: Avash — lint, tests, build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -226,7 +232,7 @@ jobs:
   # et WebdriverIO 9 traîne des avis « haute » sans correctif : « critique ».
   audit-npm:
     name: Audit npm (front, suite bout en bout)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -462,7 +468,7 @@ jobs:
 
   e2e:
     name: E2E (app réelle, headless)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -569,7 +575,7 @@ jobs:
   # c'est cette diversité qui fait sortir les défauts de décodage.
   conformite:
     name: Conformité (xrdp réels XFCE + GNOME, sshd PAM)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }

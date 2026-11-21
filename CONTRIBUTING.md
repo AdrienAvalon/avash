@@ -266,7 +266,7 @@ npm test                # toute la suite
 **Régression visuelle.** `specs/visuel.spec.js` compare des captures de
 l'interface (accueil sur les deux thèmes, palette, modale) à des références,
 pixel à pixel, avec une tolérance d'un demi pour-cent. Les références de
-`e2e/visuel/reference` sont celles de la chaîne (ubuntu-latest) : les polices
+`e2e/visuel/reference` sont celles de la chaîne (ubuntu-24.04) : les polices
 d'une autre machine ne rendent pas pareil, donc en local le scénario est sauté
 sauf `VISUEL=1 npx wdio run wdio.conf.js --spec specs/visuel.spec.js` — un
 passage à part, car le service de comparaison ralentit chaque fichier de
