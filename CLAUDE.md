@@ -85,6 +85,14 @@ ce qui n'est pas ici n'existe pas pour eux.
 
 ## Sécurité et secrets
 
+- **La sécurité prime dans tout arbitrage** (exigence du mainteneur,
+  21 novembre 2026) : Avash manipule des clés, des mots de passe et des accès
+  à des serveurs, il vise le niveau maximal. Aucune alerte de dépendance ne
+  reste ouverte sans justification écrite dans `.cargo/audit.toml` ou
+  `deny.toml` ; une exception se réexamine à chaque montée de version et se
+  retire dès qu'elle n'a plus d'objet. Quand le niveau maximal casse une
+  compatibilité (vieux serveurs, algorithmes hérités), le choix revient au
+  mainteneur : le lui soumettre, ne pas trancher seul.
 - Jamais de secret dans un fichier suivi, un message de commit ou un
   commentaire. Les jetons vivent dans `secrets/github.enc.yaml` et
   `secrets/gitlab.enc.yaml` (sops, clé age du poste) et servent via

@@ -14,15 +14,13 @@
 # peut pas changer.
 unmaintained = "workspace"
 ignore = [
-  # RUSTSEC-2023-0071 : rsa, canal auxiliaire temporel Marvin. Le crate `avash`
-  # active volontairement la fonctionnalité `rsa` de russh (cf.
-  # crates/avash/Cargo.toml) : c'est bien une opération à CLÉ PRIVÉE — signer le
-  # défi d'authentification avec la clé id_rsa de l'utilisateur, et l'auth par
-  # clé d'hôte RSA. Arbitrage assumé : garder cette compatibilité coûte moins
-  # que ce canal temporel, exploitable seulement par un serveur malveillant qui
-  # mesure des milliers de signatures (trouvé par l'audit du 8 septembre 2026 :
-  # l'ancien texte prétendait à tort que rsa n'était pas employé pour du privé).
-  "RUSTSEC-2023-0071",
+  # RUSTSEC-2023-0071 (rsa, attaque Marvin) N'EST PLUS ignoré ici : russh
+  # 0.65.2 a monté `rsa` en 0.10.0, première version corrigée (arithmétique à
+  # temps constant sur crypto-bigint). L'arbitrage qui gardait RSA malgré
+  # l'avis n'a plus d'objet depuis le 21 novembre 2026 ; l'entrée, devenue
+  # fantôme, est retirée (scripts/tests/deny-ignore-sans-avis-fantome.sh).
+  # Le processus de bureau distant garde la sienne tant que picky retient une
+  # préversion de rsa : voir rdp-sidecar/deny.toml.
   # RUSTSEC-2024-0429 (glib, VariantStrIter non sûr) N'EST PLUS ignoré ici, et
   # ce n'est pas un oubli. L'avis est porté par une FONCTION précise
   # (`glib::VariantStrIter::next`, versions >=0.15 <0.20) : cargo-deny ne le

@@ -20,6 +20,13 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   de la clé d'hôte (GHSA-9264-jvgf-6w2f). Les avis sur le serveur d'agent de
   russh ne touchent pas Avash, qui n'en embarque pas. Le serveur SSH de test
   suit la nouvelle signature de `auth_publickey`.
+- **L'exception Marvin n'existe plus pour l'application.** russh 0.65 apporte
+  `rsa` 0.10.0, première version corrigée de RUSTSEC-2023-0071 (récupération
+  de clé par mesure de temps) : la prise en charge RSA, gardée jusqu'ici
+  malgré l'avis pour ne pas perdre les serveurs à clé d'hôte RSA et les clés
+  `id_rsa`, ne coûte plus rien. L'avis est retiré de `.cargo/audit.toml` et de
+  `deny.toml` ; il reste accepté pour le seul processus de bureau distant, où
+  `rsa` vérifie des signatures X.509 sans clé privée.
 - **pageant 0.2.5** (Windows) : tampon de trame non borné sur une longueur
   annoncée par le pair (GHSA-662x-8wvj-2276).
 - **zip 9.8.1** (dépendance de la mise à jour automatique, depuis la 4.6.1) :
@@ -39,6 +46,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- Accessibilité : la pastille de version de la barre latérale garde son texte
+  visible (« v0.13.3 ») comme nom accessible, l'action « Vérifier les mises à
+  jour » passant en description. Un `aria-label` remplaçait ce texte, si bien
+  qu'une commande vocale nommant ce qui est écrit ne trouvait pas le bouton
+  (WCAG 2.5.3). Vu par l'audit axe de la suite bout en bout à la montée
+  d'axe-core 4.14.
 - Un bureau distant coupé ou fermé n'essaie plus de se redimensionner : les
   minuteurs de redimensionnement (attente pendant le glissé, rejeu après la
   connexion, filet de 3 s) survivaient à la session et relisaient la taille
@@ -47,6 +60,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Validation
 
+- La chaîne ne suit plus `ubuntu-latest` : passée à la 26.04 début novembre
+  2026, l'image n'avait plus le paquet `webkit2gtk-driver`, et le workflow
+  Qualité tombait à l'installation depuis le 9 novembre. Les jobs de
+  construction, de test et de publication sont épinglés sur `ubuntu-24.04`.
+- Suite bout en bout sur WebdriverIO 10 et son service de comparaison visuelle
+  11 ; `minimatch` et `glob` y sont forcés sur des versions corrigées
+  (GHSA-g3hv-75wg-m249, GHSA-3g3m-2fjr-6pw4). `npm audit` ne rapporte plus rien,
+  ni pour le front ni pour la suite.
 - Le scénario bout en bout des tunnels ne perd plus ses clics sous Windows :
   la liste est reconstruite toutes les 1,5 s, et trouver la ligne puis
   cliquer en deux commandes WebDriver laissait le clic tomber sur un bouton

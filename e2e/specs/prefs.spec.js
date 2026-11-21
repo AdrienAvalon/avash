@@ -15,8 +15,13 @@ describe("Presse-papiers RDP — réglage de partage", () => {
     await browser.keys(["Escape"]);
     await browser.waitUntil(async () => !(await $("#palette").isDisplayed()), { timeout: 5000 });
   };
-  // Première entrée de la palette : les réglages précèdent les hôtes.
-  const libelle = async () => $("#palette-results .item .name").getProperty("textContent");
+  // Première entrée de la palette : les réglages précèdent les hôtes. Sélection
+  // multiple puis indice 0, et non sélection simple : WebdriverIO 10 refuse une
+  // sélection simple qui trouve plusieurs éléments (« strict mode violation »,
+  // montée du 21 novembre 2026), et c'est bien la première ligne d'une liste
+  // qu'on vise ici.
+  const premiere = () => $$("#palette-results .item")[0];
+  const libelle = async () => premiere().$(".name").getProperty("textContent");
   const reglage = async () => browser.execute((k) => localStorage.getItem(k), CLE);
 
   it("propose la bascule à la palette, en annonçant l'état courant", async () => {
@@ -29,7 +34,7 @@ describe("Presse-papiers RDP — réglage de partage", () => {
 
   it("coupe le partage et le retient", async () => {
     await ouvrirPalette();
-    await $("#palette-results .item").click();
+    await premiere().click();
     await browser.waitUntil(async () => (await reglage()) === "0",
       { timeout: 5000, timeoutMsg: "le refus n'a pas été enregistré" });
 
@@ -41,7 +46,7 @@ describe("Presse-papiers RDP — réglage de partage", () => {
 
   it("rétablit le partage", async () => {
     await ouvrirPalette();
-    await $("#palette-results .item").click();
+    await premiere().click();
     await browser.waitUntil(async () => (await reglage()) === "1",
       { timeout: 5000, timeoutMsg: "le partage n'a pas été rétabli" });
   });

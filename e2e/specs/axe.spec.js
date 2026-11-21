@@ -52,22 +52,29 @@ async function figerLesAnimations() {
 async function auditer(contexte) {
   await figerLesAnimations();
   await browser.execute(SOURCE_AXE);
-  const resultat = await browser.executeAsync((ctx, done) => {
-    // eslint-disable-next-line no-undef
-    window.axe
-      .run(ctx || document, { resultTypes: ["violations"] })
-      .then((r) =>
-        done(
-          r.violations.map((v) => ({
-            id: v.id,
-            impact: v.impact,
-            aide: v.help,
-            cibles: v.nodes.slice(0, 3).map((n) => n.target.join(" ")),
-          })),
-        ),
-      )
-      .catch((e) => done([{ id: "axe-erreur", impact: "critical", aide: String(e), cibles: [] }]));
-  }, contexte);
+  // Commande de protocole `executeAsyncScript`, et non l'aide `executeAsync` :
+  // WebdriverIO 10 a retiré cette dernière (vu à la montée du 21 novembre 2026,
+  // « browser.executeAsync is not a function »). Le corps est une chaîne et le
+  // rappel de fin est le dernier argument, comme le veut le protocole ; le
+  // pilote WebKit et le serveur embarqué (Windows, macOS) la servent tous deux.
+  const resultat = await browser.executeAsyncScript(
+    `const ctx = arguments[0];
+     const done = arguments[arguments.length - 1];
+     window.axe
+       .run(ctx || document, { resultTypes: ["violations"] })
+       .then((r) =>
+         done(
+           r.violations.map((v) => ({
+             id: v.id,
+             impact: v.impact,
+             aide: v.help,
+             cibles: v.nodes.slice(0, 3).map((n) => n.target.join(" ")),
+           })),
+         ),
+       )
+       .catch((e) => done([{ id: "axe-erreur", impact: "critical", aide: String(e), cibles: [] }]));`,
+    [contexte ?? null],
+  );
   return resultat.filter((v) => !HORS_PERIMETRE.has(v.id));
 }
 
