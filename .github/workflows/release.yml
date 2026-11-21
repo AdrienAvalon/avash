@@ -22,12 +22,13 @@ permissions:
   contents: read
 
 jobs:
+  # Image épinglée sur ubuntu-24.04 : voir la note en tête des jobs de ci.yml.
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             triple: x86_64-unknown-linux-gnu
             nom: linux
           - os: windows-latest
@@ -43,7 +44,7 @@ jobs:
         with: { persist-credentials: false }
 
       - name: Dépendances système (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
@@ -189,7 +190,7 @@ jobs:
   # planifié, reste au workflow Sécurité.
   securite:
     name: Sécurité avant publication (gitleaks, fuzz)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -228,7 +229,7 @@ jobs:
   outil-signature:
     name: Outil de signature (tauri-cli, sans secret)
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions: {}
     steps:
@@ -255,7 +256,7 @@ jobs:
     name: Signature des mises à jour
     needs: [build, securite, outil-signature]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: release
     permissions: {}
@@ -298,7 +299,7 @@ jobs:
 
   publier:
     needs: [build, securite, signer]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # L'événement autant que la référence. Trouvé par l'audit du 9 septembre
     # 2026 : `workflow_dispatch` est là pour ESSAYER un build sans créer de tag,
     # mais le bouton « Run workflow » laisse choisir n'importe quelle référence,

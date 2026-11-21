@@ -21,6 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Image épinglée sur ubuntu-24.04 : voir la note en tête des jobs de ci.yml.
   # Les paquets portés (rdp-sidecar/vendor, test-rdp-server/vendor) ne remontent
   # pas tout seuls : Dependabot ne voit que les dépendances déclarées. Ce job
   # compare chaque paquet porté à crates.io et rougit dès que l'amont a avancé,
@@ -28,7 +29,7 @@ jobs:
   # et non un retard qui s'accumule (10 septembre 2026).
   portes-amont:
     name: Paquets portés (dérive par rapport à l'amont)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,7 +45,7 @@ jobs:
   # monte : pilotes WebDriver, serveurs de test, sshd du harnais.
   couverture:
     name: Couverture (unitaires + bout en bout, cargo-llvm-cov)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -123,7 +124,7 @@ jobs:
 
   mutation:
     name: Mutation (cargo-mutants, modules de sécurité)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Chaque mutant rejoue les tests du cœur : c'est long par construction.
     timeout-minutes: 330
     steps:
