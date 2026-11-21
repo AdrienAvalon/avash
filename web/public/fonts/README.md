@@ -33,3 +33,13 @@ Résultat : 2,9 Mo → environ 476 Ko par graisse.
 Couverture : latin accentué, cyrillique, grec, ponctuation, flèches, maths,
 semi-graphiques, blocs, formes, symboles, dingbats (dont `❯`), powerline
 (U+E0A0-E0D4) et les icônes Nerd Font courantes.
+
+## Police de titre
+
+`space-grotesk-600.woff2` : **Space Grotesk**, graisse 600, sous-ensemble latin
+(13 Ko), sous **SIL Open Font License 1.1** (texte dans
+`licenses/SPACE-GROTESK-OFL.txt`). Elle sert à la marque et aux titres ; le
+texte courant reste la police du système. Fichier pris tel quel dans le paquet
+npm `@fontsource/space-grotesk` 5.3.0 (`files/space-grotesk-latin-600-normal.woff2`,
+SHA-256 `685bbbf69fa616df1ef81847c85fc76be097ddfb3468ff2257be54511ab3130f`).
+Source : https://github.com/floriankarsten/space-grotesk

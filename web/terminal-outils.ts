@@ -45,7 +45,7 @@ function runTermSearch(next: boolean) {
   if (!s) return;
   const q = ($("term-search-input") as HTMLInputElement).value;
   if (!q) return;
-  const opts = { decorations: { matchOverviewRuler: "#8b7cf6", activeMatchColorOverviewRuler: "#a598f8" } };
+  const opts = { decorations: { matchOverviewRuler: "#4ade9f", activeMatchColorOverviewRuler: "#86efc0" } };
   if (next) s.search.findNext(q, opts);
   else s.search.findPrevious(q, opts);
 }

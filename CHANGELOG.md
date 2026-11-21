@@ -7,6 +7,25 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Modifié
+
+- **Nouvelle identité, « Encre et menthe ».** Le logo devient « le A curseur » :
+  le A d'Avash, dont la barre est le curseur plein d'un terminal. Deux formes
+  seulement, lisibles à 16 px, là où l'écusson doré (bouclier, serveurs,
+  circuit, cadenas) devenait une tache dans la barre de titre et jurait avec
+  l'interface. L'accent passe du violet au vert menthe sur les deux thèmes,
+  terminal compris ; la marque de l'interface prend la couleur du texte et de
+  l'accent, donc suit le thème. Jeu d'icônes régénéré par `scripts/icones.sh`,
+  qui n'existait pas.
+- L'accueil met en tête ce qu'on vient y chercher : la marque en petit, le
+  titre, puis la reprise des onglets de la dernière fois en carte d'accent,
+  avant les actions (elle était sous les boutons, derrière un logo de 208 px).
+- Le bas de la barre latérale garde « Connexion directe » en toutes lettres
+  et range clés, tunnels, snippets et import en quatre icônes sur une ligne,
+  nommées au survol et pour les lecteurs d'écran.
+- Titres et marque en Space Grotesk, embarquée (13 Ko, SIL OFL 1.1) : Avash
+  ne fait toujours aucune requête réseau pour s'afficher.
+
 ### Sécurité
 
 - **Le lecteur YAML abandonné est remplacé.** `rdp.yaml`, `tunnels.yaml`,

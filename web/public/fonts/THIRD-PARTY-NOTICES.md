@@ -57,3 +57,12 @@ et les caractères supprimés rendent les fichiers binaires différents.
 empreintes des notices, copiées sans modification. Cet inventaire concerne
 ces fichiers précis ; il ne constitue pas une déclaration globale sur les
 licences de toutes les dépendances, captures, logos ou futures polices d’Avash.
+
+## Space Grotesk (police de titre)
+
+`space-grotesk-600.woff2` (SHA-256
+`685bbbf69fa616df1ef81847c85fc76be097ddfb3468ff2257be54511ab3130f`) est
+distribuée sans modification depuis le paquet npm `@fontsource/space-grotesk`
+5.3.0. Copyright 2020 The Space Grotesk Project Authors, sous SIL Open Font
+License 1.1 : [licenses/SPACE-GROTESK-OFL.txt](licenses/SPACE-GROTESK-OFL.txt)
+(SHA-256 `18a4de52385f6b988782639d5d0cc1326e5a8c2de9a7f01d7b20d9aedcc60943`).

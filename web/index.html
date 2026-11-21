@@ -25,26 +25,37 @@
       font-weight: 600 700; font-style: normal; font-display: swap;
     }
 
+    /* Police de titre : Space Grotesk, graisse 600, sous-ensemble latin
+       (13 Ko). Elle ne sert qu'à la marque et aux titres ; le texte courant
+       reste celui du système, sans rien à charger. Embarquée comme la police
+       du terminal : Avash ne fait aucune requête réseau pour s'afficher. */
+    @font-face {
+      font-family: "Avash Titre";
+      src: url("/fonts/space-grotesk-600.woff2") format("woff2");
+      font-weight: 600 700; font-style: normal; font-display: swap;
+    }
+
     /* =====================================================================
        Jetons de design. Un seul endroit : couleurs, rayons, ombres, durees.
        Trois profondeurs de fond (terminal < barre laterale < surfaces), un
-       accent violet unique, des etats vert/ambre/rouge.
+       accent menthe unique (identite « Encre et menthe », novembre 2026), des
+       etats vert/ambre/rouge.
        ===================================================================== */
     :root {
-      --bg: #0b0d14;            /* terminal, le plus sombre */
-      --bg-soft: #0f1219;       /* barre laterale, barre d'onglets */
-      --panel: #141824;         /* surfaces posees (modales, palette) */
-      --card: #191e2c;          /* cartes, champs, elements listes */
-      --card-hover: #1f2535;
-      --border: #262d3f;
-      --border-soft: #1b2030;
-      --text: #e9ecf4;
-      --text-dim: #8d96ab;
+      --bg: #0c0f14;            /* terminal, le plus sombre */
+      --bg-soft: #10141b;       /* barre laterale, barre d'onglets */
+      --panel: #131821;         /* surfaces posees (modales, palette) */
+      --card: #171d27;          /* cartes, champs, elements listes */
+      --card-hover: #1d2430;
+      --border: #283040;
+      --border-soft: #1c222d;
+      --text: #e8ebf1;
+      --text-dim: #9aa3b2;
 
       /* 4,5:1 minimum sur --bg-soft ET sur --card. L'ancienne valeur #5b6478
          donnait 3,15:1 : mesuré par axe-core sur l'application réelle, pas
          estimé à l'œil. Teinte conservée, clarté relevée. */
-      --text-faint: #7e879d;
+      --text-faint: #8690a1;
 
       /* Part de la teinte d'hôte dans l'encre des initiales. Le reste vient de
          --text, donc la lisibilité suit le thème automatiquement. Valeurs
@@ -56,16 +67,16 @@
          convient ; en clair il faut l'assombrir, sinon la pastille de version
          tombe à 2,86:1. */
       --accent-sur-teinte: var(--accent-soft);
-      --accent: #8b7cf6;
-      --accent-soft: #a89bfa;
+      --accent: #4ade9f;
+      --accent-soft: #86efc0;
 
       /* Survol d'un bouton plein : plus clair sur fond sombre, plus foncé sur
          fond clair, pour que le texte garde son contraste (AA) dans les deux. */
-      --accent-hover: #a89bfa;
-      --accent-ink: #14101f;    /* texte sur fond accent */
-      --accent-glow: rgb(139,124,246,.26);
-      --accent-line: rgb(139,124,246,.55);
-      --accent-tint: rgb(139,124,246,.12);
+      --accent-hover: #86efc0;
+      --accent-ink: #06130d;    /* texte sur fond accent */
+      --accent-glow: rgb(74,222,159,.22);
+      --accent-line: rgb(74,222,159,.5);
+      --accent-tint: rgb(74,222,159,.1);
       --ok: #4ad295; --warn: #e8b765; --err: #ef6b73;
 
       /* Texte des messages de modale (erreur/succès) : distinct de --err/--ok
@@ -74,13 +85,14 @@
          assombrissent (trouvé par l'audit du 7 septembre 2026 : sur fond clair
          elles tombaient à ~1,7 / ~1,4:1, quasi illisibles). */
       --err-text: #ff9a9a; --ok-text: #8ee0ac;
-      --term-bg: #0d0f16;
+      --term-bg: #0c0f14;
 
       /* Ascenseurs : codés en dur jusqu'à l'audit du 12 septembre 2026
          (C-front-10), sombres sur panneau blanc en thème clair. */
-      --scroll-thumb: #262c3d; --scroll-thumb-hover: #38405a;
+      --scroll-thumb: #283040; --scroll-thumb-hover: #3a4558;
       --mono: "Avash Mono", ui-monospace, monospace;
       --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+      --titre: "Avash Titre", system-ui, -apple-system, "Segoe UI", sans-serif;
       --r-sm: 6px; --r-md: 9px; --r-lg: 14px;
       --shadow-soft: 0 1px 2px rgb(0,0,0,.35), 0 6px 18px rgb(0,0,0,.22);
       --shadow-pop: 0 18px 50px rgb(0,0,0,.55), 0 0 0 1px rgb(255,255,255,.03) inset;
@@ -102,10 +114,10 @@
       --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #fff;
       --card: #fff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
-      --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
-      --accent: #6d5cf0; --accent-soft: #5847d8; --accent-ink: #fff; --accent-hover: #5d4be0;
-      --accent-glow: rgb(109,92,240,.16); --accent-line: rgb(109,92,240,.42);
-      --accent-tint: rgb(109,92,240,.10);
+      --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #0b6846;
+      --accent: #0f7a52; --accent-soft: #0b6846; --accent-ink: #fff; --accent-hover: #0b6846;
+      --accent-glow: rgb(15,122,82,.16); --accent-line: rgb(15,122,82,.42);
+      --accent-tint: rgb(15,122,82,.10);
 
       /* En clair, --accent-soft et ces trois jetons servent AUSSI d'encre de
          petits textes (noms de dossiers SFTP, badge « rebond », pastille de tag
@@ -131,10 +143,10 @@
       --bg: #f6f7f9; --bg-soft: #eef0f5; --panel: #fff;
       --card: #fff; --card-hover: #eef1f6;
       --border: #d7dce6; --border-soft: #e6e9f0;
-      --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #5847d8;
-      --accent: #6d5cf0; --accent-soft: #5847d8; --accent-ink: #fff; --accent-hover: #5d4be0;
-      --accent-glow: rgb(109,92,240,.16); --accent-line: rgb(109,92,240,.42);
-      --accent-tint: rgb(109,92,240,.10);
+      --text: #171b26; --text-dim: #5a6478; --text-faint: #5f6a7f; --ini-mix: 45%; --accent-sur-teinte: #0b6846;
+      --accent: #0f7a52; --accent-soft: #0b6846; --accent-ink: #fff; --accent-hover: #0b6846;
+      --accent-glow: rgb(15,122,82,.16); --accent-line: rgb(15,122,82,.42);
+      --accent-tint: rgb(15,122,82,.10);
 
       /* En clair, --accent-soft et ces trois jetons servent AUSSI d'encre de
          petits textes (noms de dossiers SFTP, badge « rebond », pastille de tag
@@ -269,7 +281,7 @@
 
     .brand {
       padding: 14px 16px 12px; display: flex; align-items: center; gap: 10px;
-      font-weight: 700; font-size: 15px; letter-spacing: .1px;
+      font-family: var(--titre); font-weight: 600; font-size: 17px; letter-spacing: -.1px;
     }
 
     .brand .mascot {
@@ -473,7 +485,22 @@
     .host-empty.host-erreur { color: var(--err-text); }
     .host-empty code { background: var(--card); padding: 1px 5px; border-radius: 4px; }
 
-    .side-actions { padding: 8px 10px 6px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border-soft); }
+    /* Une action nommée (la connexion directe), les quatre autres en icônes
+       sur une ligne : cinq boutons empilés prenaient le tiers de la barre pour
+       des écrans qu'on ouvre rarement. Le libellé des quatre reste dans le
+       bouton, masqué à l'œil seulement : il en demeure le nom accessible, et
+       `title` le montre au survol. */
+    .side-actions {
+      padding: 8px 10px 6px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 4px; border-top: 1px solid var(--border-soft);
+    }
+    .side-actions #manual-btn { grid-column: 1 / -1; }
+    .side-actions .manual-btn:not(#manual-btn) { justify-content: center; padding: 6px 0; }
+
+    .side-actions .manual-btn:not(#manual-btn) > span:not(.ic) {
+      position: absolute; width: 1px; height: 1px; overflow: hidden;
+      clip-path: inset(50%); white-space: nowrap;
+    }
 
     .manual-btn {
       display: flex; align-items: center; gap: 10px; width: 100%;
@@ -638,33 +665,40 @@
       position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 10px; color: var(--text-dim);
       background:
-        radial-gradient(ellipse 60% 45% at 50% 42%, rgb(139,124,246,.16), transparent 70%),
+        radial-gradient(ellipse 60% 45% at 50% 42%, var(--accent-tint), transparent 70%),
         var(--bg);
     }
 
     .terminal-empty .big-logo {
-      width: 208px; height: auto; margin-bottom: 4px; user-select: none;
-      filter: drop-shadow(0 16px 44px rgb(0,0,0,.5));
+      width: 72px; height: auto; margin-bottom: 8px; user-select: none;
+      filter: drop-shadow(0 8px 22px rgb(0,0,0,.35));
       animation: rise .5s var(--ease) both;
     }
 
     @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.96) } to { opacity: 1; transform: none } }
-    .terminal-empty .title { font-size: 19px; font-weight: 700; color: var(--text); letter-spacing: -.2px; }
+    .terminal-empty .title { font-family: var(--titre); font-size: 26px; font-weight: 600; color: var(--text); letter-spacing: -.4px; }
     .terminal-empty .hint { font-size: 13px; color: var(--text-dim); }
     .empty-actions { display: flex; gap: 10px; margin-top: 14px; justify-content: center; }
 
-    /* Proposition de rouvrir les onglets de la dernière fois : sous les
-       actions, discrète, avec ses deux boutons sur la même ligne. */
+    /* Proposition de rouvrir les onglets de la dernière fois.
+       La reprise vient juste sous le titre, avant les actions, et en carte
+       d'accent : quand des onglets étaient ouverts, c'est ce qu'on vient
+       chercher. Jusqu'à la refonte de novembre 2026 elle était sous les
+       boutons, en petit, derrière un logo de 208 px. Elle précède aussi les
+       actions dans le document, pour que l'ordre de tabulation suive l'œil. */
     .restaurer {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
+      justify-content: center;
       gap: 10px;
-      margin-top: 18px;
-      padding: 8px 12px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      font-size: 13px;
-      color: var(--text-dim);
+      margin: 6px 0 4px;
+      padding: 12px 16px;
+      border: 1px solid var(--accent-line);
+      border-radius: var(--r-lg);
+      background: var(--accent-tint);
+      font-size: 14px;
+      color: var(--text);
     }
 
     .restaurer[hidden] { display: none; }
@@ -1058,13 +1092,13 @@
     .sftp-drop {
       position: absolute; inset: 8px; z-index: 5; display: none; flex-direction: column;
       align-items: center; justify-content: center; gap: 6px; border-radius: 12px;
-      border: 2px dashed var(--accent-line); background: rgb(11,13,20,.82);
+      border: 2px dashed var(--accent-line); background: rgb(12,15,20,.82);
 
       /* Le voile est toujours sombre (les deux thèmes), l'encre doit donc rester
          claire : on ne suit pas --accent-soft, qui est assombri en thème clair
          (encre de petits textes) et tomberait à 3,06:1 sur ce voile (trouvé par
          l'audit du 7 septembre 2026). Teinte accent fixée, lisible sur sombre. */
-      color: #a89bfa; font-size: 13px; font-weight: 600; pointer-events: none;
+      color: #86efc0; font-size: 13px; font-weight: 600; pointer-events: none;
     }
     .sftp-drop span { font-size: 26px; }
     .sftp-panel.dragging .sftp-drop { display: flex; }
@@ -1105,17 +1139,15 @@
     </style>
 </head>
 <body>
-  <!-- Marque avash (écusson : bouclier + serveurs + cadenas), définie une fois et
-       réutilisée via <use>. Le jeu d'icônes de l'app dérive de icons/logo.svg. -->
+  <!-- Marque avash, « le A curseur » : le A d'Avash, dont la barre est le curseur
+       plein d'un terminal. Définie une fois et réutilisée via <use>. Le trait
+       prend la couleur du texte et le curseur celle de l'accent, donc la marque
+       suit le thème. Même dessin que icons/logo.svg (jeu d'icônes régénéré par
+       scripts/icones.sh). -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-    <symbol id="avash-mark" viewBox="0 0 24 24">
-      <path d="M3.4 3.4 H20.6 V12 C20.6 17.3 16.8 20.5 12 22.5 C7.2 20.5 3.4 17.3 3.4 12 Z" fill="#d9b24a"/>
-      <path d="M4.9 5 H19.1 V11.9 C19.1 16.3 15.9 19 12 20.8 C8.1 19 4.9 16.3 4.9 11.9 Z" fill="#12233f"/>
-      <rect x="7.4" y="7.2" width="9.2" height="3.1" rx="1" fill="#3b4a6b"/>
-      <circle cx="14.6" cy="8.75" r="0.7" fill="#f4d98a"/><circle cx="12.7" cy="8.75" r="0.7" fill="#5cc8ff"/>
-      <path d="M10.3 15.2 v-1.1 a1.7 1.7 0 0 1 3.4 0 v1.1" fill="none" stroke="#f4d98a" stroke-width="1.1"/>
-      <rect x="9.1" y="15" width="5.8" height="4.4" rx="1" fill="#f4d98a"/>
-      <circle cx="12" cy="17.2" r="0.85" fill="#12233f"/>
+    <symbol id="avash-mark" viewBox="0 0 48 48">
+      <polyline points="11,37 24,10 37,37" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="20.5" y="27" width="7" height="6" rx="1.5" fill="var(--accent)"/>
     </symbol>
   </svg>
   <!-- Notifications (voir notify() dans main.ts) -->
@@ -1145,10 +1177,10 @@
       <div id="host-list" class="host-list"></div>
       <div class="side-actions">
         <button id="manual-btn" class="manual-btn" type="button" data-icon="plus" data-i18n="connexion-directe">Connexion directe</button>
-        <button id="keys-btn" class="manual-btn" type="button" data-icon="key" data-i18n="mes-cles-ssh">Mes clés SSH</button>
-        <button id="tunnels-btn" class="manual-btn" type="button" data-icon="tunnel" data-i18n="tunnels">Tunnels</button>
-        <button id="snippets-btn" class="manual-btn" type="button" data-icon="zap" data-i18n="snippets">Snippets</button>
-        <button id="import-btn" class="manual-btn" type="button" data-icon="download" data-i18n="importer-des-sessions">Importer des sessions</button>
+        <button id="keys-btn" class="manual-btn" type="button" data-i18n-title="mes-cles-ssh" data-icon="key" data-i18n="mes-cles-ssh">Mes clés SSH</button>
+        <button id="tunnels-btn" class="manual-btn" type="button" data-i18n-title="tunnels" data-icon="tunnel" data-i18n="tunnels">Tunnels</button>
+        <button id="snippets-btn" class="manual-btn" type="button" data-i18n-title="snippets" data-icon="zap" data-i18n="snippets">Snippets</button>
+        <button id="import-btn" class="manual-btn" type="button" data-i18n-title="importer-des-sessions" data-icon="download" data-i18n="importer-des-sessions">Importer des sessions</button>
       </div>
       <div class="footer"><span data-i18n="ssh-config">~/.ssh/config</span><span id="footer-version">avash</span></div>
       <div class="side-resize" id="side-resize"></div>
@@ -1169,15 +1201,15 @@
         <div class="terminal-empty" id="terminal-empty">
           <img class="big-logo" src="hero.svg" alt="Avash" draggable="false" />
           <div class="title" data-i18n="pret-quand-tu-l-es">Prêt quand tu l'es.</div>
-          <div class="hint" id="empty-hint" data-i18n="double-clic-sur-un-hote-pour-te-connecter">Double-clic sur un hôte pour te connecter</div>
-          <div class="empty-actions">
-            <button class="btn-primary" id="empty-connect" type="button" data-icon="plus" data-i18n="connexion-directe">Connexion directe</button>
-            <button class="btn-ghost" id="empty-keys" type="button" data-icon="key" data-i18n="mes-cles-ssh">Mes clés SSH</button>
-          </div>
           <div class="restaurer" id="restaurer" hidden role="status">
             <span id="restaurer-texte"></span>
             <button class="btn-primary" id="restaurer-ok" type="button" data-i18n="restaurer-ok">Rouvrir</button>
             <button class="btn-ghost" id="restaurer-non" type="button" data-i18n="restaurer-non">Ignorer</button>
+          </div>
+          <div class="hint" id="empty-hint" data-i18n="double-clic-sur-un-hote-pour-te-connecter">Double-clic sur un hôte pour te connecter</div>
+          <div class="empty-actions">
+            <button class="btn-primary" id="empty-connect" type="button" data-icon="plus" data-i18n="connexion-directe">Connexion directe</button>
+            <button class="btn-ghost" id="empty-keys" type="button" data-icon="key" data-i18n="mes-cles-ssh">Mes clés SSH</button>
           </div>
           <div class="shortcuts">
             <span data-i18n="raccourci-palette"><kbd data-i18n="ctrl">Ctrl</kbd>+<kbd>K</kbd> palette (Ctrl+Maj+K dans un terminal)</span>
