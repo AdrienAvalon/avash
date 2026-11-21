@@ -153,8 +153,7 @@ fn chemin_local_libre(base: &std::path::Path) -> std::path::PathBuf {
     let dir = base.parent().unwrap_or_else(|| std::path::Path::new("."));
     let tige = base
         .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|s| s.to_string_lossy().into_owned());
     let ext = base.extension().map(|e| e.to_string_lossy().into_owned());
     for n in 2..=u32::MAX {
         let nom = match &ext {
@@ -300,8 +299,7 @@ pub async fn sftp_download(
     let local = local_target(&remote)?;
     let name = std::path::Path::new(&remote)
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     let mut report = progress_reporter(&app, id, transfert, &name, "download");
     let annulation = inscrire(&transferts, transfert);
     let issue = if is_dir.unwrap_or(false) {

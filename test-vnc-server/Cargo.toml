@@ -2,6 +2,8 @@
 name = "test-vnc-server"
 version = "0.1.0"
 edition = "2021"
+# Même plancher que l'espace de travail : voir le Cargo.toml racine.
+rust-version = "1.98"
 publish = false
 description = "Avash — serveur VNC de test pour la suite bout en bout"
 license = "AGPL-3.0-or-later"

@@ -70,6 +70,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   2026, l'image n'avait plus le paquet `webkit2gtk-driver`, et le workflow
   Qualité tombait à l'installation depuis le 9 novembre. Les jobs de
   construction, de test et de publication sont épinglés sur `ubuntu-24.04`.
+- Rust 1.98 est déclaré comme version minimale : c'est celle de l'extension
+  de Flathub, le canal le plus en retrait, vérifiée par une compilation
+  complète. La chaîne, passée à Rust 1.100, refusait sept écritures
+  `map(…).unwrap_or_default()` que son clippy veut en `map_or_default`.
 - Front : stylelint 18 (la règle `declaration-block-single-line-max-declarations`,
   que la configuration coupait, n'existe plus) et jsdom 31. TypeScript reste
   en 6 : typescript-eslint n'accepte pas encore la 7.

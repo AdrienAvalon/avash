@@ -23,7 +23,10 @@ ignore = [
   # vérification de signatures X.509 — aucune clé privée RSA côté client, donc
   # pas la surface que vise Marvin (trouvé par l'audit du 8 septembre 2026 : ce
   # commentaire recopiait celui de la racine et nommait à tort une dépendance
-  # SSH, hors-sujet dans un processus de bureau distant).
+  # SSH, hors-sujet dans un processus de bureau distant). Le correctif existe
+  # (rsa 0.10.0) mais picky et sspi épinglent `=0.10.0-rc.18` jusque dans leurs
+  # dernières versions (relevé du 21 novembre 2026) : à lever dès qu'ils
+  # l'acceptent.
   "RUSTSEC-2023-0071",
   # RUSTSEC-2024-0429 (glib) n'a rien à faire ici : glib n'est même pas dans le
   # graphe du processus de bureau distant (`cargo tree -i glib` ne trouve rien),

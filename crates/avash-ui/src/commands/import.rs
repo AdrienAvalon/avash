@@ -131,8 +131,7 @@ pub fn import_scan(chemin: Option<String>) -> Result<BilanImport, String> {
                 avash::rdphost::RdpHost::new(&b.name, &b.host, b.port, &b.user, 1280, 800)
                     .validate()
                     .err()
-                    .map(|e| vec![format!("{e:#}")])
-                    .unwrap_or_default();
+                    .map_or_default(|e| vec![format!("{e:#}")]);
             bureaux.push(BureauCandidat {
                 bureau: b,
                 remarques,

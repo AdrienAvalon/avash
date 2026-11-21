@@ -73,9 +73,7 @@ pub fn enregistrement_demarrer(
 #[must_use]
 #[tauri::command(async)]
 pub fn enregistrements_lister() -> Vec<avash::enregistrement::Info> {
-    avash::enregistrement::repertoire()
-        .map(|d| avash::enregistrement::lister(&d))
-        .unwrap_or_default()
+    avash::enregistrement::repertoire().map_or_default(|d| avash::enregistrement::lister(&d))
 }
 
 /// Ouvre le répertoire des enregistrements dans le gestionnaire de fichiers,

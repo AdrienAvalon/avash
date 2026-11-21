@@ -378,8 +378,7 @@ pub(crate) fn ecrire_diagnostic<R: tauri::Runtime>(
         .and_then(|r| r.0.verrou().clone());
     let sessions = app
         .try_state::<crate::rdp::RdpStore>()
-        .map(|r| crate::rdp::journaux(&r))
-        .unwrap_or_default();
+        .map_or_default(|r| crate::rdp::journaux(&r));
     let faits = collecter(
         &app.package_info().version.to_string(),
         tauri::webview_version().ok(),
