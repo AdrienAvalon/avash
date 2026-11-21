@@ -16,16 +16,14 @@ license.workspace = true
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-# RSA est conserve volontairement. Il tire `rsa`, affecte par RUSTSEC-2023-0071
-# (attaque Marvin, 5.9 moyenne, sans correctif amont). Le desactiver donne zero
-# vulnerabilite, mais casse la connexion aux serveurs a cle d'hote RSA et aux
-# cles id_rsa — verifie contre un vrai sshd : "Wrong server signature", message
-# opaque pour l'utilisateur.
-# Pour un gestionnaire de connexions, perdre cette compatibilite coute plus que
-# ce canal temporel, exploitable seulement par un serveur malveillant mesurant
-# des milliers de tentatives.
-# Pour privilegier la securite au detriment de la compatibilite :
-#   russh = { version = "0.65", default-features = false, features = ["flate2", "aws-lc-rs"] }
+# RSA est pris en charge (serveurs a cle d'hote RSA, cles id_rsa) : sans la
+# fonctionnalite `rsa`, la connexion echoue sur "Wrong server signature",
+# message opaque pour l'utilisateur (verifie contre un vrai sshd).
+# Jusqu'a la 0.13.2, elle tirait un `rsa` vise par RUSTSEC-2023-0071 (attaque
+# Marvin, canal temporel), accepte faute de correctif amont. Depuis russh 0.65
+# (21 novembre 2026), `rsa` 0.10.0 est corrige : il n'y a plus d'arbitrage, et
+# l'avis n'est plus ignore dans .cargo/audit.toml ni deny.toml. Ne pas
+# redescendre russh sous la 0.65.2 sans relire ce point.
 # `ring` plutot que `aws-lc-rs` (le defaut) : meme fonctionnement, verifie
 # contre un vrai sshd, mais 2 Mo de moins sur le binaire final.
 russh = { version = "0.65", default-features = false, features = [

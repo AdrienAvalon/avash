@@ -33,19 +33,27 @@ justification() {
 just_racine="$(justification deny.toml)"
 just_sidecar="$(justification rdp-sidecar/deny.toml)"
 
-if [[ -z "$just_racine" || -z "$just_sidecar" ]]; then
-  echo "  ✗ justification RUSTSEC-2023-0071 introuvable dans l'un des deny.toml" >&2
+# Depuis le 21 novembre 2026, la racine n'ignore plus l'avis : russh 0.65 a
+# monté `rsa` en 0.10.0, corrigé. Une entrée absente n'a pas de justification à
+# vérifier ; si elle revient un jour, les règles ci-dessous s'appliquent de
+# nouveau. Même chose pour le sidecar le jour où picky quittera sa préversion.
+racine_ignore=0; sidecar_ignore=0
+grep -qE '^[[:space:]]*"RUSTSEC-2023-0071"' deny.toml && racine_ignore=1
+grep -qE '^[[:space:]]*"RUSTSEC-2023-0071"' rdp-sidecar/deny.toml && sidecar_ignore=1
+
+if [[ "$racine_ignore" -eq 1 && -z "$just_racine" ]] || [[ "$sidecar_ignore" -eq 1 && -z "$just_sidecar" ]]; then
+  echo "  ✗ RUSTSEC-2023-0071 est ignoré sans justification dans l'un des deny.toml" >&2
   exit 1
 fi
 
 # 1. deny.toml racine : le crate `avash` emploie bel et bien `rsa` pour du RSA
 # PRIVÉ (signature du défi SSH avec la clé de l'utilisateur). La justification
 # ne doit plus prétendre le contraire, et doit renvoyer à l'arbitrage réel.
-if echo "$just_racine" | grep -qiE "n'employons pas|pas pour du rsa priv"; then
+if [[ "$racine_ignore" -eq 1 ]] && echo "$just_racine" | grep -qiE "n'employons pas|pas pour du rsa priv"; then
   echo "  ✗ deny.toml : la justification nie encore l'usage privé de rsa (faux, cf. Cargo.toml features rsa)" >&2
   echecs=1
 fi
-if ! echo "$just_racine" | grep -qiE 'id_rsa|Cargo\.toml'; then
+if [[ "$racine_ignore" -eq 1 ]] && ! echo "$just_racine" | grep -qiE 'id_rsa|Cargo\.toml'; then
   echo "  ✗ deny.toml : la justification devrait renvoyer à l'arbitrage id_rsa/Cargo.toml" >&2
   echecs=1
 fi
@@ -54,11 +62,11 @@ fi
 # dynamiquement) ; le nommer dans la justification est faux. `rsa` y vient de
 # picky, la justification doit le dire.
 russh_dans_sidecar="$(grep -c '^name = "russh"' rdp-sidecar/Cargo.lock || true)"
-if [[ "$russh_dans_sidecar" -eq 0 ]] && echo "$just_sidecar" | grep -qi 'russh'; then
+if [[ "$sidecar_ignore" -eq 1 && "$russh_dans_sidecar" -eq 0 ]] && echo "$just_sidecar" | grep -qi 'russh'; then
   echo "  ✗ rdp-sidecar/deny.toml : la justification nomme russh, absent de l'arbre du sidecar" >&2
   echecs=1
 fi
-if ! echo "$just_sidecar" | grep -qi 'picky'; then
+if [[ "$sidecar_ignore" -eq 1 ]] && ! echo "$just_sidecar" | grep -qi 'picky'; then
   echo "  ✗ rdp-sidecar/deny.toml : la justification devrait décrire la chaîne picky (X.509)" >&2
   echecs=1
 fi
@@ -67,4 +75,4 @@ if [[ "$echecs" -ne 0 ]]; then
   exit 1
 fi
 
-echo "  ✓ justifications RUSTSEC-2023-0071 exactes (racine : id_rsa/RSA privé ; sidecar : picky/X.509)"
+echo "  ✓ RUSTSEC-2023-0071 : racine $([[ $racine_ignore -eq 1 ]] && echo 'ignoré, justification exacte' || echo 'non ignoré (rsa corrigé)') ; sidecar $([[ $sidecar_ignore -eq 1 ]] && echo 'ignoré, justification picky/X.509 exacte' || echo 'non ignoré')"

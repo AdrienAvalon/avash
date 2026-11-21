@@ -17,7 +17,9 @@ describe("Santé des hôtes", () => {
     const input = await $("#palette-input");
     await input.waitForDisplayed({ timeout: 5000 });
     await input.setValue("santé");
-    const item = await $("#palette-results .item");
+    // Première ligne des résultats : « santé » en remonte deux, et WebdriverIO 10
+    // refuse une sélection simple ambiguë.
+    const item = await $$("#palette-results .item")[0];
     await item.waitForDisplayed({ timeout: 5000 });
     await item.click();
 

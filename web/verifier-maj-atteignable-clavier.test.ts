@@ -38,11 +38,16 @@ describe("La vérification des mises à jour est atteignable au clavier", () => 
     expect(balise).toMatch(/\btype="button"/);
   });
 
-  it("le bouton annonce son action à un lecteur d'écran", () => {
-    // Sans nom accessible, le lecteur d'écran n'aurait lu que « v0.9.2 » sans
-    // dire que c'est le déclencheur de la vérification des mises à jour.
-    expect(balise).toMatch(/\baria-label="[^"]+"/);
-    expect(balise).toMatch(/\bdata-i18n-aria="verifier-les-mises-a-jour"/);
+  it("le bouton annonce son action sans masquer la version affichée", () => {
+    // Le nom accessible est le texte visible (« v0.13.2 ») et l'action vient en
+    // description, par `title`. Un `aria-label` « Vérifier les mises à jour »
+    // remplaçait ce texte : la commande vocale « cliquer v0.13.2 » ne trouvait
+    // plus le bouton (WCAG 2.5.3, règle axe `label-content-name-mismatch`, vue
+    // par la suite bout en bout à la montée d'axe-core 4.14 le 21 novembre 2026).
+    expect(balise).not.toMatch(/\baria-label=/);
+    expect(balise).not.toMatch(/\bdata-i18n-aria=/);
+    expect(balise).toMatch(/\btitle="[^"]+"/);
+    expect(balise).toMatch(/\bdata-i18n-title="verifier-les-mises-a-jour"/);
   });
 
   it("le style de pastille est reposé par-dessus le bouton natif", () => {

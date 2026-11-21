@@ -272,13 +272,13 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 
 ## Choix techniques notables
 
-- **SSH via russh**, en conservant volontairement la prise en charge RSA
-  (dépendance `rsa`, concernée par RUSTSEC-2023-0071 / attaque Marvin, sans
-  correctif amont). La compatibilité avec les serveurs et clés RSA a été jugée
-  plus importante que ce canal temporel, exploitable seulement par un serveur
-  malveillant. Le compromis et l'alternative (compilation sans RSA) sont
-  documentés dans `crates/avash/Cargo.toml`, et l'avis est explicitement ignoré
-  dans `cargo audit`.
+- **SSH via russh**, avec la prise en charge RSA (serveurs à clé d'hôte RSA,
+  clés `id_rsa`). Jusqu'à la 0.13.2, elle reposait sur un `rsa` visé par
+  RUSTSEC-2023-0071 (attaque Marvin, canal temporel), accepté faute de
+  correctif amont. Depuis russh 0.65 (21 novembre 2026), `rsa` 0.10.0 est
+  corrigé : l'exception a été retirée de `cargo audit` et de `cargo deny` pour
+  l'application. Elle subsiste pour le seul processus de bureau distant, où
+  `rsa` ne sert qu'à vérifier des signatures X.509 (aucune clé privée).
 - **russh sans `aws-lc-rs`, avec `ring`** : même fonctionnement vérifié contre
   un vrai `sshd`, mais un binaire final plus léger (~2 Mo de moins).
 - **RDP via IronRDP** dans un sidecar, avec le canal **Display Control (DVC)**
