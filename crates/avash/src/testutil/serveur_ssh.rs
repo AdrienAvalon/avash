@@ -157,7 +157,7 @@ impl russh::server::Handler for TestSshSession {
     async fn auth_publickey(
         &mut self,
         user: &str,
-        _key: &russh::keys::PublicKey,
+        _key: russh::server::VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         self.user = Some(user.to_owned());
         // Les comptes « pam-* » refusent la clé : sans quoi le test

@@ -9,6 +9,26 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Sécurité
 
+- **russh 0.65.3** (depuis la 0.63.3 ; vingt-deux alertes ouvertes au
+  21 novembre 2026). Côté client, celui d'Avash : un serveur ne peut plus
+  faire accepter une clé d'hôte et une signature d'un autre algorithme que
+  celui négocié (GHSA-66vf-xq4p-pg7q), ni faire grossir la mémoire sans borne
+  avant l'authentification par des `USERAUTH_FAILURE` répétés
+  (GHSA-ppq4-8rhp-9xrq) ou des paquets `EXT_INFO` (GHSA-4p9f-7p9m-5vfg), ni
+  figer un canal en annonçant une taille de paquet nulle
+  (GHSA-fw5c-8223-6h42) ; `kex_done` n'est plus appelé avant la vérification
+  de la clé d'hôte (GHSA-9264-jvgf-6w2f). Les avis sur le serveur d'agent de
+  russh ne touchent pas Avash, qui n'en embarque pas. Le serveur SSH de test
+  suit la nouvelle signature de `auth_publickey`.
+- **pageant 0.2.5** (Windows) : tampon de trame non borné sur une longueur
+  annoncée par le pair (GHSA-662x-8wvj-2276).
+- **zip 9.8.1** (dépendance de la mise à jour automatique, depuis la 4.6.1) :
+  différentiel d'analyse entre en-têtes, bits SUID/SGID conservés et liens
+  symboliques sortant de la destination à l'extraction (RUSTSEC-2026-0367 et
+  suivants).
+- **rustls-webpki 0.103.17 et webpki-root-certs 1.0.12** : les intermédiaires
+  emSign retirés de la confiance ne sont plus acceptés (RUSTSEC-2026-0382 et
+  0383).
 - **rustls 0.23.46** (RUSTSEC-2026-0346 à 0349, publiés le 14 octobre 2026 :
   `Debug` des valeurs de session client qui exposait des secrets TLS, données
   envoyées au serveur externe après un refus ECH, décompression Brotli de
