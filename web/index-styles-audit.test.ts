@@ -65,7 +65,9 @@ describe("polices", () => {
 
   it("aucune_face_ne_masque_le_texte_en_attendant_la_police", () => {
     const faces = [...css.matchAll(/@font-face\s*\{([^}]*)\}/g)].map((m) => m[1]);
-    expect(faces.length).toBe(2);
+    // Deux graisses de la police du terminal, et la police de titre (refonte
+    // de novembre 2026).
+    expect(faces.length).toBe(3);
     for (const f of faces) expect(f).toMatch(/font-display:\s*swap/);
   });
 });

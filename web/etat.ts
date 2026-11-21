@@ -126,11 +126,11 @@ export const $ = <T extends HTMLElement>(id: string) => document.getElementById(
 // Place ici, il etait purement ignore et xterm.js retombait sur son defaut
 // (courier-new), d'ou un rendu tres laid.
 export const THEME_DARK = {
-  background: "#0d0f16",
+  background: "#0c0f14",
   foreground: "#dfe3ee",
-  cursor: "#8b7cf6",
-  cursorAccent: "#0d0f16",
-  selectionBackground: "rgba(139, 124, 246, .30)",
+  cursor: "#4ade9f",
+  cursorAccent: "#0c0f14",
+  selectionBackground: "rgba(74, 222, 159, .28)",
   selectionForeground: "#ffffff",
   // Palette ANSI : contrastee sur fond sombre, sans saturation criarde.
   black: "#1b1e29", red: "#ef6b73", green: "#4ad295", yellow: "#e8b765",
@@ -144,9 +144,9 @@ export const THEME_DARK = {
 export const THEME_LIGHT = {
   background: "#f6f7f9",
   foreground: "#1f2430",
-  cursor: "#6d5cf0",
+  cursor: "#0f7a52",
   cursorAccent: "#f6f7f9",
-  selectionBackground: "rgba(109,92,240,.22)",
+  selectionBackground: "rgba(15,122,82,.2)",
   selectionForeground: "#0b0d14",
   black: "#2c3140", red: "#c8353d", green: "#1f9d57", yellow: "#9a6a15",
   blue: "#3059c8", magenta: "#8043c8", cyan: "#0d7d97", white: "#5a6478",

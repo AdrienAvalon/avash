@@ -34,7 +34,16 @@ CADRES="$CAPTURES_DOSSIER/cadres"
 rm -rf "$CADRES"; mkdir -p "$CADRES"
 export CAPTURES_CADRES="$CADRES"
 cd e2e
-xvfb-run -a -s "-screen 0 1440x900x24" npx wdio run wdio.captures.conf.js
+# Sans le rendu DMABUF de WebKitGTK : sous Xvfb, avec le pilote NVIDIA du poste
+# (RTX 3090 depuis septembre 2026), il rend une fenêtre entièrement noire et le
+# script remplaçait les captures par des PNG noirs de 205 octets sans rien
+# signaler (vu le 21 novembre 2026). Le rendu logiciel donne la même image.
+WEBKIT_DISABLE_DMABUF_RENDERER=1 xvfb-run -a -s "-screen 0 1440x900x24" npx wdio run wdio.captures.conf.js
+# Une capture d'une seule couleur est une capture ratée : mieux vaut s'arrêter
+# que de la publier.
+for f in "$CAPTURES_DOSSIER"/*.png; do
+  [ "$(magick "$f" -format '%k' info:)" -gt 16 ] || { echo "capture vide (une seule teinte) : $f" >&2; exit 1; }
+done
 # Les PNG perdent leurs métadonnées (dates, logiciel) : rien d'autre que l'image.
 for f in "$CAPTURES_DOSSIER"/*.png; do magick "$f" -strip "$f"; done
 # La démonstration : les cadres pris aux moments clés, deux et demi par
