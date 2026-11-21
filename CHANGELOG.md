@@ -27,6 +27,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   `id_rsa`, ne coûte plus rien. L'avis est retiré de `.cargo/audit.toml` et de
   `deny.toml` ; il reste accepté pour le seul processus de bureau distant, où
   `rsa` vérifie des signatures X.509 sans clé privée.
+- **russh-sftp 4** (depuis la 2.4). La bibliothèque lit et écrit désormais en
+  avance, seize requêtes en vol par fichier ; Avash la règle sur une requête à
+  la fois, parce que son parallélisme par bandes et sa reprise (carte des
+  bandes reçues, point de contrôle des envois) reposent sur ce qui est
+  réellement acquitté. La taille des écritures reste celle qu'annonce le
+  serveur. Les poignées de fichier sont des octets opaques, plus des chaînes.
 - **pageant 0.2.5** (Windows) : tampon de trame non borné sur une longueur
   annoncée par le pair (GHSA-662x-8wvj-2276).
 - **zip 9.8.1** (dépendance de la mise à jour automatique, depuis la 4.6.1) :
@@ -64,6 +70,9 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   2026, l'image n'avait plus le paquet `webkit2gtk-driver`, et le workflow
   Qualité tombait à l'installation depuis le 9 novembre. Les jobs de
   construction, de test et de publication sont épinglés sur `ubuntu-24.04`.
+- Front : stylelint 18 (la règle `declaration-block-single-line-max-declarations`,
+  que la configuration coupait, n'existe plus) et jsdom 31. TypeScript reste
+  en 6 : typescript-eslint n'accepte pas encore la 7.
 - Suite bout en bout sur WebdriverIO 10 et son service de comparaison visuelle
   11 ; `minimatch` et `glob` y sont forcés sur des versions corrigées
   (GHSA-g3hv-75wg-m249, GHSA-3g3m-2fjr-6pw4). `npm audit` ne rapporte plus rien,

@@ -825,6 +825,14 @@ pub fn parent_de(chemin: &str) -> &str {
     chemin.rsplit_once('/').map_or("", |(a, _)| a)
 }
 
+/// Le nom que ce serveur a donné à une poignée (`fs:<chemin>`, `fsdir:<chemin>`,
+/// `file`, `dir`). russh-sftp 4 transporte les poignées en octets opaques
+/// (`SftpHandle`) et non plus en `String` ; celles d'ici sont toujours du texte
+/// que ce même serveur a émis, d'où la conversion sans perte.
+fn nom_de_poignee(poignee: &russh_sftp::protocol::SftpHandle) -> String {
+    String::from_utf8_lossy(poignee.as_bytes()).into_owned()
+}
+
 // Les methodes du trait Handler de russh-sftp sont declarees
 // `fn ... -> impl Future<...> + Send`. On calque cette signature plutot que
 // d'utiliser `async fn` : clippy suggere l'inverse, mais coller au trait rend
@@ -873,7 +881,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
                 // Le descripteur porte le chemin : le serveur n'a pas d'état.
                 return Ok(Handle {
                     id,
-                    handle: format!("fs:{filename}"),
+                    handle: format!("fs:{filename}").into(),
                 });
             }
             // Deux chemins réservés pour exercer les échecs, que le reste du
@@ -894,10 +902,11 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn read(
         &mut self,
         id: u32,
-        handle: String,
+        handle: russh_sftp::protocol::SftpHandle,
         offset: u64,
         len: u32,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Data, Self::Error>> + Send {
+        let handle = nom_de_poignee(&handle);
         let done = std::mem::replace(&mut self.file_read_done, true);
         let coupure = self.coupure_en_lecture;
         let gros = self.gros_fichier;
@@ -971,10 +980,11 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn write(
         &mut self,
         id: u32,
-        handle: String,
+        handle: russh_sftp::protocol::SftpHandle,
         offset: u64,
         data: Vec<u8>,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        let handle = nom_de_poignee(&handle);
         async move {
             if let Some(chemin) = handle.strip_prefix("fs:") {
                 let mut g = fs_fichiers();
@@ -994,8 +1004,9 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn close(
         &mut self,
         id: u32,
-        handle: String,
+        handle: russh_sftp::protocol::SftpHandle,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        let handle = nom_de_poignee(&handle);
         async move {
             if let Some(chemin) = handle.strip_prefix("fs:") {
                 FS_DESCRIPTEURS
@@ -1141,7 +1152,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
                 }
                 return Ok(Handle {
                     id,
-                    handle: format!("fsdir:{path}"),
+                    handle: format!("fsdir:{path}").into(),
                 });
             }
             Ok(Handle {
@@ -1154,8 +1165,9 @@ impl russh_sftp::server::Handler for TestSftpSession {
     fn readdir(
         &mut self,
         id: u32,
-        handle: String,
+        handle: russh_sftp::protocol::SftpHandle,
     ) -> impl Future<Output = Result<russh_sftp::protocol::Name, Self::Error>> + Send {
+        let handle = nom_de_poignee(&handle);
         // Un descripteur de dossier /fs se lit une fois : la seconde lecture
         // rend Eof, comme un vrai serveur.
         let deja_lu = !self.dossiers_lus.insert(handle.clone());
