@@ -25,10 +25,10 @@ tokio = { version = "1", features = ["full"] }
 # ce canal temporel, exploitable seulement par un serveur malveillant mesurant
 # des milliers de tentatives.
 # Pour privilegier la securite au detriment de la compatibilite :
-#   russh = { version = "0.63", default-features = false, features = ["flate2", "aws-lc-rs"] }
+#   russh = { version = "0.65", default-features = false, features = ["flate2", "aws-lc-rs"] }
 # `ring` plutot que `aws-lc-rs` (le defaut) : meme fonctionnement, verifie
 # contre un vrai sshd, mais 2 Mo de moins sur le binaire final.
-russh = { version = "0.63", default-features = false, features = [
+russh = { version = "0.65", default-features = false, features = [
     "flate2",
     "ring",
     "rsa",
@@ -87,7 +87,7 @@ outils-de-test = ["dep:bytes"]
 # russh (couche protocole) n'expose pas ce flux. Cible Windows seulement : nul
 # effet sur les autres plateformes.
 [target.'cfg(windows)'.dependencies]
-pageant = "0.2"
+pageant = "0.2.5"
 
 [dev-dependencies]
 # Auto-dépendance : les tests d'intégration (`tests/integration.rs`) et les
