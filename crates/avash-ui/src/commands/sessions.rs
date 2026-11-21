@@ -99,6 +99,10 @@ pub struct SessionHandle {
     /// Enregistrement asciicast en cours, partagé avec le pump qui y écrit
     /// chaque sortie. `None` hors enregistrement.
     pub enregistreur: Enregistrement,
+    /// Ce que la poignée de main SSH a établi (clé d'hôte, algorithmes,
+    /// authentification), relevé à l'ouverture pour la barre d'état de
+    /// l'onglet. `None` pour une console série, qui n'a rien de tout cela.
+    pub securite: Option<avash::ssh::SecuriteSession>,
 }
 
 /// L'enregistreur d'un onglet, tenu par le pump et par les commandes.
@@ -1068,12 +1072,14 @@ async fn open_on_target(
     // La cible — mot de passe compris — n'est pas conservée : la session
     // établie suffit à tout ce qui suit, panneau SFTP inclus.
     drop(target);
+    let securite = session.securite();
     let session: SessionPartagee = std::sync::Arc::new(tokio::sync::Mutex::new(session));
     let enregistreur: Enregistrement = std::sync::Arc::new(Mutex::new(None));
     enregistrer_session(
         state,
         id,
         SessionHandle {
+            securite: Some(securite),
             epoch,
             input,
             resize,
@@ -1200,6 +1206,24 @@ pub async fn pty_write(
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// L'état de sécurité de la session d'un onglet, pour sa barre d'état : clé
+/// d'hôte connue ou apprise à l'instant, algorithmes négociés, méthode
+/// d'authentification. `None` quand l'onglet n'est pas une session SSH
+/// (console série) ou n'existe plus. Rien de secret n'y figure : une empreinte
+/// de clé publique et des noms d'algorithmes.
+#[tauri::command]
+#[must_use]
+pub fn session_securite(
+    state: tauri::State<'_, SessionStore>,
+    id: u64,
+) -> Option<avash::ssh::SecuriteSession> {
+    state
+        .inner
+        .verrou()
+        .get(&id)
+        .and_then(|h| h.securite.clone())
 }
 
 /// Redimensionne le PTY (resize fenêtre / onglet) — `window_change` SSH.

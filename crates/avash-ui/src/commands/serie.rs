@@ -60,6 +60,7 @@ pub async fn serie_open<R: tauri::Runtime>(
         &state,
         id,
         SessionHandle {
+            securite: None,
             epoch,
             input: session.in_tx,
             resize,

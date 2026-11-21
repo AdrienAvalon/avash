@@ -48,6 +48,10 @@ export type Session = {
   sftpPath: string;
   /** Port série du poste : ni SFTP, ni sonde d'OS, ni copie vers un hôte. */
   serie?: boolean;
+  /** Ce que la poignée de main SSH a établi, relevé quand la session devient
+   *  vivante (voir `securite-session.ts`). Absent avant, et pour une console
+   *  série. */
+  securite?: import("./securite-session").SecuriteSession | null;
 };
 
 /**
