@@ -2,6 +2,8 @@
 name = "test-rdp-server"
 version = "0.1.0"
 edition = "2021"
+# Même plancher que l'espace de travail : voir le Cargo.toml racine.
+rust-version = "1.98"
 # Serveur de test, pas bibliothèque : rien n'est publié sur crates.io. Le dire
 # empêche une publication par mégarde, comme les cinq autres manifestes du dépôt.
 # Trouvé par l'audit du 8 septembre 2026 : ce manifeste était le seul sans

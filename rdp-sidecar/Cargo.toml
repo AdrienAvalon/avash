@@ -2,6 +2,8 @@
 name = "avash-rdp"
 version = "0.13.2"
 edition = "2021"
+# Même plancher que l'espace de travail : voir le Cargo.toml racine.
+rust-version = "1.98"
 # Application, pas bibliothèque : rien n'est publié sur crates.io. Le dire
 # empêche une publication par mégarde, et lève l'avertissement de cargo-deny
 # sur la dépendance de chemin interne.

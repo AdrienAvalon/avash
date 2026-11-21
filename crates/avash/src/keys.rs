@@ -144,8 +144,7 @@ pub fn list_keys() -> Result<Vec<KeyEntry>> {
         }
         let name = private
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| n.to_string_lossy().into_owned());
         // Audit du 12 septembre 2026 (C-SIL-13) : une `.pub` illisible (droits,
         // octets non UTF-8) donnait une clé sans bouton « copier » ni
         // déploiement, sans un mot. La liste la montre toujours, et le journal

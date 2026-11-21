@@ -6,6 +6,7 @@ name = "avash-ui"
 version.workspace = true
 license.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 # Application, pas bibliothèque : rien n'est publié sur crates.io. Le dire

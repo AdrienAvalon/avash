@@ -101,8 +101,7 @@ fn ligne_hote(h: &avash::SshHost) -> String {
     let rebond = h
         .proxy_jump
         .as_deref()
-        .map(|j| format!("  (via {})", avash::sans_controle(j)))
-        .unwrap_or_default();
+        .map_or_default(|j| format!("  (via {})", avash::sans_controle(j)));
     format!(
         "  • {:<20} → {cible}{rebond}",
         avash::sans_controle(&h.alias)

@@ -592,8 +592,7 @@ pub fn rdp_diagnostic(state: tauri::State<'_, RdpStore>, id: u64) -> String {
         .journaux
         .verrou()
         .get(&id)
-        .map(|j| j.verrou().iter().cloned().collect::<Vec<_>>().join("\n"))
-        .unwrap_or_default()
+        .map_or_default(|j| j.verrou().iter().cloned().collect::<Vec<_>>().join("\n"))
 }
 
 /// Message d'annulation volontaire : le front le reconnaît pour ne pas

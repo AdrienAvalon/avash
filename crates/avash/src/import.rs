@@ -527,8 +527,7 @@ pub fn parse_reg_query(sortie: &str) -> Lecture {
         let (nom, kind, valeur) = (champs[0].trim(), champs[1].trim(), champs[2].trim());
         let valeur = if kind == "REG_DWORD" {
             u32::from_str_radix(valeur.trim_start_matches("0x"), 16)
-                .map(|v| v.to_string())
-                .unwrap_or_default()
+                .map_or_default(|v| v.to_string())
         } else {
             valeur.to_string()
         };
@@ -579,11 +578,7 @@ fn bureau_moba(nom: &str, hostname: &str, champs: &[&str], dossier: &str) -> Bur
             .and_then(|p| p.trim().parse::<u16>().ok())
             .filter(|p| *p != 0)
             .unwrap_or(3389),
-        user: champs
-            .get(3)
-            .map(|s| s.trim())
-            .unwrap_or_default()
-            .to_string(),
+        user: champs.get(3).map_or_default(|s| s.trim()).to_string(),
         folder: dossier.to_string(),
     }
 }
@@ -618,7 +613,7 @@ pub fn parse_mobaxterm_ini(contenu: &str) -> Lecture {
                     continue;
                 };
                 let champs: Vec<&str> = champs.split('#').next().unwrap_or("").split('%').collect();
-                let hostname = champs.get(1).map(|s| s.trim()).unwrap_or_default();
+                let hostname = champs.get(1).map_or_default(|s| s.trim());
                 if hostname.is_empty() {
                     lecture.ignorees += 1;
                     continue;

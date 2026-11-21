@@ -1248,10 +1248,7 @@ impl AvashSession {
         // passe et retente, plutot que d'afficher un echec sans recours.
         // La raison de l'échec de la clé n'apparaît qu'ici, en fin de course,
         // pour ne pas masquer un succès par l'agent ou le mot de passe.
-        let detail_cle = raison_cle
-            .as_deref()
-            .map(|r| format!(" ({r})"))
-            .unwrap_or_default();
+        let detail_cle = raison_cle.as_deref().map_or_default(|r| format!(" ({r})"));
         if auth.password.is_none() {
             return Err(anyhow!(
                 "{PASSWORD_REQUIRED} Aucune méthode d'authentification n'a abouti pour « {} ». \

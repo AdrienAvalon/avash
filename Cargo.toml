@@ -10,6 +10,14 @@ exclude = ["rdp-sidecar", "test-rdp-server", "test-vnc-server", "fuzz"]
 [workspace.package]
 version = "0.13.2"
 edition = "2021"
+# Version minimale de Rust : celle de l'extension rust-stable de Flathub, le
+# canal qui compile avec le Rust le plus ancien (1.98.1 au 21 novembre 2026,
+# quand la chaîne et Arch sont en 1.100). La déclarer fait refuser par cargo
+# une dépendance qui exigerait plus récent, et retient clippy de proposer une
+# écriture que ce canal ne compilerait pas. Vérifié par `cargo +1.98.1 check`
+# sur l'espace de travail et le processus de bureau distant. À relever quand
+# Flathub monte.
+rust-version = "1.98"
 license = "AGPL-3.0-or-later"
 authors = ["Adrien Cros <adrien.cros@outlook.com>"]
 repository = "https://github.com/AdrienAvalon/avash"

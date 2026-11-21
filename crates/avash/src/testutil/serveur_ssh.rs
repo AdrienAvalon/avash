@@ -763,14 +763,10 @@ pub fn fs_poser(chemin: &str, contenu: &[u8]) {
     let mut d = fs_dossiers();
     let mut p = chemin
         .rsplit_once('/')
-        .map(|(a, _)| a.to_owned())
-        .unwrap_or_default();
+        .map_or_default(|(a, _)| a.to_owned());
     while !p.is_empty() && p != "/fs" {
         d.as_mut().unwrap().insert(p.clone());
-        p = p
-            .rsplit_once('/')
-            .map(|(a, _)| a.to_owned())
-            .unwrap_or_default();
+        p = p.rsplit_once('/').map_or_default(|(a, _)| a.to_owned());
     }
     fs_fichiers()
         .as_mut()

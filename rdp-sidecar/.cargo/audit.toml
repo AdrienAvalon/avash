@@ -12,10 +12,14 @@
 # ici (garde : scripts/tests/audit-config-centralise.sh).
 [advisories]
 ignore = [
-    # RUSTSEC-2023-0071 : rsa, canal auxiliaire temporel Marvin, sans correctif
-    # amont. Côté sidecar, `rsa` arrive par picky (tiré par sspi et
-    # ironrdp-connector), pour vérifier des signatures X.509 : aucune clé
-    # privée RSA côté client, donc pas la surface que vise Marvin. Même
-    # justification que rdp-sidecar/deny.toml.
+    # RUSTSEC-2023-0071 : rsa, canal auxiliaire temporel Marvin. Corrigé en
+    # rsa 0.10.0, mais hors de portée ici : picky et sspi (tirés par
+    # ironrdp-connector) épinglent `rsa = "=0.10.0-rc.18"`, jusque dans leurs
+    # dernières versions (picky 7.0.0-rc.29, sspi 0.23.1, relevé du 21 novembre
+    # 2026), et ironrdp 0.17, dernier publié, retient ironrdp-connector 0.10.
+    # Côté sidecar, `rsa` ne sert qu'à vérifier des signatures X.509 : aucune
+    # clé privée RSA côté client, donc pas la surface que vise Marvin. À lever
+    # dès que picky et sspi acceptent rsa 0.10.0. Même justification que
+    # rdp-sidecar/deny.toml.
     "RUSTSEC-2023-0071",
 ]
