@@ -7,6 +7,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Ajouté
+
+- **Barre d'état de sécurité d'une session SSH.** Sous le terminal, une ligne
+  dit ce que la poignée de main a réellement établi : clé d'hôte connue, ou
+  **premier contact** (clé apprise à l'instant, que personne n'a comparée à une
+  référence, signalé en ambre) ; algorithme et empreinte SHA-256 de la clé du
+  serveur ; échange de clés, chiffrement et code d'intégrité négociés ;
+  méthode d'authentification qui a abouti. Rien n'est déduit de la
+  configuration : le cœur relève ces valeurs pendant l'échange
+  (`AvashSession::securite`) et l'interface les affiche sans les interpréter
+  comme du HTML.
+
 ### Modifié
 
 - **Nouvelle identité, « Encre et menthe ».** Le logo devient « le A curseur » :

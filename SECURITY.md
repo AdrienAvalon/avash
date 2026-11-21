@@ -235,6 +235,21 @@ marquée comme compromise aurait été réapprise et acceptée. Avash refuse
 savons pas valider une autorité de certification, et faire semblant serait pire
 que refuser.
 
+### Ce qu'une session SSH a établi se lit à l'écran
+
+Depuis la refonte de novembre 2026, chaque session SSH porte une barre d'état :
+verdict sur la clé d'hôte, empreinte SHA-256, algorithmes négociés (échange de
+clés, chiffrement, intégrité), méthode d'authentification. Le **premier
+contact** y est signalé comme tel : la clé vient d'être apprise et personne ne
+l'a comparée à une référence, c'est le seul moment où une interception
+passerait inaperçue, et il ressemblait jusque-là à n'importe quelle
+reconnexion. Comparer l'empreinte affichée à celle que donne l'administrateur
+du serveur (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`) lève le doute.
+
+Ces valeurs sont relevées par le cœur pendant la poignée de main, jamais
+déduites de la configuration, et l'interface les pose en texte : un nom
+d'algorithme ou une empreinte ne peut pas y devenir du HTML.
+
 ### Le processus RDP n'est jamais cherché en chemin relatif
 
 Le chemin de repli du processus `avash-rdp` était `rdp-sidecar/target/release/`,

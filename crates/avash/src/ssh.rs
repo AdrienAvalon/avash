@@ -451,11 +451,74 @@ type RemoteForwards = Arc<std::sync::Mutex<HashMap<u32, Arc<RemoteTarget>>>>;
 /// pendant elle » de SECURITY.md n'était donc pas tenue.
 type RelaisAgent = Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>;
 
+/// Ce que la vérification de la clé d'hôte a conclu pour une session établie.
+/// Une clé changée, révoquée ou invérifiable n'apparaît pas ici : la connexion
+/// est refusée avant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EtatCleHote {
+    /// La clé présentée est celle que `known_hosts` connaissait déjà.
+    Connue,
+    /// Premier contact : la clé vient d'être apprise, personne ne l'a comparée
+    /// à une empreinte de référence. C'est le moment où une interception passe
+    /// inaperçue, d'où l'intérêt de le montrer.
+    PremierContact,
+}
+
+/// La méthode par laquelle l'authentification a abouti.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MethodeAuth {
+    /// Clé privée lue dans un fichier.
+    Cle,
+    /// Clé détenue par l'agent SSH du poste.
+    Agent,
+    /// Mot de passe (`password`).
+    MotDePasse,
+    /// Mot de passe répondu à une invite PAM (`keyboard-interactive`).
+    ClavierInteractif,
+}
+
+/// État de sécurité d'une session SSH établie : ce que le serveur a prouvé, ce
+/// qui a réellement été négocié, et comment l'utilisateur s'est authentifié.
+/// Rien n'est déduit de la configuration : chaque champ vient de l'échange.
+/// Montré dans la barre d'état de la session (refonte de novembre 2026), pour
+/// que la sécurité d'une connexion se lise au lieu de se supposer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct SecuriteSession {
+    /// Verdict de `known_hosts`. `None` tant que la poignée de main n'a pas
+    /// atteint la vérification.
+    pub cle_hote: Option<EtatCleHote>,
+    /// Algorithme de la clé d'hôte présentée (`ssh-ed25519`, `rsa-sha2-512`…).
+    pub algorithme_cle_hote: String,
+    /// Empreinte SHA-256 de la clé d'hôte, au format d'OpenSSH (`SHA256:…`).
+    pub empreinte_cle_hote: String,
+    /// Échange de clés négocié.
+    pub echange_de_cles: String,
+    /// Chiffrement négocié.
+    pub chiffrement: String,
+    /// Code d'authentification des messages, ou `None` quand le chiffrement
+    /// l'intègre (AES-GCM, ChaCha20-Poly1305).
+    pub integrite: Option<String>,
+    /// Méthode d'authentification qui a abouti.
+    pub authentification: Option<MethodeAuth>,
+}
+
+type SecuritePartagee = Arc<std::sync::Mutex<SecuriteSession>>;
+
+/// Un chiffrement qui authentifie lui-même les messages : le code négocié à
+/// côté n'est alors pas employé, et l'afficher laisserait croire le contraire.
+fn chiffrement_authentifie(nom: &str) -> bool {
+    nom.contains("gcm") || nom.contains("poly1305")
+}
+
 /// Handler d'auth + vérification `known_hosts`.
 struct AvashAuth {
     host: String,
     port: u16,
     verdict: HostKeyVerdict,
+    /// Rempli au fil de la poignée de main, relu par [`AvashSession::securite`].
+    securite: SecuritePartagee,
     forwards: RemoteForwards,
     /// L'agent SSH du poste est-il redirigé vers ce serveur en ce moment ?
     /// Levé par `run_avec_agent` le temps d'une commande, jamais autrement :
@@ -545,6 +608,18 @@ async fn ouvrir_agent_local() -> Option<Box<dyn FluxAgent>> {
     None
 }
 
+impl AvashAuth {
+    /// Retient ce que la vérification de la clé d'hôte vient d'établir.
+    fn noter_cle_hote(&self, etat: EtatCleHote, cle: &russh::keys::PublicKey) {
+        let mut securite = self.securite.verrou();
+        securite.cle_hote = Some(etat);
+        cle.algorithm()
+            .as_str()
+            .clone_into(&mut securite.algorithme_cle_hote);
+        securite.empreinte_cle_hote = cle.fingerprint(russh::keys::HashAlg::Sha256).to_string();
+    }
+}
+
 impl russh::client::Handler for AvashAuth {
     type Error = russh::Error;
 
@@ -611,7 +686,10 @@ impl russh::client::Handler for AvashAuth {
             };
         match juger_cle_hote(&enregistrees, server_public_key) {
             // Hôte connu, clé identique.
-            VerdictCle::Connue => Ok(true),
+            VerdictCle::Connue => {
+                self.noter_cle_hote(EtatCleHote::Connue, server_public_key);
+                Ok(true)
+            }
 
             // Hôte inconnu : premier contact, on mémorise.
             VerdictCle::PremierContact => {
@@ -630,6 +708,7 @@ impl russh::client::Handler for AvashAuth {
                     *self.verdict.verrou() = Some(reason);
                     return Err(russh::Error::UnknownKey);
                 }
+                self.noter_cle_hote(EtatCleHote::PremierContact, server_public_key);
                 Ok(true)
             }
 
@@ -648,6 +727,24 @@ impl russh::client::Handler for AvashAuth {
                 Err(russh::Error::UnknownKey)
             }
         }
+    }
+
+    /// Les algorithmes réellement négociés, relevés à la fin de chaque échange
+    /// de clés (le premier, puis chaque renouvellement). Le secret partagé que
+    /// russh propose ici n'est ni lu ni conservé.
+    async fn kex_done(
+        &mut self,
+        _secret_partage: Option<&[u8]>,
+        noms: &russh::Names,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let chiffrement = noms.cipher.as_ref().to_owned();
+        let mut securite = self.securite.verrou();
+        noms.kex.as_ref().clone_into(&mut securite.echange_de_cles);
+        securite.integrite =
+            (!chiffrement_authentifie(&chiffrement)).then(|| noms.server_mac.as_ref().to_owned());
+        securite.chiffrement = chiffrement;
+        Ok(())
     }
 
     /// Le serveur relaie une connexion recue sur un port redirige (`-R`).
@@ -741,6 +838,7 @@ pub struct Hop {
 
 pub struct AvashSession {
     session: russh::client::Handle<AvashAuth>,
+    securite: SecuritePartagee,
     forwards: RemoteForwards,
     /// Partagé avec le Handler : levé le temps d'un `run_avec_agent`.
     agent_redirige: Arc<std::sync::atomic::AtomicBool>,
@@ -986,11 +1084,13 @@ impl AvashSession {
     ) -> (
         AvashAuth,
         HostKeyVerdict,
+        SecuritePartagee,
         RemoteForwards,
         Arc<std::sync::atomic::AtomicBool>,
         RelaisAgent,
     ) {
         let verdict: HostKeyVerdict = Arc::new(std::sync::Mutex::new(None));
+        let securite: SecuritePartagee = Arc::default();
         let forwards: RemoteForwards = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let agent_redirige = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let relais_agent: RelaisAgent = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -998,11 +1098,27 @@ impl AvashSession {
             host: host.to_string(),
             port,
             verdict: verdict.clone(),
+            securite: securite.clone(),
             forwards: forwards.clone(),
             agent_redirige: agent_redirige.clone(),
             relais_agent: relais_agent.clone(),
         };
-        (handler, verdict, forwards, agent_redirige, relais_agent)
+        (
+            handler,
+            verdict,
+            securite,
+            forwards,
+            agent_redirige,
+            relais_agent,
+        )
+    }
+
+    /// L'état de sécurité de cette session, tel que la poignée de main l'a
+    /// établi (une copie : un renouvellement de clés ultérieur ne la modifie
+    /// pas, il faut la redemander).
+    #[must_use]
+    pub fn securite(&self) -> SecuriteSession {
+        self.securite.verrou().clone()
     }
 
     /// Connexion directe (TCP), sans rebond, bornée par le délai de connexion.
@@ -1053,7 +1169,8 @@ impl AvashSession {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        let (handler, verdict, forwards, agent_redirige, relais_agent) = Self::handler(host, port);
+        let (handler, verdict, securite, forwards, agent_redirige, relais_agent) =
+            Self::handler(host, port);
         let poignee = russh::client::connect_stream(Self::config(), flux, handler);
         let mut session = match tokio::time::timeout_at(echeance, poignee).await {
             Ok(Ok(s)) => s,
@@ -1069,7 +1186,7 @@ impl AvashSession {
             Err(_) => return Err(anyhow!(message_delai(host, port, delai, Etape::Poignee))),
         };
         match tokio::time::timeout_at(echeance, Self::authenticate(&mut session, auth)).await {
-            Ok(issue) => issue?,
+            Ok(issue) => securite.verrou().authentification = Some(issue?),
             Err(_) => {
                 return Err(anyhow!(message_delai(
                     host,
@@ -1081,6 +1198,7 @@ impl AvashSession {
         }
         Ok(Self {
             session,
+            securite,
             forwards,
             agent_redirige,
             relais_agent,
@@ -1173,7 +1291,7 @@ impl AvashSession {
     async fn authenticate(
         session: &mut russh::client::Handle<AvashAuth>,
         auth: &ClientAuth,
-    ) -> Result<()> {
+    ) -> Result<MethodeAuth> {
         // Raison pour laquelle la clé n'a pas servi (chiffrée par phrase de
         // passe, format non géré, droits) — gardée pour l'erreur finale, pas
         // fatale en soi. Trouvé par l'audit du 7 septembre 2026 : un `?` sur le
@@ -1195,7 +1313,7 @@ impl AvashSession {
                         .await?
                         .success()
                     {
-                        return Ok(());
+                        return Ok(MethodeAuth::Cle);
                     }
                 }
                 Err(e) => {
@@ -1214,7 +1332,7 @@ impl AvashSession {
         // Une cle deverrouillee une fois, ou sur token materiel (YubiKey),
         // evite de saisir quoi que ce soit.
         if Self::authenticate_agent(session, &auth.user).await? {
-            return Ok(());
+            return Ok(MethodeAuth::Agent);
         }
         // Ce que le serveur accepte encore, tel qu'il le dit lui-même. Sans
         // cela l'échec était muet sur sa cause : « authentification échouée »,
@@ -1226,7 +1344,7 @@ impl AvashSession {
                 .authenticate_password(&auth.user, password.as_str())
                 .await?;
             if issue.success() {
-                return Ok(());
+                return Ok(MethodeAuth::MotDePasse);
             }
             if let russh::client::AuthResult::Failure {
                 remaining_methods, ..
@@ -1241,7 +1359,7 @@ impl AvashSession {
             // savions pas, et l'utilisateur voyait « authentification échouée »
             // avec un mot de passe pourtant juste.
             if Self::authenticate_clavier(session, &auth.user, password.as_str()).await? {
-                return Ok(());
+                return Ok(MethodeAuth::ClavierInteractif);
             }
         }
         // Marqueur reconnu par l'interface : elle demande alors le mot de

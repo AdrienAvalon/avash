@@ -23,6 +23,7 @@ import { notify, notifyErreur } from "./notifications";
 import { openFolderMenu } from "./dossiers";
 import { openTermSearch, setFontSize } from "./terminal-outils";
 import { setTitlebar, setupWindowControls } from "./titre";
+import { majBarreSecurite, type SecuriteSession } from "./securite-session";
 import { sftp, sftpOpenAt, sftpSyncButton, sftpAppliquerVue } from "./sftp";
 import { tunnels } from "./tunnels";
 import "./import";
@@ -534,9 +535,21 @@ function setSessionState(id: number, st: SessionState) {
       st === "connecting" ? t("session-connexion-en-cours") : st === "live" ? t("session-connectee") : t("session-terminee");
   }
   s.tab.classList.toggle("dead", st === "closed");
+  if (st === "live" && !s.serie) void releverSecurite(s);
   rafraichirLignes([`ssh:${s.alias}`]);
   sftpSyncButton();
   setTitlebar();
+}
+
+/** Demande au cœur ce que la poignée de main a établi, pour la barre d'état.
+ *  Un échec ne casse rien : la barre reste sur « Connectée », sans détail. */
+async function releverSecurite(s: Session): Promise<void> {
+  try {
+    s.securite = await invoke<SecuriteSession | null>("session_securite", { id: s.id });
+  } catch {
+    s.securite = null;
+  }
+  majBarreSecurite();
 }
 
 /** Retient le moteur de rendu du terminal et le confie au diagnostic.

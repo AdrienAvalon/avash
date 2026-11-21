@@ -840,6 +840,7 @@ pub(crate) fn poignee_avec_clavier(
     let (input, clavier) = tokio::sync::mpsc::channel(16);
     let (resize, _) = tokio::sync::mpsc::channel(1);
     let h = SessionHandle {
+        securite: None,
         epoch,
         input,
         resize,
@@ -1362,6 +1363,7 @@ pub(crate) fn poignee_scp_annulable(epoch: u64) -> SessionHandle {
     let (input, _) = tokio::sync::mpsc::channel(1);
     let (resize, _) = tokio::sync::mpsc::channel(1);
     SessionHandle {
+        securite: None,
         epoch,
         input,
         resize,
@@ -1445,6 +1447,7 @@ async fn une_copie_directe_terminee_ne_reste_pas_annulable() {
     let (input, _) = tokio::sync::mpsc::channel(1);
     let (resize, _) = tokio::sync::mpsc::channel(1);
     let source = SessionHandle {
+        securite: None,
         epoch: 1,
         input,
         resize,

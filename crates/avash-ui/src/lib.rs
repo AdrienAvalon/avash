@@ -136,6 +136,7 @@ pub fn run() {
             commands::pty_write,
             commands::pty_ack,
             commands::pty_resize,
+            commands::session_securite,
             commands::pty_close,
             commands::sftp_realpath,
             commands::sftp_list,

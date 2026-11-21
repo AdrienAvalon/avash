@@ -38,6 +38,7 @@ async fn onglet_reel(
     let pty = session.open_pty(80, 24, "xterm-256color").await.unwrap();
     let partagee: SessionPartagee = std::sync::Arc::new(tokio::sync::Mutex::new(session));
     let handle = SessionHandle {
+        securite: None,
         epoch: SESSION_EPOCH.fetch_add(1, Ordering::Relaxed),
         input: pty.in_tx.clone(),
         resize: pty.resize_tx.clone(),

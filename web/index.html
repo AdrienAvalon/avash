@@ -589,7 +589,38 @@
     .tab:hover .close, .tab.active .close { opacity: .55; }
     .tab .close:hover { opacity: 1; background: var(--err); color: #fff; }
 
-    .terminal-zone { flex: 1; position: relative; display: flex; }
+    /* `min-height: 0` : sans lui la zone refuse de rétrécir sous la hauteur de
+       son contenu et pousse la barre d'état hors de la fenêtre. */
+    .terminal-zone { flex: 1; min-height: 0; position: relative; display: flex; }
+
+    /* Barre d'état de sécurité d'une session SSH : ce que la poignée de main a
+       établi (voir securite-session.ts). Une ligne, discrète ; le premier
+       contact, lui, se voit. */
+    .barre-securite {
+      /* Une seule ligne, quelle que soit la largeur : le verdict sur la clé et
+         la méthode d'authentification gardent leur place, les noms
+         d'algorithmes se tronquent (leur texte complet reste en infobulle).
+         `flex: none` : la barre ne cède pas sa hauteur à la zone du terminal. */
+      flex: none; display: flex; align-items: center; gap: 18px;
+      padding: 0 14px; height: 28px; font-size: 11.5px; white-space: nowrap; overflow: hidden;
+      background: var(--bg-soft); border-top: 1px solid var(--border-soft); color: var(--text-dim);
+    }
+    .barre-securite[hidden] { display: none; }
+
+    .barre-securite .bs-cle {
+      flex: none; display: inline-flex; align-items: center; gap: 6px;
+      color: var(--ok); font-weight: 600;
+    }
+    .barre-securite .bs-cle svg { width: 13px; height: 13px; }
+    .barre-securite.premier-contact .bs-cle { color: var(--warn); }
+
+    .barre-securite .bs-mono {
+      font-family: var(--mono); font-size: 11px;
+      flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    }
+    .barre-securite .bs-empreinte { flex-shrink: 4; user-select: text; }
+    .barre-securite .bs-auth, .barre-securite .bs-etat { flex: none; }
+    .barre-securite .bs-auth { margin-left: auto; }
 
     /* Meme fond que le theme xterm : l'espace entre la derniere ligne et le
        bord (les lignes ne tombent jamais juste) ne se voit pas. */
@@ -1289,6 +1320,7 @@
           <div class="ctx-item danger" role="menuitem" data-act="delete" data-i18n="supprimer">Supprimer</div>
         </div>
       </div>
+      <div class="barre-securite" id="barre-securite" role="status" aria-label="Sécurité de la session" data-i18n-aria="securite-barre" hidden></div>
     </section>
   </div>
 

@@ -424,6 +424,52 @@ async fn unknown_host_is_learned_on_first_contact() {
         .expect("reconnexion sur hote connu : doit passer");
 }
 
+/// La barre d'état de sécurité d'une session (refonte de novembre 2026) ne doit
+/// rien affirmer que la poignée de main n'ait établi : premier contact puis
+/// hôte connu, algorithmes réellement négociés, méthode qui a abouti.
+#[tokio::test]
+async fn l_etat_de_securite_dit_ce_que_la_poignee_de_main_a_etabli() {
+    use avash::ssh::{EtatCleHote, MethodeAuth};
+    let port = spawn_test_sshd().await;
+    let auth = test_auth();
+
+    let premiere = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("premier contact");
+    let etat = premiere.securite();
+    assert_eq!(
+        etat.cle_hote,
+        Some(EtatCleHote::PremierContact),
+        "une clé apprise à l'instant ne doit pas passer pour une clé connue"
+    );
+    assert_eq!(etat.authentification, Some(MethodeAuth::Cle));
+    assert_eq!(
+        etat.empreinte_cle_hote,
+        CLE_HOTE
+            .public_key()
+            .fingerprint(russh::keys::HashAlg::Sha256)
+            .to_string(),
+        "l'empreinte affichée doit être celle de la clé du serveur"
+    );
+    assert!(etat.empreinte_cle_hote.starts_with("SHA256:"));
+    assert_ne!(etat.algorithme_cle_hote, "");
+    assert!(
+        !etat.echange_de_cles.is_empty(),
+        "échange de clés non relevé"
+    );
+    assert!(!etat.chiffrement.is_empty(), "chiffrement non relevé");
+    // Un chiffrement qui authentifie lui-même n'affiche pas de code à côté, et
+    // un chiffrement qui ne le fait pas en affiche forcément un.
+    let integre = etat.chiffrement.contains("gcm") || etat.chiffrement.contains("poly1305");
+    assert_eq!(etat.integrite.is_none(), integre, "{etat:?}");
+    drop(premiere);
+
+    let seconde = avash::ssh::AvashSession::connect("127.0.0.1", port, &auth)
+        .await
+        .expect("reconnexion");
+    assert_eq!(seconde.securite().cle_hote, Some(EtatCleHote::Connue));
+}
+
 /// Non-regression : abandonner le canal de resize ne doit ni tuer la session,
 /// ni faire tourner le pump a vide.
 ///

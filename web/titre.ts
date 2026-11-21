@@ -1,5 +1,6 @@
 // Barre de titre intégrée (fenêtre sans décorations).
 
+import { majBarreSecurite } from "./securite-session";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ic } from "./icons";
 import { $, state } from "./etat";
@@ -82,6 +83,9 @@ export async function setupWindowControls() {
  *  onglets sont affichés mais un seul a le clavier. */
 export function setTitlebar() {
   $("tb-name").textContent = nomOngletActif() ?? "Avash";
+  // La barre d'état de sécurité suit l'onglet actif et son état, comme le
+  // titre : ce point de passage voit tous les changements des deux.
+  majBarreSecurite();
 }
 
 function nomOngletActif(): string | null {
