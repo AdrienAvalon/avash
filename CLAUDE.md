@@ -41,6 +41,14 @@ ce qui n'est pas ici n'existe pas pour eux.
   release), tests Rust du cœur, de l'interface et du sidecar, audit et deny,
   front (tsc, eslint, stylelint, knip, vitest, npm audit). Il tourne aussi dans
   le hook pre-commit (`scripts/hooks`, activé par `core.hooksPath`).
+- Le hook pre-commit ne joue qu'une **partie** de `./check.sh` (garde front,
+  format, clippy, tests, front), et la chaîne GitHub ne joue pas ses gardes de
+  documentation, d'audit ni d'IPC : lancer `./check.sh` en entier avant de
+  pousser. Trois gardes sont restés rouges dans `main` du 21 au 22 novembre
+  2026 pour l'avoir oublié.
+- Une branche de version ou de maintenance part de `main` à jour
+  (`git switch -c <branche> github/main`), jamais de la branche courante : la
+  0.13.3 a failli embarquer la refonte de l'interface.
 - `./check.sh --quick` saute le build release : **toujours reconstruire en
   release avant la suite bout en bout**, le binaire embarque `web/dist`.
 - Le hook pre-commit refuse un commit non formaté et le fait **sans bruit**
