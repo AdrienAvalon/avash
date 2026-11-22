@@ -489,7 +489,8 @@ pub struct SecuriteSession {
     /// Verdict de `known_hosts`. `None` tant que la poignée de main n'a pas
     /// atteint la vérification.
     pub cle_hote: Option<EtatCleHote>,
-    /// Algorithme de la clé d'hôte présentée (`ssh-ed25519`, `rsa-sha2-512`…).
+    /// Type de la clé d'hôte présentée (`ssh-ed25519`, `ssh-rsa`…) : celui de
+    /// la clé, pas l'algorithme de signature négocié pour elle.
     pub algorithme_cle_hote: String,
     /// Empreinte SHA-256 de la clé d'hôte, au format d'OpenSSH (`SHA256:…`).
     pub empreinte_cle_hote: String,
@@ -502,6 +503,57 @@ pub struct SecuriteSession {
     pub integrite: Option<String>,
     /// Méthode d'authentification qui a abouti.
     pub authentification: Option<MethodeAuth>,
+    /// Rebonds (`ProxyJump`) dont la clé vient d'être apprise, `hôte:port`. La
+    /// cible peut être connue de longue date et le rebond vu pour la première
+    /// fois : c'est lui, alors, qui a pu être intercepté, et il a reçu ses
+    /// identifiants. Rempli par [`AvashSession::securite`].
+    pub rebonds_premier_contact: Vec<String>,
+}
+
+/// Clés d'hôte apprises pendant cette exécution et pas encore montrées comme
+/// « premier contact » : `(hôte, port, empreinte SHA-256)`.
+///
+/// La clé s'écrit dans `known_hosts` pendant l'échange de clés, donc AVANT
+/// l'authentification. Qu'une première tentative échoue ensuite (clé refusée
+/// puis mot de passe demandé, mot de passe erroné, délai), et la suivante
+/// trouvait la clé « connue » : la barre d'état de la 0.14.0 l'affichait ainsi
+/// alors que personne n'avait vu le premier contact. Pareil après une commande,
+/// un tunnel ou un déploiement de clé, qui apprennent la clé sans rien montrer
+/// (audit du 22 novembre 2026). Une clé reste donc « premier contact » jusqu'à
+/// ce qu'une session l'ait rapportée par [`AvashSession::securite`].
+///
+/// Limite connue : la mémoire est celle du processus. Une clé apprise par une
+/// tentative ratée, sans session réussie avant la fermeture d'Avash, sera
+/// « connue » au lancement suivant.
+static CLES_A_MONTRER: std::sync::Mutex<Vec<(String, u16, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Retient qu'une clé vient d'être apprise et reste à montrer.
+fn retenir_cle_a_montrer(hote: &str, port: u16, empreinte: &str) {
+    let mut cles = CLES_A_MONTRER.verrou();
+    if !cles
+        .iter()
+        .any(|(h, p, e)| h == hote && *p == port && e == empreinte)
+    {
+        cles.push((hote.to_owned(), port, empreinte.to_owned()));
+    }
+}
+
+/// Cette clé a-t-elle été apprise pendant cette exécution sans avoir encore
+/// été montrée ?
+fn cle_reste_a_montrer(hote: &str, port: u16, empreinte: &str) -> bool {
+    CLES_A_MONTRER
+        .verrou()
+        .iter()
+        .any(|(h, p, e)| h == hote && *p == port && e == empreinte)
+}
+
+/// La clé a été rapportée comme « premier contact » : elle redevient une clé
+/// connue pour les sessions suivantes.
+fn cle_montree(hote: &str, port: u16, empreinte: &str) {
+    CLES_A_MONTRER
+        .verrou()
+        .retain(|(h, p, e)| !(h == hote && *p == port && e == empreinte));
 }
 
 type SecuritePartagee = Arc<std::sync::Mutex<SecuriteSession>>;
@@ -687,7 +739,18 @@ impl russh::client::Handler for AvashAuth {
         match juger_cle_hote(&enregistrees, server_public_key) {
             // Hôte connu, clé identique.
             VerdictCle::Connue => {
-                self.noter_cle_hote(EtatCleHote::Connue, server_public_key);
+                // Connue de `known_hosts`, mais peut-être seulement depuis une
+                // tentative de cette exécution que personne n'a vue aboutir
+                // (voir `CLES_A_MONTRER`).
+                let empreinte = server_public_key
+                    .fingerprint(russh::keys::HashAlg::Sha256)
+                    .to_string();
+                let etat = if cle_reste_a_montrer(&self.host, self.port, &empreinte) {
+                    EtatCleHote::PremierContact
+                } else {
+                    EtatCleHote::Connue
+                };
+                self.noter_cle_hote(etat, server_public_key);
                 Ok(true)
             }
 
@@ -708,6 +771,13 @@ impl russh::client::Handler for AvashAuth {
                     *self.verdict.verrou() = Some(reason);
                     return Err(russh::Error::UnknownKey);
                 }
+                retenir_cle_a_montrer(
+                    &self.host,
+                    self.port,
+                    &server_public_key
+                        .fingerprint(russh::keys::HashAlg::Sha256)
+                        .to_string(),
+                );
                 self.noter_cle_hote(EtatCleHote::PremierContact, server_public_key);
                 Ok(true)
             }
@@ -838,6 +908,9 @@ pub struct Hop {
 
 pub struct AvashSession {
     session: russh::client::Handle<AvashAuth>,
+    /// L'hôte et le port joints, tels que `known_hosts` les nomme.
+    hote: String,
+    port: u16,
     securite: SecuritePartagee,
     forwards: RemoteForwards,
     /// Partagé avec le Handler : levé le temps d'un `run_avec_agent`.
@@ -846,9 +919,7 @@ pub struct AvashSession {
     /// de chaque commande par la garde.
     relais_agent: RelaisAgent,
     /// Rebonds gardes vivants : le transport de cette session passe par leurs
-    /// canaux ; les lacher couperait la connexion. Jamais relu, seulement
-    /// possede — d'ou l'allow.
-    #[allow(dead_code)]
+    /// canaux ; les lacher couperait la connexion.
     jumps: Vec<AvashSession>,
 }
 
@@ -1116,9 +1187,24 @@ impl AvashSession {
     /// L'état de sécurité de cette session, tel que la poignée de main l'a
     /// établi (une copie : un renouvellement de clés ultérieur ne la modifie
     /// pas, il faut la redemander).
+    ///
+    /// Rapporter un premier contact le solde : la clé redevient « connue » pour
+    /// les sessions suivantes (voir `CLES_A_MONTRER`). Les rebonds de la chaîne
+    /// sont interrogés de même, et ceux dont la clé vient d'être apprise sont
+    /// nommés dans `rebonds_premier_contact`.
     #[must_use]
     pub fn securite(&self) -> SecuriteSession {
-        self.securite.verrou().clone()
+        let mut etat = self.securite.verrou().clone();
+        if etat.cle_hote == Some(EtatCleHote::PremierContact) {
+            cle_montree(&self.hote, self.port, &etat.empreinte_cle_hote);
+        }
+        etat.rebonds_premier_contact = self
+            .jumps
+            .iter()
+            .filter(|rebond| rebond.securite().cle_hote == Some(EtatCleHote::PremierContact))
+            .map(|rebond| format!("{}:{}", rebond.hote, rebond.port))
+            .collect();
+        etat
     }
 
     /// Connexion directe (TCP), sans rebond, bornée par le délai de connexion.
@@ -1198,6 +1284,8 @@ impl AvashSession {
         }
         Ok(Self {
             session,
+            hote: host.to_owned(),
+            port,
             securite,
             forwards,
             agent_redirige,

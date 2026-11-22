@@ -7,6 +7,34 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Sécurité
+
+- **La barre d'état de sécurité pouvait dire « clé d'hôte connue » lors d'un
+  vrai premier contact.** La clé d'un serveur s'écrit dans `known_hosts`
+  pendant l'échange de clés, avant l'authentification. Il suffisait qu'une
+  première tentative échoue ensuite (la clé ne suffit pas et un mot de passe
+  est demandé, mot de passe erroné, délai) pour que la tentative suivante
+  trouve la clé déjà enregistrée et l'affiche comme connue : le premier
+  contact, le seul moment où une interception passe inaperçue, n'était alors
+  jamais signalé. Même effet après une commande, un tunnel ou un déploiement
+  de clé, qui apprennent la clé sans rien montrer. Une clé apprise pendant
+  l'exécution reste désormais « premier contact » jusqu'à ce qu'une session
+  l'ait montrée. La vérification des clés elle-même n'était pas en cause : une
+  clé changée a toujours été refusée. Limite connue : cette mémoire est celle
+  du processus, une clé apprise par une tentative ratée puis jamais montrée
+  avant la fermeture d'Avash sera « connue » au lancement suivant. Trouvé par
+  la relecture de sécurité du 22 novembre 2026.
+- **Le premier contact avec un rebond est signalé.** Chaque maillon d'un
+  `ProxyJump` vérifiait sa clé, mais seul l'état de la cible remontait : un
+  rebond vu pour la première fois derrière une cible connue laissait la barre
+  sur « clé d'hôte connue ». La barre nomme maintenant le rebond dont la clé
+  vient d'être apprise.
+- La barre n'affiche « clé d'hôte connue » que si le cœur l'a dit : un état
+  absent ne passe plus pour connu. À la reconnexion, elle ne montre plus un
+  instant l'empreinte de la poignée de main précédente. L'infobulle de
+  l'empreinte la donne en entier, pour la comparer même dans une fenêtre
+  étroite.
+
 ### Corrigé
 
 - **L'AppImage ne s'ouvrait pas sur certaines machines sous Wayland.** « Could

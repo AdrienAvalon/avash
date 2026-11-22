@@ -245,8 +245,14 @@ fn relance_avec_wayland_du_systeme() {
     };
     // `exec` ne revient que sur un échec : on continue alors sans la relance,
     // ce qui laisse l'application telle qu'elle était avant ce correctif.
+    // `arg0` : le nom sous lequel on a été lancé, pas « /proc/self/exe », que
+    // GTK prendrait pour nom de programme (classe de fenêtre, regroupement dans
+    // la barre des tâches).
+    let mut arguments = std::env::args_os();
+    let nom = arguments.next().unwrap_or_else(|| "avash-ui".into());
     let erreur = std::process::Command::new("/proc/self/exe")
-        .args(std::env::args_os().skip(1))
+        .arg0(nom)
+        .args(arguments)
         .env("LD_PRELOAD", nouveau)
         .exec();
     eprintln!("avash : relance avec la bibliothèque Wayland du système impossible ({erreur})");

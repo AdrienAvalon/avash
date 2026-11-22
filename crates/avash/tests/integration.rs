@@ -470,6 +470,107 @@ async fn l_etat_de_securite_dit_ce_que_la_poignee_de_main_a_etabli() {
     assert_eq!(seconde.securite().cle_hote, Some(EtatCleHote::Connue));
 }
 
+/// Trouvé par l'audit du 22 novembre 2026 : la clé d'hôte s'écrit dans
+/// `known_hosts` pendant l'échange de clés, avant l'authentification. Une
+/// première tentative ratée (ici un mot de passe refusé, comme quand la clé ne
+/// suffit pas et qu'Avash redemande un mot de passe) suffisait donc à faire
+/// passer la tentative suivante pour une « clé connue » : la barre d'état de la
+/// 0.14.0 ne signalait jamais le premier contact dans ce cas, le plus courant
+/// pour un hôte à mot de passe.
+#[tokio::test]
+async fn une_cle_apprise_par_une_tentative_ratee_reste_un_premier_contact() {
+    use avash::ssh::EtatCleHote;
+    let port = spawn_test_sshd().await;
+    std::sync::LazyLock::force(&HOME_POSE);
+    // « refuse » : le compte du serveur de test qui rejette la clé et tout mot
+    // de passe autre que le sien.
+    let mauvais = avash::ssh::ClientAuth {
+        user: "refuse".into(),
+        key_path: None,
+        password: Some(zeroize::Zeroizing::new("mot-de-passe-faux".to_owned())),
+    };
+    assert!(
+        avash::ssh::AvashSession::connect("127.0.0.1", port, &mauvais)
+            .await
+            .is_err(),
+        "la tentative au mauvais mot de passe devait échouer"
+    );
+
+    let reussie = avash::ssh::AvashSession::connect("127.0.0.1", port, &test_auth())
+        .await
+        .expect("seconde tentative");
+    assert_eq!(
+        reussie.securite().cle_hote,
+        Some(EtatCleHote::PremierContact),
+        "la clé a été apprise par la tentative ratée : personne n'a encore vu ce premier contact"
+    );
+    // Redemander l'état de la même session ne change pas sa réponse.
+    assert_eq!(
+        reussie.securite().cle_hote,
+        Some(EtatCleHote::PremierContact)
+    );
+    drop(reussie);
+
+    // Une fois montré, le premier contact est soldé.
+    let suivante = avash::ssh::AvashSession::connect("127.0.0.1", port, &test_auth())
+        .await
+        .expect("troisième connexion");
+    assert_eq!(suivante.securite().cle_hote, Some(EtatCleHote::Connue));
+}
+
+/// Même audit : chaque maillon d'un `ProxyJump` vérifie sa clé, mais seul l'état
+/// de la cible remontait. Un rebond vu pour la première fois (celui qui a pu
+/// être intercepté, et qui a reçu ses identifiants) derrière une cible connue
+/// laissait la barre sur « clé d'hôte connue ».
+#[tokio::test]
+async fn le_premier_contact_d_un_rebond_est_nomme() {
+    use avash::ssh::EtatCleHote;
+    let rebond = spawn_test_sshd().await;
+    let cible = spawn_test_sshd().await;
+    // La cible est connue de longue date : contact direct, montré, soldé.
+    let directe = avash::ssh::AvashSession::connect("127.0.0.1", cible, &test_auth())
+        .await
+        .expect("contact direct avec la cible");
+    assert_eq!(
+        directe.securite().cle_hote,
+        Some(EtatCleHote::PremierContact)
+    );
+    drop(directe);
+
+    let saut = || avash::ssh::Hop {
+        addr: "127.0.0.1".into(),
+        port: rebond,
+        auth: test_auth(),
+    };
+    let session =
+        avash::ssh::AvashSession::connect_via(&[saut()], "127.0.0.1", cible, &test_auth())
+            .await
+            .expect("connexion via le rebond");
+    let etat = session.securite();
+    assert_eq!(
+        etat.cle_hote,
+        Some(EtatCleHote::Connue),
+        "la cible est connue"
+    );
+    assert_eq!(
+        etat.rebonds_premier_contact,
+        vec![format!("127.0.0.1:{rebond}")],
+        "le rebond vient d'être appris : il doit être nommé"
+    );
+    drop(session);
+
+    // Montré une fois, le rebond est connu à son tour.
+    let seconde =
+        avash::ssh::AvashSession::connect_via(&[saut()], "127.0.0.1", cible, &test_auth())
+            .await
+            .expect("seconde connexion via le rebond");
+    assert_eq!(
+        seconde.securite().rebonds_premier_contact,
+        Vec::<String>::new(),
+        "montré une fois, le rebond n'a plus à être nommé"
+    );
+}
+
 /// Non-regression : abandonner le canal de resize ne doit ni tuer la session,
 /// ni faire tourner le pump a vide.
 ///

@@ -207,7 +207,12 @@ avec la distinction que fait OpenSSH (voir `check_server_key` dans
 `crates/avash/src/ssh.rs`) :
 
 - **hôte inconnu** : la clé est apprise au premier contact et ajoutée à
-  `~/.ssh/known_hosts` ;
+  `~/.ssh/known_hosts`. La barre d'état de la session le signale en ambre,
+  avec l'empreinte à comparer. Comme la clé s'écrit avant l'authentification,
+  une clé apprise pendant l'exécution reste « premier contact » tant qu'aucune
+  session ne l'a montrée, même si la tentative qui l'a apprise a échoué ; un
+  rebond (`ProxyJump`) appris à l'instant est nommé de la même façon. Limite :
+  cette mémoire ne survit pas à la fermeture d'Avash ;
 - **clé identique** : connexion acceptée ;
 - **clé changée** : la connexion est **refusée**, avec un message explicite
   (réinstallation du serveur ou interception possible) et l'empreinte SHA-256

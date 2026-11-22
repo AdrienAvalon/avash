@@ -20,6 +20,8 @@ export type SecuriteSession = {
   chiffrement: string;
   integrite: string | null;
   authentification: "cle" | "agent" | "mot-de-passe" | "clavier-interactif" | null;
+  /** Rebonds (`ProxyJump`) dont la clé vient d'être apprise, `hôte:port`. */
+  rebonds_premier_contact?: string[];
 };
 
 /** Le bouclier de la barre, construit nœud par nœud : aucun HTML n'est
@@ -75,19 +77,38 @@ export function rendreBarreSecurite(barre: HTMLElement, s: Session | null): void
   }
 
   const enfants: HTMLElement[] = [];
+  // Quatre cas, du plus inquiétant au plus rassurant. « Clé connue » ne
+  // s'affiche que si le cœur l'a dit en toutes lettres : jusqu'à l'audit du
+  // 22 novembre 2026, tout ce qui n'était pas « premier contact » (un état
+  // absent compris) passait pour connu.
+  const rebonds = e.rebonds_premier_contact ?? [];
   const premier = e.cle_hote === "premier-contact";
-  barre.classList.toggle("premier-contact", premier);
-  const cle = morceau(
-    "bs-cle",
-    premier ? t("securite-premier-contact") : t("securite-cle-connue"),
-    premier ? t("securite-premier-contact-aide") : t("securite-cle-connue-aide"),
-  );
+  let libelle: string;
+  let aide: string;
+  if (premier) {
+    libelle = t("securite-premier-contact");
+    aide = t("securite-premier-contact-aide");
+  } else if (rebonds.length > 0) {
+    // La cible est connue, mais un maillon du trajet vient d'être appris : c'est
+    // lui qui a pu être intercepté, et il a déjà reçu ses identifiants.
+    libelle = t("securite-rebond-premier-contact", { rebonds: rebonds.join(", ") });
+    aide = t("securite-rebond-premier-contact-aide");
+  } else if (e.cle_hote === "connue") {
+    libelle = t("securite-cle-connue");
+    aide = t("securite-cle-connue-aide");
+  } else {
+    libelle = t("securite-cle-indeterminee");
+    aide = t("securite-cle-indeterminee-aide");
+  }
+  barre.classList.toggle("premier-contact", premier || rebonds.length > 0);
+  const cle = morceau("bs-cle", libelle, aide);
   cle.prepend(bouclier());
   enfants.push(cle);
   if (e.empreinte_cle_hote) {
-    enfants.push(
-      morceau("bs-mono bs-empreinte", `${e.algorithme_cle_hote} ${e.empreinte_cle_hote}`.trim(), t("securite-empreinte")),
-    );
+    // L'empreinte est le premier morceau à se raccourcir quand la fenêtre est
+    // étroite : son infobulle la donne en entier, c'est elle qu'on compare.
+    const complete = `${e.algorithme_cle_hote} ${e.empreinte_cle_hote}`.trim();
+    enfants.push(morceau("bs-mono bs-empreinte", complete, `${t("securite-empreinte")}\n${complete}`));
   }
   if (e.echange_de_cles) enfants.push(morceau("bs-mono", e.echange_de_cles, t("securite-echange")));
   if (e.chiffrement) enfants.push(morceau("bs-mono", e.chiffrement, t("securite-chiffrement")));
