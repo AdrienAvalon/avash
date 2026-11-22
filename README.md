@@ -24,15 +24,21 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![Couverture](https://img.shields.io/badge/couverture-84%25%20des%20lignes-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20attrap%C3%A9s-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
-<img src="docs/captures/demo.webp" alt="Démonstration : un terminal SSH, puis un bureau Windows 11, dans avash" width="880">
+<img src="docs/captures/demo.webp" alt="Démonstration : l'accueil, un terminal SSH et sa barre de sécurité, le panneau SFTP, puis un bureau Windows 11, dans avash" width="880">
 
 </div>
+
+> **Nouveau dans la 0.14.** Une identité refaite, « Encre et menthe » (nouveau
+> logo, thèmes sombre et clair, accueil épuré), et une **barre d'état de
+> sécurité** sous chaque terminal SSH : clé d'hôte connue ou premier contact,
+> empreinte, algorithmes réellement négociés. Le détail est dans le
+> [CHANGELOG](CHANGELOG.md).
 
 ## En bref
 
 | Fonction | Ce qu'elle apporte |
 |---|---|
-| **SSH** | terminal complet (xterm.js), onglets, `ProxyJump` en chaîne, agent, clés générées et déployées depuis l'application |
+| **SSH** | terminal complet (xterm.js), onglets, `ProxyJump` en chaîne, agent, clés générées et déployées depuis l'application, barre d'état qui dit ce que la poignée de main a établi |
 | **RDP** | bureaux Windows, xrdp et GNOME Remote Desktop intégrés (IronRDP), redimensionnement natif sans zoom d'image, presse-papiers partagé sur demande, fichiers copiés-collés dans les deux sens, un dossier du poste servi comme lecteur sur le distant, son du distant |
 | **VNC** | les bureaux VNC dans la même fenêtre (ZRLE, clavier en keysyms, presse-papiers), chiffrés par VeNCrypt quand le serveur l'offre, certificat épinglé au premier contact |
 | **SFTP** | panneau de fichiers sur la session du terminal : parcourir, envoyer et télécharger fichiers ou dossiers entiers, reprendre un transfert coupé, file de transferts avec vitesse, copie d'un hôte à l'autre sans passer par le disque du poste |
@@ -51,18 +57,22 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 - **Rien à migrer.** avash lit `~/.ssh/config` et y écrit ce que vous ajoutez, au
   format d'OpenSSH : vos hôtes apparaissent au premier lancement, et `ssh` en
   ligne de commande continue de voir la même chose.
-- **Natif.** Tauri 2 et Rust, pas d'Electron : une vingtaine de mégaoctets, un
-  démarrage en une fraction de seconde, un bureau distant qui suit la fenêtre
-  au pixel près.
+- **Natif.** Tauri 2 et Rust, pas d'Electron : un installeur d'une dizaine de
+  mégaoctets, un démarrage en une fraction de seconde, un bureau distant qui
+  suit la fenêtre au pixel près.
 - **Sûr par défaut.** Un serveur dont la clé change est refusé, en SSH comme en
   RDP, et un serveur RDP ne peut pas obtenir un mot de passe sans
   authentification mutuelle. Les secrets vivent dans le trousseau, jamais dans
   un fichier.
+- **Lisible.** Sous chaque terminal, une ligne dit ce que la connexion a
+  réellement négocié : clé d'hôte déjà connue ou apprise à l'instant, empreinte,
+  échange de clés, chiffrement, méthode d'authentification. Rien n'est déduit
+  de la configuration.
 - **Libre.** AGPL-3.0, code auditable, binaires avec attestation de provenance
   et nomenclature logicielle (SBOM).
 
 <div align="center">
-<img src="docs/captures/terminal-ssh.png" alt="Une session SSH dans avash" width="880">
+<img src="docs/captures/terminal-ssh.png" alt="Une session SSH dans avash ; en bas, la barre d'état de sécurité signale un premier contact et donne l'empreinte de la clé d'hôte et les algorithmes négociés" width="880">
 </div>
 
 ## Installation
@@ -126,7 +136,8 @@ produit par notre chaîne d'intégration continue (attestation Sigstore).
 
 ### Depuis les sources
 
-Rust stable, Node.js 22 et les dépendances système de Tauri suffisent ; les
+Rust 1.98 ou plus récent, Node.js 22 et les dépendances système de Tauri
+suffisent ; les
 étapes sont dans [CONTRIBUTING.md](CONTRIBUTING.md). `./scripts/release.sh`
 enchaîne validation, construction et empreintes.
 
@@ -142,7 +153,8 @@ enchaîne validation, construction et empreintes.
 ## Au quotidien
 
 <div align="center">
-<img src="docs/captures/accueil.png" alt="L'accueil d'avash : hôtes rangés par dossiers, raccourcis" width="880">
+<img src="docs/captures/accueil.png" alt="L'accueil d'avash en thème sombre : hôtes rangés par dossiers, raccourcis" width="49%">
+<img src="docs/captures/accueil-clair.png" alt="Le même accueil en thème clair" width="49%">
 </div>
 
 | Raccourci | Action |
@@ -162,6 +174,8 @@ restent au shell distant (préfixe tmux, effacement de fin de ligne readline).
 
 - Interface en **français** et en **anglais** : suit la locale, se change dans la
   palette, ou `AVASH_LANGUE=fr|en`.
+- **Sombre ou clair** : le thème se change d'un clic en haut de la barre
+  latérale. Les polices sont embarquées, l'interface ne charge rien du réseau.
 - **Santé des hôtes** : une sonde TCP par hôte, à la demande ou au démarrage,
   voyant sur chaque ligne.
 - **Enregistrement de session** au format asciicast v2, rejouable avec
@@ -200,6 +214,12 @@ par une issue si une case est fausse.
   **avant** que CredSSP ne transmette le moindre identifiant ; le repli de NLA
   vers TLS seul est refusé. Même règle encore pour un serveur VNC sous
   VeNCrypt : certificat épinglé au premier contact, refusé s'il change.
+- **Ce qui a été négocié se lit à l'écran.** La barre d'état d'une session SSH
+  affiche l'algorithme et l'empreinte SHA-256 de la clé du serveur, l'échange
+  de clés, le chiffrement, le code d'intégrité et la méthode d'authentification
+  relevés pendant la poignée de main. Un **premier contact**, où la clé vient
+  d'être apprise sans que personne l'ait comparée à une référence, y est
+  signalé en ambre.
 - Presse-papiers partagé avec les bureaux distants seulement si vous le voulez,
   dans les deux sens, révocable à tout moment. Un dossier partagé comme lecteur
   RDP ne donne que ce dossier : chaque chemin demandé par le serveur est ramené
@@ -208,6 +228,10 @@ par une issue si une case est fausse.
   configuration ; rien d'illimité ne vient du réseau (résolution, surfaces,
   images, sortie de commande, presse-papiers, tous plafonnés).
 - Aucune télémétrie, aucun appel réseau autre que vos connexions.
+- **Chaîne d'approvisionnement tenue** : aucune alerte de dépendance ne reste
+  ouverte sans justification écrite, les actions de la chaîne d'intégration
+  sont épinglées sur leur commit, et chaque binaire publié porte une
+  attestation de provenance vérifiable.
 
 Le modèle de sécurité, ce qu'il couvre et ce qu'il ne couvre pas, et comment
 signaler une faille : [SECURITY.md](SECURITY.md).
@@ -293,9 +317,11 @@ commerciale distincte peut être négociée avec l'auteur :
 
 Les composants tiers gardent leurs propres licences et attributions : les
 paquets IronRDP et vnc-rs portés (MIT, Apache-2.0) sont documentés dans
-[rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md), et la police Meslo
+[rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md), la police Meslo
 Nerd Font dans
-[web/public/fonts/LICENSE-MesloLGS-NerdFont.txt](web/public/fonts/LICENSE-MesloLGS-NerdFont.txt).
+[web/public/fonts/LICENSE-MesloLGS-NerdFont.txt](web/public/fonts/LICENSE-MesloLGS-NerdFont.txt)
+et la police Space Grotesk des titres (SIL OFL 1.1) dans
+[web/public/fonts/licenses/SPACE-GROTESK-OFL.txt](web/public/fonts/licenses/SPACE-GROTESK-OFL.txt).
 
 © 2026 Adrien Cros.
 

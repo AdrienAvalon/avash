@@ -24,9 +24,14 @@ application, which reads your `~/.ssh/config` as it is.
 [![Coverage](https://img.shields.io/badge/coverage-84%25%20of%20lines-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20caught-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
-<img src="docs/captures/demo.webp" alt="Demo: an SSH terminal, then a Windows 11 desktop, inside avash" width="880">
+<img src="docs/captures/demo.webp" alt="Demo: the home screen, an SSH terminal with its security bar, the SFTP panel, then a Windows 11 desktop, inside avash" width="880">
 
 </div>
+
+> **New in 0.14.** A redesigned identity, "Ink and mint" (new logo, dark and
+> light themes, a cleaner home screen), and a **security status bar** under
+> every SSH terminal: known host key or first contact, fingerprint, the
+> algorithms actually negotiated. Details in the [CHANGELOG](CHANGELOG.md).
 
 > The project's language is French: documentation, commit messages and the
 > interface strings live in French first. The interface itself is available in
@@ -36,7 +41,7 @@ application, which reads your `~/.ssh/config` as it is.
 
 | Feature | What it brings |
 |---|---|
-| **SSH** | full terminal (xterm.js), tabs, chained `ProxyJump`, agent, keys generated and deployed from the app |
+| **SSH** | full terminal (xterm.js), tabs, chained `ProxyJump`, agent, keys generated and deployed from the app, a status bar that states what the handshake established |
 | **RDP** | Windows, xrdp and GNOME Remote Desktop desktops built in (IronRDP), native resizing with no image scaling, clipboard shared on request, files copied and pasted both ways, a local folder served as a drive on the remote desktop, remote sound |
 | **VNC** | VNC desktops in the same window (ZRLE, keyboard as keysyms, clipboard), encrypted with VeNCrypt when the server offers it, certificate pinned on first contact |
 | **SFTP** | a file panel on the terminal's own session: browse, upload and download files or whole folders, resume an interrupted transfer, a transfer queue with speeds, host-to-host copy without touching the local disk |
@@ -55,17 +60,21 @@ application, which reads your `~/.ssh/config` as it is.
 - **Nothing to migrate.** avash reads `~/.ssh/config` and writes what you add
   in OpenSSH's own format: your hosts show up on first launch, and `ssh` on the
   command line keeps seeing the same thing.
-- **Native.** Tauri 2 and Rust, no Electron: about twenty megabytes, a start-up
-  in a fraction of a second, a remote desktop that follows the window pixel for
-  pixel.
+- **Native.** Tauri 2 and Rust, no Electron: an installer of about ten
+  megabytes, a start-up in a fraction of a second, a remote desktop that
+  follows the window pixel for pixel.
 - **Safe by default.** A server whose key changed is refused, for SSH as for
   RDP, and an RDP server cannot obtain a password without mutual
   authentication. Secrets live in the keyring, never in a file.
+- **Legible.** Under every terminal, one line states what the connection
+  really negotiated: host key already known or learned just now, fingerprint,
+  key exchange, cipher, authentication method. Nothing is inferred from the
+  configuration.
 - **Free software.** AGPL-3.0, auditable code, binaries with a provenance
   attestation and a software bill of materials (SBOM).
 
 <div align="center">
-<img src="docs/captures/terminal-ssh.png" alt="An SSH session inside avash" width="880">
+<img src="docs/captures/terminal-ssh.png" alt="An SSH session inside avash; at the bottom, the security status bar flags a first contact and shows the host key fingerprint and the negotiated algorithms" width="880">
 </div>
 
 ## Install
@@ -127,7 +136,8 @@ built by our CI (Sigstore attestation).
 
 ### From source
 
-Stable Rust, Node.js 22 and Tauri's system dependencies are enough; the steps
+Rust 1.98 or later, Node.js 22 and Tauri's system dependencies are enough; the
+steps
 are in [CONTRIBUTING.md](CONTRIBUTING.md) (in French). `./scripts/release.sh`
 runs validation, build and checksums in one go.
 
@@ -143,7 +153,8 @@ runs validation, build and checksums in one go.
 ## Day to day
 
 <div align="center">
-<img src="docs/captures/accueil.png" alt="avash home: hosts in folders, shortcuts" width="880">
+<img src="docs/captures/accueil.png" alt="avash home in the dark theme: hosts in folders, shortcuts" width="49%">
+<img src="docs/captures/accueil-clair.png" alt="The same home screen in the light theme" width="49%">
 </div>
 
 | Shortcut | Action |
@@ -163,6 +174,8 @@ with the remote shell (tmux prefix, readline's kill to end of line).
 
 - Interface in **French** and **English**: follows the locale, switchable from
   the palette, or `AVASH_LANGUE=fr|en`.
+- **Dark or light**: the theme switches with one click at the top of the
+  sidebar. Fonts are bundled, the interface loads nothing from the network.
 - **Host health**: one TCP probe per host, on demand or at start-up, a light on
   each row.
 - **Session recording** in asciicast v2, replayable with `asciinema play`; the
@@ -201,6 +214,11 @@ is wrong.
   **before** CredSSP sends any credential; falling back from NLA to plain TLS
   is refused. Same rule again for a VNC server under VeNCrypt: certificate
   pinned on first contact, refused if it changes.
+- **What was negotiated is on screen.** The status bar of an SSH session shows
+  the algorithm and SHA-256 fingerprint of the server key, the key exchange,
+  the cipher, the integrity code and the authentication method recorded during
+  the handshake. A **first contact**, where the key was just learned and nobody
+  compared it to a reference, is flagged in amber.
 - Clipboard shared with remote desktops only if you want it, both ways,
   revocable at any time. A folder shared as an RDP drive gives that folder
   only: every path the server asks for is brought back under its root before
@@ -209,6 +227,9 @@ is wrong.
   nothing unbounded comes from the network (resolution, surfaces, images,
   command output, clipboard: all capped).
 - No telemetry, no network call other than your connections.
+- **A supply chain kept in check**: no dependency alert stays open without a
+  written justification, CI actions are pinned to their commit, and every
+  published binary carries a verifiable provenance attestation.
 
 The security model, what it covers and what it does not, and how to report a
 vulnerability: [SECURITY.md](SECURITY.md).
@@ -293,9 +314,11 @@ AGPL without removing rights already granted to published versions.
 
 Third-party components keep their own licenses and attributions: the vendored
 IronRDP and vnc-rs crates (MIT, Apache-2.0) are documented in
-[rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md), and the Meslo Nerd
+[rdp-sidecar/vendor/README.md](rdp-sidecar/vendor/README.md), the Meslo Nerd
 Font in
-[web/public/fonts/LICENSE-MesloLGS-NerdFont.txt](web/public/fonts/LICENSE-MesloLGS-NerdFont.txt).
+[web/public/fonts/LICENSE-MesloLGS-NerdFont.txt](web/public/fonts/LICENSE-MesloLGS-NerdFont.txt),
+and the Space Grotesk font used for headings (SIL OFL 1.1) in
+[web/public/fonts/licenses/SPACE-GROTESK-OFL.txt](web/public/fonts/licenses/SPACE-GROTESK-OFL.txt).
 
 © 2026 Adrien Cros.
 

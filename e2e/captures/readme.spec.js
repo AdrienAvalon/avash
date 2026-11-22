@@ -38,18 +38,26 @@ describe("captures du README", () => {
   });
 
   it("accueil", async () => {
+    // Le thème clair d'abord, pour le README seulement : la démonstration
+    // reste en sombre d'un bout à l'autre.
+    await theme("light");
+    await pause(600);
+    await browser.saveScreenshot(`${DOSSIER}/accueil-clair.png`);
+    await theme("dark");
+    await pause(600);
     await browser.saveScreenshot(`${DOSSIER}/accueil.png`);
     await cadre(4);
   });
 
   it("terminal SSH", async () => {
     await doubleCliquerHote("test-ssh");
-    await pause(300);
-    await cadre();
     await browser.waitUntil(async () => (await $$(".state.live")).length > 0,
       { timeout: 20000, timeoutMsg: "session SSH jamais live" });
     await pause(1000);
-    await cadre(2);
+    // Aucun cadre avant le « clear » ci-dessous : le shell de connexion du
+    // poste affiche à l'ouverture sa bannière (nom de machine, matériel,
+    // adresse), qui s'est retrouvée dans la démonstration régénérée le
+    // 22 novembre 2026.
     // Une invite et des commandes neutres : la machine derrière le sshd local
     // est le poste du mainteneur, on ne montre ni son nom ni ses disques. Le
     // shell de connexion peut être fish : on passe par bash pour l'invite.
@@ -70,7 +78,7 @@ describe("captures du README", () => {
     ]) {
       await taper(commande);
       await pause(600);
-      await cadre();
+      if (commande !== "exec bash --norc") await cadre();
     }
     await pause(800);
     await browser.saveScreenshot(`${DOSSIER}/terminal-ssh.png`);
@@ -162,12 +170,22 @@ describe("captures du README", () => {
     // parc et le compte n'ont rien à faire dans la démonstration.
     await cadre(2);
     await $("#m-addr").setValue(hote);
-    await $("#m-port").setValue("3389");
+    await $("#m-port").setValue(process.env.CAPTURES_RDP_PORT || "3389");
     await $("#m-user").setValue(process.env.CAPTURES_RDP_UTILISATEUR);
     await $("#m-password").setValue(process.env.CAPTURES_RDP_MDP);
     await $("#m-submit").click();
     await pause(800);
     await cadre();
+    // Premier contact : l'application demande d'épingler le certificat du
+    // serveur avant le moindre identifiant (et, pour un xrdp du parc, de se
+    // passer de NLA). La question entre dans la démonstration, puis on accepte.
+    for (let i = 0; i < 3; i++) {
+      const question = await $("#confirm-modal");
+      if (!(await question.waitForDisplayed({ timeout: 8000 }).then(() => true, () => false))) break;
+      await cadre(3);
+      await $("#confirm-ok").click();
+      await pause(800);
+    }
     const canvas = await $(".rdp-container canvas");
     await canvas.waitForExist({ timeout: 30000, timeoutMsg: "aucun canvas RDP" });
     await attendreBureauConnecte();
