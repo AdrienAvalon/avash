@@ -528,6 +528,11 @@ function setSessionState(id: number, st: SessionState) {
   // L'état vit dans la session : la barre latérale le lit là, plus dans les
   // classes CSS de l'onglet (audit du 12 septembre 2026, C-front-1).
   s.etat = st;
+  // Ce que la barre de sécurité savait vaut pour la poignée de main
+  // précédente : sans cette remise à zéro, une reconnexion (après « oublier la
+  // clé », par exemple) affichait un instant l'ancienne empreinte et « clé
+  // connue », le temps que le cœur réponde (audit du 22 novembre 2026).
+  s.securite = undefined;
   const dot = s.tab.querySelector(".state") as HTMLElement | null;
   if (dot) {
     dot.className = `state ${st}`;

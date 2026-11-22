@@ -68,6 +68,33 @@ describe("barre d'état de sécurité", () => {
     expect(b.classList.contains("premier-contact")).toBe(false);
   });
 
+  it("nomme_le_rebond_appris_a_l_instant_meme_si_la_cible_est_connue", () => {
+    // Trouvé par l'audit du 22 novembre 2026 : seul l'état de la cible
+    // remontait, un rebond vu pour la première fois restait invisible.
+    const el = barre();
+    rendreBarreSecurite(el, session({ securite: { ...etabli, rebonds_premier_contact: ["bastion.exemple:22"] } }));
+    expect(el.classList.contains("premier-contact")).toBe(true);
+    expect(el.querySelector(".bs-cle")?.textContent).toBe("Premier contact avec le rebond bastion.exemple:22");
+    expect(el.textContent).not.toContain("Clé d'hôte connue");
+  });
+
+  it("n_affirme_pas_cle_connue_quand_le_coeur_ne_l_a_pas_dit", () => {
+    // Même audit : tout ce qui n'était pas « premier-contact », un état absent
+    // compris, s'affichait « Clé d'hôte connue ».
+    const el = barre();
+    rendreBarreSecurite(el, session({ securite: { ...etabli, cle_hote: null } }));
+    expect(el.textContent).not.toContain("Clé d'hôte connue");
+    expect(el.querySelector(".bs-cle")?.textContent).toBe("Clé d'hôte : état non rapporté");
+  });
+
+  it("donne_l_empreinte_entiere_en_infobulle", () => {
+    // Même audit : l'empreinte se tronque en premier dans une fenêtre étroite,
+    // et l'infobulle ne portait que son libellé.
+    const el = barre();
+    rendreBarreSecurite(el, session({ securite: etabli }));
+    expect((el.querySelector(".bs-empreinte") as HTMLElement).title).toContain(etabli.empreinte_cle_hote);
+  });
+
   it("n_affiche_un_code_d_integrite_que_s_il_est_employe", () => {
     const b = barre();
     rendreBarreSecurite(b, session({ securite: etabli }));
