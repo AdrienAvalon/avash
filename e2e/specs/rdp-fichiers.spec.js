@@ -96,10 +96,18 @@ describe("RDP — fichiers par le presse-papiers", () => {
       }
     };
     const connecte = attendre(MSG_CONNECTE, 25000, "connexion RDP");
+    // Le texte initial du serveur passe d'abord : le canal est prêt. On
+    // s'inscrit AVANT d'attendre la connexion, et non après : une trame que
+    // personne n'attend est jetée (`if (!suite) return`), et sur un exécuteur
+    // chargé le texte initial arrive dans le même paquet que l'annonce de
+    // connexion, donc avant que `await connecte` n'ait rendu la main. Le test
+    // tombait alors sur « presse-papiers initial : rien reçu », une fois sur
+    // deux en intégration le 22 novembre 2026, jamais sur un poste rapide ;
+    // reproduit à coup sûr en retardant l'inscription de deux secondes.
+    const texteInitial = attendre(MSG_PRESSE_PAPIERS, 40000, "presse-papiers initial");
     ws.onopen = () => ws.send(new TextEncoder().encode(token));
     await connecte;
-    // Le texte initial du serveur passe d'abord : le canal est prêt.
-    await attendre(MSG_PRESSE_PAPIERS, 15000, "presse-papiers initial");
+    await texteInitial;
 
     // 1) Distant → poste. Le poste « copie » le texte déclencheur : le serveur
     //    de test répond en copiant son fichier ; le sidecar en demande la liste
