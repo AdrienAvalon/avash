@@ -137,7 +137,21 @@ describe("Enregistrement de session (asciicast)", () => {
     expect(listes).toContain(chemin);
     expect(listes).toContain(premierFichier);
     expect(listes[0]).toBe(chemin, "le plus récent d'abord");
+    // Le focus dans le terminal, fenêtre ouverte : c'est le cas qui a fait
+    // échouer ce scénario deux fois en intégration (22 novembre 2026). Selon
+    // l'instant où la palette rendait le focus, Échap fermait la fenêtre ou
+    // partait au shell derrière elle, qui avalait ensuite la commande suivante.
+    // On se place du mauvais côté de la course : Échap doit fermer la fenêtre,
+    // et rien de ce qui est tapé pendant qu'elle est ouverte n'atteint le shell.
+    await browser.execute(() => document.querySelector(".xterm-helper-textarea")?.focus());
+    const derriere = marqueur("derriere-la-fenetre");
+    await browser.keys([...derriere]);
     await browser.keys("Escape");
+    await browser.waitUntil(
+      () => browser.execute(() => !document.getElementById("enregistrements-modal").classList.contains("open")),
+      { timeout: 5000, timeoutMsg: "Échap n'a pas fermé la liste des enregistrements (focus dans le terminal)" },
+    );
+    expect(await sortiePty()).not.toContain(derriere);
 
     // Arrêté, l'enregistrement ne reprend pas : ce qui suit n'y entre pas. Le
     // marqueur est unique : le shell garde l'historique des passages précédents

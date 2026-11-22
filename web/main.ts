@@ -557,6 +557,11 @@ async function releverSecurite(s: Session): Promise<void> {
   majBarreSecurite();
 }
 
+/** Une fenêtre modale ou la palette est-elle ouverte par-dessus la vue ? */
+function calqueOuvert(): boolean {
+  return document.querySelector(".modal-backdrop.open, .palette-backdrop.open") !== null;
+}
+
 /** Retient le moteur de rendu du terminal et le confie au diagnostic.
  *
  *  Audit du 12 septembre 2026 (C-front-14, contrat K8) : le repli WebGL → DOM
@@ -678,6 +683,15 @@ async function newSessionShell(label: string) {
   // On n'intercepte QUE ces combinaisons ; tout le reste (dont Ctrl+C
   // d'interruption) part au shell distant.
   term.attachCustomKeyEventHandler((e) => {
+    // Une fenêtre ouverte par-dessus le terminal (enregistrements, tunnels,
+    // confirmation…) ne lui prend pas toujours le focus : les frappes
+    // partaient alors au shell DERRIÈRE la fenêtre, Échap compris, qui ne la
+    // fermait donc pas. Vu en intégration le 22 novembre 2026 : Échap sur la
+    // liste des enregistrements arrivait au shell, la fenêtre restait ouverte
+    // et la commande suivante était avalée. Tant qu'un calque est ouvert, le
+    // terminal n'envoie rien, quel que soit le type d'événement, et la touche
+    // remonte aux écouteurs de la fenêtre.
+    if (calqueOuvert()) return false;
     if (e.type !== "keydown") return true;
     // Raccourcis de l'application : `false` et xterm n'envoie rien au shell, la
     // touche remonte aux écouteurs de la fenêtre. Ctrl+Tab partait en

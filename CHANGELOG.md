@@ -53,6 +53,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **Les frappes partaient au shell derrière une fenêtre ouverte.** Une fenêtre
+  ouverte par-dessus un terminal sans lui prendre le focus (la liste des
+  enregistrements, par exemple) laissait passer les frappes au shell qu'elle
+  recouvrait, Échap compris : la fenêtre ne se fermait pas et ce qu'on tapait
+  s'exécutait sans se voir. Tant qu'une fenêtre ou la palette est ouverte, le
+  terminal n'envoie plus rien et Échap ferme la fenêtre. Trouvé par un scénario
+  bout en bout qui échouait une fois de temps en temps en intégration, selon
+  l'instant où le focus revenait au terminal.
 - **L'AppImage ne s'ouvrait pas sur certaines machines sous Wayland.** « Could
   not create default EGL display: EGL_BAD_PARAMETER. Aborting... », puis rien :
   l'AppImage embarque une `libwayland-client` plus vieille que le pilote
