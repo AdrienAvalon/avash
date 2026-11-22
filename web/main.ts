@@ -742,6 +742,23 @@ async function newSessionShell(label: string) {
     return true;
   });
 
+  // Second verrou du même défaut : le filtre des touches ne voit que le
+  // clavier. Sous WebView2, un caractère imprimable arrive par l'événement
+  // `input` du champ caché de xterm, comme une saisie IME, et passait donc
+  // quand même au shell derrière la fenêtre (suite bout en bout Windows,
+  // 22 novembre 2026). On l'arrête à la source, en phase de capture, avant
+  // l'écouteur de xterm. Pas dans `onData` : il porte aussi les réponses du
+  // terminal aux requêtes du shell (position du curseur, attributs), qu'une
+  // fenêtre ouverte n'a pas à faire perdre.
+  for (const type of ["beforeinput", "input", "compositionstart"] as const) {
+    container.addEventListener(type, (e) => {
+      if (!calqueOuvert()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.target instanceof HTMLTextAreaElement) e.target.value = "";
+    }, true);
+  }
+
   term.onData((data) => {
     // Session terminee : Entree relance la connexion, le reste est ignore
     // (l'ecrire au backend ne ferait qu'afficher « Session inconnue »).
