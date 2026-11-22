@@ -91,6 +91,11 @@ jobs:
           openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost" \
             -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
           cargo build --locked --release --manifest-path test-vnc-server/Cargo.toml
+      # Même réservation que le job E2E de ci.yml (voir son commentaire) : les
+      # ports fixes des serveurs de test tombent dans la plage des connexions
+      # sortantes, et ce job joue la même suite bout en bout.
+      - name: Ports des serveurs de test réservés
+        run: sudo sysctl -w net.ipv4.ip_local_reserved_ports=33890-33910,35900-35910
       - name: Couverture (binaires instrumentés, unitaires, suite bout en bout)
         run: scripts/couverture.sh couverture
       - name: Couverture du front (Vitest)
