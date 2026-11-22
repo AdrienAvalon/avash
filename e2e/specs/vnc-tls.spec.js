@@ -46,8 +46,12 @@ describe("VNC — VeNCrypt, TLS et certificat épinglé", () => {
 
   before(async () => {
     srv = startVncServer(VNC_PORT, (l) => { journal += l; }, { tlsPort: TLS_PORT, cert: CERT, key: KEY });
-    await waitForPort(VNC_PORT);
-    await waitForPort(TLS_PORT);
+    try {
+      await waitForPort(VNC_PORT);
+      await waitForPort(TLS_PORT);
+    } catch (e) {
+      throw new Error(`${e.message} ; journal du serveur : ${journal.replace(/\n/g, " / ") || "(vide)"}`, { cause: e });
+    }
   });
   after(() => {
     if (srv) srv.kill();
