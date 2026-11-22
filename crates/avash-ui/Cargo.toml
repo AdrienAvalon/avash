@@ -80,7 +80,7 @@ tokio = { version = "1", features = ["full", "test-util"] }
 # Pseudo-terminal pour les tests de `serie_open` (audit du 12 septembre 2026,
 # C-couv-5) : l'esclave tient lieu de port série, le maître de l'équipement.
 [target.'cfg(unix)'.dev-dependencies]
-nix = { version = "0.31", features = ["term", "fs", "user"] }
+nix = { version = "0.32", features = ["term", "fs", "user"] }
 # Serveur SSH+SFTP en mémoire du cœur (`avash::testutil::serveur_ssh`), pour
 # éprouver les commandes SFTP, tunnels et dépôt de clé contre une vraie session
 # (`commands/tests_reseau.rs`). Dépendance de développement seulement : le

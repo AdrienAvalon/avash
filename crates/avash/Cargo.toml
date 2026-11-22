@@ -108,7 +108,7 @@ avash = { path = ".", features = ["outils-de-test"] }
 # déjà ; passé en 0.31 (Dependabot #35, 2026-10-06), version que l'interface
 # compile aussi pour ses propres besoins : aucune nouvelle copie dans l'arbre.
 [target.'cfg(unix)'.dev-dependencies]
-nix = { version = "0.31", default-features = false, features = ["term", "fs"] }
+nix = { version = "0.32", default-features = false, features = ["term", "fs"] }
 
 [lints]
 workspace = true
