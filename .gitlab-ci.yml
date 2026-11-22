@@ -203,6 +203,7 @@ dependances:
     # (rdp-sidecar/.cargo/audit.toml) : lancé d'ici avec --file, c'est celle de
     # l'espace de travail qui le gouvernait (audit du 12 septembre 2026).
     - (cd rdp-sidecar && cargo audit --deny unsound)
+    - scripts/audit-verrous-de-test.sh
     - cargo deny --locked check advisories licenses bans sources
     - cargo deny --locked --manifest-path rdp-sidecar/Cargo.toml check advisories licenses bans sources
     # Les audits npm vivent ici, avec ceux de cargo, et non dans les jobs qui

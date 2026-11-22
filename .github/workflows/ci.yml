@@ -196,6 +196,9 @@ jobs:
           cargo install cargo-audit --version 0.22.2 --locked
           cargo audit --deny unsound
           (cd rdp-sidecar && cargo audit --deny unsound)
+          # Serveurs de test, fuzzing et verrous autonomes des paquets portés :
+          # rien de livré, mais aucun verrou du dépôt ne reste sans audit.
+          scripts/audit-verrous-de-test.sh
 
       # cargo-audit ne voit que les vulnérabilités déclarées. cargo-deny ferme
       # trois autres portes que rien ne surveillait : une licence inattendue

@@ -35,6 +35,21 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   instant l'empreinte de la poignée de main précédente. L'infobulle de
   l'empreinte la donne en entier, pour la comparer même dans une fenêtre
   étroite.
+### Validation
+
+- **Tous les verrous du dépôt sont audités.** `cargo audit` ne regardait que
+  l'espace de travail et le processus RDP ; les serveurs de test, les cibles de
+  fuzzing et les verrous autonomes des paquets portés ne l'étaient par
+  personne, et le Scorecard de l'OpenSSF y comptait quarante-cinq avis. Rien de
+  publié n'était touché. Ces verrous sont mis à jour (il n'y reste que
+  l'exception `rsa`, déjà justifiée pour le processus RDP), le serveur RDP de
+  test passe par le connecteur porté sans carte à puce, et
+  `scripts/audit-verrous-de-test.sh` les audite dans `./check.sh` et dans les
+  deux chaînes d'intégration.
+- **Alertes d'analyse de code triées.** 124 alertes CodeQL ouvertes depuis
+  septembre sont classées avec leur justification : 122 dans du code de test
+  (valeurs factices, harnais), 2 sur le chemin TLS hérité, voulu, qui épingle
+  le certificat par empreinte.
 
 ### Corrigé
 
