@@ -1213,7 +1213,12 @@ pub async fn pty_write(
 /// d'authentification. `None` quand l'onglet n'est pas une session SSH
 /// (console série) ou n'existe plus. Rien de secret n'y figure : une empreinte
 /// de clé publique et des noms d'algorithmes.
-#[tauri::command]
+///
+/// `async` : la commande prend le verrou du magasin de sessions, qu'une
+/// ouverture de session peut tenir ; sur le fil principal, elle figerait la
+/// fenêtre le temps de l'obtenir (garde
+/// `commandes-trousseau-hors-fil-principal.sh`, que seul `./check.sh` joue).
+#[tauri::command(async)]
 #[must_use]
 pub fn session_securite(
     state: tauri::State<'_, SessionStore>,
