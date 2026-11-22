@@ -400,13 +400,13 @@ pub fn load_defs_from(path: &Path) -> Result<Vec<TunnelDef>> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    serde_yaml::from_str(&text).with_context(|| format!("{} est illisible", path.display()))
+    serde_saphyr::from_str(&text).with_context(|| format!("{} est illisible", path.display()))
 }
 
 /// Ecriture atomique : un plantage en pleine ecriture ne laisse pas un
 /// fichier tronque qui perdrait tous les tunnels.
 pub fn save_defs_to(path: &Path, defs: &[TunnelDef]) -> Result<()> {
-    crate::ecrire_atomiquement(path, serde_yaml::to_string(defs)?.as_bytes())
+    crate::ecrire_atomiquement(path, serde_saphyr::to_string(&defs)?.as_bytes())
 }
 
 /// Ajoute ou remplace (meme `id`) une definition.

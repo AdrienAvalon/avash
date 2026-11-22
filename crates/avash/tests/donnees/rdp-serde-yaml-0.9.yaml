@@ -1,0 +1,34 @@
+- id: a1
+  name: Bureau compta
+  host: srv-compta.exemple.fr
+  port: 3389
+  user: EXEMPLE\alice
+  width: 1920
+  height: 1080
+  folder: prod/bureaux
+  sans_nla: false
+  tls_herite: false
+  protocole: rdp
+- id: b2
+  name: bob@exemple.fr@2001:db8::10
+  host: 2001:db8::10
+  port: 3390
+  user: bob@exemple.fr
+  width: 3440
+  height: 1440
+  folder: ''
+  sans_nla: true
+  tls_herite: true
+  protocole: rdp
+  partage: '/home/bob/Échanges : été'
+- id: c3
+  name: 'vnc: labo #3'
+  host: 10.0.0.7
+  port: 5900
+  user: ''
+  width: 1024
+  height: 768
+  folder: ''
+  sans_nla: false
+  tls_herite: false
+  protocole: vnc

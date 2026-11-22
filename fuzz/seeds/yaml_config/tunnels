@@ -1,0 +1,21 @@
+- id: t1
+  alias: web-1
+  kind: local
+  bind_port: 8080
+  target_host: 127.0.0.1
+  target_port: 80
+  name: 'interface: admin'
+- id: t2
+  alias: db-1
+  kind: remote
+  bind_port: 0
+  target_host: ::1
+  target_port: 5432
+  name: ''
+- id: t3
+  alias: rebond
+  kind: dynamic
+  bind_port: 1080
+  target_host: ''
+  target_port: 0
+  name: SOCKS « maison »
