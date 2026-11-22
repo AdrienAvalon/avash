@@ -41,7 +41,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   ne fait toujours aucune requête réseau pour s'afficher.
 - Vitrine, captures du README et aperçu social aux nouvelles couleurs ;
   l'aperçu social a désormais sa source (`scripts/apercu-social.sh`).
-  L'animation de démonstration n'est pas encore refaite.
+- **README et captures refaits.** Les deux README présentent la barre d'état de
+  sécurité et les deux thèmes, corrigent la taille annoncée (un installeur
+  d'une dizaine de mégaoctets, pas « une vingtaine » pour l'application) et la
+  version minimale de Rust (1.98). Toutes les captures et la démonstration
+  animée sont reprises sur la 0.14.0, avec une vue de l'accueil en thème
+  clair ; le bureau distant est un Windows 11 d'évaluation en machine
+  virtuelle. La démonstration ne prend plus d'image avant le nettoyage de
+  l'écran : la bannière du shell de connexion du poste s'y serait retrouvée.
+  `scripts/captures-readme.sh` accepte `CAPTURES_RDP_PORT` et un
+  `CAPTURES_RDP_MDP` déjà posé, pour une machine de test au mot de passe
+  public.
 
 ### Sécurité
 

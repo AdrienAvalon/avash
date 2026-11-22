@@ -6,7 +6,9 @@
 # Usage : scripts/captures-readme.sh [hôte RDP]
 #   CAPTURES_RDP_UTILISATEUR : compte du bureau (défaut « Administrateur ») ;
 #   le mot de passe est lu dans le trousseau (service avash, username
-#   rdp:<utilisateur>@<hôte>:3389), jamais passé en argument.
+#   rdp:<utilisateur>@<hôte>:<port>), jamais passé en argument ;
+#   CAPTURES_RDP_PORT (défaut 3389) et CAPTURES_RDP_MDP pour une machine de
+#   test au mot de passe public.
 #
 # À lancer après un build release : le binaire embarque le front et la
 # version affichée dans la barre latérale est celle de ce binaire.
@@ -26,9 +28,15 @@ if [ -n "${1:-}" ]; then
   # l'audit du 8 septembre 2026) avant la garde ci-dessous, qui restait donc
   # inatteignable. Avec `|| true` la substitution rend 0 avec une valeur vide,
   # et c'est la garde qui explique quoi enregistrer dans le trousseau.
-  CAPTURES_RDP_MDP="$(secret-tool lookup service avash username "rdp:$CAPTURES_RDP_UTILISATEUR@$1:3389" || true)"
+  # Une machine de test jetable (VM locale, parc en conteneurs) a un mot de
+  # passe public : CAPTURES_RDP_MDP déjà posé dans l'environnement court-circuite
+  # le trousseau, et CAPTURES_RDP_PORT vise son port redirigé.
+  export CAPTURES_RDP_PORT="${CAPTURES_RDP_PORT:-3389}"
+  if [ -z "${CAPTURES_RDP_MDP:-}" ]; then
+    CAPTURES_RDP_MDP="$(secret-tool lookup service avash username "rdp:$CAPTURES_RDP_UTILISATEUR@$1:${CAPTURES_RDP_PORT:-3389}" || true)"
+  fi
   export CAPTURES_RDP_MDP
-  [ -n "$CAPTURES_RDP_MDP" ] || { echo "aucun mot de passe dans le trousseau pour rdp:$CAPTURES_RDP_UTILISATEUR@$1:3389" >&2; exit 1; }
+  [ -n "$CAPTURES_RDP_MDP" ] || { echo "aucun mot de passe dans le trousseau pour rdp:$CAPTURES_RDP_UTILISATEUR@$1:${CAPTURES_RDP_PORT:-3389} (ni CAPTURES_RDP_MDP)" >&2; exit 1; }
 fi
 CADRES="$CAPTURES_DOSSIER/cadres"
 rm -rf "$CADRES"; mkdir -p "$CADRES"
