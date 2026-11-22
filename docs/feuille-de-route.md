@@ -47,7 +47,7 @@ défaut n'est pas livrée, même terminée.
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Couverture | 84 % des lignes de l'espace de travail (cœur 91 %, interface 70 %), 81 % du processus RDP, tests unitaires et suite bout en bout confondus sur des binaires instrumentés (`scripts/couverture.sh`, 06/09/2026) ; 201 mutants sur 264 attrapés sur les modules de sécurité |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.13.3 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
+| Version publiée | 0.14.0 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
@@ -266,7 +266,9 @@ qui est en place, et ce qui attend :
   `flatpak-builder` du temps où il pointait le tag v0.8.0, passé à v0.10.1 sans
   que cette construction soit rejouée, puis rejouée le 9 septembre 2026 sur le
   tag v0.11.0, le 10 septembre 2026 sur le tag v0.11.1, le 12 septembre 2026
-  sur les tags v0.12.2 puis v0.13.0, et le 14 septembre 2026 sur le tag v0.13.1
+  sur les tags v0.12.2 puis v0.13.0, et le 14 septembre 2026 sur le tag v0.13.1 ;
+  le manifeste est passé au tag v0.14.0 le 22 novembre 2026, sources
+  régénérées, sans que cette construction soit rejouée
   (construite,
   installée, lancée sous Xvfb à chaque fois : la fenêtre tient ; le
   lancement sans `--own-name` reste à éprouver, `flatpak run` ne sachant pas
