@@ -20,10 +20,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   de clé, qui apprennent la clé sans rien montrer. Une clé apprise pendant
   l'exécution reste désormais « premier contact » jusqu'à ce qu'une session
   l'ait montrée. La vérification des clés elle-même n'était pas en cause : une
-  clé changée a toujours été refusée. Limite connue : cette mémoire est celle
-  du processus, une clé apprise par une tentative ratée puis jamais montrée
-  avant la fermeture d'Avash sera « connue » au lancement suivant. Trouvé par
-  la relecture de sécurité du 22 novembre 2026.
+  clé changée a toujours été refusée. Cette mémoire est aussi tenue sur disque
+  (`premiers-contacts`, dans le répertoire de configuration d'Avash) : fermer
+  l'application après une tentative ratée ne fait pas passer la clé pour
+  connue au lancement suivant. Trouvé par la relecture de sécurité du
+  22 novembre 2026.
 - **Le premier contact avec un rebond est signalé.** Chaque maillon d'un
   `ProxyJump` vérifiait sa clé, mais seul l'état de la cible remontait : un
   rebond vu pour la première fois derrière une cible connue laissait la barre

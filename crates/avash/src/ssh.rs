@@ -522,38 +522,106 @@ pub struct SecuriteSession {
 /// (audit du 22 novembre 2026). Une clé reste donc « premier contact » jusqu'à
 /// ce qu'une session l'ait rapportée par [`AvashSession::securite`].
 ///
-/// Limite connue : la mémoire est celle du processus. Une clé apprise par une
-/// tentative ratée, sans session réussie avant la fermeture d'Avash, sera
-/// « connue » au lancement suivant.
+/// La liste vit aussi sur disque (`premiers-contacts` dans le répertoire de
+/// configuration d'Avash), pour qu'une clé apprise par une tentative ratée ne
+/// devienne pas « connue » parce qu'Avash a été fermé entre-temps, ou parce
+/// qu'elle l'a été par un autre processus (ligne de commande, seconde
+/// fenêtre). Le fichier ne décide de rien pour la vérification des clés, qui
+/// reste celle de `known_hosts` : le perdre ou le falsifier ne fait, au pire,
+/// que rendre un premier contact muet ou en afficher un de trop. Une écriture
+/// qui échoue est donc journalisée et la mémoire du processus fait le reste.
 static CLES_A_MONTRER: std::sync::Mutex<Vec<(String, u16, String)>> =
     std::sync::Mutex::new(Vec::new());
 
-/// Retient qu'une clé vient d'être apprise et reste à montrer.
-fn retenir_cle_a_montrer(hote: &str, port: u16, empreinte: &str) {
-    let mut cles = CLES_A_MONTRER.verrou();
-    if !cles
-        .iter()
-        .any(|(h, p, e)| h == hote && *p == port && e == empreinte)
-    {
-        cles.push((hote.to_owned(), port, empreinte.to_owned()));
+/// Au-delà, les entrées les plus anciennes sortent : la liste se vide d'elle-
+/// même à l'usage, cette borne ne sert qu'à ce qu'un fichier abîmé ou gonflé
+/// ne coûte rien.
+const MAX_CLES_A_MONTRER: usize = 512;
+
+fn chemin_cles_a_montrer() -> Option<PathBuf> {
+    Some(
+        crate::repertoire_configuration()?
+            .join("avash")
+            .join("premiers-contacts"),
+    )
+}
+
+/// Une entrée par ligne : hôte, port et empreinte séparés par une tabulation.
+/// Les lignes illisibles sont ignorées.
+fn lire_cles_a_montrer(chemin: &std::path::Path) -> Vec<(String, u16, String)> {
+    let Ok(texte) = std::fs::read_to_string(chemin) else {
+        return Vec::new();
+    };
+    texte
+        .lines()
+        .filter_map(|ligne| {
+            let mut champs = ligne.split('\t');
+            let hote = champs.next()?;
+            let port = champs.next()?.parse().ok()?;
+            let empreinte = champs.next()?;
+            (!hote.is_empty() && !empreinte.is_empty())
+                .then(|| (hote.to_owned(), port, empreinte.to_owned()))
+        })
+        .take(MAX_CLES_A_MONTRER)
+        .collect()
+}
+
+/// Applique `changer` à la liste du disque et la réécrit si elle a changé.
+fn changer_cles_a_montrer(changer: impl FnOnce(&mut Vec<(String, u16, String)>)) {
+    let Some(chemin) = chemin_cles_a_montrer() else {
+        return;
+    };
+    let avant = lire_cles_a_montrer(&chemin);
+    let mut apres = avant.clone();
+    changer(&mut apres);
+    if apres.len() > MAX_CLES_A_MONTRER {
+        apres.drain(..apres.len() - MAX_CLES_A_MONTRER);
+    }
+    if apres == avant {
+        return;
+    }
+    let mut texte = String::new();
+    for (hote, port, empreinte) in &apres {
+        use std::fmt::Write as _;
+        // Écrire dans une `String` n'échoue pas.
+        let _ = writeln!(texte, "{hote}\t{port}\t{empreinte}");
+    }
+    if let Err(e) = crate::ecrire_atomiquement(&chemin, texte.as_bytes()) {
+        tracing::warn!("premiers contacts à montrer non enregistrés : {e:#}");
     }
 }
 
-/// Cette clé a-t-elle été apprise pendant cette exécution sans avoir encore
-/// été montrée ?
+/// Retient qu'une clé vient d'être apprise et reste à montrer.
+fn retenir_cle_a_montrer(hote: &str, port: u16, empreinte: &str) {
+    let entree = (hote.to_owned(), port, empreinte.to_owned());
+    // Le verrou couvre aussi le fichier : deux connexions simultanées ne se
+    // marchent pas dessus dans ce processus.
+    let mut cles = CLES_A_MONTRER.verrou();
+    if !cles.contains(&entree) {
+        cles.push(entree.clone());
+    }
+    changer_cles_a_montrer(|liste| {
+        if !liste.contains(&entree) {
+            liste.push(entree);
+        }
+    });
+}
+
+/// Cette clé a-t-elle été apprise sans avoir encore été montrée ?
 fn cle_reste_a_montrer(hote: &str, port: u16, empreinte: &str) -> bool {
-    CLES_A_MONTRER
-        .verrou()
-        .iter()
-        .any(|(h, p, e)| h == hote && *p == port && e == empreinte)
+    let entree = (hote.to_owned(), port, empreinte.to_owned());
+    let cles = CLES_A_MONTRER.verrou();
+    cles.contains(&entree)
+        || chemin_cles_a_montrer().is_some_and(|c| lire_cles_a_montrer(&c).contains(&entree))
 }
 
 /// La clé a été rapportée comme « premier contact » : elle redevient une clé
 /// connue pour les sessions suivantes.
 fn cle_montree(hote: &str, port: u16, empreinte: &str) {
-    CLES_A_MONTRER
-        .verrou()
-        .retain(|(h, p, e)| !(h == hote && *p == port && e == empreinte));
+    let entree = (hote.to_owned(), port, empreinte.to_owned());
+    let mut cles = CLES_A_MONTRER.verrou();
+    cles.retain(|e| *e != entree);
+    changer_cles_a_montrer(|liste| liste.retain(|e| *e != entree));
 }
 
 type SecuritePartagee = Arc<std::sync::Mutex<SecuriteSession>>;
@@ -3125,5 +3193,52 @@ mod tests_apprentissage {
             })
             .collect();
         assert_eq!(perdues, [] as [u16; 0], "clés apprises perdues (ports)");
+    }
+}
+
+#[cfg(test)]
+mod tests_premiers_contacts {
+    use super::{
+        chemin_cles_a_montrer, cle_montree, cle_reste_a_montrer, lire_cles_a_montrer,
+        retenir_cle_a_montrer, CLES_A_MONTRER,
+    };
+    use crate::Verrou;
+
+    /// Relecture de sécurité du 22 novembre 2026 : la mémoire des clés apprises
+    /// mais jamais montrées ne tenait que dans le processus. Fermer Avash après
+    /// une tentative ratée suffisait à ce que la clé soit « connue » ensuite.
+    #[test]
+    fn une_cle_a_montrer_survit_a_la_fermeture_d_avash() {
+        let _g = crate::testutil::temp_home();
+        retenir_cle_a_montrer("srv.exemple", 2222, "SHA256:abc");
+        // Un autre lancement : la mémoire du processus est vide, le disque non.
+        CLES_A_MONTRER.verrou().clear();
+        assert!(cle_reste_a_montrer("srv.exemple", 2222, "SHA256:abc"));
+        // Ni un autre port, ni une autre clé du même hôte.
+        assert!(!cle_reste_a_montrer("srv.exemple", 22, "SHA256:abc"));
+        assert!(!cle_reste_a_montrer("srv.exemple", 2222, "SHA256:autre"));
+
+        cle_montree("srv.exemple", 2222, "SHA256:abc");
+        assert!(!cle_reste_a_montrer("srv.exemple", 2222, "SHA256:abc"));
+        let chemin = chemin_cles_a_montrer().unwrap();
+        assert_eq!(lire_cles_a_montrer(&chemin), Vec::new());
+    }
+
+    #[test]
+    fn un_fichier_abime_ne_fait_ni_paniquer_ni_inventer_une_entree() {
+        let _g = crate::testutil::temp_home();
+        let chemin = chemin_cles_a_montrer().unwrap();
+        std::fs::create_dir_all(chemin.parent().unwrap()).unwrap();
+        std::fs::write(
+            &chemin,
+            "sans-tabulation\nhote\tpas-un-port\tSHA256:x\n\t22\tSHA256:x\nbon\t22\tSHA256:y\nhote\t22\t\n",
+        )
+        .unwrap();
+        assert_eq!(
+            lire_cles_a_montrer(&chemin),
+            vec![("bon".to_owned(), 22, "SHA256:y".to_owned())]
+        );
+        assert!(cle_reste_a_montrer("bon", 22, "SHA256:y"));
+        assert!(!cle_reste_a_montrer("hote", 22, ""));
     }
 }
