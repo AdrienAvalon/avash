@@ -39,8 +39,33 @@ fn main() {
     //
     // La variable reste surchargeable : qui veut retrouver le compositing la
     // définit à 0 avant de lancer avash.
+    // AppImage : la bibliothèque Wayland du système d'abord (voir
+    // `relance_avec_wayland_du_systeme`). Avant tout le reste : si elle a lieu,
+    // la relance remplace ce processus et rien de ce qui suit n'a été fait deux
+    // fois.
+    #[cfg(target_os = "linux")]
+    relance_avec_wayland_du_systeme();
+
     #[cfg(target_os = "linux")]
     {
+        // Pilote NVIDIA sur X11 ou XWayland : le rendu DMABUF de WebKitGTK ne
+        // parvient pas à allouer ses tampons (« Failed to create GBM buffer »)
+        // et la fenêtre reste entièrement grise. Vu le 22 novembre 2026 sur une
+        // RTX 3090 (pilote 620, WebKitGTK du système) en lançant le binaire avec
+        // GDK_BACKEND=x11 ; en Wayland natif la même machine affiche tout. Sans
+        // ce rendu, la fenêtre s'affiche et la frappe reste immédiate (mesuré).
+        // Surchargeable : qui pose la variable lui-même garde sa valeur.
+        if couper_dmabuf(
+            std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some(),
+            std::path::Path::new("/proc/driver/nvidia/version").exists(),
+            std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty()),
+            std::env::var("GDK_BACKEND").ok().as_deref(),
+        ) {
+            // SAFETY: aucun autre fil n'existe encore (le fil de profilage, sous
+            // cfg(coverage), est lancé plus bas, après ce bloc) et WebKit n'est
+            // pas chargé : personne ne lit l'environnement en parallèle.
+            unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+        }
         if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
             // SAFETY: aucun autre fil n'existe encore (le fil de profilage, sous
             // cfg(coverage), est lancé plus bas, après ce bloc) et WebKit n'est
@@ -167,6 +192,109 @@ fn session_distante() -> bool {
     GetSystemMetrics(SM_REMOTESESSION) != 0
 }
 
+/// Là où les distributions rangent `libwayland-client` : Arch et dérivées,
+/// Fedora et openSUSE, Debian et Ubuntu.
+#[cfg(any(target_os = "linux", test))]
+const WAYLAND_DU_SYSTEME: [&str; 4] = [
+    "/usr/lib/libwayland-client.so.0",
+    "/usr/lib64/libwayland-client.so.0",
+    "/usr/lib/x86_64-linux-gnu/libwayland-client.so.0",
+    "/lib/x86_64-linux-gnu/libwayland-client.so.0",
+];
+
+/// `AppImage` : relance le processus avec la `libwayland-client` du système en
+/// tête de `LD_PRELOAD`.
+///
+/// L'`AppImage` embarque les `libwayland-*` de la machine de construction
+/// (Ubuntu), mais pas Mesa : le pilote EGL du système se retrouve lié à une
+/// `libwayland-client` plus vieille que lui et refuse de créer son écran,
+/// « Could not create default EGL display: `EGL_BAD_PARAMETER`. Aborting... »,
+/// fenêtre jamais affichée. Signalé le 22 novembre 2026 sur un portable Intel
+/// et NVIDIA sous `CachyOS` (0.14.0), reproduit sur un poste NVIDIA en forçant
+/// le pilote EGL de Mesa ; ni `WEBKIT_DISABLE_DMABUF_RENDERER` ni le retrait de
+/// `WAYLAND_DISPLAY` n'y changent rien, seule la bibliothèque du système répare.
+/// L'éditeur de liens ne relit pas `LD_PRELOAD` en cours de route : il faut un
+/// nouveau processus.
+///
+/// `LD_PRELOAD` reste posé après la relance : les processus de `WebKit` (rendu,
+/// réseau) sont des fils de celui-ci et butent sur la même erreur sans lui. Un
+/// premier jet le retirait au second passage, et la fenêtre restait vide
+/// (essai du 22 novembre 2026). Les autres fils (bureau distant, navigateur,
+/// `ProxyCommand`) héritent donc d'une bibliothèque du système préchargée, sans
+/// effet pour eux. C'est aussi ce qui arrête la boucle : au second passage la
+/// bibliothèque est déjà dans `LD_PRELOAD`, il n'y a plus rien à faire.
+#[cfg(target_os = "linux")]
+fn relance_avec_wayland_du_systeme() {
+    use std::os::unix::process::CommandExt;
+
+    let preload = std::env::var("LD_PRELOAD").unwrap_or_default();
+    let Some(appdir) = std::env::var_os("APPDIR").filter(|v| !v.is_empty()) else {
+        return;
+    };
+    let Some(bibliotheque) = wayland_du_systeme(
+        std::path::Path::new(&appdir),
+        &preload,
+        std::path::Path::exists,
+    ) else {
+        return;
+    };
+    let nouveau = if preload.is_empty() {
+        bibliotheque.to_owned()
+    } else {
+        format!("{bibliotheque}:{preload}")
+    };
+    // `exec` ne revient que sur un échec : on continue alors sans la relance,
+    // ce qui laisse l'application telle qu'elle était avant ce correctif.
+    let erreur = std::process::Command::new("/proc/self/exe")
+        .args(std::env::args_os().skip(1))
+        .env("LD_PRELOAD", nouveau)
+        .exec();
+    eprintln!("avash : relance avec la bibliothèque Wayland du système impossible ({erreur})");
+}
+
+/// La `libwayland-client` du système à précharger, ou `None` s'il n'y a rien à
+/// faire : une bibliothèque Wayland est déjà préchargée (par l'utilisateur ou
+/// par une relance précédente), ou aucune n'existe hors de l'`AppImage`.
+///
+/// Pur à l'accès au disque près, passé en paramètre : testable partout.
+#[cfg(any(target_os = "linux", test))]
+fn wayland_du_systeme(
+    appdir: &std::path::Path,
+    preload: &str,
+    existe: impl Fn(&std::path::Path) -> bool,
+) -> Option<&'static str> {
+    if preload.contains("libwayland-client") {
+        return None;
+    }
+    WAYLAND_DU_SYSTEME.into_iter().find(|chemin| {
+        let chemin = std::path::Path::new(chemin);
+        !chemin.starts_with(appdir) && existe(chemin)
+    })
+}
+
+/// Faut-il couper le rendu DMABUF de `WebKitGTK` ? Oui avec le pilote NVIDIA dès
+/// que GTK passe par X11 (session X11, `XWayland`, ou `GDK_BACKEND=x11` comme
+/// dans l'`AppImage`), jamais si l'utilisateur a déjà tranché.
+///
+/// Pur : aucun accès à l'environnement, testable sur toute plateforme.
+#[cfg(any(target_os = "linux", test))]
+fn couper_dmabuf(
+    deja_pose: bool,
+    nvidia: bool,
+    wayland_display: bool,
+    gdk_backend: Option<&str>,
+) -> bool {
+    // GTK essaie les moteurs de GDK_BACKEND dans l'ordre ; sans la variable, il
+    // prend Wayland dès qu'un compositeur répond.
+    let premier = gdk_backend.and_then(|v| v.split(',').next()).map(str::trim);
+    let par_x11 = match premier {
+        Some("x11") => true,
+        Some("wayland") => false,
+        _ => !wayland_display,
+    };
+    !deja_pose && nvidia && par_x11
+}
+
 /// Faut-il retirer `WEBKIT_INSPECTOR_SERVER` de l'environnement ? Oui dès
 /// qu'une valeur est héritée — sauf sous pilotage `WebDriver`, où cette variable
 /// est le canal par lequel `WebKitWebDriver` commande l'application.
@@ -235,8 +363,65 @@ fn action_webview2(herite: bool, distante: bool, automatisation: bool) -> Action
 #[cfg(test)]
 mod tests {
     use super::{
-        action_webview2, retirer_inspecteur_http_webkit, retirer_inspecteur_webkit, ActionWebview2,
+        action_webview2, couper_dmabuf, retirer_inspecteur_http_webkit, retirer_inspecteur_webkit,
+        wayland_du_systeme, ActionWebview2,
     };
+    use std::path::Path;
+
+    #[test]
+    fn l_appimage_precharge_la_bibliotheque_wayland_du_systeme() {
+        // Signalé le 22 novembre 2026 : l'AppImage 0.14.0 ne s'ouvrait pas sur
+        // un portable Intel sous CachyOS (EGL_BAD_PARAMETER), la bibliothèque
+        // embarquée masquant celle du système.
+        let arch = |p: &Path| p == Path::new("/usr/lib/libwayland-client.so.0");
+        assert_eq!(
+            wayland_du_systeme(Path::new("/tmp/.mount_AvashX"), "", arch),
+            Some("/usr/lib/libwayland-client.so.0")
+        );
+        let debian = |p: &Path| p == Path::new("/usr/lib/x86_64-linux-gnu/libwayland-client.so.0");
+        assert_eq!(
+            wayland_du_systeme(Path::new("/tmp/.mount_AvashX"), "/opt/autre.so", debian),
+            Some("/usr/lib/x86_64-linux-gnu/libwayland-client.so.0")
+        );
+    }
+
+    #[test]
+    fn rien_a_precharger_sans_bibliotheque_du_systeme_ou_si_c_est_deja_fait() {
+        let aucune = |_: &Path| false;
+        assert_eq!(wayland_du_systeme(Path::new("/tmp/app"), "", aucune), None);
+        // Déjà préchargée (par l'utilisateur, comme le contournement donné le
+        // 22 novembre 2026) : pas de seconde relance.
+        let toutes = |_: &Path| true;
+        assert_eq!(
+            wayland_du_systeme(
+                Path::new("/tmp/app"),
+                "/usr/lib/libwayland-client.so.0",
+                toutes
+            ),
+            None
+        );
+        // Une AppImage extraite sous /usr/lib ne se précharge pas elle-même.
+        assert_eq!(
+            wayland_du_systeme(Path::new("/usr/lib"), "", |p| p
+                == Path::new("/usr/lib/libwayland-client.so.0")),
+            None
+        );
+    }
+
+    #[test]
+    fn le_rendu_dmabuf_est_coupe_pour_nvidia_sur_x11_seulement() {
+        // Vu le 22 novembre 2026 : fenêtre grise, « Failed to create GBM
+        // buffer », binaire natif sous XWayland avec une RTX 3090.
+        assert!(couper_dmabuf(false, true, true, Some("x11")));
+        assert!(couper_dmabuf(false, true, false, None), "session X11 pure");
+        assert!(couper_dmabuf(false, true, true, Some("x11,wayland")));
+        // Wayland natif : la même machine affiche tout, on n'y touche pas.
+        assert!(!couper_dmabuf(false, true, true, None));
+        assert!(!couper_dmabuf(false, true, true, Some("wayland,x11")));
+        // Autre pilote, ou choix déjà fait par l'utilisateur.
+        assert!(!couper_dmabuf(false, false, false, Some("x11")));
+        assert!(!couper_dmabuf(true, true, false, Some("x11")));
+    }
 
     #[test]
     fn l_inspecteur_webkit_herite_est_retire_hors_pilotage() {

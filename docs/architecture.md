@@ -352,6 +352,27 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
   fenêtre était saccadé : WebKitGTK réallouait ses tampons GPU à chaque image du
   geste (42 % du temps dans le noyau, mesuré au profileur). Sans compositing
   accéléré, la part noyau retombe à 19 % et le débit RDP est inchangé.
+- **`WEBKIT_DISABLE_DMABUF_RENDERER` sous Linux, pilote NVIDIA et X11
+  seulement.** Avec le pilote NVIDIA, le rendu DMABUF de WebKitGTK n'alloue pas
+  ses tampons dès que GTK passe par X11 (session X11, XWayland, ou
+  `GDK_BACKEND=x11` comme dans l'AppImage) : « Failed to create GBM buffer »,
+  fenêtre entièrement grise (vu le 22 novembre 2026, RTX 3090, pilote 620).
+  En Wayland natif la même machine affiche tout, on n'y touche pas. La
+  décision vit dans `couper_dmabuf`, pure et testée ; qui pose la variable
+  lui-même garde sa valeur.
+- **AppImage : la `libwayland-client` du système, par une relance.**
+  L'AppImage embarque les `libwayland-*` de la machine de construction mais
+  pas Mesa : le pilote EGL du système se retrouve lié à une bibliothèque plus
+  vieille que lui et refuse de créer son écran (« Could not create default EGL
+  display: EGL_BAD_PARAMETER », fenêtre jamais affichée ; signalé le
+  22 novembre 2026 sur un portable Intel et NVIDIA, reproduit en forçant le
+  pilote EGL de Mesa). Quand `APPDIR` est posé, `main` se relance donc une
+  fois avec la bibliothèque du système en tête de `LD_PRELOAD`, prise dans une
+  liste fixe de chemins du système, jamais dans l'AppImage ni dans
+  l'environnement. La variable reste posée ensuite, parce que les processus
+  de WebKit en ont besoin eux aussi : les processus lancés par Avash
+  (bureau distant, navigateur, `ProxyCommand`) en héritent, sans effet pour
+  eux. Hors AppImage, rien ne change.
 - **`--disable-gpu-compositing` sous Windows, en session distante seulement.**
   Symétrique du point précédent, pour un autre symptôme : avash affiché à
   travers un RDP (un poste piloté à distance, ou un avash Windows imbriqué dans
