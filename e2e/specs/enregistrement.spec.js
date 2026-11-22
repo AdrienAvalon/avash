@@ -156,8 +156,21 @@ describe("Enregistrement de session (asciicast)", () => {
     // en place, `apres` serait déjà sur disque (flush à chaque ligne). Le
     // marqueur est unique (Date.now), donc `includes` ne fait pas de faux
     // positif avec un écho précédent.
-    await browser.waitUntil(async () => (await sortiePty()).includes(apres),
-      { timeout: 10000, timeoutMsg: "l'écho après arrêt n'est jamais revenu" });
+    // Sur échec, on dit où était le focus et ce que le shell a renvoyé en
+    // dernier : vu en intégration le 22 novembre 2026 (PR #95), « jamais
+    // revenu » ne dit pas si les frappes sont parties ailleurs que dans le
+    // terminal (la palette vient de se fermer) ou si le shell n'a pas répondu.
+    try {
+      await browser.waitUntil(async () => (await sortiePty()).includes(apres), { timeout: 10000 });
+    } catch {
+      const focus = await browser.execute(() => {
+        const e = document.activeElement;
+        const ouverts = [...document.querySelectorAll(".modal-backdrop.open, #palette.open, #term-context.open")].map((m) => m.id);
+        return `${e?.tagName ?? "aucun"}#${e?.id ?? ""}.${String(e?.className ?? "").slice(0, 60)} ; ouverts : ${ouverts.join(",") || "rien"}`;
+      });
+      throw new Error(`l'écho après arrêt (${apres}) n'est jamais revenu ; focus : ${focus} ; `
+        + `fin de la sortie du terminal : ${(await sortiePty()).slice(-300)}`);
+    }
     expect(readFileSync(chemin, "utf8")).not.toContain(apres);
   });
 });
