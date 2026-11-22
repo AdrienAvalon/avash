@@ -385,6 +385,9 @@ run "docs : e2e/README, pauses conservées et règle assertion négative" "$ROOT
 # verrou e2e ne le contient plus. Le contrôle prend package.json et le verrou
 # pour vérité, exige que le README documente le 3e override et rougit contre la
 # phrase extract-zip du README comme contre le commentaire périmé de check.sh.
+# 22 novembre 2026 : WebdriverIO 10 exige de lui-même les versions saines, les
+# trois overrides sont retirés ; le contrôle garde l'état d'après (pas de retour
+# muet, verrou sans version vulnérable, overrides restants expliqués).
 run "docs : e2e/README, overrides et extract-zip évincé" "$ROOT" ./scripts/tests/e2e-readme-overrides.sh
 # CONTRIBUTING.md listait feat/fix/perf/test/chore/docs — sans ci, build ni
 # refactor, pourtant ci (33) et build (24) sont les types les plus fréquents

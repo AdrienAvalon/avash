@@ -17,9 +17,6 @@
     "axe-core": "^4.13.0"
   },
   "overrides": {
-    "deepmerge-ts": "^8.0.2",
-    "serialize-javascript": "^7.1.1",
-    "@puppeteer/browsers": "^3.2.2",
     "minimatch": "^11.0.9",
     "glob": "^14.0.6"
   }

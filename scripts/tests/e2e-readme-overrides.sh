@@ -26,46 +26,68 @@ pkg="e2e/package.json"
 lock="e2e/package-lock.json"
 readme="e2e/README.md"
 check="check.sh"
-
 echecs=0
 
-# --- Vérité du code : les trois overrides sont bien déclarés ----------------
+# Révision du 22 novembre 2026 : WebdriverIO 10 exige de lui-même les versions
+# saines de deepmerge-ts, serialize-javascript et @puppeteer/browsers. La
+# condition de retrait que ce contrôle surveillait s'est réalisée (il a rougi,
+# comme prévu) ; les trois overrides sont retirés et le contrôle garde
+# maintenant l'état d'après : ils ne reviennent pas sans raison écrite, les
+# versions vulnérables ne rentrent pas dans le verrou, et la doc décrit les
+# overrides qui restent, ni plus ni moins.
+
+# 1. Les overrides retirés ne reviennent pas en silence.
 for dep in "deepmerge-ts" "serialize-javascript" "@puppeteer/browsers"; do
-  if ! grep -qF "\"$dep\"" "$pkg"; then
-    echo "  ✗ $pkg ne déclare plus l'override $dep : la source de vérité a bougé, revoir la doc et ce contrôle" >&2
+  if node -e 'const o=require("./e2e/package.json").overrides||{}; process.exit(process.argv[1] in o ? 0 : 1)' "$dep"; then
+    echo "  ✗ $pkg redéclare l'override $dep, retiré le 22 novembre 2026 : dire pourquoi dans $readme et revoir ce contrôle" >&2
     echecs=1
   fi
 done
 
-# --- Vérité du verrou : extract-zip n'est plus dans l'arbre e2e -------------
+# 2. Le verrou ne contient ni extract-zip ni les lignes vulnérables.
 if grep -q "extract-zip" "$lock"; then
-  echo "  ✗ $lock contient encore extract-zip : la doc peut en reparler, revoir ce contrôle" >&2
+  echo "  ✗ $lock contient de nouveau extract-zip (GHSA-jmr9-qjv8-65gv)" >&2
+  echecs=1
+fi
+if ! node -e '
+  const p = require("./e2e/package-lock.json").packages;
+  const majeure = (v) => Number(String(v).split(".")[0]);
+  const mineure = (v) => Number(String(v).split(".")[1]);
+  let mauvais = [];
+  for (const [chemin, v] of Object.entries(p)) {
+    const nom = chemin.split("node_modules/").pop();
+    if (nom === "deepmerge-ts" && majeure(v.version) < 8) mauvais.push(`${chemin}@${v.version}`);
+    if (nom === "@puppeteer/browsers" && majeure(v.version) < 3) mauvais.push(`${chemin}@${v.version}`);
+    if (nom === "serialize-javascript"
+        && (majeure(v.version) < 7 || (majeure(v.version) === 7 && mineure(v.version) < 1))) {
+      mauvais.push(`${chemin}@${v.version}`);
+    }
+  }
+  if (mauvais.length) { console.error("  ✗ versions vulnérables dans le verrou e2e : " + mauvais.join(", ")); process.exit(1); }
+'; then
   echecs=1
 fi
 
-# --- Vérité du verrou : @wdio/utils exige encore @puppeteer/browsers 2.x ----
-# (justifie que l'override force la 3 ; condition de retrait = passage à ≥ 3)
-if ! grep -qE '"@puppeteer/browsers": "\^2\.' "$lock"; then
-  echo "  ✗ $lock : @wdio/utils n'exige plus @puppeteer/browsers ^2.x — la condition de retrait de l'override a changé, revoir la doc" >&2
+# 3. Chaque override qui reste est expliqué dans la doc, et la doc n'en
+#    présente pas d'autre comme actif.
+restants="$(node -e 'console.log(Object.keys(require("./e2e/package.json").overrides||{}).join("\n"))')"
+while read -r dep; do
+  [[ -n "$dep" ]] || continue
+  if ! grep -qF "\`$dep\`" "$readme"; then
+    echo "  ✗ $readme n'explique pas l'override $dep déclaré dans $pkg" >&2
+    echecs=1
+  fi
+done <<<"$restants"
+if ! grep -q "Conditions de retrait" "$readme"; then
+  echo "  ✗ $readme ne dit plus à quelle condition retirer les overrides restants" >&2
   echecs=1
 fi
 
-# --- Le README doit documenter le troisième override -----------------------
-if ! grep -qF "@puppeteer/browsers" "$readme"; then
-  echo "  ✗ $readme n'explique pas l'override @puppeteer/browsers (le 3e, qui évince extract-zip)" >&2
-  echo "    → décrire : v3 remplace extract-zip par modern-tar ; retrait quand @wdio/utils exige ≥ 3" >&2
-  echecs=1
-fi
-
-# --- Le README ne doit plus dire que les avis restants viennent d'extract-zip
+# 4. Formulations périmées (constats d'origine du 8 septembre 2026).
 if grep -qiE 'avis restants viennent .*extract-zip' "$readme"; then
   echo "  ✗ $readme affirme encore « les avis restants viennent tous d'extract-zip », qui a quitté le verrou" >&2
   echecs=1
 fi
-
-# --- check.sh ne doit plus lister extract-zip comme dépendance transitive ---
-# Le commentaire de l'étape « audit npm (e2e) » énumérait extract-zip parmi les
-# dépendances transitives portant des avis « haute ».
 if grep -qiE 'transitives \(extract-zip' "$check"; then
   echo "  ✗ $check nomme encore extract-zip comme dépendance transitive à avis (commentaire audit npm e2e)" >&2
   echecs=1
@@ -74,5 +96,4 @@ fi
 if [[ "$echecs" -ne 0 ]]; then
   exit 1
 fi
-
-echo "  ✓ e2e/README.md et check.sh : overrides décrits conformément à package.json et au verrou (extract-zip évincé)"
+echo "  ✓ e2e/README.md : overrides restants expliqués, overrides retirés absents, verrou sans version vulnérable ni extract-zip"

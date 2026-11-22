@@ -41,7 +41,11 @@ fi
 # Les entrées réelles sont des chaînes citées ; les commentaires citent les
 # mêmes IDs sans guillemets, on ne prend donc que les guillemetés.
 avis_audit="$(grep -oE '"RUSTSEC-[0-9]{4}-[0-9]{4}"' .cargo/audit.toml | tr -d '"' | sort -u)"
-avis_deny="$(grep -oE '"RUSTSEC-[0-9]{4}-[0-9]{4}"' deny.toml | tr -d '"' | sort -u)"
+# `|| true` : deny.toml peut n'ignorer AUCUN avis, et c'est l'état visé. Sans
+# cela, grep sort en 1 faute de correspondance et, sous `pipefail`, le contrôle
+# s'arrêtait là sans un mot : il a rougi en silence le 22 novembre 2026, dès
+# que la dernière exception de deny.toml (rsa, attaque Marvin) a été retirée.
+avis_deny="$(grep -oE '"RUSTSEC-[0-9]{4}-[0-9]{4}"' deny.toml | tr -d '"' | sort -u || true)"
 
 if [[ -z "$avis_audit" ]]; then
   echo "  ✗ .cargo/audit.toml : aucun avis dans [advisories] ignore" >&2
