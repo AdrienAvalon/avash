@@ -108,7 +108,7 @@ describe("Mesures du front", () => {
     // vide) : on s'abonne par les internes de la webview, comme le fait
     // `@tauri-apps/api` lui-même.
     await browser.execute(async () => {
-      const m = { frappes: [], attente: null, derniereSortie: performance.now(), sorties: 0 };
+      const m = { frappes: [], attente: null, pose: performance.now(), derniereSortie: performance.now(), sorties: 0 };
       window.__mesure = m;
       document.addEventListener("keydown", (e) => {
         if (e.key.length === 1) m.attente = { t0: performance.now(), touche: e.key };
@@ -129,11 +129,17 @@ describe("Mesures du front", () => {
         }),
       });
     });
-    // L'invite du shell : la sortie s'est tue depuis un moment.
+    // L'invite du shell : la sortie s'est tue depuis un moment. Elle a pu
+    // arriver tout entière AVANT la pose de la sonde, auquel cas aucune sortie
+    // ne viendra plus : le scénario attendait alors pour rien et échouait sur
+    // « l'invite du shell n'est jamais venue » (vu le 22 novembre 2026). Un
+    // silence de 2,5 s depuis la pose vaut donc invite, lui aussi.
     await browser.waitUntil(
       () => browser.execute(() => {
         const m = window.__mesure;
-        return m.sorties > 0 && performance.now() - m.derniereSortie > 700;
+        const maintenant = performance.now();
+        if (maintenant - m.derniereSortie <= 700) return false;
+        return m.sorties > 0 || maintenant - m.pose > 2500;
       }),
       { timeout: 15000, timeoutMsg: "l'invite du shell n'est jamais venue" },
     );

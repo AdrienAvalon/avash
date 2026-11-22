@@ -535,7 +535,7 @@ Ces mesures sont à relever à chaque version :
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
 | Scénarios bout en bout | 81 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 84 % des lignes (cœur + interface), 81 % (processus RDP), unitaires et bout en bout confondus | en hausse à chaque version |
-| Latence à la frappe (SSH local) | 11 ms jusqu'à l'écho, 18 ms jusqu'à l'image (médianes, 04/09/2026) | < 16 ms, tenue |
+| Latence à la frappe (SSH local) | 1 ms jusqu'à l'écho, 9 ms jusqu'à l'image (médianes, 22/11/2026, 0.14.0 ; 11 et 18 ms le 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |
 
 Le dernier indicateur est le seul qui compte vraiment. Les autres servent à le tenir.
