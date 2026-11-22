@@ -1,0 +1,437 @@
+- id: id0
+  name: yes
+  command: yes
+  run: true
+  category: yes
+- id: id1
+  name: no
+  command: no
+  run: false
+  category: no
+- id: id2
+  name: on
+  command: on
+  run: true
+  category: on
+- id: id3
+  name: off
+  command: off
+  run: false
+  category: off
+- id: id4
+  name: 'null'
+  command: 'null'
+  run: true
+  category: 'null'
+- id: id5
+  name: '~'
+  command: '~'
+  run: false
+  category: '~'
+- id: id6
+  name: 'true'
+  command: 'true'
+  run: true
+  category: 'true'
+- id: id7
+  name: 'False'
+  command: 'False'
+  run: false
+  category: 'False'
+- id: id8
+  name: '123'
+  command: '123'
+  run: true
+  category: '123'
+- id: id9
+  name: '012'
+  command: '012'
+  run: false
+  category: '012'
+- id: id10
+  name: '+1'
+  command: '+1'
+  run: true
+  category: '+1'
+- id: id11
+  name: '-1'
+  command: '-1'
+  run: false
+  category: '-1'
+- id: id12
+  name: '1e3'
+  command: '1e3'
+  run: true
+  category: '1e3'
+- id: id13
+  name: '0x1F'
+  command: '0x1F'
+  run: false
+  category: '0x1F'
+- id: id14
+  name: '0o17'
+  command: '0o17'
+  run: true
+  category: '0o17'
+- id: id15
+  name: '.inf'
+  command: '.inf'
+  run: false
+  category: '.inf'
+- id: id16
+  name: '.nan'
+  command: '.nan'
+  run: true
+  category: '.nan'
+- id: id17
+  name: '1.0'
+  command: '1.0'
+  run: false
+  category: '1.0'
+- id: id18
+  name: 2026-11-22
+  command: 2026-11-22
+  run: true
+  category: 2026-11-22
+- id: id19
+  name: 'a: b'
+  command: 'a: b'
+  run: false
+  category: 'a: b'
+- id: id20
+  name: a:b
+  command: a:b
+  run: true
+  category: a:b
+- id: id21
+  name: '# pas un commentaire'
+  command: '# pas un commentaire'
+  run: false
+  category: '# pas un commentaire'
+- id: id22
+  name: 'x # y'
+  command: 'x # y'
+  run: true
+  category: 'x # y'
+- id: id23
+  name: ' espace devant'
+  command: ' espace devant'
+  run: false
+  category: ' espace devant'
+- id: id24
+  name: 'espace derriere '
+  command: 'espace derriere '
+  run: true
+  category: 'espace derriere '
+- id: id25
+  name: |-
+    ligne1
+    ligne2
+  command: |-
+    ligne1
+    ligne2
+  run: false
+  category: |-
+    ligne1
+    ligne2
+- id: id26
+  name: |
+    ligne1
+    ligne2
+  command: |
+    ligne1
+    ligne2
+  run: true
+  category: |
+    ligne1
+    ligne2
+- id: id27
+  name: |2-
+
+    ligne
+  command: |2-
+
+    ligne
+  run: false
+  category: |2-
+
+    ligne
+- id: id28
+  name: |+
+    fin
+
+  command: |+
+    fin
+
+  run: true
+  category: |+
+    fin
+
+- id: id29
+  name: '''apostrophes'''
+  command: '''apostrophes'''
+  run: false
+  category: '''apostrophes'''
+- id: id30
+  name: '"guillemets"'
+  command: '"guillemets"'
+  run: true
+  category: '"guillemets"'
+- id: id31
+  name: it's
+  command: it's
+  run: false
+  category: it's
+- id: id32
+  name: é日本🙂
+  command: é日本🙂
+  run: true
+  category: é日本🙂
+- id: id33
+  name: ::1
+  command: ::1
+  run: false
+  category: ::1
+- id: id34
+  name: '{{var}}'
+  command: '{{var}}'
+  run: true
+  category: '{{var}}'
+- id: id35
+  name: '{a: 1}'
+  command: '{a: 1}'
+  run: false
+  category: '{a: 1}'
+- id: id36
+  name: '[1, 2]'
+  command: '[1, 2]'
+  run: true
+  category: '[1, 2]'
+- id: id37
+  name: '- tiret'
+  command: '- tiret'
+  run: false
+  category: '- tiret'
+- id: id38
+  name: '-'
+  command: '-'
+  run: true
+  category: '-'
+- id: id39
+  name: '!tag'
+  command: '!tag'
+  run: false
+  category: '!tag'
+- id: id40
+  name: '&ancre'
+  command: '&ancre'
+  run: true
+  category: '&ancre'
+- id: id41
+  name: '*alias'
+  command: '*alias'
+  run: false
+  category: '*alias'
+- id: id42
+  name: '%dir'
+  command: '%dir'
+  run: true
+  category: '%dir'
+- id: id43
+  name: '@at'
+  command: '@at'
+  run: false
+  category: '@at'
+- id: id44
+  name: '`back`'
+  command: '`back`'
+  run: true
+  category: '`back`'
+- id: id45
+  name: ''
+  command: ''
+  run: false
+  category: ''
+- id: id46
+  name: ' '
+  command: ' '
+  run: true
+  category: ' '
+- id: id47
+  name: "\t"
+  command: "\t"
+  run: false
+  category: "\t"
+- id: id48
+  name: "a\tb"
+  command: "a\tb"
+  run: true
+  category: "a\tb"
+- id: id49
+  name: "a\r\nb"
+  command: "a\r\nb"
+  run: false
+  category: "a\r\nb"
+- id: id50
+  name: '---'
+  command: '---'
+  run: true
+  category: '---'
+- id: id51
+  name: '...'
+  command: '...'
+  run: false
+  category: '...'
+- id: id52
+  name: '|'
+  command: '|'
+  run: true
+  category: '|'
+- id: id53
+  name: '>'
+  command: '>'
+  run: false
+  category: '>'
+- id: id54
+  name: '| bloc'
+  command: '| bloc'
+  run: true
+  category: '| bloc'
+- id: id55
+  name: '? cle'
+  command: '? cle'
+  run: false
+  category: '? cle'
+- id: id56
+  name: ': val'
+  command: ': val'
+  run: true
+  category: ': val'
+- id: id57
+  name: ','
+  command: ','
+  run: false
+  category: ','
+- id: id58
+  name: a\b
+  command: a\b
+  run: true
+  category: a\b
+- id: id59
+  name: \n
+  command: \n
+  run: false
+  category: \n
+- id: id60
+  name: "\N"
+  command: "\N"
+  run: true
+  category: "\N"
+- id: id61
+  name: "\uFEFFbom"
+  command: "\uFEFFbom"
+  run: false
+  category: "\uFEFFbom"
+- id: id62
+  name: "nul\0"
+  command: "nul\0"
+  run: true
+  category: "nul\0"
+- id: id63
+  name: "\x7F"
+  command: "\x7F"
+  run: false
+  category: "\x7F"
+- id: id64
+  name: "\e[31m"
+  command: "\e[31m"
+  run: true
+  category: "\e[31m"
+- id: id65
+  name: |2
+      indent
+        plus
+  command: |2
+      indent
+        plus
+  run: false
+  category: |2
+      indent
+        plus
+- id: id66
+  name: |-
+    a
+
+
+    b
+  command: |-
+    a
+
+
+    b
+  run: true
+  category: |-
+    a
+
+
+    b
+- id: id67
+  name: 'trailing:'
+  command: 'trailing:'
+  run: false
+  category: 'trailing:'
+- id: id68
+  name: http://x.y:8080/a?b=c#d
+  command: http://x.y:8080/a?b=c#d
+  run: true
+  category: http://x.y:8080/a?b=c#d
+- id: id69
+  name: C:\Users\x
+  command: C:\Users\x
+  run: false
+  category: C:\Users\x
+- id: id70
+  name: <<
+  command: <<
+  run: true
+  category: <<
+- id: id71
+  name: =
+  command: =
+  run: false
+  category: =
+- id: id72
+  name: '0'
+  command: '0'
+  run: true
+  category: '0'
+- id: id73
+  name: '00'
+  command: '00'
+  run: false
+  category: '00'
+- id: id74
+  name: 1_000
+  command: 1_000
+  run: true
+  category: 1_000
+- id: id75
+  name: 1:30
+  command: 1:30
+  run: false
+  category: 1:30
+- id: id76
+  name: y
+  command: y
+  run: true
+  category: y
+- id: id77
+  name: n
+  command: n
+  run: false
+  category: n
+- id: id78
+  name: N
+  command: N
+  run: true
+  category: N

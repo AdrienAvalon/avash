@@ -7,6 +7,28 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Sécurité
+
+- **Le lecteur YAML abandonné est remplacé.** `rdp.yaml`, `tunnels.yaml`,
+  `snippets.yaml` et `folders.yaml` passaient par `serde_yaml`, que son auteur
+  a déclaré abandonné en mars 2024 et qui s'adosse à `unsafe-libyaml`, une
+  traduction mécanique du C sans mainteneur. Ils passent par `serde-saphyr`,
+  maintenu, écrit en Rust sans aucun `unsafe` (`forbid(unsafe_code)`, lecteur
+  compris) et qui borne ce qu'un fichier peut lui faire allouer : une bombe
+  d'alias est refusée au lieu d'être développée. Contrepartie pesée : dix
+  paquets entrent pour deux qui sortent, tous lus (auteurs, dépôts, absence de
+  code natif) avant d'être admis.
+  Les fichiers déjà sur le disque se relisent à l'identique : un essai
+  différentiel a fait écrire l'ancienne bibliothèque et lire la nouvelle, et
+  l'inverse, sur des bureaux, des tunnels et quatre-vingts chaînes piégeuses
+  (`yes`, `~`, `012`, `a: b`, sauts de ligne, caractères de contrôle) ; ce que
+  l'ancienne écrivait est gardé en témoin dans `crates/avash/tests/donnees` et
+  relu à chaque commit. Une seule divergence, bornée par un test : une valeur
+  ancienne contenant un séparateur de ligne Unicode (U+2028 ou U+2029, par
+  exemple collé depuis un traitement de texte) gagne deux espaces après lui à
+  la première relecture, une seule fois. Une dixième cible de fuzzing,
+  `yaml_config`, exerce le nouveau lecteur et l'aller-retour lecture-écriture.
+
 ## [0.13.3] - 2026-11-22
 
 ### Sécurité

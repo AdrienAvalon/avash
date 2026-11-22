@@ -168,13 +168,13 @@ pub fn load_snippets_from(path: &Path) -> Result<Vec<Snippet>> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    serde_yaml::from_str(&text).with_context(|| format!("{} est illisible", path.display()))
+    serde_saphyr::from_str(&text).with_context(|| format!("{} est illisible", path.display()))
 }
 
 /// Ecriture atomique : un plantage en pleine ecriture ne laisse pas un
 /// fichier tronque qui perdrait tous les snippets.
 pub fn save_snippets_to(path: &Path, snippets: &[Snippet]) -> Result<()> {
-    crate::ecrire_atomiquement(path, serde_yaml::to_string(snippets)?.as_bytes())
+    crate::ecrire_atomiquement(path, serde_saphyr::to_string(&snippets)?.as_bytes())
 }
 
 /// Ajoute ou remplace (meme `id`) un snippet.

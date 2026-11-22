@@ -20,7 +20,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1950%20verts-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1957%20verts-brightgreen.svg)](docs/qualite.md)
 [![Couverture](https://img.shields.io/badge/couverture-84%25%20des%20lignes-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20attrap%C3%A9s-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -214,12 +214,12 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**1950 tests** à chaque commit, sur GitHub Actions (Linux, Windows et macOS,
+**1957 tests** à chaque commit, sur GitHub Actions (Linux, Windows et macOS,
 conformité contre de vrais serveurs xrdp comprise) :
 
 | Niveau | Tests | En un mot |
 |---|---:|---|
-| Cœur Rust et intégration contre un vrai sshd | 344 | parseurs, import, SFTP, tunnels, rebonds |
+| Cœur Rust et intégration contre un vrai sshd | 350 | parseurs, import, SFTP, tunnels, rebonds |
 | Interface Tauri | 202 | commandes, magasin de sessions, clavier |
 | Processus RDP | 237 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
 | Serveurs de test | 32 | côté serveur RDPDR (décodeurs écrits à la main, automate du scénario, dialogue complet avec le canal client) et serveur VNC |
@@ -229,7 +229,7 @@ conformité contre de vrais serveurs xrdp comprise) :
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, le Scorecard de l'OpenSSF,
-neuf cibles cargo-fuzz et un parc RDP en conteneurs. Une règle tient lieu de
+dix cibles cargo-fuzz et un parc RDP en conteneurs. Une règle tient lieu de
 discipline : **un nouveau test doit avoir été vu échouer.** Le détail, avec ce
 que chaque dispositif a réellement trouvé : [docs/qualite.md](docs/qualite.md).
 

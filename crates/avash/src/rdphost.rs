@@ -192,7 +192,7 @@ pub fn load_hosts_brut_from(path: &Path) -> Result<Vec<RdpHost>> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    serde_yaml::from_str(&text).with_context(|| format!("{} est illisible", path.display()))
+    serde_saphyr::from_str(&text).with_context(|| format!("{} est illisible", path.display()))
 }
 
 /// Les bureaux AFFICHABLES : la lecture brute débarrassée des entrées qu'on
@@ -209,7 +209,7 @@ pub fn load_hosts_from(path: &Path) -> Result<Vec<RdpHost>> {
 
 /// Ecriture atomique : un plantage en cours d'ecriture ne tronque pas le fichier.
 pub fn save_hosts_to(path: &Path, hosts: &[RdpHost]) -> Result<()> {
-    crate::ecrire_atomiquement(path, serde_yaml::to_string(hosts)?.as_bytes())
+    crate::ecrire_atomiquement(path, serde_saphyr::to_string(&hosts)?.as_bytes())
 }
 
 pub fn upsert_host_in(path: &Path, host: RdpHost) -> Result<Vec<RdpHost>> {
@@ -320,12 +320,12 @@ mod tests {
     fn le_protocole_est_rdp_par_defaut_et_survit_a_l_aller_retour() {
         let ancien =
             "- id: r-1\n  name: A\n  host: h\n  port: 3389\n  user: u\n  width: 0\n  height: 0\n";
-        let lus: Vec<RdpHost> = serde_yaml::from_str(ancien).unwrap();
+        let lus: Vec<RdpHost> = serde_saphyr::from_str(ancien).unwrap();
         assert_eq!(lus[0].protocole, Protocole::Rdp);
         let v = RdpHost::new("V", "h", 5900, "", 0, 0).en(Protocole::Vnc);
-        let texte = serde_yaml::to_string(std::slice::from_ref(&v)).unwrap();
+        let texte = serde_saphyr::to_string(&std::slice::from_ref(&v)).unwrap();
         assert!(texte.contains("protocole: vnc"), "{texte}");
-        let relus: Vec<RdpHost> = serde_yaml::from_str(&texte).unwrap();
+        let relus: Vec<RdpHost> = serde_saphyr::from_str(&texte).unwrap();
         assert_eq!(relus, vec![v]);
         assert_eq!(Protocole::depuis(Some("vnc")), Protocole::Vnc);
         assert_eq!(Protocole::depuis(Some("autre")), Protocole::Rdp);

@@ -61,7 +61,7 @@ fn with_ancestors(path: &str) -> Vec<String> {
 fn load_from(path: &Path) -> Result<Vec<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
-            let f: FoldersFile = serde_yaml::from_str(&text).context("folders.yaml illisible")?;
+            let f: FoldersFile = serde_saphyr::from_str(&text).context("folders.yaml illisible")?;
             let mut v: Vec<String> = f
                 .folders
                 .iter()
@@ -89,7 +89,7 @@ fn save_to(path: &Path, folders: &[String]) -> Result<()> {
     sorted.sort();
     sorted.dedup();
     let f = FoldersFile { folders: sorted };
-    let yaml = serde_yaml::to_string(&f).context("sérialisation folders.yaml")?;
+    let yaml = serde_saphyr::to_string(&f).context("sérialisation folders.yaml")?;
     crate::ecrire_atomiquement(path, yaml.as_bytes())
 }
 

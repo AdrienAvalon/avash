@@ -22,6 +22,9 @@ ironrdp-graphics = { path = "../rdp-sidecar/vendor/ironrdp-graphics" }
 # scénario tourne sur un moteur tokio à un seul fil.
 vnc-rs = { path = "../rdp-sidecar/vendor/vnc-rs" }
 tokio = { version = "1", features = ["rt", "io-util", "time", "macros"] }
+# Cible yaml_config : le lecteur YAML du cœur, dans la même version que lui.
+serde = "1"
+serde-saphyr = { version = "2.2", default-features = false, features = ["serialize", "deserialize"] }
 
 [patch.crates-io]
 ironrdp-pdu = { path = "../rdp-sidecar/vendor/ironrdp-pdu" }
@@ -90,6 +93,13 @@ bench = false
 [[bin]]
 name = "osinfo"
 path = "fuzz_targets/osinfo.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "yaml_config"
+path = "fuzz_targets/yaml_config.rs"
 test = false
 doc = false
 bench = false
