@@ -205,22 +205,24 @@ coupe la session de pilotage embarquée (la page ne répond plus, `ECONNRESET`).
 
 ## Dépendances : les `overrides` de `package.json`
 
-WebdriverIO 9 tire `deepmerge-ts` 7 (épuisement de pile sur un graphe
-récursif) et, par mocha, `serialize-javascript` 6 (exécution de code par
-`RegExp.flags`), et aucune de ses versions ne les corrige : `npm audit fix` ne
-propose qu'une rétrogradation en 7.x. Enfin, `@wdio/utils` dépend de
-`@puppeteer/browsers` `^2.2.0`, qui embarque `extract-zip`
-(GHSA-jmr9-qjv8-65gv, traversée de chemin par lien symbolique, sans correctif
-amont). Les trois `overrides` imposent les versions saines :
-`@puppeteer/browsers` `^3.2.2`, où `extract-zip` a laissé place à
-`modern-tar`, si bien que le verrou e2e ne contient plus `extract-zip` ;
-la suite tourne pareil. C'est du code de test, jamais embarqué, et `npm audit`
-n'y bloque que sur « critique » pour cette raison.
+Deux `overrides` restent, tous deux pour mocha, que WebdriverIO 10 tire en
+version 12 : il demande `minimatch` `^10.2.2` et `glob` `^13.0.0`, des lignes
+visées par des avis que seules les suivantes corrigent. Ils sont forcés en
+`minimatch` `^11.0.9` et `glob` `^14.0.6`, les versions que `@wdio/cli` et
+`@wdio/config` demandent déjà d'eux-mêmes ; la suite tourne pareil. C'est du
+code de test, jamais embarqué, et `npm audit` n'y bloque que sur « critique »
+pour cette raison ; il n'y trouve aujourd'hui aucun avis.
 
-Conditions de retrait : si une montée de WebdriverIO corrige `deepmerge-ts`
-ou `serialize-javascript`, retirer l'`override` correspondant ; retirer celui
-de `@puppeteer/browsers` quand `@wdio/utils` exigera lui-même la version 3 ou
-plus (aujourd'hui encore `^2.2.0`).
+Conditions de retrait : retirer chacun dès que mocha exigera lui-même
+`minimatch` 11 ou `glob` 14, ou plus.
+
+Trois autres `overrides` ont existé sous WebdriverIO 9 et sont retirés depuis
+le 22 novembre 2026, leur condition de retrait étant remplie : WebdriverIO 10
+exige de lui-même `deepmerge-ts` 8 (la 7 épuisait la pile sur un graphe
+récursif), `serialize-javascript` 7.1 par mocha (la 6 exécutait du code par
+`RegExp.flags`) et `@puppeteer/browsers` 3, où `extract-zip`
+(GHSA-jmr9-qjv8-65gv, traversée de chemin par lien symbolique) a laissé place
+à `modern-tar`. Le verrou e2e ne contient plus `extract-zip`.
 
 ## Audit d'accessibilité (`axe.spec.js`)
 

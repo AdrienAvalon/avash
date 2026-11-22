@@ -29,6 +29,26 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   la première relecture, une seule fois. Une dixième cible de fuzzing,
   `yaml_config`, exerce le nouveau lecteur et l'aller-retour lecture-écriture.
 
+### Validation
+
+- **Le contrôle complet rejoué, trois gardes réparés.** Le hook de commit ne
+  joue qu'une partie de `./check.sh` ; le contrôle entier, relancé après la
+  0.13.3, a montré trois écarts. Le garde des avis d'audit s'arrêtait sans un
+  mot dès que `deny.toml` n'ignorait plus aucun avis (un `grep` sans
+  correspondance sous `pipefail`), c'est-à-dire exactement dans l'état visé.
+  Les trois `overrides` de la suite bout en bout posés sous WebdriverIO 9
+  (`deepmerge-ts`, `serialize-javascript`, `@puppeteer/browsers`) n'avaient
+  plus d'objet, WebdriverIO 10 exigeant de lui-même les versions saines : ils
+  sont retirés, sans changement du verrou, et le garde surveille maintenant
+  qu'ils ne reviennent pas et que le verrou reste propre. Le total des tests
+  annoncé avait une unité de retard sur la somme de son tableau.
+- **Suite bout en bout : ports réservés, échecs lisibles.** Les ports fixes des
+  serveurs de test tombent dans la plage que Linux attribue aux connexions
+  sortantes ; l'un d'eux, pris au mauvais moment, donnait « port pas prêt à
+  temps » en intégration. La chaîne les réserve, et les scénarios VNC et
+  d'enregistrement citent désormais le journal du serveur ou la fin du
+  fichier quand ils échouent.
+
 ## [0.13.3] - 2026-11-22
 
 ### Sécurité
