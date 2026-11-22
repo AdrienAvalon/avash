@@ -306,9 +306,16 @@ export function startVncServer(port, surLigne, options = {}) {
     : [];
   const p = spawn(`./target/release/test-vnc-server${EXE}`,
     ["--port", String(port), "--pass", "test", ...tls],
-    { cwd: resolve("../test-vnc-server"), stdio: ["ignore", "pipe", "ignore"] });
+    { cwd: resolve("../test-vnc-server"), stdio: ["ignore", "pipe", "pipe"] });
   p.stdout.setEncoding("utf8");
   p.stdout.on("data", (d) => surLigne?.(String(d)));
+  // La sortie d'erreur et la fin du processus entrent au journal elles aussi.
+  // Le 22 novembre 2026, en intégration, « port 35904 pas prêt à temps » :
+  // le serveur n'écoutait pas, et rien ne disait pourquoi (adresse déjà prise,
+  // certificat illisible, plantage), sa sortie d'erreur étant jetée.
+  p.stderr.setEncoding("utf8");
+  p.stderr.on("data", (d) => surLigne?.(`[stderr] ${String(d)}`));
+  p.once("exit", (code, signal) => surLigne?.(`[fin du serveur VNC : code ${code}, signal ${signal}]\n`));
   return p;
 }
 

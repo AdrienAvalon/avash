@@ -73,8 +73,19 @@ describe("Enregistrement de session (asciicast)", () => {
     expect(premierFichier).toBeDefined();
     const avant = marqueur("avant-du-lancement");
     await taper(`echo ${avant}\n`);
-    await browser.waitUntil(() => readFileSync(premierFichier, "utf8").includes(avant),
-      { timeout: 10000, timeoutMsg: "le premier marqueur n'est jamais arrivé" });
+    // Sur échec, on dit ce que le fichier contient : « jamais arrivé » ne
+    // distingue pas une frappe perdue (le marqueur y est, amputé d'un
+    // caractère) d'un shell qui n'a rien reçu ou d'un enregistreur qui n'a
+    // rien écrit. Vu en intégration le 22 novembre 2026, une fois, sans que
+    // le journal permette de trancher.
+    try {
+      await browser.waitUntil(() => readFileSync(premierFichier, "utf8").includes(avant),
+        { timeout: 10000 });
+    } catch {
+      const contenu = readFileSync(premierFichier, "utf8");
+      throw new Error(`le premier marqueur (${avant}) n'est jamais arrivé ; `
+        + `fin de l'enregistrement (${contenu.length} octets) : ${contenu.slice(-600)}`);
+    }
     await menu("record-stop");
     await browser.waitUntil(async () => (await $$(".tab.rec")).length === 0, { timeout: 5000 });
 

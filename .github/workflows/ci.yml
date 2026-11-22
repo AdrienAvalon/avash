@@ -532,6 +532,17 @@ jobs:
             -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
           cargo build --locked --release --manifest-path test-vnc-server/Cargo.toml
 
+      # Les serveurs de test écoutent sur des ports fixes (33893 à 33902 pour
+      # RDP, 35900 à 35905 pour VNC) qui tombent dans la plage que Linux
+      # attribue aux connexions SORTANTES (32768 à 60999). Une connexion
+      # quelconque de l'exécuteur peut donc tenir l'un d'eux au moment où le
+      # serveur veut l'écouter : « Address already in use », puis « port 35904
+      # pas prêt à temps » (vu le 22 novembre 2026, reproduit en occupant le
+      # port par une connexion sortante). On retire ces ports de l'attribution
+      # automatique ; une écoute explicite dessus reste permise.
+      - name: Ports des serveurs de test réservés
+        run: sudo sysctl -w net.ipv4.ip_local_reserved_ports=33890-33910,35900-35910
+
       - name: E2E — suite complète (sshd et serveur RDP locaux compris)
         working-directory: e2e
         run: xvfb-run -a npm test
