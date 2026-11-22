@@ -119,6 +119,10 @@ if cargo audit --version >/dev/null 2>&1; then
   # audit.toml) : lancé d'ici avec --file, il passait sous celle de l'espace de
   # travail, et le verdict dépendait du répertoire (audit du 12 septembre 2026).
   run "audit sidecar RDP"  "$SIDECAR" cargo audit --deny unsound
+  # Les verrous qui ne partent dans aucun binaire (serveurs de test, fuzzing,
+  # verrous autonomes des paquets portés) n'étaient audités par personne : le
+  # Scorecard y comptait quarante-cinq avis le 22 novembre 2026.
+  run "audit verrous de test" "$ROOT" ./scripts/audit-verrous-de-test.sh
 else
   printf '  \033[33m~\033[0m %s\n' "audit securite (cargo-audit absent)"
 fi

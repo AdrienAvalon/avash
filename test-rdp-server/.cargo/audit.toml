@@ -1,0 +1,32 @@
+# Vulnérabilités connues du serveur RDP de test, examinées et acceptées.
+#
+# Ce serveur ne sert qu'à la suite bout en bout : il n'entre dans aucun binaire
+# publié. Ses verrous n'étaient audités par personne jusqu'au 22 novembre 2026
+# (le Scorecard de l'OpenSSF y comptait quarante-cinq avis, tous verrous de test
+# confondus) ; ils le sont depuis par scripts/audit-verrous-de-test.sh, lancé
+# de ce dossier, donc sous cette liste. Elle vaut aussi pour le verrou autonome
+# du paquet porté (vendor/ironrdp-server/Cargo.lock), qui ne sert qu'à jouer ses
+# propres tests.
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 : rsa, canal auxiliaire temporel Marvin. Même cause que
+    # pour le processus RDP (rdp-sidecar/.cargo/audit.toml) : picky et sspi
+    # épinglent `rsa = "=0.10.0-rc.18"`. Ici le serveur tient bien une clé
+    # privée RSA, mais c'est une clé jetable, générée pour la durée d'un test
+    # et servie sur la boucle locale. À lever avec l'exception du sidecar.
+    "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0574 à 0582 : heapless 0.7.17, neuf avis « unsound ». Absent
+    # du serveur lui-même depuis qu'il passe par le connecteur porté sans carte
+    # à puce (Cargo.toml, [patch.crates-io]). Reste dans le seul verrou autonome
+    # du paquet porté, où `ironrdp-acceptor` tire le connecteur de l'amont pour
+    # les onze tests du paquet : rien n'y ouvre de session par carte à puce.
+    "RUSTSEC-2026-0574",
+    "RUSTSEC-2026-0575",
+    "RUSTSEC-2026-0576",
+    "RUSTSEC-2026-0577",
+    "RUSTSEC-2026-0578",
+    "RUSTSEC-2026-0579",
+    "RUSTSEC-2026-0580",
+    "RUSTSEC-2026-0581",
+    "RUSTSEC-2026-0582",
+]

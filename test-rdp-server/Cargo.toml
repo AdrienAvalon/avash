@@ -35,6 +35,12 @@ sha2 = "0.11"
 # fabrique de canal, par laquelle passe rdpdr. Voir vendor/README.md.
 [patch.crates-io]
 ironrdp-server = { path = "vendor/ironrdp-server" }
+# Le connecteur porté par le processus RDP, dont la voie carte à puce est
+# retirée : l'amont tire `heapless` 0.7.17 par sspi, winscard et iso7816 (neuf
+# avis « unsound » du 18 novembre 2026, RUSTSEC-2026-0574 à 0582). Le serveur
+# de test n'ouvre aucune session par carte à puce ; il n'a pas à porter ce que
+# le client a quitté (relevé du 22 novembre 2026, verrous de test audités).
+ironrdp-connector = { path = "../rdp-sidecar/vendor/ironrdp-connector" }
 
 # Politique de sûreté commune au processus RDP et aux serveurs de test (audit
 # du 12 septembre 2026, unsafe.md) : ce paquet n'hérite de rien, l'espace de
