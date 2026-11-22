@@ -7,6 +7,23 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- **L'AppImage ne s'ouvrait pas sur certaines machines sous Wayland.** « Could
+  not create default EGL display: EGL_BAD_PARAMETER. Aborting... », puis rien :
+  l'AppImage embarque une `libwayland-client` plus vieille que le pilote
+  graphique Mesa du système, qui refuse alors de créer son écran. Signalé sur
+  un portable Intel et NVIDIA sous CachyOS avec la 0.14.0, reproduit en forçant
+  le pilote EGL de Mesa. Lancée depuis une AppImage, l'application se relance
+  maintenant une fois avec la bibliothèque du système préchargée, ce qui
+  revient au contournement `LD_PRELOAD=/usr/lib/libwayland-client.so.0`.
+- **Fenêtre entièrement grise avec le pilote NVIDIA sur X11.** Le paquet natif
+  lancé dans une session X11, ou par XWayland, restait vide (« Failed to create
+  GBM buffer ») : le rendu DMABUF de WebKitGTK n'y alloue pas ses tampons.
+  Avash le coupe dans ce seul cas (pilote NVIDIA et GTK sur X11) ; en Wayland
+  natif, rien ne change. `WEBKIT_DISABLE_DMABUF_RENDERER` posé à la main garde
+  la priorité.
+
 ## [0.14.0] - 2026-11-22
 
 ### Ajouté
