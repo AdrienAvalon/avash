@@ -68,6 +68,35 @@ pub fn diagnostic_noter_rendu(
     }
 }
 
+/// Le terminal peut-il être dessiné par le GPU (WebGL) ?
+///
+/// Sous Linux, `main` coupe par défaut le compositing accéléré de `WebKitGTK`
+/// (`WEBKIT_DISABLE_COMPOSITING_MODE=1`, pour le redimensionnement). Sans lui,
+/// chaque image d'un canevas WebGL est relue du GPU vers la mémoire centrale
+/// avant d'être affichée. Sur un portable à deux cartes graphiques (Intel Iris
+/// Xe et RTX 40, KDE Wayland, 23 novembre 2026), cette relecture coûtait une
+/// à trois secondes par frappe dans un terminal SSH, alors que le reste de
+/// l'interface, dessiné sans le GPU, restait immédiat ; avec la variable à 0,
+/// la frappe redevenait instantanée. Le terminal ne passe donc par WebGL que
+/// si le compositing est là pour l'afficher sans relecture.
+#[must_use]
+pub fn webgl_permis(linux: bool, compositing_coupe: Option<&str>) -> bool {
+    !linux || matches!(compositing_coupe, None | Some("" | "0"))
+}
+
+/// Dit au front s'il peut charger le rendu WebGL du terminal (voir
+/// `webgl_permis`). Synchrone : une lecture de l'environnement.
+#[tauri::command]
+#[must_use]
+pub fn terminal_webgl_permis() -> bool {
+    webgl_permis(
+        cfg!(target_os = "linux"),
+        std::env::var("WEBKIT_DISABLE_COMPOSITING_MODE")
+            .ok()
+            .as_deref(),
+    )
+}
+
 /// Les variables rapportées. `AVASH_*` sont les nôtres (aucune ne porte de
 /// mot de passe ni de jeton) ; les autres expliquent les défauts d'affichage
 /// les plus fréquents sous Linux.
@@ -394,6 +423,20 @@ mod tests_diagnostic {
     use super::{collecter, composer, diagnostic_noter_rendu, ecrire_diagnostic, Faits};
     use crate::commands::tests::{app_de_test, with_ssh_config};
     use tauri::Manager as _;
+
+    #[test]
+    fn le_webgl_du_terminal_suit_le_compositing_sous_linux() {
+        use super::webgl_permis;
+        // Le défaut d'Avash sous Linux : compositing coupé, donc pas de WebGL.
+        assert!(!webgl_permis(true, Some("1")));
+        // Qui rétablit le compositing retrouve le rendu par le GPU.
+        assert!(webgl_permis(true, Some("0")));
+        assert!(webgl_permis(true, Some("")));
+        assert!(webgl_permis(true, None));
+        // Windows et macOS n'ont pas cette variable : WebGL comme avant.
+        assert!(webgl_permis(false, Some("1")));
+        assert!(webgl_permis(false, None));
+    }
 
     fn faits() -> Faits {
         Faits {

@@ -352,6 +352,15 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
   fenêtre était saccadé : WebKitGTK réallouait ses tampons GPU à chaque image du
   geste (42 % du temps dans le noyau, mesuré au profileur). Sans compositing
   accéléré, la part noyau retombe à 19 % et le débit RDP est inchangé.
+  Contrepartie : sans compositing, un canevas WebGL est relu du GPU vers la
+  mémoire centrale à chaque image. Sur un portable à deux cartes graphiques
+  (Intel Iris Xe et RTX 40, KDE Wayland, 23 novembre 2026), chaque frappe dans
+  un terminal mettait une à trois secondes à s'afficher, le reste de
+  l'interface restant immédiat ; avec la variable à 0, la frappe redevenait
+  instantanée. Le terminal ne charge donc le rendu WebGL de xterm.js que si le
+  compositing est actif (`terminal_webgl_permis`) : par défaut sous Linux il
+  est dessiné par le DOM, comme le reste de la fenêtre. Qui lance Avash avec
+  `WEBKIT_DISABLE_COMPOSITING_MODE=0` retrouve le compositing et WebGL.
 - **`WEBKIT_DISABLE_DMABUF_RENDERER` sous Linux, pilote NVIDIA et X11
   seulement.** Avec le pilote NVIDIA, le rendu DMABUF de WebKitGTK n'alloue pas
   ses tampons dès que GTK passe par X11 (session X11, XWayland, ou

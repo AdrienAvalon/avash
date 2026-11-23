@@ -172,6 +172,19 @@ describe("création d'un terminal", () => {
     expect(etat.state.rendu).toBe("dom");
   });
 
+  it("sans_compositing_le_terminal_ne_charge_pas_webgl", async () => {
+    // Sous Linux, compositing de WebKitGTK coupé : chaque image d'un canevas
+    // WebGL est relue du GPU, et la frappe mettait une à trois secondes à
+    // s'afficher sur un portable à deux cartes graphiques (23 novembre 2026).
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "terminal_webgl_permis" ? false : reponsesParDefaut(cmd)));
+    etat.state.rendu = null;
+    const avant = xt.webgls.length;
+    await main.openSession(hote("srv-dom"));
+    expect(xt.webgls).toHaveLength(avant);
+    expect(appels("diagnostic_noter_rendu").at(-1)).toEqual(["diagnostic_noter_rendu", { rendu: "dom" }]);
+  });
+
   it("un_lien_osc8_passe_par_open_external", async () => {
     // FS-3 : sans `linkHandler`, xterm activait un lien OSC 8 par un confirm()
     // natif en anglais puis window.open, hors de la liste blanche de Rust.
