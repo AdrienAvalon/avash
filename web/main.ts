@@ -573,13 +573,23 @@ function noterRendu(rendu: "webgl" | "dom"): void {
   invoke("diagnostic_noter_rendu", { rendu }).catch(() => {});
 }
 
+/** Le terminal peut-il passer par WebGL ? Demandé au processus à chaque onglet
+ *  (`terminal_webgl_permis`) : sous Linux, le compositing de WebKitGTK est
+ *  coupé par défaut, et un canevas WebGL est alors relu du GPU à chaque image.
+ *  Sur un portable à deux cartes graphiques, la frappe mettait une à trois
+ *  secondes à s'afficher (23 novembre 2026). Seul un « non » explicite écarte
+ *  WebGL : sans réponse, on garde le comportement d'avant. */
+function terminalWebglPermis(): Promise<boolean> {
+  return invoke<boolean>("terminal_webgl_permis").then((v) => v !== false, () => true);
+}
+
 /** Cree l'onglet et le terminal. La connexion elle-meme est faite par l'appelant. */
 async function newSessionShell(label: string) {
   // xterm.js vit hors du paquet principal (voir xterm-charge.ts) : déjà là
   // après le premier terminal, ou déjà en route depuis l'accueil. La graisse
   // grasse de la police vient avec lui (C-front-8) : le rendu WebGL met les
   // glyphes en cache, un gras dessiné avec la police de repli le resterait.
-  const [{ Terminal, FitAddon, WebglAddon, SearchAddon, SerializeAddon, WebLinksAddon }] = await Promise.all([chargerXterm(), ensureGrasseChargee()]);
+  const [{ Terminal, FitAddon, WebglAddon, SearchAddon, SerializeAddon, WebLinksAddon }, , webglAutorise] = await Promise.all([chargerXterm(), ensureGrasseChargee(), terminalWebglPermis()]);
   const id = state.nextId++;
   const term = new Terminal({
     theme: terminalTheme(),
@@ -652,8 +662,10 @@ async function newSessionShell(label: string) {
   // On replie si le contexte WebGL est indisponible (machine virtuelle, pilote
   // graphique limite) — mieux vaut un rendu moins beau qu'un terminal qui
   // refuse de s'ouvrir. Le moteur retenu est noté pour le diagnostic.
+  // Pas de WebGL non plus quand le processus le déconseille (compositing de
+  // WebKitGTK coupé, voir `terminalWebglPermis`).
   let rendu: "webgl" | "dom" = "dom";
-  try {
+  if (webglAutorise) try {
     const webgl = new WebglAddon();
     webgl.onContextLoss(() => {
       webgl.dispose();

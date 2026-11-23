@@ -7,6 +7,26 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Sécurité
+
+- **`cookie` passe en 0.18.3** (RUSTSEC-2026-0594, publié le 23 novembre
+  2026 : les nonces des cookies privés peuvent se répéter dans un processus
+  qui se duplique). La bibliothèque vient avec Tauri ; Avash ne pose aucun
+  cookie privé et ne se duplique pas, la montée ferme l'alerte.
+
+### Corrigé
+
+- **Sous Linux, la frappe dans un terminal pouvait mettre une à trois secondes
+  à s'afficher.** Vu sur un portable à deux cartes graphiques (Intel Iris Xe
+  et RTX 40, KDE Wayland), alors que le champ de filtre et le reste de
+  l'interface répondaient tout de suite. Avash coupe le compositing accéléré
+  de WebKitGTK (pour le redimensionnement de la fenêtre), et le terminal était
+  malgré tout dessiné par la carte graphique : chaque image devait alors être
+  relue du GPU vers la mémoire centrale. Tant que le compositing est coupé,
+  le terminal est maintenant dessiné comme le reste de la fenêtre, sans le
+  GPU. Lancer Avash avec `WEBKIT_DISABLE_COMPOSITING_MODE=0` rétablit le
+  compositing et le rendu par le GPU. Windows et macOS ne changent pas.
+
 ### Modifié
 
 - **`ironrdp-tls` passe en 0.3.0 et `x509-cert` en 0.3 dans le processus RDP.**

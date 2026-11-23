@@ -20,7 +20,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1974%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-1976%20passing-brightgreen.svg)](docs/qualite.md)
 [![Coverage](https://img.shields.io/badge/coverage-84%25%20of%20lines-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20caught-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -236,17 +236,17 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1974 tests** on every commit, on GitHub Actions (Linux, Windows and macOS,
+**1976 tests** on every commit, on GitHub Actions (Linux, Windows and macOS,
 including conformance against real xrdp servers):
 
 | Level | Tests | In a word |
 |---|---:|---|
 | Rust core and integration against a real sshd | 355 | parsers, import, SFTP, tunnels, jump hosts |
-| Tauri interface | 205 | commands, session store, keyboard |
+| Tauri interface | 206 | commands, session store, keyboard |
 | RDP process | 237 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
 | Test servers | 32 | server-side RDPDR (hand-written decoders, scenario state machine, full dialogue with the client channel) and the VNC server |
 | Vendored IronRDP and vnc-rs crates | 634 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
-| Front (Vitest) | 430 | pure logic, VNC keysyms, translations |
+| Front (Vitest) | 431 | pure logic, VNC keysyms, translations |
 | End to end (WebdriverIO) | 81 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo

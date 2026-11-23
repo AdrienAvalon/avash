@@ -25,6 +25,7 @@ AUTORISEES=(
   rdp_close               # retire l'enfant du magasin et lui envoie un signal
   pty_ack                 # accusé du terminal, en mémoire, très fréquent
   diagnostic_noter_rendu  # retient « webgl » ou « dom », en mémoire
+  terminal_webgl_permis   # une variable d'environnement
   snippet_vars            # analyse d'une chaîne (non exposée)
   enregistrement_en_cours # le chemin retenu en mémoire (non exposée)
 )

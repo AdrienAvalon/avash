@@ -158,6 +158,7 @@ pub fn run() {
             commands::hosts_health,
             commands::diagnostic_exporter,
             commands::diagnostic_noter_rendu,
+            commands::terminal_webgl_permis,
             commands::onglets_memoriser,
             commands::onglets_memorises,
             commands::serie_ports,
