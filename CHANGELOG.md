@@ -7,6 +7,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Modifié
+
+- **`ironrdp-tls` passe en 0.3.0 et `x509-cert` en 0.3 dans le processus RDP.**
+  Le comportement ne change pas : la couche TLS accepte toujours le certificat
+  présenté, et c'est l'épinglage au premier contact d'Avash qui le juge, avant
+  l'envoi du moindre identifiant. La validation contre les autorités du
+  système, nouvelle dans cette version d'`ironrdp-tls`, n'est pas activée :
+  un serveur RDP présente presque toujours un certificat auto-signé.
+
 ## [0.14.1] - 2026-11-22
 
 ### Sécurité

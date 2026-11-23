@@ -3,8 +3,8 @@
 use anyhow::{Context, Result};
 
 pub(crate) fn server_public_key(cert: &x509_cert::Certificate) -> Result<Vec<u8>> {
-    cert.tbs_certificate
-        .subject_public_key_info
+    cert.tbs_certificate()
+        .subject_public_key_info()
         .subject_public_key
         .as_bytes()
         .context("clé publique non alignée")
