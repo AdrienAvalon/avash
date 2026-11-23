@@ -27,7 +27,7 @@ path = "src/main.rs"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr", "rdpsnd", "rdpdr", "pdu", "core"] }
 ironrdp-tokio = { version = "0.10", features = ["reqwest"] }
-ironrdp-tls = { version = "0.2", features = ["rustls"] }
+ironrdp-tls = { version = "0.3", features = ["rustls"] }
 # Chemin TLS hérité (`--tls-herite`, voir tls_herite.rs) : la pile du système
 # pour les serveurs sans suite moderne (Windows Server 2012 R2 et antérieurs).
 # Sous Linux, `vendored` embarque OpenSSL : l'AppImage et le Flatpak ne
