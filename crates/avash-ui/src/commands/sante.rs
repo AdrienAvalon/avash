@@ -166,10 +166,12 @@ mod tests_sante {
             .await
             .unwrap();
         let port = ecoute.local_addr().unwrap().port();
-        let ferme = {
-            let e = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            e.local_addr().unwrap().port()
-        };
+        // Réservé sans écouter, et gardé jusqu'à la fin : un port libéré
+        // avant la sonde peut être repris par un test voisin (vu en CI sous
+        // macOS le 23 novembre 2026, sur le test jumeau du cœur).
+        let reserve = tokio::net::TcpSocket::new_v4().unwrap();
+        reserve.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let ferme = reserve.local_addr().unwrap().port();
         let _g = with_ssh_config(&format!(
             "Host vivant\n  HostName 127.0.0.1\n  Port {port}\n\nHost muet\n  HostName 127.0.0.1\n  Port {ferme}\n\nHost cache\n  HostName 10.0.0.9\n  ProxyJump vivant\n"
         ));

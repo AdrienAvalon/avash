@@ -119,12 +119,16 @@ mod tests {
 
     #[tokio::test]
     async fn un_port_ferme_est_injoignable_avec_la_raison() {
-        // Un port libéré à l'instant : personne n'écoute.
-        let port = {
-            let e = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            e.local_addr().unwrap().port()
-        };
+        // Un port réservé mais qui n'écoute pas : le système refuse la
+        // connexion, et personne d'autre ne peut le prendre. Un port libéré
+        // juste avant la sonde était repris par un test voisin : sous macOS,
+        // la sonde l'a trouvé joignable (régression vue en CI le 23 novembre
+        // 2026, `Joignable { latence_ms: 0 }`).
+        let reserve = tokio::net::TcpSocket::new_v4().unwrap();
+        reserve.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = reserve.local_addr().unwrap().port();
         let s = sonder("127.0.0.1", port, DELAI_DEFAUT).await;
+        drop(reserve);
         assert!(
             matches!(&s, Sante::Injoignable { raison } if !raison.is_empty()),
             "{s:?}"
