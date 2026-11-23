@@ -847,6 +847,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/der_derive/der_derive-0.8.0.crate",
+        "sha256": "59600e2c2d636fde9b65e99cc6445ac770c63d3628195ff39932b8d6d7409903",
+        "dest": "cargo/vendor/der_derive-0.8.0"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"59600e2c2d636fde9b65e99cc6445ac770c63d3628195ff39932b8d6d7409903\", \"files\": {}}",
+        "dest": "cargo/vendor/der_derive-0.8.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/deranged/deranged-0.5.9.crate",
         "sha256": "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e",
         "dest": "cargo/vendor/deranged-0.5.9"
@@ -1861,14 +1874,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/ironrdp-tls/ironrdp-tls-0.2.2.crate",
-        "sha256": "ea5f0bb732e33159834f06a687f5415dae1a82c71c123c1c3a3689d41ed47645",
-        "dest": "cargo/vendor/ironrdp-tls-0.2.2"
+        "url": "https://static.crates.io/crates/ironrdp-tls/ironrdp-tls-0.3.0.crate",
+        "sha256": "63dcf5982519d8bd18eb102ffbba1933d25744f3e0f2c59f794b4b7fe0ef0f84",
+        "dest": "cargo/vendor/ironrdp-tls-0.3.0"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"ea5f0bb732e33159834f06a687f5415dae1a82c71c123c1c3a3689d41ed47645\", \"files\": {}}",
-        "dest": "cargo/vendor/ironrdp-tls-0.2.2",
+        "contents": "{\"package\": \"63dcf5982519d8bd18eb102ffbba1933d25744f3e0f2c59f794b4b7fe0ef0f84\", \"files\": {}}",
+        "dest": "cargo/vendor/ironrdp-tls-0.3.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -2480,19 +2493,6 @@
         "type": "inline",
         "contents": "{\"package\": \"d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120\", \"files\": {}}",
         "dest": "cargo/vendor/pem-4.0.0",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/pem-rfc7468/pem-rfc7468-0.7.0.crate",
-        "sha256": "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412",
-        "dest": "cargo/vendor/pem-rfc7468-0.7.0"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412\", \"files\": {}}",
-        "dest": "cargo/vendor/pem-rfc7468-0.7.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -3117,6 +3117,19 @@
         "type": "inline",
         "contents": "{\"package\": \"48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf\", \"files\": {}}",
         "dest": "cargo/vendor/rustls-0.23.46",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/rustls-native-certs/rustls-native-certs-0.8.5.crate",
+        "sha256": "4a073f5dc7469f984c52ad2752b63b0807745133b6de880b7b64c1ac4c48aec4",
+        "dest": "cargo/vendor/rustls-native-certs-0.8.5"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"4a073f5dc7469f984c52ad2752b63b0807745133b6de880b7b64c1ac4c48aec4\", \"files\": {}}",
+        "dest": "cargo/vendor/rustls-native-certs-0.8.5",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -4768,6 +4781,19 @@
         "type": "inline",
         "contents": "{\"package\": \"1301e935010a701ae5f8655edc0ad17c44bad3ac5ce8c39185f75453b720ae94\", \"files\": {}}",
         "dest": "cargo/vendor/x509-cert-0.2.5",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/x509-cert/x509-cert-0.3.1.crate",
+        "sha256": "e9f58ad685a2945c7c063f5d69b5c27105d75bb85c740380d8fc64e79a098417",
+        "dest": "cargo/vendor/x509-cert-0.3.1"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"e9f58ad685a2945c7c063f5d69b5c27105d75bb85c740380d8fc64e79a098417\", \"files\": {}}",
+        "dest": "cargo/vendor/x509-cert-0.3.1",
         "dest-filename": ".cargo-checksum.json"
     },
     {
