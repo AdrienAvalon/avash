@@ -169,6 +169,9 @@ run "IPC : commandes exposées toutes appelées" "$ROOT" ./scripts/tests/ipc-com
 # La vitrine annonçait « 1233 tests » depuis des semaines : les six emplacements
 # des compteurs doivent dire ce que docs/qualite.md compte (9 septembre 2026).
 run "docs : compteurs de tests partout" "$ROOT" ./scripts/tests/compteurs-tests-partout.sh
+# Les images des README ne dépendent pas d'un service qui interroge une API à
+# l'affichage : quatre badges sont restés cassés sur GitHub le 24 novembre 2026.
+run "docs : badges statiques des README" "$ROOT" ./scripts/tests/readme-badges-statiques.sh
 run "fuzz : toutes les cibles jouées" "$ROOT" ./scripts/tests/fuzz-continue-toutes-cibles.sh
 run "release : publier attend la sécurité" "$ROOT" ./scripts/tests/release-publier-attend-securite.sh
 run "CI : main jamais annulée, groupes Dependabot" "$ROOT" ./scripts/tests/ci-main-et-groupes-dependabot.sh
