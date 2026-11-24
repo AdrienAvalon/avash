@@ -98,3 +98,83 @@ export function setConfirmerFermetureOnglet(actif: boolean): void {
     /* stockage indisponible : le choix vaut pour la session */
   }
 }
+
+/** Journal des commandes passées en SSH (voir `journal-capteur.ts`) : coupé
+ *  par défaut. Il note sur le disque ce qu'on fait sur des serveurs, ce que
+ *  personne ne doit découvrir après coup ; il s'allume à la palette. */
+export const JOURNAL_KEY = "avash.journal.commandes";
+/** Exceptions par connexion, `{ "alias": true | false }` : une connexion
+ *  journalisée alors que le journal est coupé, ou l'inverse. */
+export const JOURNAL_HOTES_KEY = "avash.journal.commandes.hotes";
+/** Durée de conservation du journal, en jours. */
+export const JOURNAL_JOURS_KEY = "avash.journal.commandes.jours";
+export const JOURNAL_JOURS_DEFAUT = 90;
+
+export function journalGlobal(): boolean {
+  try {
+    return localStorage.getItem(JOURNAL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setJournalGlobal(actif: boolean): void {
+  try {
+    localStorage.setItem(JOURNAL_KEY, actif ? "1" : "0");
+  } catch {
+    /* stockage indisponible : le choix vaut pour la session */
+  }
+}
+
+function exceptionsJournal(): Record<string, boolean> {
+  try {
+    const brut: unknown = JSON.parse(localStorage.getItem(JOURNAL_HOTES_KEY) ?? "{}");
+    if (!brut || typeof brut !== "object" || Array.isArray(brut)) return {};
+    return Object.fromEntries(Object.entries(brut).filter(([, v]) => typeof v === "boolean")) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+/** Le journal vaut-il pour cette connexion ? Son exception, sinon le réglage. */
+export function journalActifPour(alias: string): boolean {
+  const e = exceptionsJournal();
+  return Object.hasOwn(e, alias) ? e[alias] : journalGlobal();
+}
+
+/** L'exception de cette connexion, ou `null` quand elle suit le réglage. */
+export function exceptionJournal(alias: string): boolean | null {
+  const e = exceptionsJournal();
+  return Object.hasOwn(e, alias) ? e[alias] : null;
+}
+
+/** Inverse le journal pour cette connexion. Une exception qui revient au
+ *  réglage général disparaît : elle suivra ses changements. */
+export function basculerJournalPour(alias: string): void {
+  const e = exceptionsJournal();
+  const voulu = !journalActifPour(alias);
+  if (voulu === journalGlobal()) delete e[alias];
+  else e[alias] = voulu;
+  try {
+    localStorage.setItem(JOURNAL_HOTES_KEY, JSON.stringify(e));
+  } catch {
+    /* stockage indisponible : le choix vaut pour la session */
+  }
+}
+
+export function dureeJournal(): number {
+  try {
+    const n = Number.parseInt(localStorage.getItem(JOURNAL_JOURS_KEY) ?? "", 10);
+    return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : JOURNAL_JOURS_DEFAUT;
+  } catch {
+    return JOURNAL_JOURS_DEFAUT;
+  }
+}
+
+export function setDureeJournal(jours: number): void {
+  try {
+    localStorage.setItem(JOURNAL_JOURS_KEY, String(Math.min(3650, Math.max(1, Math.round(jours)))));
+  } catch {
+    /* stockage indisponible : le choix vaut pour la session */
+  }
+}

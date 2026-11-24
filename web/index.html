@@ -984,6 +984,17 @@
     .enregistrement-row .nom { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; overflow-wrap: anywhere; }
     .enregistrement-row .meta { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 
+    /* Journal des commandes */
+    .journal-etat-ligne { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; font-size: 13px; color: var(--text-dim); }
+    .journal-filtre { width: 100%; margin-bottom: 8px; }
+    .journal-liste { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow: auto; }
+    .journal-row { display: flex; flex-direction: column; gap: 4px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+    .journal-tete { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--text-dim); }
+    .journal-tete .code.echec { color: var(--err); }
+    .journal-row .commande { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .journal-duree-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); }
+    .tab .journal-repere { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--text-dim); vertical-align: 1px; }
+
     .key-row {
       display: flex; align-items: center; gap: 10px; padding: 9px 12px;
       background: var(--card); border: 1px solid var(--border-soft); border-radius: var(--r-md); font-size: 12px;
@@ -1431,6 +1442,34 @@
       </div>
     </div>
 
+    <div class="modal-backdrop" id="journal-modal">
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="journal-modal-title">
+        <h2 id="journal-modal-title" data-i18n="journal-commandes">Journal des commandes</h2>
+        <p class="modal-hint" data-i18n="journal-hint">Les commandes passées dans les sessions SSH, telles qu'elles étaient à l'écran quand elles sont parties. Ce qui ne s'affiche pas (un mot de passe tapé à une invite) n'est jamais noté, ni une commande qui commence par une espace ; les secrets écrits dans une commande sont masqués.</p>
+        <div class="journal-etat-ligne">
+          <span id="journal-etat" aria-live="polite"></span>
+          <button type="button" class="btn-ghost" id="journal-bascule"></button>
+        </div>
+        <input type="search" id="journal-filtre" class="journal-filtre" autocomplete="off" spellcheck="false" data-i18n-placeholder="journal-filtre" data-i18n-aria="journal-filtre" placeholder="Filtrer par connexion, date ou commande" />
+        <div class="journal-liste" id="journal-liste" aria-live="polite"></div>
+        <div class="modal-actions">
+          <label class="journal-duree-label"><span data-i18n="journal-duree">Conserver</span>
+            <select id="journal-duree">
+              <option value="30" data-i18n="journal-duree-30j">30 jours</option>
+              <option value="90" data-i18n="journal-duree-90j">90 jours</option>
+              <option value="180" data-i18n="journal-duree-180j">180 jours</option>
+              <option value="365" data-i18n="journal-duree-1an">1 an</option>
+              <option value="730" data-i18n="journal-duree-2ans">2 ans</option>
+            </select>
+          </label>
+          <span class="modal-actions-spacer"></span>
+          <button type="button" class="btn-ghost" id="journal-dossier" data-i18n="ouvrir-le-dossier">Ouvrir le dossier</button>
+          <button type="button" class="btn-ghost" id="journal-exporter" data-i18n="journal-exporter">Exporter…</button>
+          <button type="button" class="btn-ghost" id="journal-close" data-i18n="fermer">Fermer</button>
+        </div>
+      </div>
+    </div>
+
     <div class="modal-backdrop" id="import-modal">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
         <h2 id="import-modal-title" data-i18n="importer-des-sessions">Importer des sessions</h2>
@@ -1527,6 +1566,7 @@
       <div class="ctx-item" role="menuitem" data-act="edit" data-i18n="modifier">Modifier…</div>
       <div class="ctx-item" role="menuitem" data-act="move" data-i18n="deplacer-vers">Déplacer vers…</div>
       <div class="ctx-item" role="menuitem" data-act="forget" data-i18n="oublier-le-mot-de-passe">Oublier le mot de passe</div>
+      <div class="ctx-item" role="menuitem" data-act="journal" id="host-context-journal" data-i18n="hote-journal-on">Journaliser les commandes de cette connexion</div>
       <div class="ctx-sep" role="separator"></div>
       <div class="ctx-item danger" role="menuitem" data-act="delete" data-i18n="supprimer">Supprimer</div>
     </div>

@@ -7,6 +7,26 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Ajouté
+
+- **Journal des commandes passées en SSH**, coupé par défaut. Demandé par le
+  mainteneur pour garder une trace de ce qui a été fait sur les serveurs.
+  Avash note la ligne de commande telle qu'elle était à l'écran quand elle est
+  partie, complétion et rappel d'historique compris, avec l'heure, la
+  connexion et sa cible ; jamais les frappes, donc jamais un mot de passe tapé
+  à une invite (`sudo`, `passwd`, `read` sans écho), qui ne s'affiche pas. Les
+  marqueurs OSC 133 du shell distant, quand il les envoie, rendent le relevé
+  exact et ajoutent le code de retour. Rien n'est noté en plein écran (`vim`,
+  `less`), ni une ligne qui commence par une espace. Les secrets écrits dans
+  une commande (`PGPASSWORD=…`, `--password=…`, `mysql -p…`, `curl -u`,
+  `Authorization:`, mot de passe d'une URL) sont masqués avant l'écriture. Il
+  s'allume à la palette (`Ctrl+K`), une connexion peut en être exclue ou être
+  seule journalisée par son menu, et un repère sur l'onglet dit qu'il tourne.
+  La fenêtre « Journal des commandes » cherche par connexion, date ou
+  commande, exporte en texte et règle la conservation (90 jours par défaut).
+  Fichiers d'un jour en 0600 dans `<config>/avash/journal-commandes/`. Voir
+  SECURITY.md, « Le journal des commandes ».
+
 ## [0.14.3] - 2026-11-24
 
 ### Corrigé

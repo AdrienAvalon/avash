@@ -59,6 +59,14 @@ const xt = vi.hoisted(() => {
     dispose() { this.element?.remove(); this.element = null; }
     paste() {}
     getSelection() { return ""; }
+    // Ce que lit le capteur du journal des commandes (journal-capteur.ts).
+    parser = { registerOscHandler: () => ({ dispose() {} }) };
+    onWriteParsed() { return { dispose() {} }; }
+    registerMarker() { return { line: 0, isDisposed: false, dispose() {} }; }
+    buffer = (() => {
+      const tampon = { type: "normal", cursorX: 0, cursorY: 0, baseY: 0, getLine: () => undefined };
+      return { active: tampon, normal: tampon };
+    })();
   }
   class FauxFit {
     t: FauxTerminal | null = null;

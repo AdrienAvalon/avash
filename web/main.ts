@@ -10,7 +10,7 @@ import { majMemoireOnglets, proposerRestauration } from "./onglets-restauration"
 import { appliquerVue, basculerPartage, ongletsAffiches, surFermeture, surFocus, vuePartagee } from "./vue-partagee";
 import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
-import { confirmerFermetureOnglet, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage } from "./prefs";
+import { confirmerFermetureOnglet, journalGlobal, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage } from "./prefs";
 import { filterHosts, isPasswordRequired, isHostKeyChanged, nettoyerMarqueurs, libelleSur, estRaccourciApplicatif, ouvrePaletteOuPanneau, nettoyerPourTerminal, etiquetteHote, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode, classeSante, santePerimee, ilYA, santesARestaurer } from "./filters";
 import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, ensureGrasseChargee, etatsSessionsParHote, renderTagBar, terminalTheme } from "./theme";
@@ -31,6 +31,7 @@ import "./import";
 // rien que le cœur utilise. Sans ces lignes, ils ne sont jamais chargés.
 import "./maj";
 import { enregistrementsOpen } from "./enregistrements";
+import { basculerJournal, brancherJournal, journalOpen, majReperesJournal, purgerJournal } from "./journal-commandes";
 import "./panneaux";
 import { appliquerLangue, langue, setLangue, t } from "./i18n";
 
@@ -541,6 +542,7 @@ function setSessionState(id: number, st: SessionState) {
   }
   s.tab.classList.toggle("dead", st === "closed");
   if (st === "live" && !s.serie) void releverSecurite(s);
+  majReperesJournal();
   rafraichirLignes([`ssh:${s.alias}`]);
   sftpSyncButton();
   setTitlebar();
@@ -778,6 +780,7 @@ async function newSessionShell(label: string) {
       if (data === "\r" && s.reconnect) void s.reconnect();
       return;
     }
+    s.capteur?.frappe(data);
     invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${nettoyerPourTerminal(String(e))}\r\n`));
   });
   // Le shell distant n'a besoin que de la taille finale : on attend une
@@ -792,6 +795,7 @@ async function newSessionShell(label: string) {
   });
 
   const s: Session = { id, alias: label, term, fit, tab, search, serialiser, closed: false, etat: "connecting", reconnect: null, sftpPath: "" };
+  s.capteur = brancherJournal(s, term);
   state.sessions.set(id, s);
   // Le nouvel onglet prend la place de l'actif (ou son volet, en vue
   // partagée) ; la vue cache le reste, bureaux RDP compris : leur conteneur
@@ -1389,6 +1393,18 @@ function commandesPalette(): EntreePalette[] {
       },
     },
     {
+      nom: t("palette-journal"),
+      detail: t("palette-journal-detail"),
+      icone: "film",
+      ouvrir: () => void journalOpen(),
+    },
+    {
+      nom: t(journalGlobal() ? "palette-journal-off" : "palette-journal-on"),
+      detail: t("palette-journal-bascule-detail"),
+      icone: "film",
+      ouvrir: () => basculerJournal(),
+    },
+    {
       nom: t("palette-enregistrements"),
       detail: t("palette-enregistrements-detail"),
       icone: "film",
@@ -1461,6 +1477,7 @@ function commandesPalette(): EntreePalette[] {
         // Les textes produits par le code se retraduisent au prochain rendu :
         // on en provoque un tout de suite pour la barre latérale.
         renderHosts();
+        majReperesJournal();
         notify(t("langue-changee"), "succes");
       },
     },
@@ -1593,6 +1610,8 @@ applyTheme();
 void setupWindowControls();
 
 restaurerSante();
+// Les jours du journal des commandes au-delà de la durée de conservation.
+purgerJournal();
 void loadHosts().then(() => {
   if (sondeAuDemarrage()) void verifierSante(true);
   // Les onglets de la dernière fois : proposés, jamais imposés.

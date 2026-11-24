@@ -11,6 +11,8 @@ import { notify, notifyErreur } from "./notifications";
 import { snippetsClose, snippetsModal } from "./snippets";
 import { tunnelsClose, tunnelsOpen } from "./tunnels";
 import { t } from "./i18n";
+import { basculerJournalPour, journalActifPour } from "./prefs";
+import { majReperesJournal } from "./journal-commandes";
 
 // ---------- Menu contextuel d'un hôte ----------
 
@@ -102,6 +104,8 @@ export function openHostMenu(h: Host, e: MouseEvent) {
   closeAllContextMenus();
   const m = $("host-context");
   m.dataset.alias = h.alias;
+  // L'entrée du journal dit ce qu'elle fera pour cette connexion.
+  $("host-context-journal").textContent = t(journalActifPour(h.alias) ? "hote-journal-off" : "hote-journal-on");
   placerMenu(m, e);
   m.classList.add("open");
 }
@@ -124,6 +128,10 @@ $("host-context").addEventListener("click", async (e) => {
     openMoveModal("ssh", alias);
   } else if (act === "tunnels") {
     await tunnelsOpen(alias);
+  } else if (act === "journal") {
+    basculerJournalPour(alias);
+    majReperesJournal();
+    notify(t(journalActifPour(alias) ? "hote-journal-active" : "hote-journal-coupe", { alias }), "succes");
   } else if (act === "delete") {
     const ok = await askConfirm(
       t("hote-supprimer-question", { alias }),

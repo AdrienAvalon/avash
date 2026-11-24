@@ -19,7 +19,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF%20Scorecard-report-informational.svg)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-1992%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-2052%20passing-brightgreen.svg)](docs/qualite.md)
 [![Coverage](https://img.shields.io/badge/coverage-84%25%20of%20lines-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20caught-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -46,7 +46,7 @@ application, which reads your `~/.ssh/config` as it is.
 | **SFTP** | a file panel on the terminal's own session: browse, upload and download files or whole folders, resume an interrupted transfer, a transfer queue with speeds, host-to-host copy without touching the local disk |
 | **Serial** | the console of a switch, a router or a board in a terminal tab, ports detected on the machine, speed of your choice |
 | **Tunnels** | local (`-L`), remote (`-R`) and SOCKS (`-D`), with live status |
-| **Organisation** | drag-and-drop folders, tags, instant search, command palette, snippets, host health, session recording |
+| **Organisation** | drag-and-drop folders, tags, instant search, command palette, snippets, host health, session recording, command log |
 | **Import** | PuTTY (files or registry) and MobaXterm, RDP desktops and folders included |
 | **Security** | passwords in the system keyring, host keys checked for SSH **and** RDP before any credential leaves, no telemetry |
 
@@ -179,6 +179,11 @@ with the remote shell (tmux prefix, readline's kill to end of line).
   each row.
 - **Session recording** in asciicast v2, replayable with `asciinema play`; the
   output, never the keystrokes.
+- **Command log** of what is run over SSH, off by default: the line as it was
+  on screen when it was sent, so never a password typed at a prompt; secrets
+  written in a command masked, search, export, adjustable retention (90 days by
+  default). The remote shell's OSC 133 marks, when it sends them, add the exit
+  code.
 - **Accessible**: full keyboard navigation, contrasts checked by `axe-core` on
   both themes.
 - **Last time's tabs**: on launch, the home screen offers to reopen what was
@@ -235,21 +240,21 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**1992 tests** on every commit, on GitHub Actions (Linux, Windows and macOS,
+**2052 tests** on every commit, on GitHub Actions (Linux, Windows and macOS,
 including conformance against real xrdp servers):
 
 | Level | Tests | In a word |
 |---|---:|---|
-| Rust core and integration against a real sshd | 355 | parsers, import, SFTP, tunnels, jump hosts |
-| Tauri interface | 206 | commands, session store, keyboard |
+| Rust core and integration against a real sshd | 376 | parsers, import, SFTP, tunnels, jump hosts |
+| Tauri interface | 207 | commands, session store, keyboard |
 | RDP process | 237 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
 | Test servers | 32 | server-side RDPDR (hand-written decoders, scenario state machine, full dialogue with the client channel) and the VNC server |
 | Vendored IronRDP and vnc-rs crates | 634 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
-| Front (Vitest) | 446 | pure logic, VNC keysyms, translations |
-| End to end (WebdriverIO) | 82 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
+| Front (Vitest) | 483 | pure logic, VNC keysyms, translations |
+| End to end (WebdriverIO) | 83 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo
-audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, the OpenSSF Scorecard, ten
+audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, the OpenSSF Scorecard, eleven
 cargo-fuzz targets and an RDP test fleet in containers. One rule stands in for
 discipline: **a new test must have been seen failing.** Details, with what each
 device actually found: [docs/qualite.md](docs/qualite.md) (in French).

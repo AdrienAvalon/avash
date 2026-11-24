@@ -91,16 +91,20 @@ fn gerer_les_etats<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Buil
         .manage(commands::RenduTerminal::default())
 }
 
+/// Les greffons de Tauri dont l'application se sert.
+fn greffons() -> tauri::Builder<tauri::Wry> {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Le journal d'abord : tout ce qui suit peut avoir à y écrire (C-SIL-2).
     journal::installer();
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_clipboard_manager::init());
-    let builder = gerer_les_etats(builder)
+    let builder = gerer_les_etats(greffons())
         .on_window_event(retenir_un_depot)
         // Quatre commandes ont été retirées de cette liste : `run_command`,
         // `snippet_vars`, `password_known`, puis `enregistrement_en_cours`
@@ -155,6 +159,12 @@ pub fn run() {
             commands::enregistrement_arreter,
             commands::enregistrements_lister,
             commands::enregistrements_ouvrir_dossier,
+            commands::journal_noter,
+            commands::journal_noter_code,
+            commands::journal_lister,
+            commands::journal_purger,
+            commands::journal_exporter,
+            commands::journal_ouvrir_dossier,
             commands::hosts_health,
             commands::diagnostic_exporter,
             commands::diagnostic_noter_rendu,

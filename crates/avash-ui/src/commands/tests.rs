@@ -2406,3 +2406,52 @@ fn le_scan_par_defaut_lit_les_sessions_putty_du_repertoire_personnel() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Journal des commandes (demandé le 24 novembre 2026) : la commande d'un
+/// onglet SSH est notée avec son libellé et sa cible, masquée, et son code de
+/// retour s'y rattache ; une console série n'est jamais journalisée.
+#[tokio::test]
+async fn le_journal_note_les_commandes_d_un_onglet_ssh_et_pas_d_une_console() {
+    let _g = with_ssh_config("");
+    let dir = avash::journal_commandes::repertoire().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = app_de_test();
+    let state = app.state::<SessionStore>();
+    let mut ssh = poignee(41);
+    ssh.label = "prod-web".into();
+    ssh.cible = ("10.0.0.5".into(), 2222, "ada".into());
+    ssh.securite = Some(avash::ssh::SecuriteSession::default());
+    enregistrer_session(&state, 3, ssh).unwrap();
+    // `poignee` n'a pas de sécurité SSH : c'est une console série.
+    enregistrer_session(&state, 4, poignee(42)).unwrap();
+
+    assert!(journal_noter(
+        app.state::<SessionStore>(),
+        3,
+        format!("mysql -p{} base", "factice")
+    )
+    .unwrap());
+    journal_noter_code(app.state::<SessionStore>(), 3, 1).unwrap();
+    assert!(!journal_noter(app.state::<SessionStore>(), 3, " sans trace".into()).unwrap());
+    assert!(journal_noter(app.state::<SessionStore>(), 4, "reboot".into()).is_err());
+    assert!(journal_noter(app.state::<SessionStore>(), 99, "ls".into()).is_err());
+
+    let lues = journal_lister();
+    assert_eq!(lues.len(), 1, "{lues:?}");
+    assert_eq!(lues[0].session, "prod-web");
+    assert_eq!(lues[0].cible, "ada@10.0.0.5:2222");
+    assert_eq!(lues[0].commande, "mysql -p•••• base");
+    assert_eq!(lues[0].code, Some(1));
+    assert_eq!(journal_purger(90).unwrap(), 0, "le jour en cours reste");
+
+    // L'export ne prend qu'un chemin absolu, et n'écrit que ce qui est noté.
+    assert!(ecrire_export(std::path::Path::new("relatif.txt"), 60).is_err());
+    let sortie = dir.parent().unwrap().join("export-journal.txt");
+    ecrire_export(&sortie, 60).unwrap();
+    let texte = std::fs::read_to_string(&sortie).unwrap();
+    assert!(
+        texte.contains("prod-web (ada@10.0.0.5:2222) [1]  mysql -p•••• base"),
+        "{texte}"
+    );
+    assert!(!texte.contains("factice"));
+}

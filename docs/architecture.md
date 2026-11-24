@@ -49,6 +49,9 @@ Le fichier `Cargo.toml` à la racine définit un workspace de deux crates, et en
     coopérative, relais d'un serveur à un autre sans écrire sur le poste ;
   - `tunnel.rs` — tunnels SSH ;
   - `snippet.rs` — snippets ;
+  - `journal_commandes.rs` — journal des commandes passées en SSH : masquage
+    des secrets écrits dans une commande, un fichier JSON Lines par jour en
+    0600, codes de retour rattachés, purge, export en texte ;
   - `folders.rs` — arborescence de dossiers (annotations `#Folder:`) ;
   - `secrets.rs` — stockage des mots de passe dans le trousseau (`keyring`),
     et sa sonde pour le diagnostic ;
@@ -62,7 +65,8 @@ Le fichier `Cargo.toml` à la racine définit un workspace de deux crates, et en
   via des commandes Tauri :
   - `commands/` — les commandes Tauri, un fichier par domaine : `sessions`
     (magasin, cible, connexion, relais, PTY), `sftp`, `tunnels`, `snippets`,
-    `enregistrement`, `cles`, `secrets`, `dossiers`, `import`, `sante`,
+    `enregistrement`, `journal` (noter, relire, purger, exporter le journal
+    des commandes), `cles`, `secrets`, `dossiers`, `import`, `sante`,
     `serie` (une session série est une session du magasin comme les autres,
     sans SFTP ni commande à distance), `onglets` (la mémoire de ce qui était
     ouvert, `onglets.json`), `diagnostic` (le texte exporté pour un ticket) ;
@@ -111,7 +115,10 @@ Le front vit dans `web/` (paquet `avash-web`, `type: module`) :
   `dossiers.ts`, `raccourcis.ts`, `terminal-outils.ts` (zoom, recherche, menu
   clic droit), `verrous.ts`, `titre.ts`, `maj.ts`, `panneaux.ts`, `import.ts`
   (import PuTTY et MobaXterm), `enregistrements.ts` (liste des enregistrements
-  asciicast), `i18n.ts` (dictionnaires français et anglais, `t()`, application
+  asciicast), `journal-capteur.ts` (relève la ligne de commande à l'écran quand
+  elle part, ou par les marqueurs OSC 133 ; jamais les frappes) et
+  `journal-commandes.ts` (capteur de chaque onglet, repère, fenêtre du
+  journal), `i18n.ts` (dictionnaires français et anglais, `t()`, application
   à la page), `collage.ts` (décision de collage sûr, testée sans terminal),
   `vue-partagee.ts` (le seul endroit qui décide ce que la zone centrale
   montre : l'onglet actif, ou deux volets), `onglets-memoire.ts` (pur : ce
@@ -448,6 +455,7 @@ annonce de copie, même quand l'interface n'avait plus le droit de l'appliquer.
 | Front (réglages persistants) | `web/prefs.ts` |
 | Client SFTP (dont bandes parallèles) | `crates/avash/src/sftp.rs` |
 | Port série | `crates/avash/src/serie.rs`, `crates/avash-ui/src/commands/serie.rs` |
+| Journal des commandes | `crates/avash/src/journal_commandes.rs`, `crates/avash-ui/src/commands/journal.rs`, `web/journal-capteur.ts`, `web/journal-commandes.ts` |
 | Diagnostic exporté | `crates/avash-ui/src/commands/diagnostic.rs` |
 | Mémoire des onglets | `crates/avash-ui/src/commands/onglets.rs`, `web/onglets-memoire.ts`, `web/onglets-restauration.ts` |
 | Vue partagée | `web/vue-partagee.ts` |

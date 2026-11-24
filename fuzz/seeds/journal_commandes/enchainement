@@ -1,0 +1,1 @@
+export GITHUB_TOKEN="{F} {F}" && sshpass -p "{F}" ssh h; echo "fin

@@ -70,6 +70,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "journal_commandes"
+path = "fuzz_targets/journal_commandes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "clearcodec"
 path = "fuzz_targets/clearcodec.rs"
 test = false

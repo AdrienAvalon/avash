@@ -1,0 +1,1 @@
+curl -H 'Authorization: Bearer x' -u a https://h/x

@@ -365,6 +365,66 @@ copie une commande depuis sa documentation, on colle dans son terminal local, on
 exécute celle de l'attaquant. Refusé, le partage n'est plus ni annoncé ni
 réclamé au serveur — le processus RDP en est informé, pas seulement l'interface.
 
+### Le journal des commandes : coupé par défaut, et ce qu'il garde
+
+Le journal des commandes note sur le disque ce que l'on
+fait sur des serveurs : c'est une trace d'audit, et donc une donnée sensible.
+Il est **coupé par défaut** et s'allume à la palette (`Ctrl+K`, « Activer le
+journal des commandes ») ; une connexion peut en être exclue, ou être la seule
+journalisée, par son menu. Un onglet journalisé porte un repère. Une console
+série ne l'est jamais.
+
+**Ce qui est noté** : la ligne de commande telle qu'elle était à l'écran quand
+elle est partie, avec l'heure, le libellé de la connexion et sa cible
+(`utilisateur@adresse:port`), et son code de retour quand le shell distant envoie
+les marqueurs OSC 133. Ce ne sont pas les frappes : ce qui ne s'affiche pas
+n'est pas noté. Un mot de passe tapé à l'invite de `sudo`, de `passwd` ou d'un
+`read` après `stty -echo` ne s'écrit pas à l'écran et n'entre donc pas dans le
+journal ; une suite bout en bout le vérifie sur une vraie session SSH. Quand
+les frappes ne sont que des caractères ordinaires, la ligne qu'elles donnent
+doit se lire à l'écran, au bout d'une ligne affichée depuis la frappe, faute de
+quoi rien n'est noté : la sortie d'un programme écrite sur la ligne d'un secret
+n'est pas prise pour une commande. Un programme qui réaffiche lui-même ce qu'on
+a tapé sans écho le met à l'écran, et donc dans le journal.
+
+**Ce qui n'est pas noté** : ce qui se tape en plein écran (`vim`, `less`,
+`top`), une ligne qui commence par une espace (comme `HISTCONTROL=ignorespace`,
+c'est le moyen de passer une commande sans trace), et, avec les marqueurs OSC
+133, ce qu'on répond à un programme qui tourne.
+
+**Les secrets écrits dans la commande elle-même** sont masqués avant
+l'écriture, par le cœur : `NOM=valeur` quand le nom désigne un secret
+(`PGPASSWORD`, `GITHUB_TOKEN`…), les options `--password=…`, `--token …` et
+apparentées, `-pSECRET` des clients MySQL, `sshpass -p`, `curl -u
+utilisateur:motdepasse`, `-U` et `--proxy-user` (formes collées et groupées
+comprises : `-pSECRET`, `-vpSECRET`, `-su u:p`), les en-têtes `Authorization:`,
+`PRIVATE-TOKEN:`, `Cookie:`, et le mot de passe d'une URL
+`schéma://utilisateur:motdepasse@hôte`.
+C'est une heuristique, et elle a des limites que nous ne cachons pas : un
+secret passé sans nom qui le désigne (argument positionnel, `echo motdepasse |
+sudo -S …`) ressemble à n'importe quel mot et reste dans le journal, comme il
+reste déjà dans l'historique du shell sur le serveur. Une commande qui doit
+porter un secret se tape précédée d'une espace.
+
+**Ce que le serveur distant peut influencer** : le journal note ce que le
+serveur affiche, et les marqueurs OSC 133 viennent de lui. Un serveur hostile
+peut donc cacher une commande (en ne l'affichant pas, ou en déclarant qu'un
+programme tourne) ou en altérer l'apparence. Il ne peut pas faire noter un texte
+sans qu'on ait appuyé sur Entrée, et un texte tapé caractère par caractère
+n'est noté que s'il se lit tel quel à l'écran. Le journal est un aide-mémoire
+de ce qu'on a fait ; ce n'est pas une trace d'audit inviolable face à un
+serveur qui ne l'est pas.
+
+**Où il vit** : `<config>/avash/journal-commandes/`, un fichier par jour en
+JSON Lines, né en 0600 dans un répertoire 0700 (un fichier retrouvé plus ouvert
+est refermé à l'écriture suivante). Les jours au-delà de la durée de
+conservation (90 jours par défaut, réglable de 30 jours à 2 ans dans la
+fenêtre du journal) sont effacés au démarrage ; seuls les fichiers qui portent
+un nom de jour sont touchés. L'export passe par la boîte « Enregistrer sous »
+native, jamais par un chemin venu de la page. Les caractères de contrôle sont
+retirés avant l'écriture, et la fenêtre affiche les commandes en texte : une
+commande relue ne peut jouer ni séquence de terminal ni HTML.
+
 ### Les mots de passe ne traversent pas l'interface
 
 Le mot de passe d'un bureau enregistré est lu par le cœur natif au moment de la
