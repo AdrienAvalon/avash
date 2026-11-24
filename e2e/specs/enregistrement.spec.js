@@ -49,6 +49,13 @@ describe("Enregistrement de session (asciicast)", () => {
   };
   // Le chemin annoncé commence par « / » sous Unix et par une lettre de lecteur
   // sous Windows (`C:\…\x.cast`) : le motif ne présume pas de sa forme.
+  // Où est le focus, et ce qui est ouvert par-dessus le terminal : pour les
+  // messages d'échec des attentes d'écho.
+  const ouLeFocus = () => browser.execute(() => {
+    const e = document.activeElement;
+    const ouverts = [...document.querySelectorAll(".modal-backdrop.open, #palette.open, #term-context.open")].map((m) => m.id);
+    return `${e?.tagName ?? "aucun"}#${e?.id ?? ""}.${String(e?.className ?? "").slice(0, 60)} ; ouverts : ${ouverts.join(",") || "rien"}`;
+  });
   const cheminDu = (toast) => /: (\S+\.cast)/.exec(toast ?? "")?.[1];
   // Un marqueur unique SANS deux caractères identiques consécutifs : la frappe
   // synthétique en perd un sur deux (« 1788 » arrivait « 178 », « asciicast »
@@ -103,8 +110,20 @@ describe("Enregistrement de session (asciicast)", () => {
     await taper("echo bonjour-cast-ok\n");
     // Le fichier est écrit au fil de l'eau : l'écho du serveur y arrive sans
     // attendre l'arrêt.
-    await browser.waitUntil(() => readFileSync(chemin, "utf8").includes("bonjour-cast-ok"),
-      { timeout: 10000, timeoutMsg: "l'écho n'est jamais arrivé dans l'enregistrement" });
+    // Sur échec, on dit où était le focus, ce que le shell a renvoyé et ce que
+    // le fichier contient : vu en intégration le 24 novembre 2026 (sur main,
+    // fce15c1), une fois, sans rien pour trancher entre une frappe perdue
+    // (l'écho est amputé dans la sortie), des frappes parties ailleurs que dans
+    // le terminal (le menu vient de se fermer) et un enregistreur qui n'écrit
+    // pas (l'écho est dans la sortie, pas dans le fichier).
+    try {
+      await browser.waitUntil(() => readFileSync(chemin, "utf8").includes("bonjour-cast-ok"),
+        { timeout: 10000 });
+    } catch {
+      throw new Error(`l'écho n'est jamais arrivé dans l'enregistrement ; focus : ${await ouLeFocus()} ; `
+        + `fin de la sortie du terminal : ${(await sortiePty()).slice(-300)} ; `
+        + `fin du fichier : ${readFileSync(chemin, "utf8").slice(-300)}`);
+    }
 
     await menu("record-stop");
     await browser.waitUntil(async () => (await $$(".tab.rec")).length === 0, { timeout: 5000 });
@@ -177,12 +196,7 @@ describe("Enregistrement de session (asciicast)", () => {
     try {
       await browser.waitUntil(async () => (await sortiePty()).includes(apres), { timeout: 10000 });
     } catch {
-      const focus = await browser.execute(() => {
-        const e = document.activeElement;
-        const ouverts = [...document.querySelectorAll(".modal-backdrop.open, #palette.open, #term-context.open")].map((m) => m.id);
-        return `${e?.tagName ?? "aucun"}#${e?.id ?? ""}.${String(e?.className ?? "").slice(0, 60)} ; ouverts : ${ouverts.join(",") || "rien"}`;
-      });
-      throw new Error(`l'écho après arrêt (${apres}) n'est jamais revenu ; focus : ${focus} ; `
+      throw new Error(`l'écho après arrêt (${apres}) n'est jamais revenu ; focus : ${await ouLeFocus()} ; `
         + `fin de la sortie du terminal : ${(await sortiePty()).slice(-300)}`);
     }
     expect(readFileSync(chemin, "utf8")).not.toContain(apres);

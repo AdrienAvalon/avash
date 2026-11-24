@@ -89,7 +89,11 @@ jobs:
         with: { persist-credentials: false }
       # Scorecard n'a pas d'alias de version majeure : le tag complet est requis,
       # épinglé sur son commit comme l'outil le recommande lui-même.
-      - uses: ossf/scorecard-action@23f22cd43608bae7a1f1fa2603d7314dee9538a5 # v2.6.0
+      # De retour sur la v2.5.0 : l'image de la v2.6.0 a perdu ses manifestes
+      # sur ghcr.io le 24 novembre 2026 (« not found » au téléchargement,
+      # ossf/scorecard-action#1752), le tag et son commit sont intacts.
+      # Dependabot ignore la v2.6.0 tant que l'amont ne l'a pas réparée.
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
         with:
           results_file: scorecard.sarif
           results_format: sarif

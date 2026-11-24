@@ -63,6 +63,13 @@ updates:
       # il a fallu les regrouper à la main (#57). Toutes versions confondues.
       codeql: { patterns: ["github/codeql-action/*"] }
       actions-mineur: { update-types: [minor, patch] }
+    ignore:
+      # L'image de la v2.6.0 a perdu ses manifestes sur ghcr.io le 24 novembre
+      # 2026 (ossf/scorecard-action#1752) : l'action ne se lance plus. On reste
+      # sur la v2.5.0 (voir .github/workflows/securite.yml) ; retirer cette
+      # entrée quand l'amont a réparé l'image ou publié la suivante.
+      - dependency-name: ossf/scorecard-action
+        versions: ["2.6.0"]
   # L'image de base de la chaîne GitLab est épinglée par empreinte
   # (ci/Dockerfile) : c'est Dependabot qui propose la suivante.
   - package-ecosystem: docker
