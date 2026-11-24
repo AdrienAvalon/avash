@@ -267,7 +267,7 @@ qui est en place, et ce qui attend :
   que cette construction soit rejouée, puis rejouée le 9 septembre 2026 sur le
   tag v0.11.0, le 10 septembre 2026 sur le tag v0.11.1, le 12 septembre 2026
   sur les tags v0.12.2 puis v0.13.0, et le 14 septembre 2026 sur le tag v0.13.1 ;
-  le manifeste est passé aux tags v0.14.0 et v0.14.1 le 22 novembre 2026, v0.14.2 le 23, sources
+  le manifeste est passé aux tags v0.14.0 et v0.14.1 le 22 novembre 2026, v0.14.2 le 23, v0.14.3 le 24, sources
   régénérées, sans que cette construction soit rejouée
   (construite,
   installée, lancée sous Xvfb à chaque fois : la fenêtre tient ; le
