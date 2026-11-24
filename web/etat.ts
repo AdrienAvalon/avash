@@ -52,6 +52,10 @@ export type Session = {
    *  vivante (voir `securite-session.ts`). Absent avant, et pour une console
    *  série. */
   securite?: import("./securite-session").SecuriteSession | null;
+  /** Relève les commandes passées pour le journal (voir `journal-capteur.ts`).
+   *  Posé sur chaque terminal ; il ne note rien tant que le journal est coupé
+   *  pour l'onglet. */
+  capteur?: import("./journal-capteur").CapteurCommandes;
 };
 
 /**

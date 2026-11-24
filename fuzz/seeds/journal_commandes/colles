@@ -1,0 +1,1 @@
+sshpass -p{F} ssh h | curl -ua https://h

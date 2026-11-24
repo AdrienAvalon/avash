@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CLIP_KEY, FERMETURE_KEY, SANTE_DEMARRAGE_KEY, confirmerFermetureOnglet, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, sonBureau, setSonBureau, sondeAuDemarrage, setSondeAuDemarrage } from "./prefs";
+import { CLIP_KEY, FERMETURE_KEY, SANTE_DEMARRAGE_KEY, confirmerFermetureOnglet, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, sonBureau, setSonBureau, sondeAuDemarrage, setSondeAuDemarrage, JOURNAL_HOTES_KEY, JOURNAL_KEY, basculerJournalPour, dureeJournal, exceptionJournal, journalActifPour, journalGlobal, setDureeJournal, setJournalGlobal } from "./prefs";
 
 // Node 26 déclare un `localStorage` global inerte que jsdom ne remplace pas :
 // l'environnement DOM ne suffit donc pas ici. On installe un stockage conforme
@@ -143,5 +143,58 @@ describe("stockage refusé par le navigateur", () => {
     expect(() => setPartageClipboard(false)).not.toThrow();
     expect(() => setSonBureau(false)).not.toThrow();
     expect(() => setSondeAuDemarrage(true)).not.toThrow();
+  });
+});
+
+// Journal des commandes (24 novembre 2026) : il écrit sur le disque ce qu'on
+// fait sur des serveurs, il doit donc être coupé tant qu'on ne l'a pas allumé,
+// et une exception par connexion doit valoir dans les deux sens.
+describe("journal des commandes : réglage et exceptions", () => {
+  beforeEach(() => stockage.clear());
+
+  it("est coupé quand rien n'a jamais été réglé", () => {
+    expect(journalGlobal()).toBe(false);
+    expect(journalActifPour("prod")).toBe(false);
+  });
+
+  it("une connexion peut être journalisée journal coupé, et exclue journal allumé", () => {
+    basculerJournalPour("prod");
+    expect(journalActifPour("prod")).toBe(true);
+    expect(journalActifPour("autre")).toBe(false);
+    setJournalGlobal(true);
+    expect(stockage.getItem(JOURNAL_KEY)).toBe("1");
+    expect(journalActifPour("autre")).toBe(true);
+    basculerJournalPour("autre");
+    expect(journalActifPour("autre")).toBe(false);
+    expect(exceptionJournal("autre")).toBe(false);
+  });
+
+  it("une exception revenue au réglage général disparaît", () => {
+    basculerJournalPour("prod"); // allumée, journal coupé
+    basculerJournalPour("prod"); // revient à « coupé », comme le réglage
+    expect(exceptionJournal("prod")).toBeNull();
+    setJournalGlobal(true);
+    // Elle suit désormais le réglage général.
+    expect(journalActifPour("prod")).toBe(true);
+  });
+
+  it("des exceptions abîmées ne valent rien", () => {
+    stockage.setItem(JOURNAL_HOTES_KEY, "{pas du json");
+    expect(journalActifPour("prod")).toBe(false);
+    stockage.setItem(JOURNAL_HOTES_KEY, JSON.stringify({ prod: "oui", web: true }));
+    expect(exceptionJournal("prod")).toBeNull();
+    expect(journalActifPour("web")).toBe(true);
+    stockage.setItem(JOURNAL_HOTES_KEY, JSON.stringify(["prod"]));
+    expect(journalActifPour("prod")).toBe(false);
+  });
+
+  it("la durée de conservation vaut 90 jours par défaut et reste bornée", () => {
+    expect(dureeJournal()).toBe(90);
+    setDureeJournal(365);
+    expect(dureeJournal()).toBe(365);
+    setDureeJournal(0);
+    expect(dureeJournal()).toBe(1);
+    setDureeJournal(1e9);
+    expect(dureeJournal()).toBe(3650);
   });
 });

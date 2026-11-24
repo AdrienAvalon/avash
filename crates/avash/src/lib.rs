@@ -10,6 +10,7 @@ pub mod testutil;
 pub mod enregistrement;
 pub mod folders;
 pub mod import;
+pub mod journal_commandes;
 pub mod keys;
 pub mod osinfo;
 pub mod rdphost;

@@ -68,7 +68,7 @@ VNC sur `35900` (`vnc.spec.js`, mot de passe `test`, image connue qui réagit
 aux entrées) et `35903`/`35904` (`vnc-tls`, VeNCrypt derrière son terminateur
 TLS).
 
-## Couverture (82 scénarios, 37 fichiers)
+## Couverture (83 scénarios, 38 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -101,6 +101,7 @@ TLS).
 | `onglets-mixtes.spec.js` | SSH et RDP côte à côte : bascule d'onglets, fermeture, l'autre survit |
 | `enregistrer-et-connecter.spec.js` | « Enregistrer et connecter » depuis la modale de connexion directe, pour un hôte SSH, un bureau RDP et un bureau VNC : l'onglet porte le nom saisi et la ligne de la barre a sa pastille verte dès l'ouverture (serveurs RDP et VNC de test sur 33902 et 35905) |
 | `enregistrement.spec.js` | **enregistrement asciicast** sur la session SSH réelle : l'écran initial, la sortie, le fichier ; la liste dans la palette |
+| `journal-commandes.spec.js` | **journal des commandes** sur la session SSH réelle : allumé à la palette, repère d'onglet, une commande notée, un secret lu sans écho (`read -s`) et une ligne précédée d'une espace jamais notés, ni dans la fenêtre ni sur le disque |
 | `sante.spec.js`       | **santé des hôtes** : voyant vert sur le sshd local, rouge sur une adresse sans route, résultat retenu |
 | `import.spec.js`      | **import PuTTY** : sessions semées dans `.putty/sessions`, aperçu, application (hors Windows) |
 | `langue.spec.js`      | **langue** imposée par `AVASH_LANGUE`, bascule à la palette, retenue |
