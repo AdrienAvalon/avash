@@ -33,7 +33,7 @@ function corpsIndex(): string {
   return corps.replace(/<script[\s\S]*?<\/script>/g, "");
 }
 
-type Evenement = "focus" | "mousedown" | "connexion" | "bascule";
+type Evenement = "focus" | "mousedown" | "connexion" | "bascule" | "collage";
 let pousseAuGeste: (vnc: boolean, evenement: Evenement) => boolean;
 
 beforeAll(async () => {
@@ -53,6 +53,13 @@ describe("pousseAuGeste — quand le presse-papiers du poste part vers le bureau
 
   it("RDP : pousse sur un clic dans le canvas (le seul geste réel dans le bureau)", () => {
     expect(pousseAuGeste(false, "mousedown")).toBe(true);
+  });
+
+  it("RDP : pousse sur un collage au clavier tapé dans le bureau, pas VNC (qui a son message [22])", () => {
+    // Signalé sur Windows Server 2012 R2 le 24 novembre 2026 : revenu dans
+    // Avash sans cliquer, Ctrl+V collait l'ancien contenu.
+    expect(pousseAuGeste(false, "collage")).toBe(true);
+    expect(pousseAuGeste(true, "collage")).toBe(false);
   });
 
   it("VNC : pousse sur le focus, la connexion et la bascule (le sidecar retient jusqu'au collage explicite, sans fuite)", () => {

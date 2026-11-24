@@ -354,7 +354,8 @@ réclamer dès qu'on le lui annonce. Avash l'annonçait **au simple retour sur s
 fenêtre**, donc à chaque bascule d'application, à tout bureau ouvert.
 
 Ce n'est plus le cas : le presse-papiers ne part que depuis la session active,
-sur un geste dans le bureau distant. Et le partage est révocable — `Ctrl+K`,
+sur un geste dans le bureau distant, un clic ou une touche de collage
+(`Ctrl+V`, `Maj+Inser`) tapée dans le bureau. Et le partage est révocable — `Ctrl+K`,
 « Ne plus partager le presse-papiers avec les bureaux RDP » — le choix étant
 retenu d'un lancement à l'autre.
 

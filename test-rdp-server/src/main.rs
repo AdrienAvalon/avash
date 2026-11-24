@@ -188,6 +188,9 @@ impl Handler {
 impl RdpServerInputHandler for Handler {
     fn keyboard(&mut self, event: KeyboardEvent) {
         info!(?event, "keyboard");
+        // Lu par la suite bout en bout : l'ordre entre l'annonce du presse-papiers
+        // du client et la touche qui colle (rdp-clipboard.spec.js).
+        println!("touche du client");
     }
 
     fn mouse(&mut self, event: MouseEvent) {
@@ -400,6 +403,7 @@ impl CliprdrBackend for ClipBackend {
     }
     fn on_process_negotiated_capabilities(&mut self, _caps: ClipboardGeneralCapabilityFlags) {}
     fn on_remote_copy(&mut self, formats: &[ClipboardFormat]) {
+        println!("annonce du client");
         // Le client a copié : des fichiers (on demande leur liste, puis leur
         // contenu si un dossier de réception est donné), ou du texte (on le lit,
         // pour y reconnaître le déclencheur de l'offre).

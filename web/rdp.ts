@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { ic } from "./icons";
 import { partageClipboard, sonBureau } from "./prefs";
+import { ATTENTE_APRES_ANNONCE_MS, avecReessais, estCollage, FileCollage, LECTURE_MAX_MS } from "./collage-rdp";
 import { LecteurAudio } from "./audio";
 import { rdpScancode, le16, rdpMousePos, humanSize, tailleBureau, libelleSur, nettoyerPourTerminal } from "./filters";
 import { decoderTrame, type BilanFichiers, type FichiersDistants } from "./trames-bureau";
@@ -53,7 +54,7 @@ async function pushLocalClipboard(force = false): Promise<void> {
   if (state.active === null || !rdpSessions.has(state.active)) return;
   let text: string;
   try {
-    text = (await clipReadText()) ?? "";
+    text = (await avecReessais(() => clipReadText())) ?? "";
   } catch {
     return; // pas de texte (image/fichier) ou accès refusé
   }
@@ -62,12 +63,44 @@ async function pushLocalClipboard(force = false): Promise<void> {
   lastClipText = text;
   const s = rdpSessions.get(state.active);
   if (s?.ws && s.ws.readyState === WebSocket.OPEN) {
-    const body = new TextEncoder().encode(text);
-    const msg = new Uint8Array(1 + body.length);
-    msg[0] = 8;
-    msg.set(body, 1);
-    s.ws.send(msg);
+    envoyerTextePoste(s.ws, text);
+    s.texteDistant = text;
   }
+}
+
+/** Message [8] : le texte du presse-papiers du poste, pour le bureau distant. */
+function envoyerTextePoste(ws: WebSocket, text: string): void {
+  const body = new TextEncoder().encode(text);
+  const msg = new Uint8Array(1 + body.length);
+  msg[0] = 8;
+  msg.set(body, 1);
+  ws.send(msg);
+}
+
+/** Avant un Ctrl+V (ou Maj+Inser) dans un bureau RDP : annonce au serveur le
+ *  texte du poste s'il ne l'a pas déjà, puis lui laisse le temps de le prendre.
+ *  Voir collage-rdp.ts pour l'histoire du cas. */
+async function annoncerAvantCollage(id: number): Promise<void> {
+  if (!partageClipboard()) return;
+  const s = rdpSessions.get(id);
+  if (!s?.ws || s.ws.readyState !== WebSocket.OPEN) return;
+  let text: string;
+  try {
+    const lu = await Promise.race([
+      avecReessais(() => clipReadText()),
+      new Promise<null>((r) => window.setTimeout(() => r(null), LECTURE_MAX_MS)),
+    ]);
+    text = lu ?? "";
+  } catch {
+    return; // pas de texte (image, fichier) ou accès refusé : la touche part telle quelle
+  }
+  // Déjà sur le bureau (il vient de le copier, ou on le lui a annoncé) : rien à
+  // annoncer, la touche part sans attendre.
+  if (!text || text === s.texteDistant) return;
+  lastClipText = text;
+  envoyerTextePoste(s.ws, text);
+  s.texteDistant = text;
+  await new Promise((r) => window.setTimeout(r, ATTENTE_APRES_ANNONCE_MS));
 }
 // Quand le presse-papiers du poste part vers le bureau distant (message [8]).
 // RDP : [8] fait annoncer le format au serveur, qui peut alors réclamer le texte
@@ -83,7 +116,11 @@ async function pushLocalClipboard(force = false): Promise<void> {
 // L'annonce peut donc y rester liée au focus, sans fuite.
 // Trouvé par l'audit du 7 septembre 2026 : SECURITY.md promet « sur un geste dans
 // le bureau distant », le code poussait au focus, à la connexion et à la bascule.
-export function pousseAuGeste(vnc: boolean, evenement: "focus" | "mousedown" | "connexion" | "bascule"): boolean {
+// Le collage au clavier (Ctrl+V, Maj+Inser) tapé dans le bureau est un geste
+// aussi explicite que le clic : en RDP il annonce le texte (24 novembre 2026,
+// collage-rdp.ts) ; en VNC il passe par son propre message [22].
+export function pousseAuGeste(vnc: boolean, evenement: "focus" | "mousedown" | "connexion" | "bascule" | "collage"): boolean {
+  if (evenement === "collage") return !vnc;
   return vnc ? evenement !== "mousedown" : evenement === "mousedown";
 }
 // Ce que le bureau distant a copié en dernier (`FichiersDistants`, message
@@ -93,8 +130,11 @@ export function pousseAuGeste(vnc: boolean, evenement: "focus" | "mousedown" | "
 /** `etat` : où en est le bureau, comme l'onglet l'affiche ; la pastille de la
  *  barre latérale, le titre et la confirmation de fermeture le lisent.
  *  `presseEnAttente` : texte copié par ce bureau pendant qu'il était en
- *  arrière-plan, appliqué au presse-papiers du poste à son prochain focus. */
-export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; etat: "connecting" | "live" | "closed"; presseEnAttente?: string | null; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean; audio?: LecteurAudio }>();
+ *  arrière-plan, appliqué au presse-papiers du poste à son prochain focus.
+ *  `texteDistant` : le dernier texte que ce bureau a dans son presse-papiers à
+ *  notre connaissance (copié par lui, ou annoncé par nous), pour ne pas le
+ *  réannoncer à chaque Ctrl+V. */
+export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; etat: "connecting" | "live" | "closed"; presseEnAttente?: string | null; texteDistant?: string; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean; audio?: LecteurAudio }>();
 
 /** État d'un bureau enregistré pour sa pastille : `live` si l'une de ses
  *  sessions est connectée, `connecting` si l'une se connecte, rien sinon.
@@ -116,7 +156,10 @@ export function etatBureau(hostId: string): "live" | "connecting" | "" {
 /** Applique au poste ce qu'un bureau distant a copié. */
 function appliquerPressePapiers(texte: string): void {
   lastClipText = texte; // ne pas le renvoyer aussitôt au distant
-  clipWriteText(texte).catch(() => {});
+  avecReessais(() => clipWriteText(texte)).catch((e: unknown) => {
+    // Plus silencieux : c'était l'un des « parfois ça ne colle pas ».
+    notifyErreur(t("clip-ecriture-impossible", { e: String(e) }));
+  });
 }
 
 /** Montre (ou met à jour) l'incrustation « connexion en cours » d'un bureau,
@@ -399,6 +442,9 @@ export async function openRdp(cible: RdpTarget) {
     const s = rdpSessions.get(id);
     if (s?.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array(bytes));
   };
+  // Les frappes passent par cette file : un Ctrl+V y fait attendre la touche,
+  // et tout ce qui suit, le temps d'annoncer le texte du poste (collage-rdp.ts).
+  const file = new FileCollage(() => annoncerAvantCollage(id));
   // Touches et boutons tenus enfoncés dans CETTE session, pour tout relâcher si
   // le canvas perd le focus alors qu'une touche l'est encore (Alt+Tab, Super,
   // ou Ctrl+Tab — le raccourci d'onglet d'Avash) : sinon le keyup part à l'autre
@@ -421,7 +467,7 @@ export async function openRdp(cible: RdpTarget) {
   };
   // L'onglet passe en arrière-plan (fenêtre minimisée, autre onglet système) :
   // les keyup ne viendront plus. On relâche comme au blur.
-  const surVisibiliteCachee = () => { if (document.hidden) relacherTenues(); };
+  const surVisibiliteCachee = () => { if (document.hidden) file.executer(relacherTenues); };
   document.addEventListener("visibilitychange", surVisibiliteCachee);
   // Mappage souris -> pixels du bureau (letterbox object-fit:contain), testé.
   // getBoundingClientRect force un recalcul de mise en page synchrone : l'appeler
@@ -521,13 +567,16 @@ export async function openRdp(cible: RdpTarget) {
     // sous WebKitGTK, et renvoyer sa valeur éteindrait le pavé numérique du
     // distant dès la première frappe. Verr.Num est de toute façon transmise
     // comme n'importe quelle touche : le bureau distant bascule lui-même.
-    touche(e, true);
+    // RDP : un collage annonce d'abord le texte du poste (collage-rdp.ts) ;
+    // `e.repeat` exclu, une touche tenue ne relit pas le presse-papiers.
+    if (!e.repeat && estCollage(e) && pousseAuGeste(cible.vnc === true, "collage")) file.coller(() => touche(e, true));
+    else file.executer(() => touche(e, true));
   });
-  canvas.addEventListener("keyup", (e) => { e.preventDefault(); touche(e, false); });
+  canvas.addEventListener("keyup", (e) => { e.preventDefault(); file.executer(() => touche(e, false)); });
   // Le canvas perd le focus (Alt+Tab, changement d'onglet, clic sur la barre
   // d'onglets ou le panneau SFTP) : les keyup/mouseup restants partiront
   // ailleurs. On relâche tout de suite pour ne rien laisser tenu côté distant.
-  canvas.addEventListener("blur", relacherTenues);
+  canvas.addEventListener("blur", () => file.executer(relacherTenues));
   // Au focus du canvas : le rect est peut-être périmé (onglet redevenu visible)
   // et les verrous du poste sont à resynchroniser. Le presse-papiers, lui, ne
   // part qu'en VNC (le sidecar le retient jusqu'au collage) : en RDP, le focus
@@ -716,6 +765,7 @@ export async function openRdp(cible: RdpTarget) {
           // qu'on le colle. Le texte attend son prochain focus (audit du
           // 12 septembre 2026, FS-4).
           const s = rdpSessions.get(id);
+          if (s) s.texteDistant = tr.texte;
           if (state.active === id) appliquerPressePapiers(tr.texte);
           else if (s) s.presseEnAttente = tr.texte;
           break;

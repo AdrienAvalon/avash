@@ -7,6 +7,28 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- **Bureau RDP : `Ctrl+V` collait parfois l'ancien contenu du presse-papiers.**
+  Signalé depuis Windows 11 vers un Windows Server 2012 R2. Le presse-papiers
+  du poste n'était annoncé au bureau distant que sur un clic dans le bureau :
+  on copiait dans une autre application, on revenait dans Avash sans cliquer
+  (Alt+Tab, barre des tâches), et `Ctrl+V` collait ce que le serveur avait
+  déjà, ou rien. Une touche de collage (`Ctrl+V`, `Maj+Inser`) tapée dans le
+  bureau est désormais un geste au même titre que le clic : Avash annonce
+  d'abord le texte du poste, lui laisse 150 ms, puis envoie la touche. Les
+  frappes qui suivent attendent derrière elle, dans l'ordre. Le processus RDP
+  annonce ce texte au serveur avant de traiter la frappe suivante, au lieu de
+  s'en remettre au découpage du réseau. Le partage reste révocable et ne
+  s'exerce que dans la session active.
+- **Bureau RDP : le texte copié sur le bureau distant pouvait ne jamais
+  arriver dans le presse-papiers du poste, sans un mot.** Sous Windows, une
+  seule application à la fois peut ouvrir le presse-papiers, et la
+  bibliothèque qui y accède n'insistait que 25 ms quand une autre le tenait
+  (historique du presse-papiers, gestionnaire de mots de passe, outil de
+  synchronisation). Avash réessaie désormais pendant 300 ms, en lecture comme
+  en écriture, et dit quand l'écriture échoue malgré tout au lieu de l'avaler.
+
 ## [0.14.2] - 2026-11-23
 
 ### Sécurité
