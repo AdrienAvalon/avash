@@ -443,7 +443,21 @@ pub async fn executer(
                                         *g = Some(text.to_owned());
                                     }
                                     offre = None;
-                                    let _ = clip_tx.send(ClipReq::Advertise);
+                                    // Annoncé ici même, pas par `clip_tx` : la
+                                    // boucle sert le WebSocket en priorité
+                                    // (`biased`), et la touche qui suit ce
+                                    // message (le Ctrl+V que l'interface envoie
+                                    // juste après, depuis le 24 novembre 2026)
+                                    // pouvait passer avant l'annonce si les deux
+                                    // trames arrivaient ensemble. L'ordre est
+                                    // ainsi garanti, et non plus laissé au
+                                    // découpage du réseau.
+                                    let msgs = active.get_svc_processor_mut::<CliprdrClient>().and_then(|c| {
+                                        c.initiate_copy(&[ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]).ok()
+                                    });
+                                    if let Some(msgs) = msgs {
+                                        send_svc!(msgs);
+                                    }
                                 }
                             }
                         }

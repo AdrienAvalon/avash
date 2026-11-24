@@ -269,3 +269,94 @@ describe("dossier partagé d'un bureau enregistré (contrat K12)", () => {
     expect(champ.value).toBe("/srv/partage");
   });
 });
+
+describe("collage au clavier dans un bureau RDP", () => {
+  // Signalé sur Windows Server 2012 R2 le 24 novembre 2026 : copier dans une
+  // autre application, revenir dans Avash sans cliquer dans le bureau, Ctrl+V :
+  // le serveur collait l'ancien contenu. Le texte du poste n'était annoncé
+  // qu'au clic.
+  const texte = (m: Uint8Array) => new TextDecoder().decode(m.slice(1));
+  const touche = (canvas: HTMLCanvasElement, type: "keydown" | "keyup", code: string, init: KeyboardEventInit = {}) =>
+    canvas.dispatchEvent(new KeyboardEvent(type, { code, bubbles: true, cancelable: true, ...init }));
+  const estV = (m: Uint8Array, enfonce: number) => m[0] === 4 && m[1] === 0x2f && m[3] === enfonce;
+
+  it("ctrl_v_annonce_le_texte_du_poste_avant_la_touche", async () => {
+    const { id, ws } = await ouvrir("c1");
+    ws.recoit(1, ...u16(1280), ...u16(800));
+    presse.readText.mockResolvedValue("copié ailleurs");
+    const canvas = rdp.rdpSessions.get(id)!.canvas;
+    touche(canvas, "keydown", "ControlLeft", { ctrlKey: true });
+    touche(canvas, "keydown", "KeyV", { ctrlKey: true });
+    // Relâchée pendant l'annonce : elle doit partir APRÈS l'enfoncement.
+    touche(canvas, "keyup", "KeyV", { ctrlKey: true });
+    await vi.waitFor(() => expect(ws.envoyes.some((m) => estV(m, 0))).toBe(true), { timeout: 1000 });
+    const iAnnonce = ws.envoyes.findIndex((m) => m[0] === 8);
+    const iEnfonce = ws.envoyes.findIndex((m) => estV(m, 1));
+    const iRelache = ws.envoyes.findIndex((m) => estV(m, 0));
+    expect(iAnnonce).toBeGreaterThanOrEqual(0);
+    expect(texte(ws.envoyes[iAnnonce])).toBe("copié ailleurs");
+    expect(iAnnonce).toBeLessThan(iEnfonce);
+    expect(iEnfonce).toBeLessThan(iRelache);
+  });
+
+  it("un_texte_deja_sur_le_bureau_n_est_pas_reannonce", async () => {
+    // Le bureau vient de copier ce texte : il en est le propriétaire, le lui
+    // réannoncer ne servirait à rien et la touche partirait 150 ms plus tard.
+    const { id, ws } = await ouvrir("c2");
+    ws.recoit(1, ...u16(1280), ...u16(800));
+    const corps = new TextEncoder().encode("copié sur le bureau");
+    ws.recoit(8, ...corps);
+    presse.readText.mockResolvedValue("copié sur le bureau");
+    touche(rdp.rdpSessions.get(id)!.canvas, "keydown", "KeyV", { ctrlKey: true });
+    await vi.waitFor(() => expect(ws.envoyes.some((m) => estV(m, 1))).toBe(true), { timeout: 100 });
+    expect(ws.envoyes.some((m) => m[0] === 8)).toBe(false);
+  });
+
+  it("le_partage_coupe_n_annonce_rien_au_collage", async () => {
+    localStorage.setItem("avash.rdp.clipboard", "0");
+    try {
+      const { id, ws } = await ouvrir("c3");
+      ws.recoit(1, ...u16(1280), ...u16(800));
+      presse.readText.mockResolvedValue("secret");
+      touche(rdp.rdpSessions.get(id)!.canvas, "keydown", "Insert", { shiftKey: true });
+      await vi.waitFor(() => expect(ws.envoyes.some((m) => m[0] === 4)).toBe(true), { timeout: 1000 });
+      expect(ws.envoyes.some((m) => m[0] === 8)).toBe(false);
+      expect(presse.readText).not.toHaveBeenCalled();
+    } finally {
+      localStorage.removeItem("avash.rdp.clipboard");
+    }
+  });
+
+  it("une_frappe_ordinaire_part_sans_attendre", async () => {
+    const { id, ws } = await ouvrir("c4");
+    ws.recoit(1, ...u16(1280), ...u16(800));
+    touche(rdp.rdpSessions.get(id)!.canvas, "keydown", "KeyA");
+    expect(ws.envoyes.some((m) => m[0] === 4 && m[1] === 0x1e)).toBe(true);
+    expect(presse.readText).not.toHaveBeenCalled();
+  });
+});
+
+describe("texte copié sur le bureau distant", () => {
+  const OCCUPE = "The native clipboard is not accessible due to being held by another party.";
+
+  it("un_presse_papiers_occupe_est_reessaye_puis_ecrit", async () => {
+    const { ws } = await ouvrir("d1");
+    ws.recoit(1, ...u16(1280), ...u16(800));
+    presse.writeText.mockRejectedValueOnce(OCCUPE).mockRejectedValueOnce(OCCUPE).mockResolvedValue(undefined);
+    ws.recoit(8, ...new TextEncoder().encode("copié sur le serveur"));
+    await vi.waitFor(() => expect(presse.writeText).toHaveBeenCalledTimes(3), { timeout: 1000 });
+    expect(presse.writeText).toHaveBeenLastCalledWith("copié sur le serveur");
+    expect(avis.notifyErreur).not.toHaveBeenCalled();
+  });
+
+  it("un_echec_d_ecriture_se_dit_au_lieu_de_disparaitre", async () => {
+    const { ws } = await ouvrir("d2");
+    ws.recoit(1, ...u16(1280), ...u16(800));
+    presse.writeText.mockRejectedValue(OCCUPE);
+    ws.recoit(8, ...new TextEncoder().encode("copié sur le serveur"));
+    await vi.waitFor(() => expect(avis.notifyErreur).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(String(avis.notifyErreur.mock.calls[0][0])).toContain("presse-papiers du poste");
+    presse.writeText.mockReset();
+    presse.writeText.mockImplementation(() => Promise.resolve());
+  });
+});
