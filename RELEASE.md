@@ -188,6 +188,10 @@ suivante, la télécharge et redémarre :
    Flathub embarquent ce fichier depuis l'archive du tag, et sans elle la
    logithèque (GNOME Logiciels, KDE Discover) annonce la version précédente
    comme la plus récente (`appstreamcli` n'y voit rien, la logithèque si).
+   Reporter aussi la version dans le badge statique des deux README
+   (`img.shields.io/badge/version-X.Y.Z-...`, gardé par
+   `scripts/tests/readme-badges-statiques.sh`) : un badge qui interroge une
+   API à l'affichage reste en image cassée dès que le service traîne.
    Enfin, régénérer puis **commiter** les deux `Cargo.lock` : sinon les builds
    `--frozen` du PKGBUILD (AUR) et du manifeste Flathub échouent sur « the lock
    file needs to be updated but --frozen was passed » (la CI, en `cargo build`

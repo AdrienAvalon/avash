@@ -11,15 +11,14 @@ application, which reads your `~/.ssh/config` as it is.
 
 [Website](https://adrienavalon.github.io/avash/en/) · [Français](README.md) · [English](README.en.md)
 
-[![Version](https://img.shields.io/github/v/release/AdrienAvalon/avash?label=version&color=0f7a52)](https://github.com/AdrienAvalon/avash/releases/latest)
-[![winget](https://img.shields.io/winget/v/AdrienCros.Avash?label=winget&color=0078d4)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/AdrienCros/Avash)
-[![Downloads](https://img.shields.io/github/downloads/AdrienAvalon/avash/total?label=downloads&color=2ea44f)](https://github.com/AdrienAvalon/avash/releases)
+[![Version](https://img.shields.io/badge/version-0.14.2-0f7a52.svg)](https://github.com/AdrienAvalon/avash/releases/latest)
+[![winget](https://img.shields.io/badge/winget-AdrienCros.Avash-0078d4.svg)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/AdrienCros/Avash)
 [![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-platforms-informational)](#install)
-[![License](https://img.shields.io/github/license/AdrienAvalon/avash?label=license)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-e05d44.svg)](LICENSE)
 
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AdrienAvalon/avash/badge)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
+[![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF%20Scorecard-report-informational.svg)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
 [![Tests](https://img.shields.io/badge/tests-1976%20passing-brightgreen.svg)](docs/qualite.md)
 [![Coverage](https://img.shields.io/badge/coverage-84%25%20of%20lines-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20caught-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
@@ -322,8 +321,3 @@ and the Space Grotesk font used for headings (SIL OFL 1.1) in
 
 © 2026 Adrien Cros.
 
-<div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=AdrienAvalon/avash&type=Date)](https://star-history.com/#AdrienAvalon/avash&Date)
-
-</div>
