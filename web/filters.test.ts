@@ -721,7 +721,7 @@ describe("tailles et dates selon la langue", () => {
   });
 });
 
-import { estRaccourciApplicatif, ouvrePaletteOuPanneau, classeSante, ilYA, santesARestaurer, libelleSur, SANTE_PERIMEE_MS, SANTE_OUBLIEE_MS } from "./filters";
+import { estRaccourciApplicatif, gesteCopierCollerCtrl, ouvrePaletteOuPanneau, classeSante, ilYA, santesARestaurer, libelleSur, SANTE_PERIMEE_MS, SANTE_OUBLIEE_MS } from "./filters";
 
 // Audit du 12 septembre 2026 (C-front-2, C-front-3). Dans un terminal, xterm voit
 // la touche avant l'application : Ctrl+Tab y partait en tabulation (complétion
@@ -807,5 +807,42 @@ describe("libelleSur", () => {
     expect(libelleSur("a\u2066b\u2069c\u200fd")).toBe("abcd");
     expect(libelleSur("srv\x1b[31m")).toBe("srv [31m");
     expect(libelleSur("web-1")).toBe("web-1");
+  });
+});
+
+// Demandé par le mainteneur le 26 novembre 2026 : sous Windows, Ctrl+C et
+// Ctrl+V ne copiaient ni ne collaient dans un terminal SSH, contrairement à
+// Windows Terminal. Option active : Ctrl+C copie la sélection et sinon part au
+// shell (interruption), Ctrl+V colle.
+describe("gesteCopierCollerCtrl (Ctrl+C / Ctrl+V comme dans Windows Terminal)", () => {
+  const touche = (code: string, mods: Partial<{ ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) =>
+    ({ key: code.slice(3).toLowerCase(), code, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, ...mods });
+
+  it("Ctrl+C copie quand du texte est sélectionné, et part au shell sinon", () => {
+    expect(gesteCopierCollerCtrl(touche("KeyC"), true, true)).toBe("copier");
+    expect(gesteCopierCollerCtrl(touche("KeyC"), true, false)).toBeNull();
+  });
+
+  it("Ctrl+V colle, sélection ou non", () => {
+    expect(gesteCopierCollerCtrl(touche("KeyV"), true, false)).toBe("coller");
+    expect(gesteCopierCollerCtrl(touche("KeyV"), true, true)).toBe("coller");
+  });
+
+  it("option coupée : tout part au shell (Ctrl+V pour vim, Ctrl+C pour interrompre)", () => {
+    expect(gesteCopierCollerCtrl(touche("KeyC"), false, true)).toBeNull();
+    expect(gesteCopierCollerCtrl(touche("KeyV"), false, false)).toBeNull();
+  });
+
+  it("Maj, Alt (AltGr sous Windows) ou Méta : pas ce geste-là", () => {
+    for (const mods of [{ shiftKey: true }, { altKey: true }, { metaKey: true }]) {
+      expect(gesteCopierCollerCtrl(touche("KeyC", mods), true, true)).toBeNull();
+      expect(gesteCopierCollerCtrl(touche("KeyV", mods), true, true)).toBeNull();
+    }
+    expect(gesteCopierCollerCtrl(touche("KeyV", { ctrlKey: false }), true, true)).toBeNull();
+  });
+
+  it("les autres lettres ne sont pas concernées", () => {
+    expect(gesteCopierCollerCtrl(touche("KeyX"), true, true)).toBeNull();
+    expect(gesteCopierCollerCtrl(touche("KeyD"), true, true)).toBeNull();
   });
 });

@@ -37,8 +37,10 @@ describe("bascule de langue : tous les textes statiques de la page traversent la
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       const parent = (n as Text).parentElement;
-      // Le CSS, le code et les identifiants techniques ne se traduisent pas.
-      if (!parent || parent.closest("code, kbd, style, script")) continue;
+      // Le CSS, le code et les identifiants techniques ne se traduisent pas,
+      // ni ce que la page marque `translate="no"` : le nom d'une langue, qui
+      // s'écrit dans cette langue (« Français » dans le choix de la langue).
+      if (!parent || parent.closest("code, kbd, style, script, [translate='no']")) continue;
       const v = n.nodeValue ?? "";
       if (MOTIF_FR.test(v)) fautes.push(v.trim());
     }

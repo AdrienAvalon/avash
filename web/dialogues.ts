@@ -4,7 +4,7 @@ import type { Terminal } from "@xterm/xterm";
 import { getVersion } from "@tauri-apps/api/app";
 import { effectuerCollage } from "./collage";
 import { avecReessais } from "./collage-rdp";
-import { readText as lirePressePapiers } from "@tauri-apps/plugin-clipboard-manager";
+import { readText as lirePressePapiers, writeText as ecrirePressePapiers } from "@tauri-apps/plugin-clipboard-manager";
 import { $ } from "./etat";
 import { t } from "./i18n";
 
@@ -87,6 +87,17 @@ export function collerDansTerminal(term: Pick<Terminal, "paste" | "focus">, text
         { ok: t("coller"), danger: true },
       ),
   }).finally(() => term.focus());
+}
+
+/** Copie la sélection d'un terminal dans le presse-papiers du poste : Ctrl+C
+ *  (option « comme Windows Terminal »), Ctrl+Maj+C et « Copier » du menu. Par
+ *  le plugin de Tauri, comme la lecture : WebKitGTK peut refuser
+ *  `navigator.clipboard` (26 novembre 2026). Un échec reste muet, à dessein :
+ *  le geste se répète et n'a pas d'autre conséquence (audit du 7 septembre
+ *  2026). */
+export function copierSelection(texte: string): void {
+  if (!texte) return;
+  avecReessais(() => ecrirePressePapiers(texte)).catch(() => {});
 }
 
 /** Colle le presse-papiers du poste dans le terminal : Ctrl+Maj+V et « Coller »

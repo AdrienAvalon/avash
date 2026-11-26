@@ -10,14 +10,16 @@ import { majMemoireOnglets, proposerRestauration } from "./onglets-restauration"
 import { appliquerVue, basculerPartage, ongletsAffiches, surFermeture, surFocus, vuePartagee } from "./vue-partagee";
 import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
-import { confirmerFermetureOnglet, journalGlobal, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage } from "./prefs";
-import { filterHosts, isPasswordRequired, isHostKeyChanged, nettoyerMarqueurs, libelleSur, estRaccourciApplicatif, ouvrePaletteOuPanneau, nettoyerPourTerminal, etiquetteHote, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode, classeSante, santePerimee, ilYA, santesARestaurer } from "./filters";
+import { confirmerFermetureOnglet, ctrlCopierColler, journalGlobal, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage, tailleTexte } from "./prefs";
+import { filterHosts, isPasswordRequired, isHostKeyChanged, nettoyerMarqueurs, libelleSur, estRaccourciApplicatif, gesteCopierCollerCtrl, ouvrePaletteOuPanneau, nettoyerPourTerminal, etiquetteHote, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode, classeSante, santePerimee, ilYA, santesARestaurer } from "./filters";
 import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
+import { brancherParametres, parametresOpen } from "./parametres";
+import { estWindows } from "./vnc-clavier";
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, ensureGrasseChargee, etatsSessionsParHote, renderTagBar, terminalTheme } from "./theme";
 import { MENUS_CONTEXTUELS, openHostMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { type ManualTarget } from "./connexion-directe";
 import { annoncerPartageClip, bureauActif, choisirEtOffrirFichiers, connectRdpSaved, etatBureau, fichiersARecevoir, openRdpMenu, rdpSessions, recevoirFichiers } from "./rdp";
-import { askConfirm, askPassword, collerPressePapiers, intercepterCollageNatif } from "./dialogues";
+import { askConfirm, askPassword, collerPressePapiers, copierSelection, intercepterCollageNatif } from "./dialogues";
 import { fermerOnglet, focusTab, orderedTabs } from "./raccourcis";
 import { notify, notifyErreur } from "./notifications";
 import { openFolderMenu } from "./dossiers";
@@ -720,13 +722,30 @@ async function newSessionShell(label: string) {
       if (e.key === "Tab") e.preventDefault();
       return false;
     }
+    // Ctrl+C et Ctrl+V comme dans Windows Terminal, si l'option est active
+    // (d'office sous Windows) : Ctrl+C copie la sélection et l'efface, et
+    // sans sélection part au shell (interruption) ; Ctrl+V colle. L'action
+    // par défaut est empêchée, comme pour Ctrl+Maj+V : WebView2 collerait
+    // sinon une seconde fois.
+    const geste = gesteCopierCollerCtrl(e, ctrlCopierColler(estWindows()), term.hasSelection());
+    if (geste === "copier") {
+      e.preventDefault();
+      copierSelection(term.getSelection());
+      term.clearSelection();
+      return false;
+    }
+    if (geste === "coller") {
+      e.preventDefault();
+      void collerPressePapiers(term);
+      return false;
+    }
     const mod = e.ctrlKey && e.shiftKey;
     if (mod && e.code === "KeyC") {
       const sel = term.getSelection();
       // Copie de la selection du terminal : un rejet reste muet a dessein, le
       // geste est repetable et sans consequence (contrairement a une cle
       // publique collee dans authorized_keys), audit du 7 septembre 2026.
-      if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+      copierSelection(sel);
       return false;
     }
     if (mod && e.code === "KeyV") {
@@ -1447,6 +1466,12 @@ function commandesPalette(): EntreePalette[] {
         }]
       : []),
     {
+      nom: t("palette-parametres"),
+      detail: t("palette-parametres-detail"),
+      icone: "book",
+      ouvrir: () => parametresOpen(),
+    },
+    {
       nom: t("palette-diagnostic"),
       detail: t("palette-diagnostic-detail"),
       icone: "film",
@@ -1608,6 +1633,9 @@ window.addEventListener("resize", () => {
 appliquerLangue();
 hydrateIcons();
 $("theme-toggle").addEventListener("click", cycleTheme);
+// La taille du texte retenue, avant le premier terminal.
+state.terminalFontSize = tailleTexte();
+brancherParametres({ langue: () => renderHosts() });
 applyTheme();
 void setupWindowControls();
 
