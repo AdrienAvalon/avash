@@ -15,6 +15,10 @@ pub mod rdp6;
 pub mod rectangle_processing;
 pub mod rle;
 pub mod rlgr;
+/// Le décodeur RLGR d'origine, référence du décodeur rapide (tests et fuzz).
+#[cfg(any(test, feature = "rlgr-reference"))]
+#[doc(hidden)]
+pub mod rlgr_reference;
 pub mod srl;
 pub mod subband_reconstruction;
 pub mod zgfx;

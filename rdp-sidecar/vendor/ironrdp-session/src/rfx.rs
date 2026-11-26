@@ -6,11 +6,11 @@ use ironrdp_graphics::rectangle_processing::Region;
 use ironrdp_graphics::{dwt, quantization, rlgr, subband_reconstruction};
 use ironrdp_pdu::codecs::rfx::{self, EntropyAlgorithm, Quant, RfxRectangle, Tile};
 use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
-use ironrdp_pdu::{Decode as _, ReadCursor, decode_cursor};
+use ironrdp_pdu::{decode_cursor, Decode as _, ReadCursor};
 use tracing::{instrument, trace};
 
 use crate::image::DecodedImage;
-use crate::{SessionResult, custom_err, general_err, reason_err};
+use crate::{custom_err, general_err, reason_err, SessionResult};
 
 const TILE_SIZE: u16 = 64;
 
@@ -119,22 +119,34 @@ impl DecodingContext {
                 // essai d'encodage manquait de tampon (10 septembre 2026).
                 general_err!("RemoteFX frame received before any Sync/Channels header (the server dropped its RemoteFX headers)")
             })?;
-        let width = channel.width.try_into().map_err(|_| general_err!("invalid width"))?;
-        let height = channel.height.try_into().map_err(|_| general_err!("invalid height"))?;
+        let width = channel
+            .width
+            .try_into()
+            .map_err(|_| general_err!("invalid width"))?;
+        let height = channel
+            .height
+            .try_into()
+            .map_err(|_| general_err!("invalid height"))?;
         let entropy_algorithm = self.context.entropy_algorithm;
 
-        let region: rfx::Block<'_> = decode_cursor(input).map_err(|e| custom_err!("decode region", e))?;
+        let region: rfx::Block<'_> =
+            decode_cursor(input).map_err(|e| custom_err!("decode region", e))?;
         let mut region = match region {
             rfx::Block::CodecChannel(rfx::CodecChannel::Region(region)) => region,
             _ => return Err(general_err!("unexpected block type")),
         };
-        let tile_set: rfx::Block<'_> = decode_cursor(input).map_err(|e| custom_err!("decode tile_set", e))?;
+        let tile_set: rfx::Block<'_> =
+            decode_cursor(input).map_err(|e| custom_err!("decode tile_set", e))?;
         let tile_set = match tile_set {
             rfx::Block::CodecChannel(rfx::CodecChannel::TileSet(t)) => t,
             _ => return Err(general_err!("unexpected block type")),
         };
-        let frame_end: rfx::Block<'_> = decode_cursor(input).map_err(|e| custom_err!("decode frame_end", e))?;
-        if !matches!(frame_end, rfx::Block::CodecChannel(rfx::CodecChannel::FrameEnd(_))) {
+        let frame_end: rfx::Block<'_> =
+            decode_cursor(input).map_err(|e| custom_err!("decode frame_end", e))?;
+        if !matches!(
+            frame_end,
+            rfx::Block::CodecChannel(rfx::CodecChannel::FrameEnd(_))
+        ) {
             return Err(general_err!("unexpected block type"));
         }
 
@@ -154,52 +166,169 @@ impl DecodingContext {
         trace!(channels = ?self.channels);
         trace!(?region);
 
-        let clipping_rectangles = clipping_rectangles(region.rectangles.as_slice(), destination, width, height);
+        let clipping_rectangles =
+            clipping_rectangles(region.rectangles.as_slice(), destination, width, height);
         trace!("Clipping rectangles: {:?}", clipping_rectangles);
 
         let mut final_update_rectangle = clipping_rectangles.extents.clone();
 
-        for (update_rectangle, tile_data) in tiles_to_rectangles(tile_set.tiles.as_slice(), destination)
-            .zip(map_tiles_data(tile_set.tiles.as_slice(), tile_set.quants.as_slice()))
+        // Portage avash (26 novembre 2026) : les tuiles se décodent en
+        // parallèle, par lots, puis se recopient dans l'image dans l'ordre.
+        // Une tuile de 64×64 ne dépend d'aucune autre ; c'était pourtant tout
+        // le décodage, sur un seul cœur, qui plafonnait un bureau RemoteFX
+        // plein écran à 13 images par seconde (mesuré par la mire du banc
+        // d'affichage, e2e/mesures/rdp.spec.js). La recopie s'arrête à la
+        // première tuile en erreur, comme la boucle d'origine : l'image
+        // garde les tuiles d'avant, et l'erreur rendue est la même.
+        let rectangles: Vec<InclusiveRectangle> =
+            tiles_to_rectangles(tile_set.tiles.as_slice(), destination).collect();
+        let donnees = map_tiles_data(tile_set.tiles.as_slice(), tile_set.quants.as_slice());
+        let fils = fils_de_decodage();
+        for (lot_rectangles, lot_donnees) in rectangles
+            .chunks(LOT_TUILES)
+            .zip(donnees.chunks(LOT_TUILES))
         {
-            decode_tile(
-                &tile_data,
+            self.decoding_tiles
+                .lot
+                .resize(lot_donnees.len() * TUILE_RGBA, 0);
+            let resultats = decoder_lot(
+                lot_donnees,
                 entropy_algorithm,
-                self.decoding_tiles.tile_output.as_mut(),
-                self.decoding_tiles.ycbcr_buffer.as_mut(),
-                self.decoding_tiles.ycbcr_temp_buffer.as_mut(),
-            )?;
+                &mut self.decoding_tiles,
+                fils,
+            );
+            for (i, (update_rectangle, resultat)) in
+                lot_rectangles.iter().zip(resultats).enumerate()
+            {
+                resultat?;
+                let current_update_rectangle = image.apply_tile(
+                    &self.decoding_tiles.lot[i * TUILE_RGBA..(i + 1) * TUILE_RGBA],
+                    PixelFormat::RgbA32,
+                    &clipping_rectangles,
+                    update_rectangle,
+                )?;
 
-            let current_update_rectangle = image.apply_tile(
-                &self.decoding_tiles.tile_output,
-                PixelFormat::RgbA32,
-                &clipping_rectangles,
-                &update_rectangle,
-            )?;
-
-            final_update_rectangle = final_update_rectangle.union(&current_update_rectangle);
+                final_update_rectangle = final_update_rectangle.union(&current_update_rectangle);
+            }
         }
 
         Ok((frame_begin.index, final_update_rectangle))
     }
 }
 
+/// Octets d'une tuile décodée (64×64, RGBA).
+const TUILE_RGBA: usize = 64 * 64 * 4;
+
+/// Tuiles décodées avant recopie. Borne la mémoire quoi qu'annonce le
+/// serveur : un TileSet porte jusqu'à 65 535 tuiles, qu'un serveur hostile
+/// ferait sinon tenir ensemble (1 Gio). 256 tuiles, 4 Mio ; une image 1080p
+/// en compte 510, soit deux lots.
+const LOT_TUILES: usize = 256;
+
+/// Au-delà, plus de fils ne fait plus gagner : la recopie et l'envoi à
+/// l'interface restent sur le fil de la session.
+const FILS_MAX: usize = 8;
+
+/// Sous ce nombre de tuiles, lancer des fils coûte plus qu'il ne rapporte.
+const TUILES_PAR_FIL_MIN: usize = 8;
+
+fn fils_de_decodage() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, core::num::NonZeroUsize::get)
+        .clamp(1, FILS_MAX)
+}
+
 #[derive(Debug, Clone)]
 struct DecodingTileContext {
-    tile_output: Vec<u8>,
+    /// Les tuiles décodées du lot en cours, à la suite.
+    lot: Vec<u8>,
+    /// Les tampons de travail du fil de la session.
+    travail: Travail,
+}
+
+/// Les tampons de travail d'un fil de décodage : un par composante YCbCr,
+/// et celui de la transformée en ondelettes.
+#[derive(Debug, Clone)]
+struct Travail {
     ycbcr_buffer: Vec<Vec<i16>>,
     ycbcr_temp_buffer: Vec<i16>,
 }
 
-impl DecodingTileContext {
+impl Travail {
     fn new() -> Self {
         let tile_size = usize::from(TILE_SIZE);
         Self {
-            tile_output: vec![0; tile_size * tile_size * 4],
             ycbcr_buffer: vec![vec![0; tile_size * tile_size]; 3],
             ycbcr_temp_buffer: vec![0; tile_size * tile_size],
         }
     }
+
+    /// Décode des tuiles à la suite, chacune dans sa part de `sortie`.
+    fn decoder(
+        &mut self,
+        tuiles: &[TileData<'_>],
+        entropy_algorithm: EntropyAlgorithm,
+        sortie: &mut [u8],
+    ) -> Vec<SessionResult<()>> {
+        tuiles
+            .iter()
+            .zip(sortie.chunks_exact_mut(TUILE_RGBA))
+            .map(|(tuile, sortie)| {
+                decode_tile(
+                    tuile,
+                    entropy_algorithm,
+                    sortie,
+                    self.ycbcr_buffer.as_mut(),
+                    self.ycbcr_temp_buffer.as_mut(),
+                )
+            })
+            .collect()
+    }
+}
+
+impl DecodingTileContext {
+    fn new() -> Self {
+        Self {
+            lot: Vec::new(),
+            travail: Travail::new(),
+        }
+    }
+}
+
+/// Décode un lot de tuiles dans `ctx.lot`, réparties entre `fils` fils, et
+/// rend le verdict de chaque tuile, dans l'ordre du lot.
+fn decoder_lot(
+    tuiles: &[TileData<'_>],
+    entropy_algorithm: EntropyAlgorithm,
+    ctx: &mut DecodingTileContext,
+    fils: usize,
+) -> Vec<SessionResult<()>> {
+    let fils = fils.min(tuiles.len() / TUILES_PAR_FIL_MIN).max(1);
+    if fils == 1 {
+        return ctx.travail.decoder(tuiles, entropy_algorithm, &mut ctx.lot);
+    }
+    let par_fil = tuiles.len().div_ceil(fils);
+    std::thread::scope(|portee| {
+        let mut fils_lances = Vec::with_capacity(fils);
+        for (part, sortie) in tuiles
+            .chunks(par_fil)
+            .zip(ctx.lot.chunks_mut(par_fil * TUILE_RGBA))
+        {
+            fils_lances.push(
+                portee.spawn(move || Travail::new().decoder(part, entropy_algorithm, sortie)),
+            );
+        }
+        // Une panique dans un fil (tuile hostile) remonte ici, sur le fil de
+        // la session, comme si le décodage y avait eu lieu : le sidecar
+        // l'isole de la même façon.
+        fils_lances
+            .into_iter()
+            .flat_map(|f| {
+                f.join()
+                    .unwrap_or_else(|panique| std::panic::resume_unwind(panique))
+            })
+            .collect()
+    })
 }
 
 fn decode_tile(
@@ -209,8 +338,19 @@ fn decode_tile(
     ycbcr_temp: &mut [Vec<i16>],
     temp: &mut [i16],
 ) -> SessionResult<()> {
-    for ((quant, data), ycbcr_buffer) in tile.quants.iter().zip(tile.data.iter()).zip(ycbcr_temp.iter_mut()) {
-        decode_component(quant, entropy_algorithm, data, ycbcr_buffer.as_mut_slice(), temp)?;
+    for ((quant, data), ycbcr_buffer) in tile
+        .quants
+        .iter()
+        .zip(tile.data.iter())
+        .zip(ycbcr_temp.iter_mut())
+    {
+        decode_component(
+            quant,
+            entropy_algorithm,
+            data,
+            ycbcr_buffer.as_mut_slice(),
+            temp,
+        )?;
     }
 
     let ycbcr_buffer = YCbCrBuffer {
@@ -219,7 +359,8 @@ fn decode_tile(
         cr: ycbcr_temp[2].as_slice(),
     };
 
-    color_conversion::ycbcr_to_rgba(ycbcr_buffer, output).map_err(|e| custom_err!("decode_tile", e))?;
+    color_conversion::ycbcr_to_rgba(ycbcr_buffer, output)
+        .map_err(|e| custom_err!("decode_tile", e))?;
 
     Ok(())
 }
@@ -231,7 +372,8 @@ fn decode_component(
     output: &mut [i16],
     temp: &mut [i16],
 ) -> SessionResult<()> {
-    rlgr::decode(entropy_algorithm, data, output).map_err(|e| custom_err!("decode_component", e))?;
+    rlgr::decode(entropy_algorithm, data, output)
+        .map_err(|e| custom_err!("decode_component", e))?;
     subband_reconstruction::decode(&mut output[4032..]);
     quantization::decode(output, quant);
     dwt::decode(output, temp);
@@ -289,4 +431,136 @@ fn map_tiles_data<'a>(tiles: &[Tile<'a>], quants: &[Quant]) -> Vec<TileData<'a>>
 struct TileData<'a> {
     quants: [Quant; 3],
     data: [&'a [u8]; 3],
+}
+
+#[cfg(test)]
+mod tests_decodage_parallele {
+    //! Le décodage réparti entre fils rend, tuile par tuile, exactement ce
+    //! que rend le décodage sur le seul fil de la session : mêmes pixels,
+    //! mêmes erreurs, dans le même ordre (portage avash, 26 novembre 2026).
+    #![expect(
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        reason = "données de test"
+    )]
+
+    use super::*;
+
+    fn hasard(etat: &mut u64) -> u64 {
+        *etat ^= *etat >> 12;
+        *etat ^= *etat << 25;
+        *etat ^= *etat >> 27;
+        etat.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn quant(etat: &mut u64) -> Quant {
+        // Quantification modérée : les coefficients restent dans la plage
+        // que la conversion YCbCr attend.
+        let mut q = || 6 + (hasard(etat) % 3) as u8;
+        Quant {
+            ll3: q(),
+            lh3: q(),
+            hl3: q(),
+            hh3: q(),
+            lh2: q(),
+            hl2: q(),
+            hh2: q(),
+            lh1: q(),
+            hl1: q(),
+            hh1: q(),
+        }
+    }
+
+    #[test]
+    fn le_decodage_parallele_rend_les_memes_tuiles_et_les_memes_erreurs() {
+        let mut etat = 0x5eed_0f_a5a5_u64;
+        // RLGR3 seulement : ce paquet, testé seul, prend ironrdp-graphics sur
+        // crates.io, dont l'encodeur RLGR1 se désynchronise du décodeur (UP_GR
+        // pour UQ_GR, corrigé dans notre copie) et fabriquerait des tuiles
+        // fausses. Le partage entre fils ne dépend pas du mode d'entropie.
+        for mode in [EntropyAlgorithm::Rlgr3] {
+            // De vraies tuiles : une image 64×64 (un dégradé propre à chaque
+            // tuile) passée par la chaîne d'encodage RemoteFX, l'inverse du
+            // décodage. Une tuile sur sept a une composante vide : des
+            // erreurs au milieu du lot, que la recopie doit rencontrer au même
+            // endroit quel que soit le nombre de fils. Pas d'octets au
+            // hasard : leurs coefficients hors plage font déborder la
+            // conversion YCbCr de la caisse `yuv` en debug (voir
+            // rdp-sidecar/vendor/README.md), ce que ce test ne vise pas.
+            let quants: Vec<Quant> = (0..100).map(|_| quant(&mut etat)).collect();
+            let octets: Vec<[Vec<u8>; 3]> = (0..100)
+                .map(|t| {
+                    let pixels: Vec<u8> = (0..64 * 64)
+                        .flat_map(|i| {
+                            let (x, y) = (i % 64, i / 64);
+                            let bruit = (hasard(&mut etat) % 9) as usize;
+                            [(x * 3 + t) as u8, (y * 2 + t * 5) as u8, ((x + y) / 2 + bruit) as u8, 255]
+                        })
+                        .collect();
+                    let (mut y, mut cb, mut cr) = ([0i16; 4096], [0i16; 4096], [0i16; 4096]);
+                    color_conversion::to_64x64_ycbcr_tile(&pixels, 64, 64, 256, PixelFormat::RgbA32, &mut y, &mut cb, &mut cr)
+                        .expect("YCbCr");
+                    let mut temp = [0i16; 4096];
+                    [y, cb, cr].map(|mut plan| {
+                        if t % 7 == 3 {
+                            return Vec::new();
+                        }
+                        dwt::encode(&mut plan, &mut temp);
+                        quantization::encode(&mut plan, &quants[t]);
+                        subband_reconstruction::encode(&mut plan[4032..]);
+                        let mut tampon = vec![0u8; 4096 * 64];
+                        let n = rlgr::encode(mode, &plan, &mut tampon).expect("encodage");
+                        tampon.truncate(n);
+                        tampon
+                    })
+                })
+                .collect();
+            let tuiles: Vec<TileData<'_>> = octets
+                .iter()
+                .zip(&quants)
+                .map(|(c, q)| TileData {
+                    quants: [q.clone(), q.clone(), q.clone()],
+                    data: [&c[0], &c[1], &c[2]],
+                })
+                .collect();
+            let mut seul = DecodingTileContext::new();
+            seul.lot = vec![0xa5; tuiles.len() * TUILE_RGBA];
+            let attendu: Vec<Result<(), String>> = decoder_lot(&tuiles, mode, &mut seul, 1)
+                .into_iter()
+                .map(|r| r.map_err(|e| e.to_string()))
+                .collect();
+            assert!(attendu.iter().any(Result::is_ok) && attendu.iter().any(Result::is_err));
+            for fils in [2, 3, 4, 8] {
+                let mut plusieurs = DecodingTileContext::new();
+                plusieurs.lot = vec![0xa5; tuiles.len() * TUILE_RGBA];
+                let obtenu: Vec<Result<(), String>> =
+                    decoder_lot(&tuiles, mode, &mut plusieurs, fils)
+                        .into_iter()
+                        .map(|r| r.map_err(|e| e.to_string()))
+                        .collect();
+                assert_eq!(obtenu, attendu, "verdicts ({mode:?}, {fils} fils)");
+                assert!(
+                    plusieurs.lot == seul.lot,
+                    "pixels différents ({mode:?}, {fils} fils)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn un_petit_lot_reste_sur_le_fil_de_la_session() {
+        // Sous TUILES_PAR_FIL_MIN tuiles par fil, pas de fil lancé : le
+        // résultat est celui du fil unique, sans coût de lancement.
+        let octets = [vec![1u8, 2, 3], vec![4, 5], vec![6]];
+        let tuiles = [TileData {
+            quants: [Quant::default(), Quant::default(), Quant::default()],
+            data: [&octets[0], &octets[1], &octets[2]],
+        }];
+        let mut ctx = DecodingTileContext::new();
+        ctx.lot = vec![0; TUILE_RGBA];
+        assert_eq!(
+            decoder_lot(&tuiles, EntropyAlgorithm::Rlgr1, &mut ctx, 8).len(),
+            1
+        );
+    }
 }

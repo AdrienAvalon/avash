@@ -6,8 +6,6 @@ use bitvec::prelude::*;
 use ironrdp_pdu::codecs::rfx::EntropyAlgorithm;
 use yuv::YuvError;
 
-use crate::utils::Bits;
-
 const KP_MAX: u32 = 80;
 const LS_GR: u32 = 3;
 const UP_GR: u32 = 4;
@@ -22,16 +20,6 @@ macro_rules! write_byte {
             $output = &mut $output[1..];
         } else {
             break;
-        }
-    };
-}
-
-macro_rules! try_split_bits {
-    ($bits:ident, $n:expr) => {
-        if $bits.len() < $n {
-            break;
-        } else {
-            $bits.split_to($n)
         }
     };
 }
@@ -122,7 +110,14 @@ pub fn encode(mode: EntropyAlgorithm, input: &[i16], tile: &mut [u8]) -> Result<
                         let two_ms = get_2magsign(input_first);
                         code_gr(&mut bits, &mut krp, two_ms);
                         if two_ms == 0 {
-                            kp = min(kp + UP_GR, KP_MAX);
+                            // UQ_GR, pas UP_GR : MS-RDPRFX 3.1.8.1.7.3, et ce
+                            // que fait le décodeur. Avec UP_GR, l'encodeur
+                            // d'origine se désynchronisait du décodeur après
+                            // un zéro en mode Golomb-Rice, et l'aller-retour
+                            // d'une vraie tuile ratait (portage avash,
+                            // 26 novembre 2026 ; le client n'encode jamais,
+                            // mais les tests fabriquent leurs tuiles ainsi).
+                            kp = min(kp + UQ_GR, KP_MAX);
                         } else {
                             kp = kp.saturating_sub(DQ_GR);
                         }
@@ -187,6 +182,94 @@ fn code_gr(bits: &mut BitStream<'_>, krp: &mut u32, val: u32) {
     }
 }
 
+/// Lecteur de bits MSB d'abord, au-dessus des octets de la tuile.
+///
+/// Portage avash (26 novembre 2026) : le décodeur d'origine lisait par des
+/// tranches `bitvec` (`split_at`, `leading_ones`, `load_be`), et le profil du
+/// processus RDP sur un bureau RemoteFX plein écran y mettait plus de la
+/// moitié du temps, la cadence plafonnant à 10 images par seconde. Ici, on
+/// lit 64 bits d'un coup et on compte une série de zéros ou de uns d'une seule
+/// instruction. Le comportement est celui d'origine au bit près, flux tronqué
+/// compris : `rlgr_reference` le garde, et les tests comme la cible `rlgr` de
+/// `fuzz/` comparent les deux.
+struct Lecteur<'a> {
+    octets: &'a [u8],
+    /// Position du prochain bit à lire, depuis le début de la tuile.
+    pos: usize,
+    total: usize,
+}
+
+impl<'a> Lecteur<'a> {
+    fn new(octets: &'a [u8]) -> Self {
+        Self {
+            octets,
+            pos: 0,
+            total: octets.len().saturating_mul(8),
+        }
+    }
+
+    fn restants(&self) -> usize {
+        self.total - self.pos
+    }
+
+    fn est_vide(&self) -> bool {
+        self.pos >= self.total
+    }
+
+    /// Les 64 bits qui suivent `pos`, alignés à gauche, et combien d'entre eux
+    /// sont vrais (au-delà de la fin de la tuile, des zéros de remplissage).
+    fn regarder(&self) -> (u64, usize) {
+        let octet = self.pos / 8;
+        let decalage = self.pos % 8;
+        let mut tampon = [0u8; 8];
+        let dispo = &self.octets[octet..];
+        let n = min(8, dispo.len());
+        tampon[..n].copy_from_slice(&dispo[..n]);
+        let mot = u64::from_be_bytes(tampon) << decalage;
+        (mot, min(64 - decalage, self.restants()))
+    }
+
+    /// Consomme la série de bits égaux à `valeur` qui commence ici, jusqu'au
+    /// premier bit différent (non consommé) ou la fin de la tuile, et dit sa
+    /// longueur : `leading_ones` / `leading_zeros` puis `split_to` d'origine.
+    fn serie(&mut self, valeur: bool) -> usize {
+        let mut longueur = 0;
+        while !self.est_vide() {
+            let (mot, valides) = self.regarder();
+            let mot = if valeur { !mot } else { mot };
+            #[expect(clippy::as_conversions, reason = "leading_zeros d'un u64 tient dans un usize")]
+            let n = min(mot.leading_zeros() as usize, valides);
+            self.pos += n;
+            longueur += n;
+            if n < valides {
+                break;
+            }
+        }
+        longueur
+    }
+
+    /// Les `n` bits suivants (n ≤ 32) lus comme un entier, ou `None` s'il en
+    /// reste moins : là où l'original sortait de sa boucle (`try_split_bits`).
+    fn lire(&mut self, n: usize) -> Option<u32> {
+        debug_assert!(n <= 32);
+        if self.restants() < n {
+            return None;
+        }
+        if n == 0 {
+            return Some(0);
+        }
+        let (mot, _) = self.regarder();
+        self.pos += n;
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            reason = "n ≤ 32 : les bits gardés tiennent dans un u32"
+        )]
+        let valeur = (mot >> (64 - n)) as u32;
+        Some(valeur)
+    }
+}
+
 pub fn decode(mode: EntropyAlgorithm, tile: &[u8], mut output: &mut [i16]) -> Result<(), RlgrError> {
     #![expect(
         clippy::as_conversions,
@@ -203,27 +286,37 @@ pub fn decode(mode: EntropyAlgorithm, tile: &[u8], mut output: &mut [i16]) -> Re
     let mut kp: u32 = k << LS_GR;
     let mut krp: u32 = kr << LS_GR;
 
-    let mut bits = Bits::new(BitSlice::from_slice(tile));
+    let mut bits = Lecteur::new(tile);
 
-    while !bits.is_empty() && !output.is_empty() {
+    // Chaque `let … else { break }` est un `try_split_bits!` de l'original :
+    // à court de bits, on sort de la boucle et le reste de la sortie est mis
+    // à zéro.
+    while !bits.est_vide() && !output.is_empty() {
         match CompressionMode::from(k) {
             CompressionMode::RunLength => {
-                let number_of_zeros = truncate_leading_value(&mut bits, false);
-                try_split_bits!(bits, 1);
-                let run = count_run(number_of_zeros, &mut k, &mut kp) + load_be_u32(try_split_bits!(bits, k as usize));
+                let number_of_zeros = bits.serie(false);
+                let Some(_) = bits.lire(1) else { break };
+                let run_base = count_run(number_of_zeros, &mut k, &mut kp);
+                let Some(complement) = bits.lire(k as usize) else {
+                    break;
+                };
+                let run = run_base + complement;
 
-                let sign_bit = try_split_bits!(bits, 1).load_be::<u8>();
+                let Some(sign_bit) = bits.lire(1) else { break };
 
-                let number_of_ones = truncate_leading_value(&mut bits, true);
-                try_split_bits!(bits, 1);
+                let number_of_ones = bits.serie(true);
+                let Some(_) = bits.lire(1) else { break };
 
-                let code_remainder = load_be_u32(try_split_bits!(bits, kr as usize)) + ((number_of_ones as u32) << kr);
+                let Some(reste) = bits.lire(kr as usize) else {
+                    break;
+                };
+                let code_remainder = reste + ((number_of_ones as u32) << kr);
 
                 update_parameters_according_to_number_of_ones(number_of_ones, &mut kr, &mut krp);
                 kp = kp.saturating_sub(DN_GR);
                 k = kp >> LS_GR;
 
-                let magnitude = compute_rl_magnitude(sign_bit, code_remainder)?;
+                let magnitude = compute_rl_magnitude(sign_bit as u8, code_remainder)?;
 
                 let size = min(run as usize, output.len());
                 fill(&mut output[..size], 0);
@@ -231,10 +324,13 @@ pub fn decode(mode: EntropyAlgorithm, tile: &[u8], mut output: &mut [i16]) -> Re
                 write_byte!(output, magnitude);
             }
             CompressionMode::GolombRice => {
-                let number_of_ones = truncate_leading_value(&mut bits, true);
-                try_split_bits!(bits, 1);
+                let number_of_ones = bits.serie(true);
+                let Some(_) = bits.lire(1) else { break };
 
-                let code_remainder = load_be_u32(try_split_bits!(bits, kr as usize)) + ((number_of_ones as u32) << kr);
+                let Some(reste) = bits.lire(kr as usize) else {
+                    break;
+                };
+                let code_remainder = reste + ((number_of_ones as u32) << kr);
 
                 update_parameters_according_to_number_of_ones(number_of_ones, &mut kr, &mut krp);
 
@@ -246,8 +342,17 @@ pub fn decode(mode: EntropyAlgorithm, tile: &[u8], mut output: &mut [i16]) -> Re
                     EntropyAlgorithm::Rlgr3 => {
                         let n_index = compute_n_index(code_remainder);
 
-                        let val1 = load_be_u32(try_split_bits!(bits, n_index));
-                        let val2 = code_remainder - val1;
+                        let Some(val1) = bits.lire(n_index) else {
+                            break;
+                        };
+                        // Un flux hostile peut annoncer val1 > code_remainder : la
+                        // soustraction débordait (panique sous contrôles de
+                        // débordement, trouvé par la cible `rlgr` de fuzz/ le
+                        // 26 novembre 2026). Le binaire publié, sans ces
+                        // contrôles, faisait le tour, et la valeur hors bornes
+                        // finissait en erreur de conversion : c'est ce tour,
+                        // rendu explicite, que l'on garde ici.
+                        let val2 = code_remainder.wrapping_sub(val1);
                         if val1 != 0 && val2 != 0 {
                             kp = kp.saturating_sub(2 * DQ_GR);
                             k = kp >> LS_GR;
@@ -277,21 +382,6 @@ fn fill(buffer: &mut [i16], value: i16) {
     for v in buffer {
         *v = value;
     }
-}
-
-fn load_be_u32(s: &BitSlice<u8, Msb0>) -> u32 {
-    if s.is_empty() { 0 } else { s.load_be::<u32>() }
-}
-
-// Returns number of truncated bits
-fn truncate_leading_value(bits: &mut Bits<'_>, value: bool) -> usize {
-    let leading_values = if value {
-        bits.leading_ones()
-    } else {
-        bits.leading_zeros()
-    };
-    bits.split_to(leading_values);
-    leading_values
 }
 
 fn count_run(number_of_zeros: usize, k: &mut u32, kp: &mut u32) -> u32 {
@@ -337,23 +427,21 @@ fn compute_rlgr1_magnitude(code_remainder: u32, k: &mut u32, kp: &mut u32) -> Re
 }
 
 fn compute_rlgr3_magnitude(val: u32) -> Result<i16, RlgrError> {
+    // `val` peut valoir u32::MAX après le tour de `val2` (voir l'appelant) :
+    // `val + 1` débordait à son tour. Le binaire publié faisait le tour, et
+    // la magnitude valait 0 ; on garde ce tour, explicite.
     if !val.is_multiple_of(2) {
-        Ok(-i16::try_from((val + 1) >> 1).map_err(|_| RlgrError::InvalidIntegralConversion("(val + 1) >> 1"))?)
+        Ok(-i16::try_from(val.wrapping_add(1) >> 1)
+            .map_err(|_| RlgrError::InvalidIntegralConversion("(val + 1) >> 1"))?)
     } else {
         i16::try_from(val >> 1).map_err(|_| RlgrError::InvalidIntegralConversion("val >> 1"))
     }
 }
 
 fn compute_n_index(code_remainder: u32) -> usize {
-    if code_remainder == 0 {
-        return 0;
-    }
-
-    let code_bytes = code_remainder.to_be_bytes();
-    let code_bits = BitSlice::<u8, Msb0>::from_slice(code_bytes.as_ref());
-    let leading_zeros = code_bits.leading_zeros();
-
-    32 - leading_zeros
+    #[expect(clippy::as_conversions, reason = "leading_zeros d'un u32 tient dans un usize")]
+    let zeros = code_remainder.leading_zeros() as usize;
+    32 - zeros
 }
 
 fn update_parameters_according_to_number_of_ones(number_of_ones: usize, kr: &mut u32, krp: &mut u32) {
@@ -417,5 +505,210 @@ impl core::error::Error for RlgrError {
 impl From<io::Error> for RlgrError {
     fn from(err: io::Error) -> Self {
         Self::Io(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Le décodeur rapide contre la référence d'origine (`rlgr_reference`),
+    //! sur des encodages réalistes, tronqués et sur des octets au hasard.
+    #![expect(
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "générateur de données de test"
+    )]
+
+    use super::*;
+
+    /// xorshift64* : des données reproductibles sans dépendance de plus.
+    struct Hasard(u64);
+
+    impl Hasard {
+        fn suivant(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn jusqua(&mut self, n: u64) -> u64 {
+            self.suivant() % n
+        }
+    }
+
+    const MODES: [EntropyAlgorithm; 2] = [EntropyAlgorithm::Rlgr1, EntropyAlgorithm::Rlgr3];
+
+    /// Des coefficients comme ceux d'une tuile RemoteFX après quantification :
+    /// surtout des zéros, des séries, de petites valeurs, quelques grandes.
+    fn coefficients(h: &mut Hasard, n: usize) -> Vec<i16> {
+        let mut v = Vec::with_capacity(n);
+        while v.len() < n {
+            match h.jusqua(10) {
+                0..=4 => {
+                    let serie = h.jusqua(200) as usize;
+                    v.extend(core::iter::repeat_n(0, serie.min(n - v.len())));
+                }
+                5..=7 => v.push(h.jusqua(17) as i16 - 8),
+                8 => v.push(h.jusqua(2001) as i16 - 1000),
+                // Pas toute la plage d'un i16 : une valeur extrême s'écrit en
+                // un code unaire de milliers de bits, que le tampon de test
+                // ne tient pas, et une tuile RemoteFX quantifiée n'en
+                // contient pas. Les octets hostiles couvrent le reste.
+                _ => v.push(h.jusqua(8191) as i16 - 4095),
+            }
+        }
+        v
+    }
+
+    /// Des coefficients denses, comme les tuiles d'une image qui change
+    /// partout (la mire du banc d'affichage) : peu de zéros, surtout de
+    /// petites valeurs.
+    fn dense(h: &mut Hasard, n: usize) -> Vec<i16> {
+        (0..n)
+            .map(|_| match h.jusqua(10) {
+                0..=1 => 0,
+                2..=8 => h.jusqua(33) as i16 - 16,
+                _ => h.jusqua(2001) as i16 - 1000,
+            })
+            .collect()
+    }
+
+    /// Les deux décodeurs sur le même flux : même verdict, mêmes cases écrites.
+    fn comparer(mode: EntropyAlgorithm, flux: &[u8], longueur: usize) {
+        let mut rapide = vec![0x5a5a_i16; longueur];
+        let mut reference = vec![0x5a5a_i16; longueur];
+        let a = decode(mode, flux, &mut rapide).map_err(|e| e.to_string());
+        let b = crate::rlgr_reference::decode(mode, flux, &mut reference).map_err(|e| e.to_string());
+        assert_eq!(a, b, "verdicts différents ({mode:?}, {} octets)", flux.len());
+        assert_eq!(
+            rapide,
+            reference,
+            "sorties différentes ({mode:?}, {} octets : {flux:02x?})",
+            flux.len()
+        );
+    }
+
+    #[test]
+    fn le_decodeur_rapide_lit_les_encodages_realistes_comme_l_original() {
+        let mut h = Hasard(0x00a5_a5a5_0123_4567);
+        for _ in 0..1500 {
+            for mode in MODES {
+                let n = [4096, 4096, 1024, 64, 1][h.jusqua(5) as usize];
+                let entree = if h.jusqua(2) == 0 {
+                    coefficients(&mut h, n)
+                } else {
+                    dense(&mut h, n)
+                };
+                let mut tuile = vec![0u8; n * 64 + 256];
+                let taille = encode(mode, &entree, &mut tuile).expect("encodage");
+                comparer(mode, &tuile[..taille], n);
+                let mut sortie = vec![0x5a5a_i16; n];
+                decode(mode, &tuile[..taille], &mut sortie).expect("décodage");
+                assert_eq!(sortie, entree, "aller-retour ({mode:?})");
+            }
+        }
+    }
+
+    #[test]
+    fn le_decodeur_rapide_traite_un_flux_tronque_comme_l_original() {
+        let mut h = Hasard(0x0bad_cafe_f00d_1234);
+        for _ in 0..800 {
+            for mode in MODES {
+                let n = 4096;
+                let entree = coefficients(&mut h, n);
+                let mut tuile = vec![0u8; n * 64 + 256];
+                let taille = encode(mode, &entree, &mut tuile).expect("encodage");
+                let coupe = 1 + h.jusqua(taille as u64) as usize;
+                comparer(mode, &tuile[..coupe], n);
+            }
+        }
+    }
+
+    #[test]
+    fn le_decodeur_rapide_traite_des_octets_hostiles_comme_l_original() {
+        let mut h = Hasard(0x1357_9bdf_2468_ace0);
+        for _ in 0..20_000 {
+            let flux: Vec<u8> = (0..1 + h.jusqua(300))
+                .map(|_| match h.jusqua(4) {
+                    // Beaucoup de 0x00 et de 0xff : les longues séries de zéros
+                    // et de uns, là où le comptage par mots a ses bords.
+                    0 => 0,
+                    1 => 0xff,
+                    _ => h.suivant() as u8,
+                })
+                .collect();
+            let longueur = h.jusqua(5000) as usize;
+            comparer(MODES[h.jusqua(2) as usize], &flux, longueur);
+        }
+    }
+
+    /// Trouvés par la cible `rlgr` de fuzz/ (26 novembre 2026) : en RLGR3,
+    /// un `val1` plus grand que le code faisait déborder `code - val1`, puis
+    /// `val + 1` quand le tour donnait u32::MAX. Les tests tournent avec les
+    /// contrôles de débordement : avant le correctif, ces flux paniquaient.
+    /// Le verdict est celui du binaire publié, qui faisait le tour.
+    #[test]
+    fn un_val1_plus_grand_que_le_code_ne_fait_plus_paniquer() {
+        // Format de la cible : [mode][longueur LE u16] puis le flux.
+        for entree in [
+            &[0x0f_u8, 0xbf, 0xff, 0x9d, 0xbf, 0xff, 0x9d][..],
+            &[
+                0x85, 0x85, 0x85, 0x85, 0x85, 0x85, 0x85, 0x85, 0xf7, 0xbf, 0xff, 0xf7, 0xbf, 0xff, 0x9d, 0x9d,
+            ][..],
+        ] {
+            let mode = if entree[0] & 1 == 0 {
+                EntropyAlgorithm::Rlgr1
+            } else {
+                EntropyAlgorithm::Rlgr3
+            };
+            let longueur = usize::from(u16::from_le_bytes([entree[1], entree[2]]));
+            comparer(mode, &entree[3..], longueur);
+        }
+    }
+
+    #[test]
+    fn une_tuile_vide_reste_une_erreur() {
+        let mut sortie = [0i16; 4];
+        assert!(matches!(
+            decode(EntropyAlgorithm::Rlgr1, &[], &mut sortie),
+            Err(RlgrError::EmptyTile)
+        ));
+    }
+
+    /// `cargo test --release -p ironrdp-graphics -- --ignored --nocapture
+    /// vitesse` : le temps de décodage des deux, sur les mêmes tuiles.
+    #[test]
+    #[ignore = "mesure, pas un test"]
+    fn vitesse_du_decodeur_rapide_contre_l_original() {
+        let mut h = Hasard(0x2222_4444_6666_8888);
+        let tuiles: Vec<(Vec<u8>, usize)> = (0..600)
+            .map(|_| {
+                let entree = dense(&mut h, 4096);
+                let mut tuile = vec![0u8; 4096 * 64 + 256];
+                let taille = encode(EntropyAlgorithm::Rlgr3, &entree, &mut tuile).expect("encodage");
+                tuile.truncate(taille);
+                (tuile, 4096)
+            })
+            .collect();
+        let mut sortie = vec![0i16; 4096];
+        for (nom, f) in [
+            (
+                "rapide",
+                decode as fn(EntropyAlgorithm, &[u8], &mut [i16]) -> Result<(), RlgrError>,
+            ),
+            ("origine", crate::rlgr_reference::decode),
+        ] {
+            let debut = std::time::Instant::now();
+            for _ in 0..5 {
+                for (t, _) in &tuiles {
+                    f(EntropyAlgorithm::Rlgr3, t, &mut sortie).expect("décodage");
+                }
+            }
+            println!(
+                "{nom} : {:.1} µs par tuile 64×64",
+                debut.elapsed().as_secs_f64() * 1e6 / (5.0 * tuiles.len() as f64)
+            );
+        }
     }
 }

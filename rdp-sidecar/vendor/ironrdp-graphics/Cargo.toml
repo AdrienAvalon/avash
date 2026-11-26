@@ -47,6 +47,12 @@ doctest = false
 # l'amont faisait passer les tests pour verts sans jamais les lancer.
 test = true
 
+[features]
+# Portage avash : expose `rlgr_reference`, le décodeur RLGR d'origine, à la
+# cible `rlgr` de fuzz/ qui le compare au décodeur rapide. Jamais posée par
+# le processus RDP.
+rlgr-reference = []
+
 [dependencies.bit_field]
 version = "0.10"
 

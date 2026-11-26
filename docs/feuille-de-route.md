@@ -41,9 +41,9 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 11/09/2026 |
 |---|---|
-| Tests | 852 Rust (292 cœur, 84 intégration, 207 interface, 237 processus RDP, 32 serveurs de test) · 634 dans les paquets IronRDP et vnc-rs portés · 483 front · 83 scénarios bout en bout dans 38 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
-| Binaire Linux | 18 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
-| Paquet front | 172 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
+| Tests | 852 Rust (292 cœur, 84 intégration, 207 interface, 237 processus RDP, 32 serveurs de test) · 641 dans les paquets IronRDP et vnc-rs portés · 483 front · 83 scénarios bout en bout dans 38 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
+| Binaire Linux | 21 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
+| Paquet front | 221 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Couverture | 84 % des lignes de l'espace de travail (cœur 91 %, interface 70 %), 81 % du processus RDP, tests unitaires et suite bout en bout confondus sur des binaires instrumentés (`scripts/couverture.sh`, 06/09/2026) ; 201 mutants sur 264 attrapés sur les modules de sécurité |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
@@ -378,6 +378,48 @@ sur des mesures de ce qui coûte réellement.
 
   Le paquet principal fait 172 Ko. Le premier terminal ne paie rien de plus
   quand le chargement à l'oisiveté l'a précédé, ce qui est le cas courant.
+
+- **Remesuré le 26/11/2026 (0.15.0), et corrigé le banc.** Dans les mêmes
+  conditions qu'en septembre (Xvfb, cinq lancements, quarante frappes), rien
+  n'a reculé malgré la refonte et les fonctions ajoutées :
+
+  | Mesure (médiane) | 05/09/2026 | 26/11/2026 |
+  |---|---:|---:|
+  | Exécution des modules | 184 ms | 122 ms |
+  | DOMContentLoaded depuis la navigation | 205 ms | 135 ms |
+  | Premier contenu peint | 152 ms | 105 ms |
+  | Frappe → écho reçu | 10 ms | 1 ms |
+  | Frappe → image suivante | 18 ms (p95 27) | 9 ms (p95 16) |
+
+  Sur un vrai bureau (Wayland, RTX 3090), le démarrage prend 137 ms, et
+  394 ms au tout premier lancement : `perf` y attribue 254 ms à la
+  compilation des shaders du rendu de WebKitGTK, que le pilote garde ensuite
+  dans `~/.cache/nvidia` (19 ms aux lancements suivants). Deux défauts du banc
+  sont apparus en chemin : le bac à sable n'avait pas de `~/.cache` (chaque
+  lancement mesuré était un premier lancement), et une session héritant de
+  `WAYLAND_DISPLAY` ouvrait la fenêtre pilotée sur l'écran réel, où les gestes
+  simulés n'aboutissent pas. Les deux sont corrigés dans `e2e/wdio.conf.js`.
+- **Mesuré puis fait (26/11/2026) : le décodage RemoteFX.** Premier banc de
+  l'affichage du bureau distant (`e2e/mesures/rdp.spec.js`, `MIRE_HZ=30`) : le
+  serveur de test pousse une mire 1920×1080 qui change entièrement à chaque
+  image, et l'on relève ce que le processus RDP affiche dans son bandeau.
+  Avash plafonnait à 10 images par seconde, le processus RDP saturé sur un
+  cœur ; `perf` y mettait plus de la moitié du temps dans la lecture bit par
+  bit de l'entropie RLGR, et presque tout le reste dans la transformée en
+  ondelettes. Deux changements dans nos copies d'IronRDP
+  (`rdp-sidecar/vendor/README.md`) :
+
+  | Étape | Images par seconde | Processus RDP (% d'un cœur) | Aller-retour vers la page |
+  |---|---:|---:|---:|
+  | 0.15.0 | 10 | 98 | 0 ms |
+  | lecteur RLGR par mots | 13 | 94 | 0 ms |
+  | + tuiles décodées en parallèle | 25 | 272 | 30 ms |
+
+  À 25 images par seconde, la machine de mesure est pleine : le serveur de
+  test, sur le même poste, encode sur près de quatre cœurs. L'aller-retour
+  vers la page (8 Mio de pixels par image, puis `putImageData`) borne ce cas
+  extrême vers 33 images par seconde ; un bureau ordinaire ne change qu'en
+  partie et n'en approche pas.
 
 *Principe* : aucune optimisation n'est retenue sans une mesure avant/après.
 

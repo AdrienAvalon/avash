@@ -284,10 +284,11 @@ import { resolve } from "node:path";
 const EXE = process.platform === "win32" ? ".exe" : "";
 // `surLigne`, s'il est donné, reçoit la sortie standard du serveur : c'est par
 // elle que le scénario du lecteur partagé lit ce que le serveur a vu du dossier.
-export function startRdpServer(port, surLigne) {
+// `plus` ajoute des options au serveur (la mire du banc d'affichage).
+export function startRdpServer(port, surLigne, plus = []) {
   const p = spawn(`./target/release/test-rdp-server${EXE}`,
     ["--bind-addr", `127.0.0.1:${port}`, "--cert", "cert.pem", "--key", "key.pem",
-     "--user", "test", "--pass", "test", "--sec", "hybrid"],
+     "--user", "test", "--pass", "test", "--sec", "hybrid", ...plus],
     { cwd: resolve("../test-rdp-server"), stdio: surLigne ? ["ignore", "pipe", "ignore"] : "ignore" });
   if (surLigne) {
     p.stdout.setEncoding("utf8");

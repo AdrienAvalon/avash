@@ -343,6 +343,7 @@ version = "0.0.0"
 dependencies = [
  "avash",
  "ironrdp-graphics",
+ "ironrdp-pdu",
  "libfuzzer-sys",
  "serde",
  "serde-saphyr",

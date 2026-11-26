@@ -7,6 +7,37 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Performance
+
+- **Bureau distant RemoteFX : deux fois et demie plus d'images par seconde.**
+  Sur un bureau plein écran (1920×1080) qui change à chaque image, comme une
+  vidéo, Avash plafonnait à 10 images par seconde : le processus RDP décodait
+  tout sur un seul cœur, saturé, et passait plus de la moitié de son temps à
+  lire le flux compressé bit par bit (mesuré par `perf`). Deux changements
+  dans nos copies d'IronRDP : un lecteur de bits par mots pour l'entropie
+  RLGR, deux fois plus rapide sur une tuile dense, et le décodage des tuiles
+  réparti entre les cœurs, par lots bornés. Le banc passe à 25 images par
+  seconde. Ce chemin sert à xrdp (RemoteFX) comme à Windows Server (RemoteFX
+  progressif, même entropie). Le nouveau décodeur rend exactement les mêmes
+  pixels et les mêmes erreurs que l'ancien, vérifié par des tests et par une
+  cible de fuzz qui compare les deux ; elle a trouvé deux débordements
+  d'entier de l'original sur un flux hostile, sans effet sur le binaire
+  publié, désormais traités explicitement. Voir `rdp-sidecar/vendor/README.md`.
+
+### Interne
+
+- **Banc d'affichage du bureau distant.** Le serveur RDP de test prend
+  `--mire <hz>` (une image plein écran neuve à chaque tic), et
+  `e2e/mesures/rdp.spec.js` relève sur la vraie application les images par
+  seconde, le débit, l'aller-retour jusqu'à la page et le processeur de chaque
+  processus.
+- **La suite bout en bout ne s'ouvre plus sur le bureau de l'utilisateur.**
+  Une session qui hérite de `WAYLAND_DISPLAY` faisait ouvrir la fenêtre
+  pilotée sur l'écran réel, où les gestes simulés n'aboutissent jamais : les
+  scénarios tombaient sur le délai de 60 s. Le bac à sable recrée aussi son
+  `~/.cache`, où le pilote NVIDIA garde ses shaders compilés : les mesures de
+  démarrage décrivaient un premier lancement à chaque fois.
+
 ## [0.15.0] - 2026-11-25
 
 ### Ajouté

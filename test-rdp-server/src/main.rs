@@ -44,7 +44,11 @@ use tracing::{debug, info, warn};
 const HELP: &str = "\
 USAGE:
   cargo run --example=server -- [--bind-addr <SOCKET ADDRESS>] [--cert <CERTIFICATE>] [--key <CERTIFICATE KEY>] [--user USERNAME] [--pass PASSWORD] [--sec tls|hybrid]
-                                [--offrir <FICHIER>] [--recevoir-dans <DOSSIER>]
+                                [--offrir <FICHIER>] [--recevoir-dans <DOSSIER>] [--mire <HZ>]
+
+  --mire <HZ>  pousse une image plein écran neuve HZ fois par seconde, au lieu
+               d'un rectangle de bruit toutes les 100 ms : la charge du banc
+               d'affichage (e2e/mesures/rdp.spec.js).
 ";
 
 #[tokio::main(flavor = "current_thread")]
@@ -73,6 +77,7 @@ async fn main() -> Result<(), anyhow::Error> {
             key,
             offrir,
             recevoir_dans,
+            mire,
         } => {
             run(
                 bind_addr,
@@ -83,6 +88,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 key,
                 offrir,
                 recevoir_dans,
+                mire,
             )
             .await
         }
@@ -104,6 +110,8 @@ enum Action {
         offrir: Option<PathBuf>,
         /// Dossier où reçoivent les fichiers que le client offre.
         recevoir_dans: Option<PathBuf>,
+        /// Cadence de la mire plein écran, en images par seconde.
+        mire: Option<u32>,
     },
 }
 
@@ -139,6 +147,10 @@ fn parse_args() -> anyhow::Result<Action> {
             .unwrap_or_else(|| "pass".to_owned());
         let offrir = args.opt_value_from_str("--offrir")?;
         let recevoir_dans = args.opt_value_from_str("--recevoir-dans")?;
+        let mire: Option<u32> = args.opt_value_from_str("--mire")?;
+        if mire.is_some_and(|hz| hz == 0 || hz > 240) {
+            anyhow::bail!("--mire attend une cadence entre 1 et 240 images par seconde");
+        }
 
         Action::Run {
             bind_addr,
@@ -149,6 +161,7 @@ fn parse_args() -> anyhow::Result<Action> {
             key,
             offrir,
             recevoir_dans,
+            mire,
         }
     };
 
@@ -177,11 +190,13 @@ fn setup_logging() -> anyhow::Result<()> {
 }
 
 #[derive(Clone, Debug)]
-struct Handler;
+struct Handler {
+    mire: Option<u32>,
+}
 
 impl Handler {
-    fn new() -> Self {
-        Self
+    fn new(mire: Option<u32>) -> Self {
+        Self { mire }
     }
 }
 
@@ -201,11 +216,60 @@ impl RdpServerInputHandler for Handler {
 const WIDTH: u16 = 1920;
 const HEIGHT: u16 = 1080;
 
-struct DisplayUpdates;
+struct DisplayUpdates {
+    /// Mire plein écran : sa cadence et son horloge, l'image suivante partant
+    /// à l'échéance d'une grille fixe (un encodage lent ne décale pas les
+    /// suivantes, il en fait sauter).
+    mire: Option<(u32, tokio::time::Interval)>,
+    rang: u32,
+}
+
+/// Une image plein écran qui change entièrement d'une fois sur l'autre : un
+/// dégradé diagonal qui glisse de quatre pixels par image, avec un bandeau
+/// clair qui défile. Rien ne se répète d'une image à la suivante, comme une
+/// vidéo plein écran ; rien n'est du bruit, comme un vrai bureau.
+fn image_de_mire(rang: u32) -> Vec<u8> {
+    let (w, h) = (usize::from(WIDTH), usize::from(HEIGHT));
+    let decalage = (rang as usize).wrapping_mul(4);
+    let bandeau = (rang as usize).wrapping_mul(6) % h;
+    let mut data = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        let clair = y.abs_diff(bandeau) < 40;
+        for x in 0..w {
+            let v = (x + y + decalage) & 0xff;
+            #[allow(clippy::cast_possible_truncation)]
+            let (b, g, r) = (
+                v as u8,
+                ((x / 8 + decalage) & 0xff) as u8,
+                ((y / 4) & 0xff) as u8,
+            );
+            if clair {
+                data.extend_from_slice(&[b | 0xc0, g | 0xc0, r | 0xc0, 255]);
+            } else {
+                data.extend_from_slice(&[b, g, r, 255]);
+            }
+        }
+    }
+    data
+}
 
 #[async_trait::async_trait]
 impl RdpServerDisplayUpdates for DisplayUpdates {
     async fn next_update(&mut self) -> anyhow::Result<Option<DisplayUpdate>> {
+        if let Some((_, horloge)) = self.mire.as_mut() {
+            horloge.tick().await;
+            self.rang = self.rang.wrapping_add(1);
+            let stride = NonZeroUsize::new(usize::from(WIDTH) * 4).expect("never zero");
+            return Ok(Some(DisplayUpdate::Bitmap(BitmapUpdate {
+                x: 0,
+                y: 0,
+                width: NonZeroU16::new(WIDTH).expect("never zero"),
+                height: NonZeroU16::new(HEIGHT).expect("never zero"),
+                format: PixelFormat::BgrA32,
+                data: image_de_mire(self.rang).into(),
+                stride,
+            })));
+        }
         sleep(Duration::from_millis(100)).await;
         let mut rng = rand::rng();
 
@@ -258,7 +322,12 @@ impl RdpServerDisplay for Handler {
     }
 
     async fn updates(&mut self) -> anyhow::Result<Box<dyn RdpServerDisplayUpdates>> {
-        Ok(Box::new(DisplayUpdates {}))
+        let mire = self.mire.map(|hz| {
+            let mut horloge = time::interval(Duration::from_secs(1) / hz);
+            horloge.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            (hz, horloge)
+        });
+        Ok(Box::new(DisplayUpdates { mire, rang: 0 }))
     }
 }
 
@@ -743,10 +812,11 @@ async fn run(
     key: Option<PathBuf>,
     offrir: Option<PathBuf>,
     recevoir_dans: Option<PathBuf>,
+    mire: Option<u32>,
 ) -> anyhow::Result<()> {
     info!(%bind_addr, ?cert, ?key, "run");
 
-    let handler = Handler::new();
+    let handler = Handler::new(mire);
 
     let server_builder = RdpServer::builder().with_addr(bind_addr);
 
