@@ -396,6 +396,7 @@ export const config = {
         "./specs/onglets-mixtes.spec.js", "./specs/enregistrer-et-connecter.spec.js",
         "./specs/enregistrement.spec.js", "./specs/journal-commandes.spec.js", "./specs/sante.spec.js",
         "./specs/restauration.spec.js", "./specs/vue-partagee.spec.js", "./specs/serie.spec.js",
+        "./specs/collage.spec.js",
       ],
   maxInstances: 1,
   // Régression visuelle : captures comparées pixel à pixel à des références.
