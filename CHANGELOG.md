@@ -30,6 +30,19 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **Windows : aucune connexion RDP n'aboutissait sur un poste sans le
+  « Visual C++ Redistributable ».** Signalé par le mainteneur (« je n'arrive
+  pas à me connecter en RDP sur un xrdp Debian depuis Windows »). Le processus
+  RDP, `avash-rdp.exe`, importait `VCRUNTIME140.dll`, que seul ce paquet de
+  Microsoft installe ; sur un Windows neuf, il mourait au lancement, avant
+  même de joindre le serveur, alors qu'`avash.exe` démarrait normalement (il
+  lie ce runtime statiquement). Reproduit sur une machine virtuelle Windows 11
+  neuve contre un xrdp Debian 12, puis vérifié : une fois le runtime présent,
+  la même connexion arrive à l'écran d'ouverture de session d'xrdp. Le
+  processus RDP lie désormais ce runtime comme `avash.exe` (seul l'UCRT,
+  composant de Windows, reste dynamique), et la chaîne Windows refuse tout
+  binaire livré qui en dépendrait (`scripts/verifier-runtime-windows.ps1`).
+
 - **Terminal SSH : un collage arrivait parfois en double, et le terminal
   perdait le focus.** Signalé par le mainteneur. `Ctrl+Maj+V` lisait le
   presse-papiers et collait, mais laissait aussi le navigateur faire son propre

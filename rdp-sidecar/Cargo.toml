@@ -111,6 +111,14 @@ ironrdp-svc = { path = "vendor/ironrdp-svc" }
 # Espace libre du volume partagé (redirection de lecteur).
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
+# Le runtime Visual C++ lié statiquement sous Windows (build.rs), comme
+# tauri-build le fait pour avash.exe : sans lui, avash-rdp.exe importait
+# VCRUNTIME140.dll, absent d'un Windows neuf, et mourait au lancement
+# (26 novembre 2026, voir build.rs). Épinglé : la même version que celle que
+# tauri-build tire dans l'espace de travail. Aucune dépendance.
+[build-dependencies]
+static_vcruntime = "=3.0.0"
+
 [dev-dependencies]
 # `pem` pour l'identité du serveur TLS 1.0 de `tls_herite::tests`.
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
