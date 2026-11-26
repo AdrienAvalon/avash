@@ -95,6 +95,14 @@ export const ENV_APP = {
   // retire toute valeur héritée, et n'en a pas besoin — le serveur embarqué
   // n'ouvre aucun port de débogage Chromium.
 };
+// Jamais le bureau Wayland de la session : GTK le préfère au DISPLAY de Xvfb,
+// et la fenêtre pilotée s'ouvrait alors sur l'écran réel de l'utilisateur, où
+// WebKitWebDriver ne sait pas simuler la souris. Chaque action de pointeur
+// attendait sans fin, et les scénarios tombaient sur le délai de 60 s. Vu le
+// 26 novembre 2026 quand la session qui lançait la suite a hérité de
+// WAYLAND_DISPLAY après un redémarrage. La chaîne d'intégration n'a pas de
+// bureau : elle passait, et passe toujours, par Xvfb.
+delete ENV_APP.WAYLAND_DISPLAY;
 
 /** Lance l'application compilée avec son serveur WebDriver, et attend qu'il réponde. */
 async function lancerAppEmbarquee() {
@@ -177,6 +185,13 @@ export function seedSandbox() {
   rmSync(join(sandbox, ".local", "share"), { recursive: true, force: true });
   rmSync(join(sandbox, ".local", "state"), { recursive: true, force: true });
   rmSync(join(sandbox, ".cache"), { recursive: true, force: true });
+  // Le dossier lui-même doit exister, vide, comme chez tout utilisateur : le
+  // pilote NVIDIA n'y crée son cache de shaders (`nvidia/GLCache`) que si le
+  // parent est là. Sans lui, chaque lancement recompilait les shaders du rendu
+  // de WebKitGTK, 254 ms de processeur contre 19 ms à chaud, mesuré par perf
+  // le 26 novembre 2026 : les mesures du démarrage décrivaient un premier
+  // lancement à chaque fois.
+  mkdirSync(join(sandbox, ".cache"), { recursive: true, mode: 0o700 });
 }
 
 function startSshd() {

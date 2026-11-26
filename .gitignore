@@ -27,6 +27,7 @@ e2e/.tmp/
 # Résultat des mesures du front (scripts/mesures-front.sh) : les chiffres
 # retenus sont reportés dans docs/feuille-de-route.md
 e2e/mesures/resultat.json
+e2e/mesures/resultat-rdp-*.json
 
 # Schémas générés par Tauri à chaque construction (autocomplétion des
 # capacités) : leur contenu suit les fonctionnalités compilées, ils ne se

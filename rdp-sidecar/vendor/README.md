@@ -1,6 +1,6 @@
 # Correctifs portés sur IronRDP et vnc-rs
 
-Six crates sont copiés ici, chacun avec un ou deux changements ciblés, décrits section par section.
+Six crates sont copiés ici, chacun avec quelques changements ciblés, décrits section par section.
 
 Une retouche mécanique s'y ajoute, sans rapport avec les défauts : les
 `#[expect(lint)]` deviennent `#[allow(lint)]`. Hors de leur espace de travail
@@ -295,6 +295,57 @@ menteurs), plus la fixture.
 
 Les tests du paquet sont réactivés (`test = true`) et comptés par
 `verifier-portes.sh`, comme pour les trois autres.
+
+## `ironrdp-graphics` — le décodage RLGR lisait bit par bit
+
+Le décodeur RLGR (`src/rlgr.rs`, `decode`), l'entropie de RemoteFX et de
+RemoteFX progressif, est réécrit autour d'un lecteur de bits par mots : il
+lit 64 bits d'un coup et compte une série de zéros ou de uns d'une seule
+instruction, là où l'original passait par des tranches `bitvec` (`split_at`,
+`leading_ones`, `load_be`) à chaque lecture. Le 26 novembre 2026, le profil
+(`perf`) du processus RDP sur un bureau RemoteFX plein écran qui change à
+chaque image (la mire du banc, `e2e/mesures/rdp.spec.js`) y mettait plus de la
+moitié du temps ; sur une tuile dense, le décodage passe de 108 à 55 µs.
+
+Le comportement est celui d'origine au bit près, flux tronqué ou hostile
+compris. L'original est gardé tel quel dans `src/rlgr_reference.rs`, compilé
+seulement pour les tests de la caisse et, par la fonctionnalité
+`rlgr-reference` (jamais posée par le processus RDP), pour la cible `rlgr` de
+`fuzz/`, qui compare les deux sorties : 1,6 million de flux en cinq minutes,
+aucune différence.
+
+Cette cible a trouvé deux débordements d'entier de l'original, en moins d'une
+minute, sur la même ligne des deux décodeurs : en RLGR3, `code - val1` quand
+un flux hostile annonce `val1` plus grand que le code, puis `val + 1` quand le
+tour donne `u32::MAX`. Le binaire publié, compilé sans contrôle de
+débordement, faisait le tour ; ce tour est désormais explicite
+(`wrapping_sub`, `wrapping_add`), et le verdict reste celui du binaire
+publié. Les deux flux sont des graines de la cible et un test de la caisse.
+
+L'encodeur, que le client n'utilise pas, avait aussi un défaut : en RLGR1,
+après un zéro en mode Golomb-Rice, il augmentait son paramètre de `UP_GR` au
+lieu de `UQ_GR` (MS-RDPRFX 3.1.8.1.7.3, et ce que fait le décodeur), et se
+désynchronisait du décodeur. Corrigé ici parce que les tests fabriquent leurs
+tuiles avec lui ; l'aller-retour d'une vraie tuile est désormais vérifié.
+
+Fichiers : `src/rlgr.rs`, `src/rlgr_reference.rs` (nouveau), `src/lib.rs` (le
+module de référence), `Cargo.toml` (la fonctionnalité).
+
+## `ironrdp-session` — les tuiles RemoteFX décodées sur un seul cœur
+
+Dans `src/rfx.rs`, les tuiles d'une image RemoteFX se décodent en parallèle,
+par lots de 256 (4 Mio, quoi qu'annonce le serveur : un TileSet peut porter
+65 535 tuiles), sur au plus huit fils de la bibliothèque standard
+(`std::thread::scope`, aucune dépendance de plus), puis se recopient dans
+l'image dans l'ordre. Une tuile de 64×64 ne dépend d'aucune autre. La recopie
+s'arrête à la première tuile en erreur, comme la boucle d'origine : l'image
+garde les tuiles d'avant, et l'erreur rendue est la même. Une panique dans un
+fil remonte sur le fil de la session, qui l'isole comme avant. Un test vérifie
+que deux, trois, quatre ou huit fils rendent exactement les pixels et les
+verdicts d'un seul.
+
+Sur la mire 1920×1080, avec le décodeur RLGR ci-dessus : de 13 à 25 images
+par seconde, le processus RDP passant d'un cœur saturé à 2,7 cœurs.
 
 ## `ironrdp-graphics` — la décompression ZGFX amplifiait sa sortie sans borne
 

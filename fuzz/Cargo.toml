@@ -17,7 +17,12 @@ libfuzzer-sys = "0.4"
 avash = { path = "../crates/avash" }
 # Le décodeur ClearCodec porté (sous-codec NSCodec) ; son parseur vient du
 # paquet ironrdp-pdu porté lui aussi (RLEX à une couleur), par le patch.
-ironrdp-graphics = { path = "../rdp-sidecar/vendor/ironrdp-graphics" }
+# La cible rlgr compare le décodeur RLGR rapide à l'original, que la
+# fonctionnalité rlgr-reference expose (jamais posée par le processus RDP).
+ironrdp-graphics = { path = "../rdp-sidecar/vendor/ironrdp-graphics", features = ["rlgr-reference"] }
+# Le mode d'entropie (`EntropyAlgorithm`) de la cible rlgr ; la copie
+# portée, par le patch ci-dessous.
+ironrdp-pdu = "0.9.0"
 # Le client VNC porté (bornes sur ce qu'un serveur fait allouer) ; son
 # scénario tourne sur un moteur tokio à un seul fil.
 vnc-rs = { path = "../rdp-sidecar/vendor/vnc-rs" }
@@ -107,6 +112,13 @@ bench = false
 [[bin]]
 name = "yaml_config"
 path = "fuzz_targets/yaml_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rlgr"
+path = "fuzz_targets/rlgr.rs"
 test = false
 doc = false
 bench = false

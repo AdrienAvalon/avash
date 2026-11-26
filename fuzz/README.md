@@ -19,6 +19,7 @@ fuzzing va plus loin, plus longtemps.
 | `mobaxterm_ini` | `MobaXterm.ini` (`#109#` SSH, `#91#` bureaux RDP) | idem, et un bureau a un nom, un hôte, un port non nul |
 | `asciicast` | un enregistrement asciicast v2 | aucune panique ; jamais plus d'événements que de lignes |
 | `clearcodec` | deux images ClearCodec (MS-RDPEGFX 2.2.4.1) décodées à la suite par le même décodeur : couches résiduelle, bandes et sous-codecs (brut, NSCodec, RLEX), caches de glyphes et de barres | aucune panique ; une image acceptée a exactement `largeur × hauteur × 4` octets |
+| `rlgr` | un flux RLGR (MS-RDPRFX 3.1.8.1.7.3) décodé par le décodeur rapide porté et par l'original gardé comme référence (`rlgr_reference`), en RLGR1 ou RLGR3, vers une sortie jusqu'à 65 535 coefficients | même verdict et mêmes coefficients écrits ; aucune panique |
 | `vnc_serveur` | le flux entier d'un serveur VNC (version, sécurité, initialisation, mises à jour Raw, ZRLE, CopyRect, taille de bureau, presse-papiers), lu par le client `vnc-rs` porté | aucune panique, aucune allocation dictée par le serveur au-delà de la borne ; une image acceptée a exactement ses pixels |
 
 ## Lancer

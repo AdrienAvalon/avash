@@ -1,0 +1,30 @@
+{
+  "cadenceDemandee": 30,
+  "fps": {
+    "mediane": 25,
+    "p95": 25,
+    "min": 9,
+    "max": 25,
+    "n": 20
+  },
+  "moParS": {
+    "mediane": 196.3,
+    "p95": 199,
+    "min": 68.3,
+    "max": 199,
+    "n": 20
+  },
+  "allerRetourMs": {
+    "mediane": 31,
+    "p95": 33,
+    "min": 5,
+    "max": 33,
+    "n": 20
+  },
+  "processeurPourcentDunCoeur": {
+    "rdp": 272,
+    "page": 41,
+    "appli": 3,
+    "serveur": 373
+  }
+}
