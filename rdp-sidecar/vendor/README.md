@@ -296,7 +296,7 @@ menteurs), plus la fixture.
 Les tests du paquet sont réactivés (`test = true`) et comptés par
 `verifier-portes.sh`, comme pour les trois autres.
 
-## `ironrdp-graphics` — le décodage RLGR lisait bit par bit
+## `ironrdp-graphics` : le décodage RLGR lisait bit par bit
 
 Le décodeur RLGR (`src/rlgr.rs`, `decode`), l'entropie de RemoteFX et de
 RemoteFX progressif, est réécrit autour d'un lecteur de bits par mots : il
@@ -331,7 +331,7 @@ tuiles avec lui ; l'aller-retour d'une vraie tuile est désormais vérifié.
 Fichiers : `src/rlgr.rs`, `src/rlgr_reference.rs` (nouveau), `src/lib.rs` (le
 module de référence), `Cargo.toml` (la fonctionnalité).
 
-## `ironrdp-session` — les tuiles RemoteFX décodées sur un seul cœur
+## `ironrdp-session` : les tuiles RemoteFX décodées sur un seul cœur
 
 Dans `src/rfx.rs`, les tuiles d'une image RemoteFX se décodent en parallèle,
 par lots de 256 (4 Mio, quoi qu'annonce le serveur : un TileSet peut porter
