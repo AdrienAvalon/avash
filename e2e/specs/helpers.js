@@ -262,6 +262,65 @@ export async function sortiePty() {
   return String(brut).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "").trim();
 }
 
+/** Écrit dans le presse-papiers du poste, ou le relit, par le plugin de
+ *  Tauri que l'application emploie elle-même. Sans geste de l'utilisateur, le
+ *  moteur refuse navigator.clipboard ; et le serveur WebDriver embarqué
+ *  (Windows, macOS) ne synthétise que des événements, sur lesquels aucun
+ *  navigateur ne fait de vraie copie : ce chemin vaut sur les trois systèmes. */
+export async function ecrirePressePapiers(texte) {
+  await browser.execute((t) => window.__TAURI_INTERNALS__.invoke("plugin:clipboard-manager|write_text", { text: t }), texte);
+}
+
+export async function lirePressePapiers() {
+  return browser.execute(() => window.__TAURI_INTERNALS__.invoke("plugin:clipboard-manager|read_text"));
+}
+
+/** La sortie du terminal sans aucune séquence d'échappement : `sortiePty` ne
+ *  retire que les CSI, et fish fait précéder le résultat d'une commande de
+ *  séquences OSC (titre, marqueurs 133). */
+export async function sortieSansSequences() {
+  const brut = String(await browser.execute(() => window.__sortiePty ?? ""));
+  return brut
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?>=]*[A-Za-z~]/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b[=>]/g, "")
+    .replace(/\r/g, "");
+}
+
+/** Ce que le shell a reçu, lu dans le résultat d'un `echo <préfixe><collé>`
+ *  qu'on valide ici : compter le texte collé dans la sortie brute ne dit rien,
+ *  fish redessinant sa ligne de commande à chaque modification. Rend ce qui
+ *  suit le préfixe, fait d'une ou plusieurs copies de `jeton`. */
+export async function resultatDeEcho(prefixe, jeton) {
+  await browser.keys(["Enter"]);
+  const motif = new RegExp(`^${prefixe}((?:${jeton})+)$`, "m");
+  let trouve = null;
+  try {
+    await browser.waitUntil(async () => {
+      trouve = (await sortieSansSequences()).match(motif);
+      return trouve !== null;
+    }, { timeout: 5000 });
+  } catch (e) {
+    throw new Error(`aucun résultat de « echo ${prefixe}… » ; fin du terminal :\n${(await sortiePty()).slice(-600)}`, { cause: e });
+  }
+  return trouve[1];
+}
+
+/** Le shell a fini de démarrer quand plus rien n'arrive depuis un moment :
+ *  fish tapé pendant ses requêtes au terminal brouillait la ligne. */
+export async function attendreShellCalme() {
+  let avant = -1;
+  await browser.waitUntil(async () => {
+    const n = await browser.execute(() => (window.__sortiePty ?? "").length);
+    const calme = n > 0 && n === avant;
+    avant = n;
+    return calme;
+  }, { timeout: 15000, interval: 700, timeoutMsg: "le shell n'a jamais fini de démarrer" });
+}
+
 /** Attend qu'une session de terminal soit live, et dit sinon ce que l'onglet affichait. */
 export async function attendreSessionLive(quoi = "session SSH", minimum = 1) {
   try {
