@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.16.0] - 2026-11-26
+
 ### Ajouté
 
 - **Une fenêtre « Paramètres »**, ouverte par la roue crantée en haut de la
@@ -3151,7 +3153,8 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.15.0...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.16.0
 [0.15.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.15.0
 [0.14.3]: https://github.com/AdrienAvalon/avash/releases/tag/v0.14.3
 [0.14.2]: https://github.com/AdrienAvalon/avash/releases/tag/v0.14.2
