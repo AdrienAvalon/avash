@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { $, FONT_MAX, FONT_MIN, type Session, state } from "./etat";
 import { notify, notifyErreur } from "./notifications";
 import { t } from "./i18n";
-import { collerDansTerminal } from "./dialogues";
+import { collerPressePapiers } from "./dialogues";
 import { placerMenu } from "./menu-hote";
 
 // ---------- Zoom de police, recherche, menu clic droit ----------
@@ -102,10 +102,10 @@ ctxMenu().addEventListener("click", (e) => {
     // répétable et sans conséquence (audit du 7 septembre 2026).
     if (sel) navigator.clipboard.writeText(sel).catch(() => {});
   } else if (act === "paste") {
-    navigator.clipboard.readText().then(
-      (t) => void collerDansTerminal(s.term, t),
-      () => {},
-    );
+    // Par le plugin : navigator.clipboard.readText est refusé sous WebKitGTK,
+    // et « Coller » ne faisait rien sous Linux (26 novembre 2026). Le focus
+    // revient au terminal une fois le collage fait.
+    void collerPressePapiers(s.term);
   } else if (act === "search") {
     openTermSearch(s.id);
   } else if (act === "selectall") {
@@ -118,6 +118,11 @@ ctxMenu().addEventListener("click", (e) => {
     void arreterEnregistrement(s);
   }
   hideContext();
+  // Le clic sur l'entrée du menu a ôté le focus à la zone de saisie : sans
+  // cela, la frappe qui suit une copie ou un effacement n'allait nulle part
+  // (26 novembre 2026). La recherche et l'enregistrement ouvrent leur propre
+  // fenêtre, qui prend le focus ; le collage le rend lui-même, une fois fait.
+  if (act === "copy" || act === "selectall" || act === "clear") s.term.focus();
 });
 
 // ---------- Enregistrement de session (asciicast) ----------

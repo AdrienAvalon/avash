@@ -3,6 +3,8 @@
 import type { Terminal } from "@xterm/xterm";
 import { getVersion } from "@tauri-apps/api/app";
 import { effectuerCollage } from "./collage";
+import { avecReessais } from "./collage-rdp";
+import { readText as lirePressePapiers } from "@tauri-apps/plugin-clipboard-manager";
 import { $ } from "./etat";
 import { t } from "./i18n";
 
@@ -68,8 +70,15 @@ window.addEventListener("keydown", (e) => {
 // La décision (vide → rien ; multi-ligne → confirmer ; puis coller) vit dans
 // effectuerCollage, pure et testée ; ici on ne fait que brancher term.paste et
 // la modale de confirmation.
-// Seul `paste` est lu : le type le dit, et les tests passent un double minimal.
-export function collerDansTerminal(term: Pick<Terminal, "paste">, texte: string): Promise<void> {
+// Seuls `paste` et `focus` sont lus : le type le dit, et les tests passent un
+// double minimal.
+//
+// Le focus revient au terminal une fois le collage fait, ou refusé (signalé le
+// 26 novembre 2026 : « quand on a fait coller on perd le focus du terminal »).
+// Le clic sur « Coller » du menu ôte le focus à la zone de saisie, et la
+// confirmation d'un collage de plusieurs lignes le garde en se fermant : la
+// frappe suivante n'allait nulle part.
+export function collerDansTerminal(term: Pick<Terminal, "paste" | "focus">, texte: string): Promise<void> {
   return effectuerCollage(texte, {
     coller: (t) => term.paste(t),
     confirmer: (n) =>
@@ -77,7 +86,29 @@ export function collerDansTerminal(term: Pick<Terminal, "paste">, texte: string)
         t(n > 1 ? "collage-question-pluriel" : "collage-question", { n }) + "\n\n" + t("collage-avertissement"),
         { ok: t("coller"), danger: true },
       ),
-  });
+  }).finally(() => term.focus());
+}
+
+/** Colle le presse-papiers du poste dans le terminal : Ctrl+Maj+V et « Coller »
+ *  du menu.
+ *
+ *  Par le plugin de Tauri, pas par `navigator.clipboard.readText` : WebKitGTK
+ *  refuse cette lecture (NotAllowedError, relevé le 26 novembre 2026), si bien
+ *  que « Coller » du menu ne faisait rien sous Linux, et Ctrl+Maj+V n'y collait
+ *  que par le collage natif du navigateur. Sous Windows, WebView2 acceptait la
+ *  lecture ET faisait ce collage natif : le texte arrivait deux fois (« ça
+ *  copie en double en SSH »). L'appelant d'un raccourci clavier empêche donc
+ *  l'action par défaut, et ce chemin est le seul. Une lecture refusée (image,
+ *  presse-papiers vide) ne colle rien, sans bruit : le geste se répète. */
+export async function collerPressePapiers(term: Pick<Terminal, "paste" | "focus">): Promise<void> {
+  let texte: string;
+  try {
+    texte = (await avecReessais(() => lirePressePapiers())) ?? "";
+  } catch {
+    term.focus();
+    return;
+  }
+  await collerDansTerminal(term, texte);
 }
 
 /** Fait passer tout collage NATIF dans `el` (Maj+Inser, clic du milieu, menu
@@ -91,7 +122,7 @@ export function collerDansTerminal(term: Pick<Terminal, "paste">, texte: string)
  *  (FS-1). L'écouteur est posé en CAPTURE sur le conteneur : il passe avant
  *  celui de xterm, placé plus bas dans l'arbre, et `stopImmediatePropagation`
  *  l'empêche de l'atteindre. `preventDefault` retient l'insertion native. */
-export function intercepterCollageNatif(el: HTMLElement, term: Pick<Terminal, "paste">): void {
+export function intercepterCollageNatif(el: HTMLElement, term: Pick<Terminal, "paste" | "focus">): void {
   el.addEventListener(
     "paste",
     (ev) => {

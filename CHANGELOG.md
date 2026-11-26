@@ -7,6 +7,22 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- **Terminal SSH : un collage arrivait parfois en double, et le terminal
+  perdait le focus.** Signalé par le mainteneur. `Ctrl+Maj+V` lisait le
+  presse-papiers et collait, mais laissait aussi le navigateur faire son propre
+  collage : sous Windows, WebView2 y voit « coller en texte brut », et
+  l'interception de ce collage natif collait le texte une seconde fois.
+  L'action par défaut est désormais empêchée, et le presse-papiers se lit par
+  le plugin de Tauri, un seul chemin sur les trois systèmes. « Coller » du
+  menu du clic droit passe par la même lecture : il ne faisait rien sous
+  Linux, où WebKitGTK refuse `navigator.clipboard.readText`. Et le terminal
+  reprend le focus après un collage, fait ou refusé à la confirmation, comme
+  après « Copier », « Tout sélectionner » et « Effacer l'écran » du menu :
+  le clic sur l'entrée le lui ôtait, et la frappe suivante n'allait nulle
+  part.
+
 ### Performance
 
 - **Bureau distant RemoteFX : deux fois et demie plus d'images par seconde.**
