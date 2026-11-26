@@ -15,9 +15,10 @@ vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.0.0
 const lecture = vi.hoisted(() => ({ readText: vi.fn<() => Promise<string>>() }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ readText: lecture.readText, writeText: vi.fn() }));
 
+/** Le corps de index.html. Ses scripts n'y gênent pas : jsdom n'exécute pas
+ *  ceux qu'on insère par innerHTML. */
 function corpsIndex(): string {
-  const corps = indexHtml.slice(indexHtml.indexOf("<body>") + 6, indexHtml.indexOf("</body>"));
-  return corps.replace(/<script[\s\S]*?<\/script>/g, "");
+  return indexHtml.slice(indexHtml.indexOf("<body>") + 6, indexHtml.indexOf("</body>"));
 }
 
 let dialogues: typeof import("./dialogues");
