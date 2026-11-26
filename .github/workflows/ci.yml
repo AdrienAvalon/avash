@@ -383,6 +383,12 @@ jobs:
           Copy-Item rdp-sidecar/target/release/avash-rdp.exe `
             crates/avash-ui/binaries/avash-rdp-x86_64-pc-windows-msvc.exe
           cargo build --locked --release -p avash-ui --features webdriver
+      # Les machines d'intégration ont le runtime Visual C++ : un binaire qui en
+      # dépend y tourne, et casse sur un Windows neuf (avash-rdp.exe, 26
+      # novembre 2026). On lit donc les imports (voir le script).
+      - name: Aucun runtime Visual C++ redistribuable
+        shell: pwsh
+        run: ./scripts/verifier-runtime-windows.ps1 rdp-sidecar/target/release/avash-rdp.exe target/release/avash-ui.exe
       - name: Serveurs RDP et VNC de test
         shell: pwsh
         run: |

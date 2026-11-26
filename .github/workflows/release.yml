@@ -135,6 +135,15 @@ jobs:
           fi
           scripts/archiver-app-macos.sh "$1"
 
+      # Aucun binaire Windows livré ne dépend du runtime Visual C++
+      # redistribuable, absent d'un Windows neuf : avash-rdp.exe en dépendait
+      # jusqu'à la 0.15.0, et aucune connexion RDP n'aboutissait sur un tel
+      # poste (26 novembre 2026, voir le script).
+      - name: Runtime Visual C++ (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/verifier-runtime-windows.ps1 target/release/avash-ui.exe crates/avash-ui/binaries/avash-rdp-${{ matrix.triple }}.exe
+
       # Version portable Windows : l'application et son processus RDP côte à côte,
       # sans installation ni écriture dans la base de registre. Utile sur un poste
       # où l'on ne peut rien installer. Nécessite WebView2, présent d'origine sur
