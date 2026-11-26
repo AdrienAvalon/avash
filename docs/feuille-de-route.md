@@ -41,7 +41,7 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 11/09/2026 |
 |---|---|
-| Tests | 852 Rust (292 cœur, 84 intégration, 207 interface, 237 processus RDP, 32 serveurs de test) · 641 dans les paquets IronRDP et vnc-rs portés · 487 front · 85 scénarios bout en bout dans 39 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
+| Tests | 852 Rust (292 cœur, 84 intégration, 207 interface, 237 processus RDP, 32 serveurs de test) · 641 dans les paquets IronRDP et vnc-rs portés · 503 front · 89 scénarios bout en bout dans 40 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
 | Binaire Linux | 21 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 221 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
@@ -575,7 +575,7 @@ Ces mesures sont à relever à chaque version :
 | Indicateur | Aujourd'hui | Cap |
 |---|---|---|
 | Plateformes réellement livrées | 2, plus macOS construite mais non éprouvée | 3 éprouvées |
-| Scénarios bout en bout | 85 | en hausse à chaque fonctionnalité |
+| Scénarios bout en bout | 89 | en hausse à chaque fonctionnalité |
 | Couverture des tests | 84 % des lignes (cœur + interface), 81 % (processus RDP), unitaires et bout en bout confondus | en hausse à chaque version |
 | Latence à la frappe (SSH local) | 1 ms jusqu'à l'écho, 9 ms jusqu'à l'image (médianes, 22/11/2026, 0.14.0 ; 11 et 18 ms le 04/09/2026) | < 16 ms, tenue |
 | Régressions arrivées à l'utilisateur | — | zéro |

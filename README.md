@@ -19,7 +19,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF%20Scorecard-rapport-informational.svg)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-2065%20verts-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-2085%20verts-brightgreen.svg)](docs/qualite.md)
 [![Couverture](https://img.shields.io/badge/couverture-84%25%20des%20lignes-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20attrap%C3%A9s-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -160,6 +160,7 @@ enchaîne validation, construction et empreintes.
 |---|---|
 | `Ctrl+Maj+K` | Palette de commandes : hôtes, actions, langue, santé, enregistrements |
 | `Ctrl+W` · `Ctrl+Tab` · `Ctrl+1`…`9` | Fermer (confirmation si la session est ouverte), suivant, aller à un onglet |
+| `Ctrl+Maj+C` · `Ctrl+Maj+V` | Copier, coller dans un terminal ; sous Windows, `Ctrl+C` (avec une sélection) et `Ctrl+V` aussi, comme dans Windows Terminal |
 | `Ctrl+Maj+B` | Panneau de fichiers (SFTP) |
 | `Ctrl+Maj+E` | Vue partagée : deux onglets côte à côte |
 | `↑` `↓` `Entrée` `Maj+F10` | La barre latérale entière au clavier |
@@ -171,8 +172,12 @@ restent au shell distant (préfixe tmux, effacement de fin de ligne readline).
 <img src="docs/captures/sftp.png" alt="Le panneau SFTP à côté du terminal : un dossier de sauvegardes, un transfert terminé dans la file" width="880">
 </div>
 
-- Interface en **français** et en **anglais** : suit la locale, se change dans la
-  palette, ou `AVASH_LANGUE=fr|en`.
+- **Paramètres** : la roue crantée en haut de la barre latérale réunit tous les
+  réglages (langue, thème, taille du texte, `Ctrl+C`/`Ctrl+V`, presse-papiers
+  et son des bureaux distants, journal des commandes) ; la palette les garde
+  aussi.
+- Interface en **français** et en **anglais** : suit la locale, se change dans les
+  paramètres ou la palette, ou `AVASH_LANGUE=fr|en`.
 - **Sombre ou clair** : le thème se change d'un clic en haut de la barre
   latérale. Les polices sont embarquées, l'interface ne charge rien du réseau.
 - **Santé des hôtes** : une sonde TCP par hôte, à la demande ou au démarrage,
@@ -242,7 +247,7 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**2065 tests** à chaque commit, sur GitHub Actions (Linux, Windows et macOS,
+**2085 tests** à chaque commit, sur GitHub Actions (Linux, Windows et macOS,
 conformité contre de vrais serveurs xrdp comprise) :
 
 | Niveau | Tests | En un mot |
@@ -252,8 +257,8 @@ conformité contre de vrais serveurs xrdp comprise) :
 | Processus RDP | 237 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
 | Serveurs de test | 32 | côté serveur RDPDR (décodeurs écrits à la main, automate du scénario, dialogue complet avec le canal client) et serveur VNC |
 | Paquets IronRDP et vnc-rs portés | 641 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
-| Front (Vitest) | 487 | logique pure, keysyms VNC, traductions |
-| Bout en bout (WebdriverIO) | 85 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
+| Front (Vitest) | 503 | logique pure, keysyms VNC, traductions |
+| Bout en bout (WebdriverIO) | 89 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo
 audit`, `cargo deny`, `npm audit`, CodeQL, gitleaks, le Scorecard de l'OpenSSF,

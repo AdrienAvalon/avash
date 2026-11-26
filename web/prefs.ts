@@ -1,4 +1,6 @@
 // Réglages retenus d'un lancement à l'autre.
+
+import { FONT_MAX, FONT_MIN } from "./etat";
 //
 // Isolés du module d'entrée pour être exerçables par les tests : ils décident de
 // ce qui sort de la machine, ce qui les rend trop importants pour n'être
@@ -176,5 +178,55 @@ export function setDureeJournal(jours: number): void {
     localStorage.setItem(JOURNAL_JOURS_KEY, String(Math.min(3650, Math.max(1, Math.round(jours)))));
   } catch {
     /* stockage indisponible : le choix vaut pour la session */
+  }
+}
+
+/** Ctrl+C et Ctrl+V copient et collent dans un terminal, comme dans Windows
+ *  Terminal (voir `gesteCopierCollerCtrl`, filters.ts). Sans réglage : oui
+ *  sous Windows, où c'est l'usage, non ailleurs, où Ctrl+V sert au shell et à
+ *  vim. Les paramètres le changent dans les deux sens. */
+const CTRL_COPIER_COLLER_KEY = "avash.terminal.ctrl-copier-coller";
+
+export function ctrlCopierColler(surWindows: boolean): boolean {
+  try {
+    const v = localStorage.getItem(CTRL_COPIER_COLLER_KEY);
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch {
+    /* stockage indisponible : le défaut du système */
+  }
+  return surWindows;
+}
+
+export function setCtrlCopierColler(actif: boolean): void {
+  try {
+    localStorage.setItem(CTRL_COPIER_COLLER_KEY, actif ? "1" : "0");
+  } catch {
+    /* stockage indisponible : le réglage vaut pour la session en cours */
+  }
+}
+
+/** La taille du texte des terminaux, en pixels. Elle ne survivait pas à un
+ *  redémarrage : Ctrl+ et Ctrl- ne valaient que pour la session. Bornée ici
+ *  aussi, pour qu'une valeur abîmée dans le stockage ne rende pas les
+ *  terminaux illisibles. */
+const TAILLE_TEXTE_KEY = "avash.terminal.taille";
+export const TAILLE_TEXTE_DEFAUT = 14;
+
+export function tailleTexte(): number {
+  try {
+    const n = Number(localStorage.getItem(TAILLE_TEXTE_KEY));
+    if (Number.isInteger(n) && n >= FONT_MIN && n <= FONT_MAX) return n;
+  } catch {
+    /* stockage indisponible */
+  }
+  return TAILLE_TEXTE_DEFAUT;
+}
+
+export function setTailleTexte(px: number): void {
+  try {
+    localStorage.setItem(TAILLE_TEXTE_KEY, String(px));
+  } catch {
+    /* stockage indisponible : le réglage vaut pour la session en cours */
   }
 }

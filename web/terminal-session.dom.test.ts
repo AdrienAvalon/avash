@@ -59,6 +59,8 @@ const xt = vi.hoisted(() => {
     dispose() { this.element?.remove(); this.element = null; }
     paste() {}
     getSelection() { return ""; }
+    hasSelection() { return false; }
+    clearSelection() {}
     // Ce que lit le capteur du journal des commandes (journal-capteur.ts).
     parser = { registerOscHandler: () => ({ dispose() {} }) };
     onWriteParsed() { return { dispose() {} }; }

@@ -7,6 +7,27 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Ajouté
+
+- **Une fenêtre « Paramètres »**, ouverte par la roue crantée en haut de la
+  barre latérale (ou « Paramètres… » dans la palette). Demandée par le
+  mainteneur : les réglages n'existaient qu'en bascules de la palette
+  (`Ctrl+K`). Elle les réunit par section, avec de vraies cases : langue,
+  thème, confirmation avant de fermer un onglet, sonde au démarrage ; taille
+  du texte et `Ctrl+C`/`Ctrl+V` pour les terminaux ; presse-papiers et son des
+  bureaux distants ; journal des commandes et sa durée de conservation. Chaque
+  contrôle fait ce que fait sa bascule de palette, qui reste. La taille du
+  texte est désormais retenue d'un lancement à l'autre.
+- **`Ctrl+C` et `Ctrl+V` copient et collent dans un terminal, comme dans
+  Windows Terminal.** Signalé par le mainteneur : sous Windows, ils ne
+  copiaient ni ne collaient en SSH. `Ctrl+C` copie quand du texte est
+  sélectionné, et sinon interrompt la commande comme avant ; `Ctrl+V` colle,
+  par le même chemin que `Ctrl+Maj+V`. Actif d'office sous Windows ; sous
+  Linux et macOS, où `Ctrl+V` sert au shell et à vim, il s'active dans les
+  paramètres. `Ctrl+Maj+C` et `Ctrl+Maj+V` marchent partout, comme avant.
+  Les trois copies passent désormais par le presse-papiers natif (plugin de
+  Tauri), comme le collage.
+
 ### Corrigé
 
 - **Terminal SSH : un collage arrivait parfois en double, et le terminal

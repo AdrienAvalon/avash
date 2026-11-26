@@ -205,6 +205,29 @@ export function estRaccourciApplicatif(e: Touche): boolean {
   return e.shiftKey && (k === "b" || k === "k");
 }
 
+/** Ce que fait Ctrl+C ou Ctrl+V dans un terminal, quand l'option « comme
+ *  Windows Terminal » est active : copier la sélection, coller, ou rien de
+ *  particulier (`null` : la touche part au shell). */
+export type GesteCtrl = "copier" | "coller" | null;
+
+/**
+ * Ctrl+C copie quand du texte est sélectionné, et sinon part au shell
+ * (interruption) ; Ctrl+V colle. Demandé par le mainteneur le 26 novembre
+ * 2026 : sous Windows, c'est ce que fait Windows Terminal, et ce qu'on y
+ * attend d'un terminal. Option : `ctrlCopierColler` (prefs.ts), d'office sous
+ * Windows, à activer ailleurs ; sans elle, Ctrl+V reste au shell et à vim.
+ * Ctrl+Maj+C / Ctrl+Maj+V copient et collent dans tous les cas.
+ *
+ * Par le code de la touche, comme Ctrl+Maj+C : la même touche physique sur
+ * toutes les dispositions. Alt exclu : Ctrl+Alt est AltGr sous Windows.
+ */
+export function gesteCopierCollerCtrl(e: Touche & { code: string }, actif: boolean, selection: boolean): GesteCtrl {
+  if (!actif || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return null;
+  if (e.code === "KeyC") return selection ? "copier" : null;
+  if (e.code === "KeyV") return "coller";
+  return null;
+}
+
 /**
  * Ctrl+K (palette) ou Ctrl+B (panneau SFTP) doit-il agir ? Hors terminal, oui ;
  * dans un terminal, seulement avec Maj : sans elle, la touche est au shell.

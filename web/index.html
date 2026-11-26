@@ -902,6 +902,11 @@
     .auth-switch .radio code { font-size: 11px; color: var(--text-faint); background: none; padding: 0; }
     .auth-switch .radio:has(input:checked) code { color: var(--accent-soft); }
     .modal .check { flex-direction: row; align-items: center; gap: 9px; color: var(--text); cursor: pointer; }
+
+    /* Fenêtre des paramètres : une section par domaine. */
+    .param-section { border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 14px 12px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 10px; }
+    .param-section legend { padding: 0 6px; font-size: 11px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--text-faint); }
+    .param-section input[type="number"] { width: 90px; }
     .modal .check input { width: 15px; height: 15px; margin: 0; }
     .field-hint { font-size: 11px; color: var(--text-faint); }
 
@@ -1207,6 +1212,7 @@
     <aside class="sidebar">
       <div class="brand">
         <span class="mascot"><svg class="mark"><use href="#avash-mark"/></svg></span> Avash <button type="button" class="ver" id="app-version" title="Vérifier les mises à jour" data-i18n-title="verifier-les-mises-a-jour">…</button>
+        <button id="parametres-btn" class="theme-toggle" type="button" data-icon="reglages" title="Paramètres" data-i18n-title="parametres" aria-label="Paramètres" data-i18n-aria="parametres"></button>
         <button id="theme-toggle" class="theme-toggle" type="button" title="Thème" data-i18n-title="theme" aria-label="Thème" data-i18n-aria="theme"></button>
       </div>
       <div class="search-wrap">
@@ -1466,6 +1472,66 @@
           <button type="button" class="btn-ghost" id="journal-dossier" data-i18n="ouvrir-le-dossier">Ouvrir le dossier</button>
           <button type="button" class="btn-ghost" id="journal-exporter" data-i18n="journal-exporter">Exporter…</button>
           <button type="button" class="btn-ghost" id="journal-close" data-i18n="fermer">Fermer</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="parametres-modal">
+      <div class="modal modal-wide parametres" role="dialog" aria-modal="true" aria-labelledby="parametres-modal-title">
+        <h2 id="parametres-modal-title" data-i18n="parametres">Paramètres</h2>
+
+        <fieldset class="param-section">
+          <legend data-i18n="param-general">Général</legend>
+          <label><span data-i18n="param-langue">Langue</span>
+            <select id="param-langue">
+              <option value="fr" lang="fr" translate="no">Français</option>
+              <option value="en" lang="en" translate="no">English</option>
+            </select>
+          </label>
+          <label><span data-i18n="theme">Thème</span>
+            <select id="param-theme">
+              <option value="system" data-i18n="theme-systeme">Système</option>
+              <option value="light" data-i18n="theme-clair">Clair</option>
+              <option value="dark" data-i18n="theme-sombre">Sombre</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="param-fermeture" /><span data-i18n="param-fermeture">Demander avant de fermer un onglet connecté</span></label>
+          <label class="check"><input type="checkbox" id="param-sante" /><span data-i18n="param-sante">Sonder la santé des hôtes au démarrage</span></label>
+        </fieldset>
+
+        <fieldset class="param-section">
+          <legend data-i18n="param-terminal">Terminal</legend>
+          <label><span data-i18n="param-taille">Taille du texte (pixels)</span>
+            <input type="number" id="param-taille" step="1" inputmode="numeric" />
+          </label>
+          <label class="check"><input type="checkbox" id="param-ctrl" aria-describedby="param-ctrl-aide" /><span data-i18n="param-ctrl">Ctrl+C et Ctrl+V copient et collent, comme dans Windows Terminal</span></label>
+          <p class="field-hint" id="param-ctrl-aide" data-i18n="param-ctrl-aide">Ctrl+C copie quand du texte est sélectionné, et sinon interrompt la commande ; Ctrl+V colle (dans vim, Ctrl+Q fait la sélection en bloc). Ctrl+Maj+C et Ctrl+Maj+V marchent dans tous les cas.</p>
+        </fieldset>
+
+        <fieldset class="param-section">
+          <legend data-i18n="param-bureau">Bureau distant</legend>
+          <label class="check"><input type="checkbox" id="param-clip" /><span data-i18n="param-clip">Partager le presse-papiers avec les bureaux distants</span></label>
+          <label class="check"><input type="checkbox" id="param-son" /><span data-i18n="param-son">Jouer le son des bureaux distants</span></label>
+        </fieldset>
+
+        <fieldset class="param-section">
+          <legend data-i18n="journal-commandes">Journal des commandes</legend>
+          <label class="check"><input type="checkbox" id="param-journal" /><span data-i18n="param-journal">Noter les commandes passées en SSH</span></label>
+          <label><span data-i18n="journal-duree">Conserver</span>
+            <select id="param-journal-duree">
+              <option value="30" data-i18n="journal-duree-30j">30 jours</option>
+              <option value="90" data-i18n="journal-duree-90j">90 jours</option>
+              <option value="180" data-i18n="journal-duree-180j">180 jours</option>
+              <option value="365" data-i18n="journal-duree-1an">1 an</option>
+              <option value="730" data-i18n="journal-duree-2ans">2 ans</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="param-journal-ouvrir" data-i18n="param-journal-ouvrir">Ouvrir le journal…</button>
+          <span class="modal-actions-spacer"></span>
+          <button type="button" class="btn-primary" id="parametres-close" data-i18n="fermer">Fermer</button>
         </div>
       </div>
     </div>

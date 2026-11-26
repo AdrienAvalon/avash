@@ -4,14 +4,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { $, FONT_MAX, FONT_MIN, type Session, state } from "./etat";
 import { notify, notifyErreur } from "./notifications";
 import { t } from "./i18n";
-import { collerPressePapiers } from "./dialogues";
+import { collerPressePapiers, copierSelection } from "./dialogues";
 import { placerMenu } from "./menu-hote";
+import { setTailleTexte } from "./prefs";
 
 // ---------- Zoom de police, recherche, menu clic droit ----------
 
 /** Applique une taille de police à tous les terminaux et la borne. */
 export function setFontSize(px: number) {
   state.terminalFontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
+  // Retenue : Ctrl+ et Ctrl- ne valaient que pour la session (26 novembre
+  // 2026, avec la fenêtre des paramètres).
+  setTailleTexte(state.terminalFontSize);
   for (const s of state.sessions.values()) {
     s.term.options.fontSize = state.terminalFontSize;
     // `fit()` déclenche `onResize`, qui envoie la taille au shell après une
@@ -100,7 +104,7 @@ ctxMenu().addEventListener("click", (e) => {
     const sel = s.term.getSelection();
     // Copie de la sélection du terminal : un rejet reste muet à dessein, geste
     // répétable et sans conséquence (audit du 7 septembre 2026).
-    if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+    copierSelection(sel);
   } else if (act === "paste") {
     // Par le plugin : navigator.clipboard.readText est refusé sous WebKitGTK,
     // et « Coller » ne faisait rien sous Linux (26 novembre 2026). Le focus

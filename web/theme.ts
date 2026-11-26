@@ -8,7 +8,7 @@ import { t } from "./i18n";
 
 // --- Thème de l'interface : système (défaut), clair, ou sombre ---
 
-type ThemePref = "system" | "light" | "dark";
+export type ThemePref = "system" | "light" | "dark";
 const THEME_KEY = "avash.theme";
 const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -41,6 +41,18 @@ export function applyTheme() {
   const icon = themePref === "system" ? "monitor" : themePref === "light" ? "sun" : "moon";
   btn.innerHTML = ic(icon);
   btn.title = t("theme-titre", { mode: t(themePref === "system" ? "theme-systeme" : themePref === "light" ? "theme-clair" : "theme-sombre") });
+}
+
+/** Le thème choisi : celui du système, clair ou sombre. */
+export function themeChoisi(): ThemePref {
+  return themePref;
+}
+
+/** Choisit un thème et l'applique (fenêtre des paramètres). */
+export function choisirTheme(pref: ThemePref): void {
+  themePref = pref;
+  try { localStorage.setItem(THEME_KEY, themePref); } catch { /* stockage indispo */ }
+  applyTheme();
 }
 
 export function cycleTheme() {

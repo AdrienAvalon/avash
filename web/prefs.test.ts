@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CLIP_KEY, FERMETURE_KEY, SANTE_DEMARRAGE_KEY, confirmerFermetureOnglet, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, sonBureau, setSonBureau, sondeAuDemarrage, setSondeAuDemarrage, JOURNAL_HOTES_KEY, JOURNAL_KEY, basculerJournalPour, dureeJournal, exceptionJournal, journalActifPour, journalGlobal, setDureeJournal, setJournalGlobal } from "./prefs";
+import { ctrlCopierColler, setCtrlCopierColler, tailleTexte, setTailleTexte, TAILLE_TEXTE_DEFAUT, CLIP_KEY, FERMETURE_KEY, SANTE_DEMARRAGE_KEY, confirmerFermetureOnglet, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, sonBureau, setSonBureau, sondeAuDemarrage, setSondeAuDemarrage, JOURNAL_HOTES_KEY, JOURNAL_KEY, basculerJournalPour, dureeJournal, exceptionJournal, journalActifPour, journalGlobal, setDureeJournal, setJournalGlobal } from "./prefs";
 
 // Node 26 déclare un `localStorage` global inerte que jsdom ne remplace pas :
 // l'environnement DOM ne suffit donc pas ici. On installe un stockage conforme
@@ -196,5 +196,41 @@ describe("journal des commandes : réglage et exceptions", () => {
     expect(dureeJournal()).toBe(1);
     setDureeJournal(1e9);
     expect(dureeJournal()).toBe(3650);
+  });
+});
+
+// Ctrl+C / Ctrl+V « comme Windows Terminal » (26 novembre 2026) : d'office
+// sous Windows, où c'est l'usage ; ailleurs, Ctrl+V sert au shell et à vim.
+describe("Ctrl+C et Ctrl+V copient et collent", () => {
+  beforeEach(() => stockage.clear());
+
+  it("actif d'office sous Windows seulement", () => {
+    expect(ctrlCopierColler(true)).toBe(true);
+    expect(ctrlCopierColler(false)).toBe(false);
+  });
+
+  it("le choix de l'utilisateur prime sur le défaut du système, dans les deux sens", () => {
+    setCtrlCopierColler(false);
+    expect(ctrlCopierColler(true)).toBe(false);
+    setCtrlCopierColler(true);
+    expect(ctrlCopierColler(false)).toBe(true);
+  });
+});
+
+// La taille du texte ne survivait pas à un redémarrage (26 novembre 2026).
+describe("taille du texte des terminaux", () => {
+  beforeEach(() => stockage.clear());
+
+  it("vaut 14 sans réglage, et retient la valeur choisie", () => {
+    expect(tailleTexte()).toBe(TAILLE_TEXTE_DEFAUT);
+    setTailleTexte(18);
+    expect(tailleTexte()).toBe(18);
+  });
+
+  it("une valeur abîmée ou hors bornes retombe sur le défaut", () => {
+    for (const v of ["", "abc", "3", "500", "12.5"]) {
+      stockage.setItem("avash.terminal.taille", v);
+      expect(tailleTexte()).toBe(TAILLE_TEXTE_DEFAUT);
+    }
   });
 });
