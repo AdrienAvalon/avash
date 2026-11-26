@@ -17,7 +17,7 @@ import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, ensureGrasseCharg
 import { MENUS_CONTEXTUELS, openHostMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { type ManualTarget } from "./connexion-directe";
 import { annoncerPartageClip, bureauActif, choisirEtOffrirFichiers, connectRdpSaved, etatBureau, fichiersARecevoir, openRdpMenu, rdpSessions, recevoirFichiers } from "./rdp";
-import { askConfirm, askPassword, collerDansTerminal, intercepterCollageNatif } from "./dialogues";
+import { askConfirm, askPassword, collerPressePapiers, intercepterCollageNatif } from "./dialogues";
 import { fermerOnglet, focusTab, orderedTabs } from "./raccourcis";
 import { notify, notifyErreur } from "./notifications";
 import { openFolderMenu } from "./dossiers";
@@ -730,10 +730,12 @@ async function newSessionShell(label: string) {
       return false;
     }
     if (mod && e.code === "KeyV") {
-      navigator.clipboard.readText().then(
-        (t) => void collerDansTerminal(term, t),
-        () => {},
-      );
+      // L'action par défaut est empêchée : WebView2 y voit « coller en texte
+      // brut » et faisait son propre collage natif, que l'interception
+      // collait une seconde fois (« ça copie en double en SSH », 26 novembre
+      // 2026). La lecture par le plugin est le seul chemin.
+      e.preventDefault();
+      void collerPressePapiers(term);
       return false;
     }
     if (mod && e.code === "KeyF") {

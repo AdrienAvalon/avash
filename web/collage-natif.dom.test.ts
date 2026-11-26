@@ -47,7 +47,7 @@ function monterTerminal() {
   const collageXterm = vi.fn();
   zoneXterm.addEventListener("paste", collageXterm);
   const paste = vi.fn();
-  intercepterCollageNatif(conteneur, { paste });
+  intercepterCollageNatif(conteneur, { paste, focus: vi.fn() });
   return { zoneXterm, collageXterm, paste };
 }
 
