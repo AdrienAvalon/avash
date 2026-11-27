@@ -59,6 +59,19 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   pipelining rétabli. Passé le premier (toujours à 4 Mio), il en tombe un
   toutes les deux secondes : une coupure ne coûte toujours que quelques
   secondes de transfert.
+- **Un client local qui ne lit plus ne gèle plus tout le tunnel.** Audit du
+  27 novembre 2026 (FI-1) : un téléchargement mis en pause dans le navigateur
+  derrière un mandataire SOCKS, ou un `curl … | less` qu'on ne fait pas
+  défiler, figeait la connexion SSH du tunnel entière (russh attend dans sa
+  boucle que le canal soit lu) : toutes les autres pages restaient blanches,
+  keepalive compris, et la ligne du tunnel se disait active. Le canal est
+  désormais toujours lu ; au-delà de 8 Mio en attente du client local, cette
+  seule connexion est coupée, et la ligne du tunnel le dit.
+- **Les relais d'un tunnel s'arrêtent avec lui.** Audit du 27 novembre 2026
+  (ME-7) : un client qui ouvrait le port SOCKS sans rien dire tenait sa tâche,
+  sa socket et la session SSH pour toujours, même tunnel arrêté. La
+  négociation SOCKS a dix secondes, et arrêter un tunnel termine ses
+  connexions.
 
 ## [0.16.0] - 2026-11-26
 

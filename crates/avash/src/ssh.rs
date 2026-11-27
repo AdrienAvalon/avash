@@ -377,53 +377,140 @@ pub struct ForwardCounters {
     pub bytes_down: AtomicU64,
 }
 
+/// Octets reçus d'un canal de tunnel et pas encore remis au client local, au
+/// delà desquels la connexion est coupée.
+///
+/// Audit du 27 novembre 2026 (FI-1) : russh remet chaque `CHANNEL_DATA` à son
+/// canal sur une file de cent messages, en attendant DANS la boucle de la
+/// session, et rouvre la fenêtre SSH à la réception, pas à la consommation. Un
+/// client local qui ne lisait plus (téléchargement mis en pause dans le
+/// navigateur, `curl … | less` qu'on ne fait pas défiler) cessait de faire lire
+/// le canal ; la file se remplissait, et c'était toute la connexion du tunnel
+/// qui attendait : plus aucune autre connexion servie, plus de keepalive, la
+/// ligne du tunnel toujours « active ». Le canal est désormais lu sans arrêt,
+/// et ce qui attend le client local est tamponné jusqu'à cette borne (quatre
+/// fenêtres de canal) ; au-delà, cette seule connexion est coupée. Un délai
+/// « sans progrès » ne pourrait que s'ajouter sous la même borne : cesser de
+/// lire pendant qu'il court recréerait le gel. La vraie correction serait
+/// amont (fenêtre rouverte à la consommation, comme OpenSSH).
+pub const RETENUE_MAX_TUNNEL: usize = 8 * 1024 * 1024;
+
+/// Comment s'est terminé le relais d'une connexion de tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinRelais {
+    /// Fin ordinaire : les deux côtés ont fini, ou l'un a échoué.
+    Normale,
+    /// Le client local ne lisait plus et `RETENUE_MAX_TUNNEL` octets
+    /// l'attendaient : la connexion a été coupée pour ne pas geler le tunnel.
+    ClientMuet,
+}
+
 impl ForwardCounters {
-    /// Relaie `a` <-> `b` jusqu'a la fin de la connexion, en comptant.
+    /// Relaie une connexion locale et un canal SSH jusqu'à la fin, en comptant.
     ///
-    /// Ecrit a la main plutot que via `copy_bidirectional` : celui-ci ne rend
-    /// les volumes qu'a la fin, alors qu'un tunnel porte souvent des
-    /// connexions longues (base de donnees, VNC) que l'interface doit voir
+    /// Écrit à la main plutôt que via `copy_bidirectional` : celui-ci ne rend
+    /// les volumes qu'à la fin, alors qu'un tunnel porte souvent des
+    /// connexions longues (base de données, VNC) que l'interface doit voir
     /// progresser.
-    pub async fn relay<A, B>(&self, a: &mut A, b: &mut B)
+    ///
+    /// Les deux sens vivent à part, et le canal n'attend jamais le client
+    /// local (voir `RETENUE_MAX_TUNNEL`) : la lecture du côté local peut, elle,
+    /// s'arrêter, la contre-pression TCP ne gênant que cette connexion.
+    /// `local_est_client` : vrai en `-L`/`-D` (le client est sur le poste),
+    /// faux en `-R` (le client est chez le serveur), pour ranger les octets
+    /// en montants (client vers destination) et descendants.
+    pub async fn relay<L, C>(
+        &self,
+        local: &mut L,
+        canal: &mut C,
+        local_est_client: bool,
+    ) -> FinRelais
     where
-        A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
-        B: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
+        L: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
+        C: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
     {
+        use std::sync::atomic::AtomicUsize;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         self.active.fetch_add(1, Ordering::Relaxed);
         self.total.fetch_add(1, Ordering::Relaxed);
-        let mut buf_a = vec![0u8; 32 * 1024];
-        let mut buf_b = vec![0u8; 32 * 1024];
-        let (mut a_done, mut b_done) = (false, false);
-        while !(a_done && b_done) {
-            tokio::select! {
-                r = a.read(&mut buf_a), if !a_done => match r {
-                    Ok(0) | Err(_) => {
-                        a_done = true;
-                        // Fin de lecture d'un cote : on signale la fin
-                        // d'ecriture a l'autre, qui repondra par son EOF.
-                        let _ = b.shutdown().await;
-                    }
+        let (vers_canal_compte, vers_local_compte) = if local_est_client {
+            (&self.bytes_up, &self.bytes_down)
+        } else {
+            (&self.bytes_down, &self.bytes_up)
+        };
+        let (mut local_r, mut local_w) = tokio::io::split(local);
+        let (mut canal_r, mut canal_w) = tokio::io::split(canal);
+        // Un échec d'écriture d'un côté, ou un client local muet, arrête tout.
+        let arret = tokio::sync::Notify::new();
+        let muet = std::sync::atomic::AtomicBool::new(false);
+        let retenus = AtomicUsize::new(0);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
+        let vers_canal = async {
+            let mut buf = vec![0u8; 32 * 1024];
+            loop {
+                match local_r.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        if b.write_all(&buf_a[..n]).await.is_err() { break; }
-                        self.bytes_up.fetch_add(n as u64, Ordering::Relaxed);
+                        if canal_w.write_all(&buf[..n]).await.is_err() {
+                            arret.notify_one();
+                            return;
+                        }
+                        vers_canal_compte.fetch_add(n as u64, Ordering::Relaxed);
                     }
-                },
-                r = b.read(&mut buf_b), if !b_done => match r {
-                    Ok(0) | Err(_) => {
-                        b_done = true;
-                        let _ = a.shutdown().await;
-                    }
-                    Ok(n) => {
-                        if a.write_all(&buf_b[..n]).await.is_err() { break; }
-                        self.bytes_down.fetch_add(n as u64, Ordering::Relaxed);
-                    }
-                },
+                }
             }
+            // Fin de lecture d'un côté : on signale la fin d'écriture à
+            // l'autre, qui répondra par son EOF.
+            let _ = canal_w.shutdown().await;
+        };
+        let lecture_canal = async {
+            let tx = tx;
+            let mut buf = vec![0u8; 32 * 1024];
+            loop {
+                match canal_r.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if retenus.fetch_add(n, Ordering::Relaxed) + n > RETENUE_MAX_TUNNEL {
+                            muet.store(true, Ordering::Relaxed);
+                            arret.notify_one();
+                            return;
+                        }
+                        if tx.send(buf[..n].to_vec()).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+            // `tx` tombe ici : l'écrivain local videra la file puis fermera.
+        };
+        let vers_local = async {
+            while let Some(octets) = rx.recv().await {
+                if local_w.write_all(&octets).await.is_err() {
+                    arret.notify_one();
+                    return;
+                }
+                retenus.fetch_sub(octets.len(), Ordering::Relaxed);
+                vers_local_compte.fetch_add(octets.len() as u64, Ordering::Relaxed);
+            }
+            let _ = local_w.shutdown().await;
+        };
+        tokio::select! {
+            _ = async { tokio::join!(vers_canal, lecture_canal, vers_local) } => {}
+            () = arret.notified() => {}
         }
         self.active.fetch_sub(1, Ordering::Relaxed);
+        if muet.load(Ordering::Relaxed) {
+            FinRelais::ClientMuet
+        } else {
+            FinRelais::Normale
+        }
     }
 }
+
+/// Message d'une connexion de tunnel coupée faute de lecteur local.
+pub const MESSAGE_CLIENT_MUET: &str = "Une connexion du tunnel a été coupée : son client local ne \
+     lisait plus ce que le serveur envoyait (8 Mio en attente). Les autres connexions continuent.";
 
 /// Destination locale d'une redirection distante (`ssh -R`).
 struct RemoteTarget {
@@ -960,7 +1047,12 @@ impl russh::client::Handler for AvashAuth {
                 return;
             };
             let mut remote = channel.into_stream();
-            target.counters.relay(&mut remote, &mut local).await;
+            // En `-R`, le client est chez le serveur : le poste est la
+            // destination. Le relais garde le canal lu (FI-1).
+            if target.counters.relay(&mut local, &mut remote, false).await == FinRelais::ClientMuet
+            {
+                tracing::warn!("{MESSAGE_CLIENT_MUET}");
+            }
         });
         Ok(())
     }

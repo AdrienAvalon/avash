@@ -5,7 +5,7 @@
 //! terminal : fermer un onglet ne coupe pas un tunnel, et inversement.
 //! Les definitions sont conservees dans `~/.config/avash/tunnels.yaml`.
 
-use crate::ssh::{AvashSession, ForwardCounters};
+use crate::ssh::{AvashSession, FinRelais, ForwardCounters, MESSAGE_CLIENT_MUET};
 use crate::Verrou as _;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -247,7 +247,23 @@ impl Drop for Tunnel {
     }
 }
 
+/// Délai laissé à un client SOCKS pour négocier sa connexion.
+///
+/// Audit du 27 novembre 2026 (ME-7) : la négociation lisait sans délai. Un
+/// outil local qui ouvre le port sans rien dire (détection automatique de
+/// mandataire, scanner, client mal écrit) tenait sa tâche, sa socket et la
+/// session SSH du tunnel pour toujours, même tunnel arrêté. Dix secondes,
+/// comme la poignée de main du processus RDP : aucun client SOCKS réel n'en
+/// demande autant.
+pub const DELAI_NEGOCIATION_SOCKS: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Accepte les connexions locales et les relaie dans un canal SSH chacune.
+///
+/// Les relais vivent dans un `JoinSet` que cette boucle détient : quand le
+/// tunnel s'arrête (`close`, ou sa destruction), la tâche d'écoute est
+/// interrompue, le `JoinSet` tombe avec elle et interrompt tous ses relais,
+/// qui lâchent leur socket et leur part de la session (audit du 27 novembre
+/// 2026, ME-7 : ils survivaient à `tunnel_stop`).
 async fn accept_loop(
     listener: TcpListener,
     session: Arc<AvashSession>,
@@ -255,8 +271,15 @@ async fn accept_loop(
     counters: Arc<ForwardCounters>,
     last_error: Arc<std::sync::Mutex<Option<String>>>,
 ) {
+    let mut relais = tokio::task::JoinSet::new();
     loop {
-        let (stream, peer) = match listener.accept().await {
+        let accepte = tokio::select! {
+            a = listener.accept() => a,
+            // Les relais finis sont ramassés au fil de l'eau : un tunnel
+            // ouvert des jours n'accumule pas leurs issues.
+            Some(_) = relais.join_next(), if !relais.is_empty() => continue,
+        };
+        let (stream, peer) = match accepte {
             Ok(x) => x,
             Err(e) => {
                 *last_error.verrou() = Some(format!("Écoute interrompue : {e}"));
@@ -267,7 +290,7 @@ async fn accept_loop(
         let def = def.clone();
         let counters = counters.clone();
         let last_error = last_error.clone();
-        tokio::spawn(async move {
+        relais.spawn(async move {
             if let Err(e) = relay_one(stream, peer, &session, &def, &counters).await {
                 *last_error.verrou() = Some(e.to_string());
             }
@@ -285,7 +308,7 @@ async fn relay_one(
 ) -> Result<()> {
     let (host, port) = match def.kind {
         TunnelKind::Local => (def.target_host.clone(), def.target_port),
-        TunnelKind::Dynamic => socks5_handshake(&mut stream).await?,
+        TunnelKind::Dynamic => socks5_borne(&mut stream, DELAI_NEGOCIATION_SOCKS).await?,
         TunnelKind::Remote => unreachable!("un tunnel distant n'a pas de boucle d'acceptation"),
     };
     let channel = match session.open_direct_tcpip(&host, port, peer).await {
@@ -304,8 +327,26 @@ async fn relay_one(
         stream.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
     }
     let mut remote = channel.into_stream();
-    counters.relay(&mut stream, &mut remote).await;
+    if counters.relay(&mut stream, &mut remote, true).await == FinRelais::ClientMuet {
+        bail!("{MESSAGE_CLIENT_MUET}");
+    }
     Ok(())
+}
+
+/// [`socks5_handshake`] sous `delai` (`DELAI_NEGOCIATION_SOCKS` en service,
+/// ME-7) ; un client muet au-delà est une erreur, et sa connexion se ferme.
+pub async fn socks5_borne<S>(s: &mut S, delai: std::time::Duration) -> Result<(String, u16)>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    tokio::time::timeout(delai, socks5_handshake(s))
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Client SOCKS muet : aucune négociation en {} ms, connexion fermée",
+                delai.as_millis()
+            )
+        })?
 }
 
 /// Negocie une requete SOCKS5 `CONNECT` (RFC 1928) sans authentification.
@@ -582,6 +623,36 @@ mod tests {
         client.read_exact(&mut rep).await.unwrap();
         assert_eq!(rep, [5, 0xFF], "aucune methode acceptable");
         assert!(task.await.unwrap().is_err());
+    }
+
+    /// Audit du 27 novembre 2026 (ME-7) : un client SOCKS muet est coupé
+    /// après le délai de négociation, et non plus jamais. Éprouvé à 50 ms (le
+    /// service en laisse dix secondes) ; un client qui parle à temps passe.
+    #[tokio::test]
+    async fn une_connexion_socks_muette_est_coupee_apres_le_delai() {
+        let delai = std::time::Duration::from_millis(50);
+        let (_client, mut server) = tokio::io::duplex(256);
+        let depart = std::time::Instant::now();
+        let e = socks5_borne(&mut server, delai)
+            .await
+            .expect_err("la négociation muette doit expirer");
+        assert!(e.to_string().contains("SOCKS muet"), "{e:#}");
+        assert!(depart.elapsed() >= delai);
+        assert_eq!(DELAI_NEGOCIATION_SOCKS, std::time::Duration::from_secs(10));
+
+        let (mut client, mut server) = tokio::io::duplex(256);
+        let negociation = tokio::spawn(async move {
+            socks5_borne(&mut server, std::time::Duration::from_secs(5)).await
+        });
+        client.write_all(&[5, 1, 0]).await.unwrap();
+        let mut rep = [0u8; 2];
+        client.read_exact(&mut rep).await.unwrap();
+        client
+            .write_all(&[5, 1, 0, 1, 10, 0, 0, 7, 0x1F, 0x90])
+            .await
+            .unwrap();
+        let (host, port) = negociation.await.unwrap().unwrap();
+        assert_eq!((host.as_str(), port), ("10.0.0.7", 8080));
     }
 
     #[tokio::test]
