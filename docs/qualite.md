@@ -10,7 +10,7 @@ conformité RDP contre de vrais serveurs).
 
 | Niveau | Nombre | Ce qui est vérifié |
 |---|---|---|
-| Cœur (`crates/avash`) | 292 | parseur `~/.ssh/config` et son **fuzzing par mutation** (plus douze cibles cargo-fuzz dans `fuzz/`, dont le décodeur ClearCodec du canal graphique, le décodeur RLGR de RemoteFX comparé à l'original et le flux entier d'un serveur VNC), import PuTTY et MobaXterm, enregistrement asciicast, journal des commandes (masquage des secrets, fichiers 0600, purge), sonde de santé, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
+| Cœur (`crates/avash`) | 292 | parseur `~/.ssh/config` et son **fuzzing par mutation** (plus treize cibles cargo-fuzz dans `fuzz/`, dont le décodeur ClearCodec du canal graphique, l'assemblage du canal graphique et de RemoteFX Progressive par le processus RDP (`fuzz/rdp/`), le décodeur RLGR de RemoteFX comparé à l'original et le flux entier d'un serveur VNC), import PuTTY et MobaXterm, enregistrement asciicast, journal des commandes (masquage des secrets, fichiers 0600, purge), sonde de santé, clés d'hôte, secrets, dossiers, tunnels, snippets, écritures atomiques, clés générées privées dès leur création |
 | Intégration | 84 | contre un **vrai serveur SSH** : authentification et ses refus, PTY, SFTP sur la session du terminal (dossiers récursifs dans les deux sens, reprise après annulation, relais entre deux serveurs, sur un système de fichiers en mémoire), tunnels, rebonds `ProxyJump` ; l'outil en ligne de commande exercé comme binaire |
 | Interface (`crates/avash-ui`) | 207 | commandes Tauri, import de sessions, enregistrement, santé des hôtes, magasin de sessions sur moteur factice (annulation pendant la connexion, éviction par époque), résolution des rebonds `ProxyJump`, décodage UTF-8 en flux, verrous clavier, annonce du processus RDP, variables d'environnement de la webview |
 | Processus RDP | 237 | lecteur partagé RDPDR (confinement des chemins, aller-retour créer-écrire-relire, énumération par motif DOS, suppression et renommage, volume, réponse par le fil), VeNCrypt (montage TLS, clé d'épinglage), son du distant (formats PCM, message, relais), fichiers par le presse-papiers (réception par morceaux dans le désordre, refus, réponse courte, offre et parcours des dossiers), session VNC (entrées, masque de boutons, copie de rectangles), empreinte du serveur, fichier des empreintes, écriture atomique, plafond de résolution, négociation, identifiants et domaine, format binaire des trames, nouvelle taille d'écran sans image vidée, configuration après redirection, origine WebSocket, disposition clavier, isolation des tests, zone sale, **résistance aux messages malformés**, canal graphique (surfaces bornées, image refusée hors surface, cache, ClearCodec, RemoteFX Progressive : décodeur SRL, paliers d'affinage, tuiles en différence, tuile hors surface sans état), magnétoscope, rejeu d'enregistrements réels (icônes NSCodec non noires), fuzzing par mutation sur cinq enregistrements |
@@ -103,9 +103,19 @@ scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
 `.github/workflows/qualite.yml` (chaque lundi, ou à la demande) mesure ce que
 les tests exercent réellement, sans bloquer les poussées : la couverture par
 `scripts/couverture.sh` (rapports HTML en artefact, résumé dans le journal du
-passage), puis `cargo-mutants` sur les modules de sécurité du cœur (`ssh.rs`,
-`keys.rs`, `secrets.rs`, `lib.rs`), qui altère le code un point à la fois et
-compte les mutants que les tests ne voient pas.
+passage), puis `cargo-mutants`, qui altère le code un point à la fois et
+compte les mutants que les tests ne voient pas. La mutation tourne en quatre
+jobs, chacun sous sa propre limite de six heures : les modules de sécurité du
+cœur (`ssh.rs`, `keys.rs`, `secrets.rs`, `lib.rs`), `sftp.rs` (noms d'entrées
+venus du serveur, borne des listages, reprise), `journal_commandes.rs`
+(masquage des secrets), et dans le processus RDP `disque.rs` (confinement du
+lecteur partagé), `empreintes.rs` (TOFU RDP), `acces_local.rs` (jeton du canal
+local) et `vnc_tls.rs` (épinglage). Jusqu'au 27 novembre 2026, seul le premier
+groupe était muté : aucun des chemins qu'un serveur hostile atteint, ajoutés
+depuis septembre, n'était regardé (audit du 27 novembre 2026, QT-6).
+`commands/sessions.rs`, qui exige l'interface Tauri compilée à chaque mutant,
+attend un passage mesuré. Le décompte des mutants de chaque groupe au
+27 novembre 2026 (`cargo mutants --list`) : 524, 246, 222 et 360.
 
 **Comment la couverture est mesurée.** Tests unitaires **et** suite bout en
 bout, ensemble : `cargo-llvm-cov` seul ne voit que les tests unitaires, et
@@ -121,7 +131,13 @@ la sortie ; sous `cfg(coverage)`, posé par cargo-llvm-cov seul, les deux
 par Vitest, sur les modules de logique pure qui ont des tests (le reste du
 front est du DOM, exercé par la suite).
 
-Relevé du 06/09/2026, et ce que la seule mesure unitaire du 05/09 donnait :
+Relevé du 06/09/2026, et ce que la seule mesure unitaire du 05/09 donnait.
+**Ce relevé est périmé** (constaté par l'audit du 27 novembre 2026, QT-14) :
+il précède les audits du 9 et du 12 septembre, le journal des commandes, le
+décodeur RLGR réécrit et la montée à russh-sftp 4, et les badges des README
+le reprennent. Le prochain passage du workflow « Qualité » le remplace, daté,
+et chaque version doit en reporter un de moins d'un mois, comme le demande
+l'en-tête de `qualite.yml`.
 
 | Périmètre | Lignes (unitaires + bout en bout) | Lignes (unitaires seuls) | Fonctions | Régions |
 |---|---:|---:|---:|---:|
@@ -156,7 +172,12 @@ déconnexion sans effet, le marqueur `@revoked` ignoré par la vraie lecture de
 `known_hosts`, la redirection distante en port 0, et dans `lib.rs` la ligne
 vide avant un bloc ajouté, le bloc `Match` qui suit un hôte retiré, la place du
 commentaire de dossier, les directives faites d'espaces, l'étoile en fin de
-motif. Second passage, ces tests posés : 201 attrapés, 43 manqués. Restent
-sans test, à dessein : l'agent SSH (aucun agent dans la suite), les réglages
-de la session russh (keepalive, `TCP_NODELAY`), et les fonctions qui
-n'existent que pour Windows.
+motif. Second passage, ces tests posés : 201 attrapés, 43 manqués. Restaient
+alors sans test, à dessein : l'agent SSH (aucun agent dans la suite), les
+réglages de la session russh (keepalive, `TCP_NODELAY`), et les fonctions qui
+n'existent que pour Windows. L'audit du 27 novembre 2026 a montré que deux de
+ces trois cas sont devenus testables, et ne sont donc plus « à dessein » : un
+agent servi par `russh::keys::agent::server` sur un socket temporaire pour
+l'agent (QT-7), et un intervalle de keepalive injecté en test seulement, comme
+`connect_borne` l'a fait pour le délai de connexion (QT-5). Ils attendent leurs
+tests.
