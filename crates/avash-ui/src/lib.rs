@@ -1,6 +1,8 @@
 //! Avash GUI — coquille Tauri 2. Sessions PTY multi-onglets côté Rust.
 
 pub mod commands;
+#[cfg(windows)]
+mod fenetre_windows;
 pub mod journal;
 pub mod langue;
 pub mod rdp;
@@ -91,6 +93,20 @@ fn gerer_les_etats<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Buil
         .manage(commands::RenduTerminal::default())
 }
 
+/// Au début de chaque chargement de la fenêtre principale, le cœur ferme ce
+/// que possédait la page précédente (audit du 27 novembre 2026, WI-1, FI-2,
+/// ME-3) : une page neuve n'a aucun onglet, donc aucune session. Le premier
+/// chargement trouve les magasins vides.
+fn purger_au_chargement<R: tauri::Runtime>(
+    vue: &tauri::Webview<R>,
+    charge: &tauri::webview::PageLoadPayload<'_>,
+) {
+    use tauri::Manager as _;
+    if charge.event() == tauri::webview::PageLoadEvent::Started && vue.label() == "main" {
+        commands::purger_la_page(vue.app_handle());
+    }
+}
+
 /// Les greffons de Tauri dont l'application se sert.
 fn greffons() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
@@ -100,12 +116,37 @@ fn greffons() -> tauri::Builder<tauri::Wry> {
         .plugin(tauri_plugin_clipboard_manager::init())
 }
 
+/// Réglages posés une fois l'application construite : raccourcis de
+/// navigateur et reprise du moteur de rendu, que Tauri n'expose pas (voir
+/// `fenetre_windows`), et veille du type de session (WI-10).
+#[allow(clippy::unnecessary_wraps)] // signature imposée par `Builder::setup`
+fn preparer(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    {
+        use tauri::Manager as _;
+        if let Some(fenetre) = app.get_webview_window("main") {
+            fenetre_windows::regler(&fenetre);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+    Ok(())
+}
+
+/// Les crochets de la fenêtre : dépôt de fichiers, chargement de la page,
+/// préparation une fois l'application construite.
+fn crochets(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    builder
+        .on_window_event(retenir_un_depot)
+        .on_page_load(purger_au_chargement)
+        .setup(preparer)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Le journal d'abord : tout ce qui suit peut avoir à y écrire (C-SIL-2).
     journal::installer();
-    let builder = gerer_les_etats(greffons())
-        .on_window_event(retenir_un_depot)
+    let builder = crochets(gerer_les_etats(greffons()))
         // Quatre commandes ont été retirées de cette liste : `run_command`,
         // `snippet_vars`, `password_known`, puis `enregistrement_en_cours`
         // (audit du 9 septembre 2026), qu'aucun appel du front n'utilisait.

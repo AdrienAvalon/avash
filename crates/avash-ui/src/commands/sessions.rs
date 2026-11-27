@@ -51,6 +51,16 @@ pub struct SessionStore {
     /// des minutes sous « Chargement… ». Trouvé par l'audit du 12 septembre
     /// 2026 (C-SIL-14) : `sftp_of` consulte ce compte et répond tout de suite.
     pub copies_directes: Mutex<HashMap<u64, usize>>,
+    /// Génération de la page qui possède les onglets, avancée à chaque
+    /// chargement de la page (voir `purger_la_page`).
+    ///
+    /// Audit du 27 novembre 2026 (WI-1, FI-2, ME-3) : le front renumérote ses
+    /// onglets à partir de 1 à chaque rechargement, le cœur gardait tout. Une
+    /// connexion lancée par l'ancienne page et aboutie après le rechargement
+    /// s'insérait alors sous un identifiant que la nouvelle page attribue à un
+    /// autre serveur. Chaque connexion note la génération à son départ ;
+    /// `enregistrer_session_de_la_page` refuse celle d'une page disparue.
+    pub page: AtomicU64,
 }
 
 /// De quoi ouvrir le sous-système SFTP sur la connexion SSH de l'onglet.
@@ -675,13 +685,41 @@ pub(crate) fn finaliser_enregistrement<R: tauri::Runtime>(
 /// l'application, et toujours listée par `open_sessions`, si bien qu'un snippet
 /// « toutes les sessions » partait sur un serveur dont l'onglet était fermé.
 /// `pty_close` prend les verrous dans le même ordre.
+#[cfg(test)]
 pub(crate) fn enregistrer_session(
     state: &tauri::State<'_, SessionStore>,
     id: u64,
     handle: SessionHandle,
 ) -> Result<(), String> {
+    enregistrer_session_de_la_page(state, id, page_courante(state), handle)
+}
+
+/// La génération de page en cours (voir `SessionStore::page`), à relever au
+/// départ d'une connexion.
+pub(crate) fn page_courante(state: &SessionStore) -> u64 {
+    state.page.load(Ordering::Acquire)
+}
+
+/// `enregistrer_session` pour une connexion partie sous la génération `page`.
+///
+/// Si la page a été rechargée entre-temps, la session est refusée comme une
+/// annulation : aucun onglet ne l'attend plus, et son identifiant appartient
+/// désormais à la nouvelle page. Le test se fait sous le verrou du magasin,
+/// que `purger_la_page` tient aussi pour avancer la génération : une session
+/// ne peut pas s'insérer entre la purge et le changement de génération.
+/// `en_cours` et `annules` ne sont pas touchés dans ce cas : la purge les a
+/// vidés, et ce qu'ils contiennent désormais appartient à la nouvelle page.
+pub(crate) fn enregistrer_session_de_la_page(
+    state: &SessionStore,
+    id: u64,
+    page: u64,
+    handle: SessionHandle,
+) -> Result<(), String> {
     let evicted = {
         let mut inner = state.inner.verrou();
+        if page_courante(state) != page {
+            return Err(CONNEXION_ANNULEE.to_owned());
+        }
         state.en_cours.verrou().remove(&id);
         if state.annules.verrou().remove(&id) {
             return Err(CONNEXION_ANNULEE.to_owned());
@@ -1026,9 +1064,15 @@ async fn open_on_target(
     rows: u32,
 ) -> Result<String, String> {
     state.en_cours.verrou().insert(id);
+    let page = page_courante(state);
     let (session, pty) = match etablir(&target, cols, rows).await {
         Ok(v) => v,
         Err(e) => {
+            // Page rechargée pendant la connexion : ces deux ensembles ont été
+            // vidés par la purge et décrivent désormais la nouvelle page.
+            if page_courante(state) != page {
+                return Err(e);
+            }
             // Une sortie en erreur doit oublier l'annulation éventuelle : elle
             // restait sinon dans l'ensemble pour toujours, et comme le front
             // renumérote ses onglets à partir de 1 à chaque rechargement de
@@ -1075,9 +1119,10 @@ async fn open_on_target(
     let securite = session.securite();
     let session: SessionPartagee = std::sync::Arc::new(tokio::sync::Mutex::new(session));
     let enregistreur: Enregistrement = std::sync::Arc::new(Mutex::new(None));
-    enregistrer_session(
+    enregistrer_session_de_la_page(
         state,
         id,
+        page,
         SessionHandle {
             securite: Some(securite),
             epoch,

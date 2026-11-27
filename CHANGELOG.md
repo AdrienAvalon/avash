@@ -157,6 +157,18 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **F5, Ctrl+R et le menu « Recharger » ne rechargent plus l'interface.** Sous
+  Windows, WebView2 gardait ses raccourcis de navigateur : F5 dans la barre
+  latérale ou le panneau SFTP faisait disparaître tous les onglets, et les
+  sessions SSH restaient ouvertes dans le cœur, invisibles, toujours proposées
+  aux snippets, et pouvant recevoir les frappes d'un nouvel onglet du même
+  numéro. Les raccourcis de navigateur sont coupés sous Windows, la page annule
+  F5 et Ctrl+R hors des terminaux (qui les reçoivent toujours) et n'ouvre plus
+  le menu contextuel par défaut hors des champs de saisie. Si la page se
+  recharge malgré tout, le cœur ferme au chargement les sessions, transferts
+  et bureaux de l'ancienne page ; un moteur de rendu WebView2 tombé est
+  relancé au lieu de laisser une page d'erreur (audit du 27 novembre 2026,
+  WI-1, FI-2, ME-3, WI-12).
 - **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
   couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
   SSH s'affichait dans la police proportionnelle de l'interface, colonnes

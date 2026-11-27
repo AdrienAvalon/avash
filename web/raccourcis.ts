@@ -10,6 +10,7 @@ import { askConfirm } from "./dialogues";
 import { libelleSur } from "./filters";
 import { t } from "./i18n";
 import { confirmerFermetureOnglet } from "./prefs";
+import { installerGardesRechargement } from "./rechargement";
 
 // ---------- Raccourcis d'onglets ----------
 
@@ -55,6 +56,10 @@ function closeActiveTab() {
   if (state.active === null) return;
   void fermerOnglet({ kind: rdpSessions.has(state.active) ? "rdp" : "ssh", id: state.active });
 }
+
+// F5, Ctrl+R et le menu « Recharger » ne rechargent plus l'interface (audit du
+// 27 novembre 2026, WI-1) : voir rechargement.ts.
+installerGardesRechargement(window);
 
 // Ctrl+Maj+E : l'onglet suivant côte à côte, ou la vue partagée refermée (le
 // raccourci de Terminator). En phase de capture et arrêté là : quand un
