@@ -82,10 +82,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   bloquaient le petit fichier glissé vers un autre. La borne vaut désormais
   par onglet (trois), avec six transferts au plus en tout.
 
-## [0.16.1] - 2026-11-27
-
-### Corrigé
-
+- **Un bureau à distance hostile ne fait plus déborder la conversion de
+  couleurs.** Une luminance hors des valeurs possibles faisait paniquer le
+  décodage RemoteFX Progressive en debug et donnait des couleurs fausses en
+  release ; elle est saturée avant la conversion (trouvé par cargo-fuzz,
+  audit du 27 novembre 2026).
 - **« Connexion RDP fermée » dit de nouveau pourquoi.** Quand une session se
   terminait en erreur (réseau coupé, serveur redémarré brutalement), le
   processus RDP écrivait sa raison juste après la fermeture de sa liaison
@@ -121,19 +122,6 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   l'autre et se redit à chaque reprise, comme la pause d'un onglet masqué.
   Partage coupé, la liste des fichiers copiés sur le distant ne s'affiche
   plus et ne peut plus se recevoir (audit du 27 novembre 2026).
-- **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
-  couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
-  SSH s'affichait dans la police proportionnelle de l'interface, colonnes
-  décalées, art ASCII et cadres cassés, couleurs du thème absentes. Depuis la
-  0.14.2, les terminaux passent au rendu DOM sous Linux (compositing de
-  WebKitGTK coupé) ; ce rendu met sa police, ses tailles et ses couleurs dans
-  des éléments `<style>` que la politique de sécurité de la page refusait :
-  Tauri y ajoute un nonce, et un nonce fait ignorer `'unsafe-inline'`. Le
-  rendu WebGL de Windows dessine sur un canevas et n'était pas touché. La
-  politique reste telle quelle : le CSS que xterm.js génère est recopié dans
-  des feuilles construites, que la CSP ne restreint pas
-  (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
-  police et la chasse fixe du terminal.
 
 ### Amélioré
 
@@ -164,6 +152,24 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   IronRDP garde pour cela deux capacités du serveur qu'elle jetait ; la mire
   du serveur de test honore la suspension, pour que le banc la voie
   (audit du 27 novembre 2026).
+
+## [0.16.1] - 2026-11-27
+
+### Corrigé
+
+- **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
+  couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
+  SSH s'affichait dans la police proportionnelle de l'interface, colonnes
+  décalées, art ASCII et cadres cassés, couleurs du thème absentes. Depuis la
+  0.14.2, les terminaux passent au rendu DOM sous Linux (compositing de
+  WebKitGTK coupé) ; ce rendu met sa police, ses tailles et ses couleurs dans
+  des éléments `<style>` que la politique de sécurité de la page refusait :
+  Tauri y ajoute un nonce, et un nonce fait ignorer `'unsafe-inline'`. Le
+  rendu WebGL de Windows dessine sur un canevas et n'était pas touché. La
+  politique reste telle quelle : le CSS que xterm.js génère est recopié dans
+  des feuilles construites, que la CSP ne restreint pas
+  (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
+  police et la chasse fixe du terminal.
 
 ## [0.16.0] - 2026-11-26
 
