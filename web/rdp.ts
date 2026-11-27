@@ -903,8 +903,10 @@ export async function openRdp(cible: RdpTarget) {
       // effacé : l'incrustation « Connexion RDP fermée » restait muette. On
       // montre l'incrustation d'abord, sa lecture du diagnostic part donc avant
       // la fermeture et retrouve la raison de la coupure.
-      showRdpClosed(id);
-      void invoke("rdp_close", { id }).catch(() => {});
+      // Et `rdp_close` n'attend plus que la lecture : il tuait le processus
+      // avant qu'il n'écrive la raison d'une fin en erreur, qu'il écrit APRÈS
+      // la fermeture de cette WebSocket (audit du 27 novembre 2026, FI-10).
+      void showRdpClosed(id).finally(() => { void invoke("rdp_close", { id }).catch(() => {}); });
     };
     ws.onerror = () => { /* onclose suivra */ };
   } catch (e) {
@@ -930,7 +932,7 @@ export async function openRdp(cible: RdpTarget) {
     }
     poserEtat(id, "closed");
     notify(t("rdp-connexion-impossible", { e: String(e) }), "erreur");
-    showRdpClosed(id); // proposer de réessayer
+    void showRdpClosed(id); // proposer de réessayer
   }
   focusRdp(id);
 }
@@ -1231,7 +1233,10 @@ export function closeRdp(id: number) {
  */
 export async function lireDiagnosticRdp(
   id: number,
-  lire: (id: number) => Promise<string> = (i) => invoke<string>("rdp_diagnostic", { id: i }),
+  // `attendreFin` : le processus écrit sa raison au moment de sortir, après la
+  // fermeture de la WebSocket ; la première lecture, jamais vide (« connecté :
+  // WxH »), la manquait sans relancer (audit du 27 novembre 2026, FI-10).
+  lire: (id: number) => Promise<string> = (i) => invoke<string>("rdp_diagnostic", { id: i, attendreFin: true }),
   pause: (ms: number) => Promise<void> = (ms) => new Promise((r) => { setTimeout(r, ms); }),
 ): Promise<string> {
   for (let essai = 0; essai < 3; essai++) {
@@ -1242,11 +1247,12 @@ export async function lireDiagnosticRdp(
   return "";
 }
 
-function showRdpClosed(id: number) {
+/** Rend la lecture du diagnostic, que `ws.onclose` attend avant `rdp_close`. */
+function showRdpClosed(id: number): Promise<void> {
   const s = rdpSessions.get(id);
-  if (!s) return; // fermeture volontaire (l'onglet est déjà retiré)
+  if (!s) return Promise.resolve(); // fermeture volontaire (l'onglet est déjà retiré)
   const wrap = s.canvas.parentElement as HTMLElement | null;
-  if (!wrap || wrap.querySelector(".rdp-closed")) return;
+  if (!wrap || wrap.querySelector(".rdp-closed")) return Promise.resolve();
   const ov = document.createElement("div");
   ov.className = "rdp-closed";
   ov.innerHTML =
@@ -1259,7 +1265,7 @@ function showRdpClosed(id: number) {
   // « Connexion RDP fermée » sans un mot de plus ne dit pas si le serveur a
   // redémarré, si le réseau a lâché ou si le processus a échoué. Le sidecar
   // écrit ses raisons ; on les montre (avec relances, cf. `lireDiagnosticRdp`).
-  void lireDiagnosticRdp(id).then((diag) => {
+  const lecture = lireDiagnosticRdp(id).then((diag) => {
     const zone = ov.querySelector(".rdp-closed-diag") as HTMLElement | null;
     // L'utilisateur a pu reconnecter ou fermer l'onglet pendant les relances :
     // ne rien écrire dans une incrustation déjà retirée du document.
@@ -1274,6 +1280,7 @@ function showRdpClosed(id: number) {
   });
   ov.querySelector('[data-act="close"]')!.addEventListener("click", () => closeRdp(id));
   wrap.appendChild(ov);
+  return lecture;
 }
 
 /** Connexion à un bureau RDP enregistré (mot de passe du trousseau, sinon demandé). */

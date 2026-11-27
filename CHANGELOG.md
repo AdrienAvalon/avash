@@ -86,6 +86,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **« Connexion RDP fermée » dit de nouveau pourquoi.** Quand une session se
+  terminait en erreur (réseau coupé, serveur redémarré brutalement), le
+  processus RDP écrivait sa raison juste après la fermeture de sa liaison
+  avec la page, qui avait déjà lu son journal et le fermait aussitôt :
+  l'incrustation et le diagnostic exporté restaient sans la cause. La page
+  attend désormais que le processus ait fini d'écrire (deux secondes au
+  plus) avant de le fermer. Et un processus RDP qui meurt au lancement sans
+  un mot (bibliothèque manquante, image refusée par Windows) est expliqué
+  par son code de sortie, au lieu d'un « s'est arrêté sans se connecter »
+  générique (audit du 27 novembre 2026).
 - **Un bureau distant dont le réseau a disparu finit par se dire fermé.**
   Rien ne surveillait la liaison : un bureau immobile n'envoie rien, et un
   VPN qui change d'adresse laissait l'onglet vert indéfiniment, l'image
