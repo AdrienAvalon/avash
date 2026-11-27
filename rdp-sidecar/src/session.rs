@@ -9,7 +9,7 @@ use crate::entrees::{input_ops, lock_sync_event};
 use crate::fichiers::{self, Offre, Reception};
 use crate::presse_papiers::{ClipBackend, ClipReq, LocalClip};
 use crate::son::{Son, SonBackend};
-use crate::trames::{frame_msg, frames_msg, nouvelle_taille, REPRISE};
+use crate::trames::{nouvelle_taille, TamponTrames, REPRISE};
 use crate::verrou::Verrou as _;
 use crate::{egfx, magnetoscope};
 use anyhow::{Context, Result};
@@ -247,6 +247,8 @@ pub async fn executer(
     // continuait d'envoyer et le processus de décoder un bureau que personne ne
     // regardait (audit du 27 novembre 2026, PR-1). Elle suspend désormais aussi
     // le serveur, quand il l'annonce.
+    // Voir `TamponTrames` (audit du 27 novembre 2026, PR-9).
+    let mut tampon = TamponTrames::default();
     let mut cadence = Cadence::nouvelle(
         affichage,
         etat.pause.load(std::sync::atomic::Ordering::Relaxed),
@@ -287,10 +289,10 @@ pub async fn executer(
     macro_rules! flush_dirty {
         () => {
             if let Some(zones) = cadence.a_emettre(Instant::now()) {
-                let msg = frames_msg(&image, &zones);
+                let msg = tampon.frames(&image, &zones);
                 stat_bytes += msg.len() as u64;
                 stat_frames += 1;
-                sink.send(Message::Binary(msg.into()))
+                sink.send(Message::Binary(msg))
                     .await
                     .context("envoi frame")?;
             }
@@ -611,10 +613,10 @@ pub async fn executer(
                             right: image.width().saturating_sub(1),
                             bottom: image.height().saturating_sub(1),
                         };
-                        let msg = frame_msg(&image, &full);
+                        let msg = tampon.frame(&image, &full);
                         stat_bytes += msg.len() as u64;
                         stat_frames += 1;
-                        sink.send(Message::Binary(msg.into())).await.context("envoi refresh")?;
+                        sink.send(Message::Binary(msg)).await.context("envoi refresh")?;
                         // Lève la pause (voir `Cadence::rafraichir`) et, si le
                         // serveur était suspendu, le relance : l'image gardée
                         // part d'abord, le serveur la remplace aussitôt après.
