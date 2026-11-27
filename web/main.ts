@@ -15,6 +15,7 @@ import { filterHosts, isPasswordRequired, isHostKeyChanged, nettoyerMarqueurs, l
 import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
 import { brancherParametres, parametresOpen } from "./parametres";
 import { estWindows } from "./vnc-clavier";
+import { cesserStylesXterm, refleterStylesXterm } from "./styles-xterm";
 import { FONT_STACK, applyTheme, cycleTheme, ensureFontLoaded, ensureGrasseChargee, etatsSessionsParHote, renderTagBar, terminalTheme } from "./theme";
 import { MENUS_CONTEXTUELS, openHostMenu, ouvrirMenuAuClavier } from "./menu-hote";
 import { type ManualTarget } from "./connexion-directe";
@@ -657,6 +658,9 @@ async function newSessionShell(label: string) {
   container.style.inset = "10px 8px 6px 14px";
   $("terminal").appendChild(container);
   term.open(container);
+  // Les <style> de xterm sont refusés par la CSP (nonce de Tauri) : sans ce
+  // relais, le rendu DOM de Linux perdait sa police (voir styles-xterm.ts).
+  if (term.element) refleterStylesXterm(term.element);
   // Collage natif (Maj+Inser, clic du milieu, menu du système) : par la même
   // décision que Ctrl+Maj+V, confirmation comprise. Il allait droit au PTY
   // (audit du 12 septembre 2026, FS-2, contrat K9).
@@ -1137,6 +1141,7 @@ export function closeSession(id: number) {
   // détaché son élément et `parentElement` ne mène plus nulle part ; chaque
   // onglet fermé laissait un conteneur vide dans la zone centrale.
   const conteneur = s.term.element?.parentElement;
+  cesserStylesXterm(s.term.element);
   s.term.dispose();
   s.tab.remove();
   conteneur?.remove();

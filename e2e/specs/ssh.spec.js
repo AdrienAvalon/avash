@@ -14,6 +14,34 @@ describe("SSH — connexion réelle (sshd local)", () => {
       { timeout: 5000, timeoutMsg: "accueil encore visible" });
   });
 
+  // Signalé par le mainteneur le 27 novembre 2026 (AppImage sous Linux) : les
+  // terminaux SSH s'affichaient dans la police proportionnelle de l'interface,
+  // colonnes décalées. Le rendu DOM (Linux, depuis la 0.14.2) met sa police
+  // dans des <style> que la CSP refusait ; styles-xterm.ts les relaie. Sous
+  // WebGL (Windows), le texte est dessiné sur un canevas : rien à lire ici,
+  // mais la police demandée au terminal doit rester la même.
+  it("le terminal garde sa police à chasse fixe", async () => {
+    const etat = await browser.execute(() => {
+      const lignes = document.querySelector("#terminal .xterm-rows");
+      if (!lignes || getComputedStyle(lignes).display === "none") return null;
+      const cs = getComputedStyle(lignes);
+      // Deux mots de même longueur, un étroit et un large : à chasse fixe,
+      // ils occupent la même largeur.
+      const mesure = (texte) => {
+        const s = document.createElement("span");
+        s.textContent = texte;
+        lignes.appendChild(s);
+        const l = s.getBoundingClientRect().width;
+        s.remove();
+        return l;
+      };
+      return { famille: cs.fontFamily, etroit: mesure("iiiiiiiiii"), large: mesure("WWWWWWWWWW") };
+    });
+    if (etat === null) return; // rendu WebGL : pas de lignes DOM visibles
+    expect(etat.famille).toContain("Avash Mono");
+    expect(Math.abs(etat.etroit - etat.large)).toBeLessThan(1);
+  });
+
   // Audit du 12 septembre 2026 (C-front-2) : xterm voyait Ctrl+Tab avant
   // l'application et l'envoyait au shell en tabulation, qui complétait « ec » en
   // « echo ». Un seul onglet ici : le raccourci n'a rien à faire, le shell ne
