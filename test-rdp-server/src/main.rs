@@ -16,6 +16,7 @@ use core::net::SocketAddr;
 use core::num::{NonZeroU16, NonZeroUsize};
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
@@ -192,11 +193,19 @@ fn setup_logging() -> anyhow::Result<()> {
 #[derive(Clone, Debug)]
 struct Handler {
     mire: Option<u32>,
+    /// Le drapeau que la bibliothèque pose quand le client envoie un Suppress
+    /// Output (bureau masqué ou réduit) et lève au Suppress Output contraire
+    /// ou au Refresh Rect. Partagé avec elle par
+    /// `with_display_suppressed_handle`.
+    suppression: Arc<AtomicBool>,
 }
 
 impl Handler {
     fn new(mire: Option<u32>) -> Self {
-        Self { mire }
+        Self {
+            mire,
+            suppression: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -222,7 +231,16 @@ struct DisplayUpdates {
     /// suivantes, il en fait sauter).
     mire: Option<(u32, tokio::time::Interval)>,
     rang: u32,
+    /// Voir `Handler::suppression`.
+    suppression: Arc<AtomicBool>,
+    /// L'état déjà annoncé sur la sortie standard, pour n'écrire qu'aux
+    /// changements.
+    suspendue: bool,
 }
+
+/// Le pas d'attente d'une mire suspendue : de quoi reprendre sans délai
+/// perceptible, sans tourner à vide.
+const PAS_SUSPENDU: Duration = Duration::from_millis(50);
 
 /// Une image plein écran qui change entièrement d'une fois sur l'autre : un
 /// dégradé diagonal qui glisse de quatre pixels par image, avec un bandeau
@@ -256,6 +274,23 @@ fn image_de_mire(rang: u32) -> Vec<u8> {
 #[async_trait::async_trait]
 impl RdpServerDisplayUpdates for DisplayUpdates {
     async fn next_update(&mut self) -> anyhow::Result<Option<DisplayUpdate>> {
+        // La bibliothèque savait recevoir le Suppress Output mais la mire n'en
+        // lisait pas le drapeau : un client qui suspendait l'affichage recevait
+        // tout de même 30 images pleines par seconde, et le banc ne pouvait
+        // voir aucun gain (audit du 27 novembre 2026, PR-1). Le changement
+        // d'état s'écrit sur la sortie standard, lisible par la suite bout en
+        // bout comme « touche du client ».
+        while self.suppression.load(Ordering::Relaxed) {
+            if !self.suspendue {
+                self.suspendue = true;
+                println!("affichage suspendu par le client");
+            }
+            sleep(PAS_SUSPENDU).await;
+        }
+        if self.suspendue {
+            self.suspendue = false;
+            println!("affichage repris par le client");
+        }
         if let Some((_, horloge)) = self.mire.as_mut() {
             horloge.tick().await;
             self.rang = self.rang.wrapping_add(1);
@@ -327,7 +362,12 @@ impl RdpServerDisplay for Handler {
             horloge.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
             (hz, horloge)
         });
-        Ok(Box::new(DisplayUpdates { mire, rang: 0 }))
+        Ok(Box::new(DisplayUpdates {
+            mire,
+            rang: 0,
+            suppression: self.suppression.clone(),
+            suspendue: false,
+        }))
     }
 }
 
@@ -843,6 +883,7 @@ async fn run(
     let mut server = server_builder
         .with_input_handler(handler.clone())
         .with_display_handler(handler.clone())
+        .with_display_suppressed_handle(handler.suppression.clone())
         .with_cliprdr_factory(Some(Box::new(ClipFactory {
             sender: None,
             offrir,
@@ -861,4 +902,43 @@ async fn run(
     }));
 
     server.run().await
+}
+
+#[cfg(test)]
+mod tests_suspension {
+    use super::{AtomicBool, Duration, Handler, Ordering, RdpServerDisplay as _};
+    use std::sync::Arc;
+
+    /// Audit du 27 novembre 2026, PR-1 : la mire poussait ses images pleines
+    /// à un client qui avait suspendu l'affichage. Suspendue, elle ne rend
+    /// plus rien ; levée, elle reprend aussitôt.
+    #[test]
+    fn la_mire_suspendue_ne_pousse_plus_d_image_et_reprend_a_la_levee() {
+        let rt = ironrdp::server::tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut h = Handler::new(Some(30));
+            let drapeau: Arc<AtomicBool> = h.suppression.clone();
+            let mut maj = h.updates().await.unwrap();
+            assert!(maj.next_update().await.unwrap().is_some(), "la mire émet");
+            drapeau.store(true, Ordering::Relaxed);
+            let attente = ironrdp::server::tokio::time::timeout(
+                Duration::from_millis(400),
+                maj.next_update(),
+            );
+            assert!(
+                attente.await.is_err(),
+                "aucune image tant que c'est suspendu"
+            );
+            drapeau.store(false, Ordering::Relaxed);
+            let repris =
+                ironrdp::server::tokio::time::timeout(Duration::from_secs(2), maj.next_update());
+            assert!(
+                repris.await.expect("la mire reprend").unwrap().is_some(),
+                "une image neuve à la levée"
+            );
+        });
+    }
 }

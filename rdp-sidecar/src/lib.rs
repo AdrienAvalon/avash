@@ -21,6 +21,7 @@
 
 pub mod acces_local;
 pub mod args;
+pub mod cadence;
 pub mod capture;
 pub mod connexion;
 pub mod disque;

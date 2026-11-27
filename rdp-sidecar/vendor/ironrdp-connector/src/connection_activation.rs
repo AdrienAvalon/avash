@@ -171,6 +171,9 @@ impl Sequence for ConnectionActivationSequence {
                         break;
                     }
                 }
+                // Lu avant que `create_client_confirm_active` ne consomme la
+                // liste : voir `DisplayUpdateSupport`.
+                let display_updates = display_update_support(&capability_sets);
 
                 // At this point we have already sent a requested desktop size to the server -- either as a part of the
                 // [`TS_UD_CS_CORE`] (on initial connection) or the [`DISPLAYCONTROL_MONITOR_LAYOUT`] (on resize event).
@@ -217,6 +220,7 @@ impl Sequence for ConnectionActivationSequence {
                     ConnectionActivationState::ConnectionFinalization {
                         desktop_size,
                         share_id,
+                        display_updates,
                         connection_finalization: ConnectionFinalizationSequence::new(
                             self.io_channel_id,
                             self.user_channel_id,
@@ -228,6 +232,7 @@ impl Sequence for ConnectionActivationSequence {
             ConnectionActivationState::ConnectionFinalization {
                 desktop_size,
                 share_id,
+                display_updates,
                 mut connection_finalization,
             } => {
                 debug!("Connection Finalization");
@@ -238,12 +243,14 @@ impl Sequence for ConnectionActivationSequence {
                     ConnectionActivationState::ConnectionFinalization {
                         desktop_size,
                         share_id,
+                        display_updates,
                         connection_finalization,
                     }
                 } else {
                     ConnectionActivationState::Finalized {
                         desktop_size,
                         share_id,
+                        display_updates,
                         enable_server_pointer: self.config.enable_server_pointer,
                         pointer_software_rendering: self.config.pointer_software_rendering,
                     }
@@ -267,14 +274,52 @@ pub enum ConnectionActivationState {
     ConnectionFinalization {
         desktop_size: DesktopSize,
         share_id: u32,
+        display_updates: DisplayUpdateSupport,
         connection_finalization: ConnectionFinalizationSequence,
     },
     Finalized {
         desktop_size: DesktopSize,
         share_id: u32,
+        display_updates: DisplayUpdateSupport,
         enable_server_pointer: bool,
         pointer_software_rendering: bool,
     },
+}
+
+/// Ce que le serveur accepte pour piloter ses mises à jour d'affichage
+/// (MS-RDPBCGR 2.2.7.1.1, General Capability Set : `refreshRectSupport` et
+/// `suppressOutputSupport`, deux drapeaux propres au serveur).
+///
+/// Ajouté par Avash (audit du 27 novembre 2026, PR-1) : l'amont lisait
+/// l'ensemble général du serveur pour sa seule version de protocole, puis le
+/// jetait. Or la spécification interdit d'envoyer un Suppress Output ou un
+/// Refresh Rect à un serveur qui ne les annonce pas, et c'est par le premier
+/// qu'un client dit « mon bureau n'est plus regardé, cesse d'envoyer » (mstsc
+/// le fait à chaque réduction de fenêtre). Sans ces deux drapeaux, le processus
+/// RDP décodait à pleine cadence un bureau masqué : 300 % d'un cœur au banc.
+/// Relevés à chaque activation, réactivation comprise, puisqu'un serveur peut
+/// y annoncer un autre ensemble.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct DisplayUpdateSupport {
+    /// Le serveur honore le Suppress Output PDU (MS-RDPBCGR 2.2.11.3).
+    pub suppress_output: bool,
+    /// Le serveur honore le Refresh Rect PDU (MS-RDPBCGR 2.2.11.2).
+    pub refresh_rect: bool,
+}
+
+/// Les deux drapeaux de l'ensemble général du serveur ; aucun si l'ensemble
+/// manque, ce qui interdit les deux PDU (le côté sûr).
+pub fn display_update_support(capability_sets: &[CapabilitySet]) -> DisplayUpdateSupport {
+    capability_sets
+        .iter()
+        .find_map(|c| match c {
+            CapabilitySet::General(g) => Some(DisplayUpdateSupport {
+                suppress_output: g.suppress_output_support,
+                refresh_rect: g.refresh_rect_support,
+            }),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 impl State for ConnectionActivationState {
@@ -430,5 +475,45 @@ fn create_client_confirm_active(
             source_descriptor: "IRONRDP".to_owned(),
             capability_sets: server_capability_sets,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests_mises_a_jour_d_affichage {
+    use ironrdp_pdu::rdp::capability_sets::{CapabilitySet, General, Pointer};
+
+    use super::{DisplayUpdateSupport, display_update_support};
+
+    /// Audit du 27 novembre 2026, PR-1 : les drapeaux de l'ensemble général du
+    /// serveur sont relevés tels quels, quel que soit leur rang dans la liste.
+    #[test]
+    fn les_drapeaux_d_affichage_du_serveur_sont_releves() {
+        let caps = [
+            CapabilitySet::Pointer(Pointer {
+                color_pointer_cache_size: 0,
+                pointer_cache_size: 0,
+            }),
+            CapabilitySet::General(General {
+                suppress_output_support: true,
+                refresh_rect_support: false,
+                ..Default::default()
+            }),
+        ];
+        assert_eq!(
+            display_update_support(&caps),
+            DisplayUpdateSupport {
+                suppress_output: true,
+                refresh_rect: false,
+            }
+        );
+    }
+
+    /// Sans ensemble général, rien n'est permis : la spécification interdit les
+    /// deux PDU à un serveur qui ne les annonce pas.
+    #[test]
+    fn sans_ensemble_general_aucun_pdu_d_affichage_n_est_permis() {
+        assert_eq!(display_update_support(&[]), DisplayUpdateSupport::default());
+        let rien = DisplayUpdateSupport::default();
+        assert!(!rien.suppress_output && !rien.refresh_rect);
     }
 }

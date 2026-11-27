@@ -100,6 +100,22 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
   police et la chasse fixe du terminal.
 
+### Amélioré
+
+- **Un bureau distant masqué ne coûte plus rien au processeur.** Derrière un
+  onglet SSH, un bureau qui bouge (vidéo, tableau de bord, journal qui
+  défile) restait décodé à pleine cadence : la pause de l'onglet ne retenait
+  que l'envoi à la page, le serveur continuait d'envoyer et le processus RDP
+  de décoder, jusqu'à 300 % d'un cœur au banc. Une seconde après le masquage,
+  Avash demande désormais au serveur de suspendre son affichage (Suppress
+  Output, comme mstsc quand on réduit sa fenêtre), et le lui fait reprendre
+  au retour, avec un rafraîchissement complet. Seulement auprès d'un serveur
+  qui l'annonce, et après une première image. Le serveur apprend ainsi qu'un
+  onglet est masqué, ce que mstsc lui dit déjà. Notre copie du connecteur
+  IronRDP garde pour cela deux capacités du serveur qu'elle jetait ; la mire
+  du serveur de test honore la suspension, pour que le banc la voie
+  (audit du 27 novembre 2026).
+
 ## [0.16.0] - 2026-11-26
 
 ### Ajouté

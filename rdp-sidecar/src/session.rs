@@ -2,13 +2,14 @@
 
 use crate::acces_local::{etablir_poste, Poste};
 use crate::args::{taille_sure, Args};
+use crate::cadence::{pdus_de, Cadence, Ordre};
 use crate::capture::{run_shot, Graphique};
 use crate::connexion::{connect, session_close_par_le_serveur, NLA_INDISPONIBLE};
 use crate::entrees::{input_ops, lock_sync_event};
 use crate::fichiers::{self, Offre, Reception};
 use crate::presse_papiers::{ClipBackend, ClipReq, LocalClip};
 use crate::son::{Son, SonBackend};
-use crate::trames::{ajouter_rect, frame_msg, frames_msg, nouvelle_taille, REPRISE};
+use crate::trames::{frame_msg, frames_msg, nouvelle_taille, REPRISE};
 use crate::verrou::Verrou as _;
 use crate::{egfx, magnetoscope};
 use anyhow::{Context, Result};
@@ -30,10 +31,6 @@ use ironrdp_tokio::single_sequence_step;
 use ironrdp_tokio::FramedWrite as _;
 use std::time::{Duration, Instant};
 use tokio_tungstenite::tungstenite::Message;
-
-/// Filet anti-gel : si un ACK de rendu se perd, on renvoie l'état courant
-/// passé ce délai plutôt que de figer l'affichage.
-const ACK_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub enum Suite {
     /// Rien n'a été dessiné : ce serveur n'a probablement que le canal
@@ -126,7 +123,14 @@ pub async fn executer(
     };
     let (w, h) = taille_sure(result.desktop_size.width, result.desktop_size.height)?;
     let activation_factory = result.activation_factory;
+    let mut affichage = result.display_updates;
     eprintln!("connecté : {w}x{h}");
+    if std::env::var_os("AVASH_EGFX_TRACE").is_some() {
+        eprintln!(
+            "affichage : suspension {}, rafraîchissement {}",
+            affichage.suppress_output, affichage.refresh_rect
+        );
+    }
     let mut image = DecodedImage::new(PixelFormat::RgbA32, w, h);
     let (io_channel_id, user_channel_id) = (result.io_channel_id, result.user_channel_id);
     let (message_channel_id, share_id) = (result.message_channel_id, result.share_id);
@@ -208,23 +212,15 @@ pub async fn executer(
 
     let mut db = Database::new();
 
-    // --- Cadencement adaptatif sur ACK (anti-lag) ---------------------------
-    // Au plus une trame « en vol ». Les mises à jour qui arrivent pendant le
-    // rendu de la webview sont fusionnées (union des rectangles) ; à l'ACK, on
-    // envoie l'état le plus récent. Rapide → chaque trame part aussitôt (aucune
-    // latence ajoutée) ; lent → on fusionne, jamais de file qui s'accumule.
-    let mut dirty: Vec<InclusiveRectangle> = Vec::new();
-    let mut awaiting_ack = false;
-    // Onglet masqué : le canvas n'est pas à l'écran, mais l'accusé de rendu
-    // partait quand même — le serveur voyait la voie libre en permanence et le
-    // sidecar continuait à décoder et à pousser des trames pleines (8 Mo en
-    // 1080p) que personne ne regardait. En pause, on accumule le rectangle sale
-    // sans rien émettre ; le retour au premier plan demande un REFRESH.
-    let mut en_pause = false;
+    // --- Cadencement adaptatif sur ACK (anti-lag), pause et suspension -----
+    // Voir cadence.rs. La pause ne retenait que l'envoi à la page : le serveur
+    // continuait d'envoyer et le processus de décoder un bureau que personne ne
+    // regardait (audit du 27 novembre 2026, PR-1). Elle suspend désormais aussi
+    // le serveur, quand il l'annonce.
+    let mut cadence = Cadence::nouvelle(affichage, false, Instant::now());
     // Le serveur dessine-t-il par le chemin classique ? Voir ATTENTE_EGFX.
     let mut dessin_classique = false;
     let mut silence: Option<Instant> = None;
-    let mut last_send = Instant::now();
     // Métriques (fenêtre ~1 s) : fps, débit, latence de bout en bout.
     let (mut stat_frames, mut stat_bytes): (u32, u64) = (0, 0);
     let mut lat_ms: f32 = 0.0;
@@ -256,20 +252,39 @@ pub async fn executer(
     #[allow(clippy::items_after_statements)]
     macro_rules! flush_dirty {
         () => {
-            if !awaiting_ack && !en_pause {
-                if !dirty.is_empty() {
-                    let msg = frames_msg(&image, &dirty);
-                    dirty.clear();
-                    stat_bytes += msg.len() as u64;
-                    stat_frames += 1;
-                    sink.send(Message::Binary(msg.into()))
-                        .await
-                        .context("envoi frame")?;
-                    awaiting_ack = true;
-                    last_send = Instant::now();
-                }
+            if let Some(zones) = cadence.a_emettre(Instant::now()) {
+                let msg = frames_msg(&image, &zones);
+                stat_bytes += msg.len() as u64;
+                stat_frames += 1;
+                sink.send(Message::Binary(msg.into()))
+                    .await
+                    .context("envoi frame")?;
             }
         };
+    }
+
+    // Porte un ordre au serveur (suspendre ou rétablir ses mises à jour
+    // d'affichage), pour un bureau de la taille de l'image.
+    #[allow(clippy::items_after_statements)]
+    macro_rules! ordonner {
+        ($ordre:expr) => {{
+            let ordre: Option<Ordre> = $ordre;
+            if let Some(o) = ordre {
+                if std::env::var_os("AVASH_EGFX_TRACE").is_some() {
+                    eprintln!("affichage : {o:?}");
+                }
+                for pdu in pdus_de(o, image.width(), image.height(), affichage) {
+                    let mut buf = WriteBuf::new();
+                    active
+                        .encode_static(&mut buf, pdu)
+                        .context("encodage suspension")?;
+                    framed
+                        .write_all(buf.filled())
+                        .await
+                        .context("écriture suspension")?;
+                }
+            }
+        }};
     }
 
     // Récolte les trames décodées par le canal graphique et les peint dans
@@ -280,7 +295,13 @@ pub async fn executer(
         () => {{
             let sortie = std::mem::take(&mut *file_egfx.verrou());
             if let Some((nl, nh)) = sortie.taille {
-                if nouvelle_taille(&mut image, &mut dirty, &mut awaiting_ack, nl, nh) {
+                if nouvelle_taille(
+                    &mut image,
+                    &mut cadence.dirty,
+                    &mut cadence.awaiting_ack,
+                    nl,
+                    nh,
+                ) {
                     let mut hello = vec![1u8];
                     hello.extend_from_slice(&nl.to_le_bytes());
                     hello.extend_from_slice(&nh.to_le_bytes());
@@ -305,23 +326,20 @@ pub async fn executer(
                     continue;
                 }
                 image.peindre_rgba(t.x, t.y, t.largeur, t.hauteur, &t.pixels);
-                ajouter_rect(
-                    &mut dirty,
-                    &InclusiveRectangle {
-                        left: t.x,
-                        top: t.y,
-                        right: t
-                            .x
-                            .saturating_add(t.largeur)
-                            .saturating_sub(1)
-                            .min(image.width().saturating_sub(1)),
-                        bottom: t
-                            .y
-                            .saturating_add(t.hauteur)
-                            .saturating_sub(1)
-                            .min(image.height().saturating_sub(1)),
-                    },
-                );
+                cadence.ajouter(&InclusiveRectangle {
+                    left: t.x,
+                    top: t.y,
+                    right: t
+                        .x
+                        .saturating_add(t.largeur)
+                        .saturating_sub(1)
+                        .min(image.width().saturating_sub(1)),
+                    bottom: t
+                        .y
+                        .saturating_add(t.hauteur)
+                        .saturating_sub(1)
+                        .min(image.height().saturating_sub(1)),
+                });
             }
             flush_dirty!();
         }};
@@ -421,9 +439,8 @@ pub async fn executer(
                     }
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&6) => {
                         // ACK de rendu : RTT de bout en bout, lissé.
-                        let rtt = last_send.elapsed().as_secs_f32() * 1000.0;
+                        let rtt = cadence.accuse(Instant::now());
                         lat_ms = if lat_ms == 0.0 { rtt } else { lat_ms.mul_add(0.8, rtt * 0.2) };
-                        awaiting_ack = false;
                         flush_dirty!();
                     }
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&8) => {
@@ -542,11 +559,11 @@ pub async fn executer(
                         partage_clip.store(b[1] != 0, std::sync::atomic::Ordering::Relaxed);
                     }
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&11) && b.len() >= 2 => {
-                        // PAUSE : 1 = l'onglet est passé à l'arrière-plan.
-                        en_pause = b[1] != 0;
-                        if !en_pause {
-                            flush_dirty!();
-                        }
+                        // PAUSE : 1 = l'onglet est passé à l'arrière-plan. La
+                        // suspension du serveur attend l'anti-rebond (au tic) ;
+                        // la reprise, elle, part aussitôt.
+                        ordonner!(cadence.pause(b[1] != 0, Instant::now()));
+                        flush_dirty!();
                     }
                     Some(Ok(Message::Binary(b))) if b.first() == Some(&9) => {
                         // REFRESH : l'onglet a été réaffiché et son canvas peut être
@@ -561,13 +578,10 @@ pub async fn executer(
                         stat_bytes += msg.len() as u64;
                         stat_frames += 1;
                         sink.send(Message::Binary(msg.into())).await.context("envoi refresh")?;
-                        awaiting_ack = true;
-                        last_send = Instant::now();
-                        dirty.clear();
-                        // Un REFRESH ne s'obtient qu'en revenant au premier plan :
-                        // il lève la pause. Le flux ne peut donc pas rester gelé
-                        // si l'interface oubliait de la lever explicitement.
-                        en_pause = false;
+                        // Lève la pause (voir `Cadence::rafraichir`) et, si le
+                        // serveur était suspendu, le relance : l'image gardée
+                        // part d'abord, le serveur la remplace aussitôt après.
+                        ordonner!(cadence.rafraichir(Instant::now()));
                     }
                     Some(Ok(Message::Binary(b))) => {
                         // [10] ne décrit pas une frappe mais l'état des verrous :
@@ -644,11 +658,13 @@ pub async fn executer(
                         return Ok(Suite::ReprendreAvecGraphique);
                     }
                 }
-                // Un ACK perdu ne doit pas geler l'écran : au-delà du délai, on
-                // considère la webview libre et on renvoie l'état courant.
-                if awaiting_ack && last_send.elapsed() > ACK_TIMEOUT {
-                    awaiting_ack = false;
-                }
+                // Un ACK perdu ne doit pas geler l'écran (au-delà du délai, la
+                // webview est considérée libre), et un bureau masqué depuis
+                // assez longtemps suspend le serveur.
+                ordonner!(cadence.tic(
+                    Instant::now(),
+                    dessine.load(std::sync::atomic::Ordering::Relaxed)
+                ));
                 flush_dirty!();
                 // Toutes les cinq secondes, IronRDP libère les verrous de
                 // presse-papiers expirés et clôt les transferts sans réponse.
@@ -834,7 +850,7 @@ pub async fn executer(
                         ActiveStageOutput::GraphicsUpdate(rect) => {
                             dessin_classique = true;
                             dessine.store(true, std::sync::atomic::Ordering::Relaxed);
-                            ajouter_rect(&mut dirty, &rect);
+                            cadence.ajouter(&rect);
                             flush_dirty!();
                         }
                         ActiveStageOutput::Terminate(raison) => {
@@ -852,17 +868,18 @@ pub async fn executer(
                             // la séquence désactivation/réactivation pour renégocier.
                             let mut buf = WriteBuf::new();
                             let mut seq = activation_factory.create();
-                            let size = loop {
+                            let (size, affichage_neuf) = loop {
                                 single_sequence_step(&mut framed, &mut seq, &mut buf)
                                     .await
                                     .context("réactivation")?;
-                                if let ConnectionActivationState::Finalized { desktop_size, share_id, .. } =
+                                if let ConnectionActivationState::Finalized { desktop_size, share_id, display_updates, .. } =
                                     seq.connection_activation_state()
                                 {
                                     active.set_share_id(share_id);
-                                    break desktop_size;
+                                    break (desktop_size, display_updates);
                                 }
                             };
+                            affichage = affichage_neuf;
                             let (nw, nh) = taille_sure(size.width, size.height)?;
                             // Sur un serveur qui dessine par le canal graphique, le
                             // ResetGraphics est déjà passé par là : l'image est à la
@@ -871,13 +888,15 @@ pub async fn executer(
                             // `nouvelle_taille`. Sur le chemin classique, la taille
                             // change vraiment et le serveur renvoie un
                             // rafraîchissement complet.
-                            if nouvelle_taille(&mut image, &mut dirty, &mut awaiting_ack, nw, nh) {
+                            if nouvelle_taille(&mut image, &mut cadence.dirty, &mut cadence.awaiting_ack, nw, nh) {
                                 // Annonce la nouvelle taille à Avash (réutilise CONNECTED [1][w][h]).
                                 let mut msg = vec![1u8];
                                 msg.extend_from_slice(&nw.to_le_bytes());
                                 msg.extend_from_slice(&nh.to_le_bytes());
                                 sink.send(Message::Binary(msg.into())).await.context("annonce resize")?;
                             }
+                            // Après la taille : le PDU porte celle du bureau.
+                            ordonner!(cadence.reactivation(affichage));
                         }
                         _ => {}
                     }
