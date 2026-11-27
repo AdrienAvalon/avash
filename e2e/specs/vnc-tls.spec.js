@@ -62,12 +62,20 @@ describe("VNC — VeNCrypt, TLS et certificat épinglé", () => {
     await connecterVnc(TLS_PORT, "test");
     await $(".rdp-container canvas").waitForExist({ timeout: 20000, timeoutMsg: "aucun canvas VNC" });
     await attendreBureauConnecte("le bureau VNC (VeNCrypt)");
-    let vu = null;
-    await browser.waitUntil(async () => {
-      vu = await pixel(100, 100);
-      return JSON.stringify(vu) === JSON.stringify([255, 0, 0]);
-    }, { timeout: 10000, timeoutMsg: `moitié gauche : ${JSON.stringify(vu)} ; journal : ${journal}` });
-    expect(await pixel(540, 380)).toEqual([0, 0, 255]);
+    // Les deux moitiés s'attendent l'une comme l'autre : le bureau arrive en
+    // plusieurs rectangles, et lire la droite dès que la gauche est peinte
+    // trouvait parfois du noir (E2E Windows, 27 novembre 2026).
+    for (const [x, y, attendue, quoi] of [[100, 100, [255, 0, 0], "moitié gauche"], [540, 380, [0, 0, 255], "moitié droite"]]) {
+      let vu = null;
+      try {
+        await browser.waitUntil(async () => {
+          vu = await pixel(x, y);
+          return JSON.stringify(vu) === JSON.stringify(attendue);
+        }, { timeout: 10000 });
+      } catch (e) {
+        throw new Error(`${quoi} : ${JSON.stringify(vu)}, attendu ${JSON.stringify(attendue)} ; journal : ${journal}`, { cause: e });
+      }
+    }
     expect(journal).toContain("type 19 choisi");
     expect(journal).toContain("TLS établi");
     // Le certificat est épinglé sous une clé qui dit le protocole.
