@@ -12,14 +12,17 @@ import indexHtml from "./index.html?raw";
 // On enregistre l'ordre des commandes IPC : c'est lui, et non le contenu, qui
 // révèle le défaut (diagnostic lu avant, fermeture après).
 const commandes: string[] = [];
-const invoke = vi.fn((cmd: string) => {
+const DIAGNOSTIC = "connecté : 10.0.0.1:3389\nError: le serveur a fermé la connexion";
+/** La réponse de `rdp_diagnostic` ; un test la retarde pour voir l'ordre. */
+let diagnostic: () => Promise<string> = () => Promise.resolve(DIAGNOSTIC);
+const invoke = vi.fn<(cmd: string, args?: unknown) => Promise<unknown>>((cmd) => {
   commandes.push(cmd);
   if (cmd === "rdp_open") return Promise.resolve({ port: 1234, token: "jeton" });
-  if (cmd === "rdp_diagnostic") return Promise.resolve("connecté : 10.0.0.1:3389\nError: le serveur a fermé la connexion");
+  if (cmd === "rdp_diagnostic") return diagnostic();
   return Promise.resolve(undefined);
 });
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string) => invoke(cmd) }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args?: unknown) => invoke(cmd, args) }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: () => Promise.resolve(() => {}) }) }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen: () => Promise.resolve() }) }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ readText: vi.fn().mockResolvedValue(""), writeText: vi.fn() }));
@@ -82,6 +85,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   FauxWebSocket.derniere = null;
+  diagnostic = () => Promise.resolve(DIAGNOSTIC);
 });
 
 describe("fermeture d'un bureau RDP (ws.onclose)", () => {
@@ -95,6 +99,7 @@ describe("fermeture d'un bureau RDP (ws.onclose)", () => {
 
     // C'est l'ordre qui compte : si `rdp_close` (retrait du journal) part avant
     // `rdp_diagnostic`, ce dernier lit un journal déjà vidé — le défaut d'origine.
+    await vi.waitFor(() => expect(commandes).toContain("rdp_close"));
     const iDiag = commandes.indexOf("rdp_diagnostic");
     const iClose = commandes.indexOf("rdp_close");
     expect(iDiag).toBeGreaterThanOrEqual(0);
@@ -115,5 +120,28 @@ describe("fermeture d'un bureau RDP (ws.onclose)", () => {
       expect(zone.hidden).toBe(false);
       expect(zone.textContent).toContain("fermé la connexion");
     });
+  });
+});
+
+describe("raison d'une fin en erreur (audit du 27 novembre 2026, FI-10)", () => {
+  // La ligne « Error: … » s'écrit au retour du processus, après la fermeture
+  // de la WebSocket, quand le journal porte déjà « connecté » : la première
+  // lecture ne relançait pas et `rdp_close`, juste derrière, tuait le
+  // processus avant qu'il ne l'écrive.
+  it("la_lecture_attend_la_fin_du_processus_et_rdp_close_attend_la_lecture", async () => {
+    let repondre: (d: string) => void = () => {};
+    diagnostic = () => new Promise((r) => { repondre = r; });
+    await openRdp({ host: "10.0.0.1", port: 3389, user: "adrien", password: "x" });
+    const ws = FauxWebSocket.derniere!;
+    ws.readyState = 3;
+    ws.onclose!();
+    const lecture = invoke.mock.calls.find((c) => c[0] === "rdp_diagnostic");
+    expect(lecture?.[1]).toMatchObject({ attendreFin: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(commandes).not.toContain("rdp_close"); // le processus écrit encore
+    repondre(DIAGNOSTIC);
+    await vi.waitFor(() => expect(commandes).toContain("rdp_close"));
+    const zone = document.querySelector(".rdp-closed-diag") as HTMLElement;
+    expect(zone.textContent).toContain("fermé la connexion");
   });
 });

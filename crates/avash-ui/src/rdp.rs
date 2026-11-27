@@ -21,6 +21,10 @@ pub struct RdpStore {
     pub stdins: tokio::sync::Mutex<HashMap<u64, tokio::process::ChildStdin>>,
     /// Dernières lignes de diagnostic du sidecar, par session.
     pub journaux: Mutex<HashMap<u64, std::sync::Arc<Mutex<std::collections::VecDeque<String>>>>>,
+    /// Le journal d'une session est-il complet ? Vrai quand l'erreur standard
+    /// du sidecar s'est fermée, c'est-à-dire quand il a fini d'écrire (voir
+    /// `rdp_diagnostic`, audit du 27 novembre 2026, FI-10).
+    pub journaux_finis: Mutex<HashMap<u64, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 /// Point de connexion WebSocket renvoyé au front.
@@ -312,6 +316,15 @@ pub(crate) async fn ouvrir_avec<R: tauri::Runtime>(
     };
     let (port, token) = match annonce {
         Ok(v) => v,
+        Err(e) if e == ARRET_MUET => {
+            // Rien sur stderr : le chargeur du système a pu refuser le
+            // processus avant sa première ligne. Son code de sortie le dit
+            // (audit du 27 novembre 2026, WI-4).
+            if let Some(statut) = code_de_sortie(&state, id, pid).await {
+                return Err(tuer(&state, id, expliquer_code_de_sortie(statut)).await);
+            }
+            return Err(echec(&state, id, pid, e).await);
+        }
         Err(e) => return Err(echec(&state, id, pid, e).await),
     };
 
@@ -492,6 +505,8 @@ async fn echec(state: &RdpStore, id: u64, pid: Option<u32>, msg: String) -> Stri
 /// mourait sans motif.
 fn suivre_diagnostic(state: &RdpStore, id: u64, flux: tokio::process::ChildStderr) {
     let journal = state.journaux.verrou().entry(id).or_default().clone();
+    let fini = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state.journaux_finis.verrou().insert(id, fini.clone());
     tokio::spawn(async move {
         let mut sorties = BufReader::new(flux).lines();
         while let Ok(Some(l)) = sorties.next_line().await {
@@ -501,6 +516,7 @@ fn suivre_diagnostic(state: &RdpStore, id: u64, flux: tokio::process::ChildStder
             }
             g.push_back(l);
         }
+        fini.store(true, std::sync::atomic::Ordering::Release);
     });
 }
 
@@ -556,9 +572,76 @@ fn message_arret(diag: &str) -> String {
     }
     let msg = diag.lines().last().unwrap_or("").trim();
     if msg.is_empty() {
-        "Le sidecar RDP s'est arrêté sans se connecter.".to_owned()
+        ARRET_MUET.to_owned()
     } else {
         msg.to_owned()
+    }
+}
+
+/// Le message d'un sidecar arrêté sans rien écrire, que `ouvrir_avec` précise
+/// par son code de sortie quand il l'obtient.
+const ARRET_MUET: &str = "Le sidecar RDP s'est arrêté sans se connecter.";
+
+/// Le statut de sortie de NOTRE enfant, attendu au plus une seconde ; l'enfant
+/// mort est alors retiré du magasin. `None` s'il vit encore, s'il n'est plus le
+/// nôtre (onglet fermé, ouverture plus récente sous le même identifiant) ou
+/// s'il est illisible.
+async fn code_de_sortie(
+    state: &RdpStore,
+    id: u64,
+    pid: Option<u32>,
+) -> Option<std::process::ExitStatus> {
+    for _ in 0..20 {
+        {
+            let mut inner = state.inner.verrou();
+            let enfant = inner.get_mut(&id).filter(|c| c.id() == pid)?;
+            if let Ok(Some(statut)) = enfant.try_wait() {
+                inner.remove(&id);
+                return Some(statut);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    None
+}
+
+/// Ce que dit le code de sortie d'un sidecar mort sans un mot.
+///
+/// Trouvé par l'audit du 27 novembre 2026 (WI-4) : le 26 novembre, sur un
+/// Windows neuf, `avash-rdp.exe` mourait au chargement (DLL VCRUNTIME140
+/// absente, 0xC0000135) et l'utilisateur ne lisait que « s'est arrêté sans se
+/// connecter » ; il a fallu une machine virtuelle neuve pour trouver la cause.
+/// Le code du chargeur la donnait. Sous Windows, ce sont des NTSTATUS ; sous
+/// Linux, 127 est le code du chargeur dynamique qui ne trouve pas une
+/// bibliothèque, et un signal dit qui a arrêté le processus.
+fn expliquer_code_de_sortie(statut: std::process::ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        if let Some(signal) = statut.signal() {
+            return format!("{ARRET_MUET} Il a été arrêté par le signal {signal}.");
+        }
+    }
+    let Some(code) = statut.code() else {
+        return ARRET_MUET.to_owned();
+    };
+    // Les NTSTATUS se lisent en hexadécimal non signé, comme Windows les écrit.
+    let brut = u32::from_ne_bytes(code.to_ne_bytes());
+    let cause = match brut {
+        0xC000_0135 => Some("une bibliothèque (DLL) dont il dépend est introuvable sur ce poste"),
+        0xC000_007B => Some("Windows refuse son image (architecture ou fichier abîmé)"),
+        0xC000_0142 => Some("l'initialisation d'une bibliothèque (DLL) a échoué"),
+        0xC000_0428 => Some("Windows a refusé sa signature"),
+        127 if cfg!(unix) => {
+            Some("le système n'a pas trouvé une bibliothèque partagée dont il dépend")
+        }
+        _ => None,
+    };
+    match cause {
+        Some(c) if brut > 0xFFFF => format!("{ARRET_MUET} Au lancement, {c} (code 0x{brut:08X})."),
+        Some(c) => format!("{ARRET_MUET} Au lancement, {c} (code {code})."),
+        None if brut > 0xFFFF => format!("{ARRET_MUET} Code de sortie 0x{brut:08X}."),
+        None => format!("{ARRET_MUET} Code de sortie {code}."),
     }
 }
 
@@ -586,9 +669,40 @@ pub(crate) fn journaux(state: &RdpStore) -> Vec<(u64, String)> {
 ///
 /// L'interface les joint au message de fermeture : sans elles, un onglet RDP
 /// qui meurt en cours de route ne dit rien de la raison.
+///
+/// `attendre_fin` : attendre, au plus `ATTENTE_FIN_JOURNAL`, que le sidecar ait
+/// fini d'écrire. Trouvé par l'audit du 27 novembre 2026 (FI-10) : la ligne
+/// « Error: … » d'une fin en erreur (réseau, redémarrage brutal du serveur)
+/// s'écrit au retour de `main`, APRÈS la fermeture de la WebSocket. Le journal
+/// portant déjà « connecté : `WxH` », la première lecture n'était jamais vide, ne
+/// relançait pas, et la raison manquait à l'incrustation comme au diagnostic
+/// exporté ; `rdp_close`, appelé juste après, tuait d'ailleurs le processus
+/// avant qu'il ne l'écrive.
 #[tauri::command]
-#[must_use]
-pub fn rdp_diagnostic(state: tauri::State<'_, RdpStore>, id: u64) -> String {
+pub async fn rdp_diagnostic(
+    state: tauri::State<'_, RdpStore>,
+    id: u64,
+    attendre_fin: Option<bool>,
+) -> Result<String, String> {
+    if attendre_fin == Some(true) {
+        let fini = state.journaux_finis.verrou().get(&id).cloned();
+        if let Some(fini) = fini {
+            let limite = std::time::Instant::now() + ATTENTE_FIN_JOURNAL;
+            while !fini.load(std::sync::atomic::Ordering::Acquire)
+                && std::time::Instant::now() < limite
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        }
+    }
+    Ok(lire_journal(&state, id))
+}
+
+/// Le temps qu'un sidecar dont la WebSocket s'est fermée met, au plus, à écrire
+/// sa raison et à sortir. Au-delà, on lit ce qu'il y a.
+const ATTENTE_FIN_JOURNAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn lire_journal(state: &RdpStore, id: u64) -> String {
     state
         .journaux
         .verrou()
@@ -616,6 +730,7 @@ async fn tuer(state: &RdpStore, id: u64, msg: String) -> String {
         let _ = child.start_kill();
     }
     state.journaux.verrou().remove(&id);
+    state.journaux_finis.verrou().remove(&id);
     state.stdins.lock().await.remove(&id);
     msg
 }
@@ -647,6 +762,7 @@ pub fn rdp_close(state: tauri::State<'_, RdpStore>, id: u64) -> Result<(), Strin
         }
     }
     state.journaux.verrou().remove(&id);
+    state.journaux_finis.verrou().remove(&id);
     Ok(())
 }
 
@@ -1298,7 +1414,57 @@ mod tests_ouverture {
     async fn fermer_ou_diagnostiquer_une_session_inconnue_ne_casse_rien() {
         let app = app_de_test();
         assert!(rdp_close(app.state::<RdpStore>(), 42).is_ok());
-        assert_eq!(rdp_diagnostic(app.state::<RdpStore>(), 42), "");
+        assert_eq!(
+            rdp_diagnostic(app.state::<RdpStore>(), 42, None)
+                .await
+                .unwrap(),
+            ""
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_code_de_sortie {
+    use super::{expliquer_code_de_sortie, ARRET_MUET};
+
+    #[cfg(unix)]
+    fn statut(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt as _;
+        std::process::ExitStatus::from_raw((code & 0xff) << 8)
+    }
+    #[cfg(windows)]
+    fn statut(code: i32) -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt as _;
+        std::process::ExitStatus::from_raw(u32::from_ne_bytes(code.to_ne_bytes()))
+    }
+
+    /// Audit du 27 novembre 2026, WI-4 : les codes du chargeur Windows se
+    /// traduisent ; un code inconnu reste dit tel quel.
+    #[cfg(windows)]
+    #[test]
+    fn les_codes_du_chargeur_windows_se_traduisent() {
+        let m = expliquer_code_de_sortie(statut(i32::from_ne_bytes(0xC000_0135_u32.to_ne_bytes())));
+        assert!(m.contains("DLL") && m.contains("0xC0000135"), "{m}");
+        let inconnu = expliquer_code_de_sortie(statut(3));
+        assert!(
+            inconnu.starts_with(ARRET_MUET) && inconnu.contains('3'),
+            "{inconnu}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn un_code_de_sortie_se_dit_toujours() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let m = expliquer_code_de_sortie(statut(127));
+        assert!(
+            m.starts_with(ARRET_MUET) && m.contains("bibliothèque partagée"),
+            "{m}"
+        );
+        let inconnu = expliquer_code_de_sortie(statut(3));
+        assert!(inconnu.contains("Code de sortie 3"), "{inconnu}");
+        let tue = expliquer_code_de_sortie(std::process::ExitStatus::from_raw(9));
+        assert!(tue.contains("signal 9"), "{tue}");
     }
 }
 
@@ -1547,8 +1713,73 @@ mod tests_sidecar_factice {
 
     fn vide(app: &tauri::App<tauri::test::MockRuntime>) -> bool {
         let s = app.state::<RdpStore>();
-        let vide = s.inner.lock().unwrap().is_empty() && s.journaux.lock().unwrap().is_empty();
+        let vide = s.inner.lock().unwrap().is_empty()
+            && s.journaux.lock().unwrap().is_empty()
+            && s.journaux_finis.lock().unwrap().is_empty();
         vide && s.stdins.try_lock().is_ok_and(|g| g.is_empty())
+    }
+
+    /// Audit du 27 novembre 2026, FI-10 : la raison d'une fin en erreur
+    /// s'écrit APRÈS la fermeture de la WebSocket, quand le journal porte déjà
+    /// « connecté ». Une lecture qui attend la fin du sidecar la trouve ; une
+    /// lecture immédiate ne la voit pas encore.
+    #[tokio::test]
+    async fn la_raison_ecrite_apres_la_fermeture_se_lit_en_attendant_la_fin() {
+        let f = Factice::nouveau(
+            "IFS= read -r mdp\necho '5000 j'\necho 'connecté : 800x600' >&2\n\
+             sleep 0.4\necho 'Error: Le serveur a fermé la connexion.' >&2\nexit 1\n",
+        );
+        let app = app_de_test();
+        ouvrir_avec(app.handle(), Some(Factice::bin()), f.demande(1, "p"))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let tot = rdp_diagnostic(app.state::<RdpStore>(), 1, None)
+            .await
+            .unwrap();
+        assert!(!tot.contains("Error:"), "pas encore écrite : {tot:?}");
+        let lu = rdp_diagnostic(app.state::<RdpStore>(), 1, Some(true))
+            .await
+            .unwrap();
+        assert!(lu.contains("connecté : 800x600"), "{lu:?}");
+        assert!(lu.contains("Le serveur a fermé la connexion."), "{lu:?}");
+        rdp_close(app.state::<RdpStore>(), 1).unwrap();
+        assert!(vide(&app));
+    }
+
+    /// L'attente est bornée : un sidecar qui ne finit pas n'empêche pas de lire
+    /// ce qu'il a déjà écrit.
+    #[tokio::test]
+    async fn l_attente_de_la_fin_du_journal_est_bornee() {
+        let f = Factice::nouveau(ANNONCE_PUIS_ATTENTE);
+        let app = app_de_test();
+        ouvrir_avec(app.handle(), Some(Factice::bin()), f.demande(1, "p"))
+            .await
+            .unwrap();
+        let debut = std::time::Instant::now();
+        let lu = rdp_diagnostic(app.state::<RdpStore>(), 1, Some(true))
+            .await
+            .unwrap();
+        assert!(debut.elapsed() < super::ATTENTE_FIN_JOURNAL + std::time::Duration::from_secs(1));
+        assert!(lu.contains("coupure simulée"), "{lu:?}");
+        rdp_close(app.state::<RdpStore>(), 1).unwrap();
+    }
+
+    /// Audit du 27 novembre 2026, WI-4 : un sidecar mort au chargement, sans
+    /// une ligne, donnait un message générique ; son code de sortie dit la
+    /// cause (ici 127, le chargeur dynamique sans sa bibliothèque).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn un_sidecar_mort_sans_un_mot_est_explique_par_son_code_de_sortie() {
+        let f = Factice::nouveau("IFS= read -r mdp\nexit 127\n");
+        let app = app_de_test();
+        let e = ouvrir_avec(app.handle(), Some(Factice::bin()), f.demande(1, "p"))
+            .await
+            .err()
+            .unwrap();
+        assert!(e.contains("bibliothèque partagée"), "{e}");
+        assert!(e.contains("127"), "{e}");
+        assert!(vide(&app));
     }
 
     /// Le contrat de SECURITY.md : un bureau enregistré ouvre sans que son mot
@@ -1670,7 +1901,9 @@ mod tests_sidecar_factice {
             .unwrap();
         let mut lu = String::new();
         for _ in 0..40 {
-            lu = rdp_diagnostic(app.state::<RdpStore>(), 1);
+            lu = rdp_diagnostic(app.state::<RdpStore>(), 1, None)
+                .await
+                .unwrap();
             if lu.contains("coupure simulée") {
                 break;
             }
@@ -1678,7 +1911,12 @@ mod tests_sidecar_factice {
         }
         assert!(lu.contains("coupure simulée"), "{lu:?}");
         rdp_close(app.state::<RdpStore>(), 1).unwrap();
-        assert_eq!(rdp_diagnostic(app.state::<RdpStore>(), 1), "");
+        assert_eq!(
+            rdp_diagnostic(app.state::<RdpStore>(), 1, None)
+                .await
+                .unwrap(),
+            ""
+        );
     }
 
     /// Un serveur bavard ne remplit pas la mémoire : trente-deux lignes, les
@@ -1696,7 +1934,9 @@ mod tests_sidecar_factice {
             .unwrap();
         let mut lu = String::new();
         for _ in 0..40 {
-            lu = rdp_diagnostic(app.state::<RdpStore>(), 1);
+            lu = rdp_diagnostic(app.state::<RdpStore>(), 1, None)
+                .await
+                .unwrap();
             if lu.ends_with("ligne 100") {
                 break;
             }
