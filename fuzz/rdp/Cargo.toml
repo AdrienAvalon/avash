@@ -1,0 +1,46 @@
+# Fuzzing guidé par la couverture du processus RDP, par sa bibliothèque
+# `avash_rdp` (audit du 27 novembre 2026, QT-11). Crate à part, et non une cible
+# de plus dans `fuzz/Cargo.toml` : le cœur (russh) et le processus RDP
+# (IronRDP, picky) ne tiennent pas dans un même graphe de dépendances, picky
+# exigeant `aes-gcm = "=0.11.0-rc.4"` là où russh prend la 0.11 publiée.
+# C'est la raison pour laquelle le processus RDP vit lui-même hors de
+# l'espace de travail. Les graines et le corpus restent ceux de `fuzz/`
+# (`seeds/<cible>`, `corpus/<cible>`), et `fuzz.sh` joue les deux crates.
+[package]
+name = "avash-fuzz-rdp"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+avash-rdp = { path = "../../rdp-sidecar" }
+
+# Les paquets portés du processus RDP, recopiés de rdp-sidecar/Cargo.toml : le
+# `[patch]` d'une dépendance ne s'applique pas, seul celui de l'espace de
+# travail compte. Sans ces lignes, la cible fuzzerait les versions de
+# crates.io, pas celles qu'Avash livre (voir rdp-sidecar/vendor/README.md).
+[patch.crates-io]
+ironrdp-session = { path = "../../rdp-sidecar/vendor/ironrdp-session" }
+ironrdp-connector = { path = "../../rdp-sidecar/vendor/ironrdp-connector" }
+ironrdp-rdpdr = { path = "../../rdp-sidecar/vendor/ironrdp-rdpdr" }
+ironrdp-pdu = { path = "../../rdp-sidecar/vendor/ironrdp-pdu" }
+ironrdp-graphics = { path = "../../rdp-sidecar/vendor/ironrdp-graphics" }
+vnc-rs = { path = "../../rdp-sidecar/vendor/vnc-rs" }
+ironrdp-svc = { path = "../../rdp-sidecar/vendor/ironrdp-svc" }
+
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "egfx_progressif"
+path = "fuzz_targets/egfx_progressif.rs"
+test = false
+doc = false
+bench = false

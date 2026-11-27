@@ -21,6 +21,7 @@ fuzzing va plus loin, plus longtemps.
 | `clearcodec` | deux images ClearCodec (MS-RDPEGFX 2.2.4.1) décodées à la suite par le même décodeur : couches résiduelle, bandes et sous-codecs (brut, NSCodec, RLEX), caches de glyphes et de barres | aucune panique ; une image acceptée a exactement `largeur × hauteur × 4` octets |
 | `rlgr` | un flux RLGR (MS-RDPRFX 3.1.8.1.7.3) décodé par le décodeur rapide porté et par l'original gardé comme référence (`rlgr_reference`), en RLGR1 ou RLGR3, vers une sortie jusqu'à 65 535 coefficients | même verdict et mêmes coefficients écrits ; aucune panique |
 | `vnc_serveur` | le flux entier d'un serveur VNC (version, sécurité, initialisation, mises à jour Raw, ZRLE, CopyRect, taille de bureau, presse-papiers), lu par le client `vnc-rs` porté | aucune panique, aucune allocation dictée par le serveur au-delà de la borne ; une image acceptée a exactement ses pixels |
+| `egfx_progressif` | les commandes du canal graphique (MS-RDPEGFX) telles que le processus RDP les reçoit après décompression, sur une surface créée d'office : surfaces, cache, remplissages, copies, et l'assemblage RemoteFX Progressive d'Avash (`rdp-sidecar/src/progressif.rs` : lecteur SRL, paliers, tuiles en différence), par la bibliothèque `avash_rdp` | aucune panique ; une trame publiée a exactement `largeur × hauteur × 4` octets, et un seul PDU ne publie jamais plus que le budget de 64 Mio |
 
 ## Lancer
 
@@ -31,7 +32,16 @@ cargo install cargo-fuzz --version 0.13.2 --locked
 ./fuzz.sh                 # chaque cible 60 s, depuis les graines
 DUREE=600 ./fuzz.sh       # plus longtemps
 cd fuzz && cargo +nightly fuzz run config_ssh corpus/config_ssh seeds/config_ssh   # une seule
+cd fuzz && cargo +nightly fuzz run egfx_progressif corpus/egfx_progressif seeds/egfx_progressif --fuzz-dir rdp   # processus RDP
 ```
+
+Les cibles du processus RDP vivent dans un crate à part, `rdp/` (option
+`--fuzz-dir rdp`) : le cœur (russh) et IronRDP ne tiennent pas dans un même
+graphe de dépendances, picky exigeant une préversion d'`aes-gcm` que russh
+refuse. `fuzz.sh` joue les deux crates ; graines et corpus restent ici. Les
+graines d'`egfx_progressif` sont des segments réels du canal graphique, tirés
+des enregistrements de `tests-parc/enregistrements/` (gnome-remote-desktop et
+trois sessions Windows), chacun précédé des surfaces vivantes à cet instant.
 
 `seeds/<cible>/` contient les graines commises (des entrées authentiques, tirées
 des tests) ; `corpus/<cible>/` reçoit ce que libFuzzer découvre et reste local.

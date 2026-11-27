@@ -26,6 +26,7 @@ import yaml
 # Verrous délibérément hors de Dependabot, et pourquoi.
 EXCLUS = {
     "fuzz": "cibles cargo-fuzz (nightly), jamais livrées ; suivent l'espace de travail par chemin",
+    "fuzz/rdp": "cibles cargo-fuzz du processus RDP (nightly), jamais livrées ; verrou recopié de rdp-sidecar/Cargo.lock, que Dependabot surveille",
     "test-rdp-server": "serveur de test de la suite bout en bout, jamais livré",
     "test-vnc-server": "serveur de test de la suite bout en bout, jamais livré",
     "test-rdp-server/vendor/ironrdp-server": "paquet porté du serveur de test, suivi par portes-amont.sh",

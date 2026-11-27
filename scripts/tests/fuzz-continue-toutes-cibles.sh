@@ -28,9 +28,16 @@ trap 'rm -rf "$bac"' EXIT
 mkdir -p "$bac/fuzz" "$bac/bin"
 cp "$script" "$bac/fuzz/fuzz.sh"
 cp "$PWD/fuzz/Cargo.toml" "$bac/fuzz/Cargo.toml"
+# Le crate du processus RDP (audit du 27 novembre 2026, QT-11) : ses cibles
+# comptent comme les autres, jouées par la même campagne.
+mkdir -p "$bac/fuzz/rdp"
+cp "$PWD/fuzz/rdp/Cargo.toml" "$bac/fuzz/rdp/Cargo.toml"
 
 # Source de vérité : les cibles déclarées dans fuzz/Cargo.toml.
-mapfile -t DECLAREES < <(sed -n '/^\[\[bin\]\]/,/^$/ s/^name = "\(.*\)"/\1/p' fuzz/Cargo.toml)
+# Un fichier à la fois : le dernier bloc [[bin]] d'un manifeste court jusqu'à
+# la fin du fichier, et un seul `sed` sur les deux prendrait le nom du paquet
+# suivant pour une cible.
+mapfile -t DECLAREES < <(for m in fuzz/Cargo.toml fuzz/rdp/Cargo.toml; do sed -n '/^\[\[bin\]\]/,/^$/ s/^name = "\(.*\)"/\1/p' "$m"; done)
 ATTENDU="${#DECLAREES[@]}"
 if [ "$ATTENDU" -lt 2 ]; then
   echo "✗ fuzz-continue-toutes-cibles : aucune cible lue dans fuzz/Cargo.toml" >&2
