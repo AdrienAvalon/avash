@@ -361,6 +361,73 @@ pub struct ClientAuth {
 /// c'est l'avertissement le plus important de l'application.
 type HostKeyVerdict = Arc<std::sync::Mutex<Option<String>>>;
 
+/// Temps au-delà duquel des octets envoyés et jamais acquittés font abandonner
+/// la connexion TCP d'une session.
+///
+/// Audit du 27 novembre 2026 (FI-3) : russh vide sa file d'envoi HORS de sa
+/// boucle d'événements, sans délai (pas d'`inactivity_timeout`, retiré à
+/// dessein par C-SIL-5). Une coupure réseau en plein envoi (VPN qui se
+/// reconnecte sous une autre adresse pendant un envoi SFTP, un `-L` montant,
+/// un gros collage) remplit le tampon d'envoi du noyau ; l'écriture attend,
+/// le keepalive ne peut plus partir, et l'onglet restait « vivant », muet,
+/// frappes avalées, jusqu'à l'abandon de la pile TCP : quinze retransmissions,
+/// environ 924 s sous Linux. L'option n'agit que si des octets attendent leur
+/// accusé : une session calme n'est jamais coupée par elle, le keepalive
+/// (30 s, trois essais) restant seul juge d'un lien muet. 90 s, comme ce
+/// keepalive : les deux détections tombent au même ordre de grandeur, et un
+/// VPN qui se reconnecte avec la même adresse a le temps de revenir.
+/// Seul le premier maillon d'un `ProxyJump` est une socket du poste : c'est le
+/// seul lien TCP qu'Avash puisse régler, et le seul qui compte ici.
+pub const ABANDON_TCP: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Pose `ABANDON_TCP` sur la socket d'une session : `TCP_USER_TIMEOUT` sous
+/// Linux, `TCP_MAXRT` sous Windows (où l'abandon par défaut, cinq
+/// retransmissions, est déjà de l'ordre de la demi-minute : l'option l'aligne
+/// sur Linux plutôt qu'elle ne le raccourcit). Ailleurs, rien : macOS n'offre
+/// pas d'équivalent public par socket.
+fn borner_les_acquittements(socket: &tokio::net::TcpStream) -> std::io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        socket2::SockRef::from(socket).set_tcp_user_timeout(Some(ABANDON_TCP))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket as _;
+        use windows_sys::Win32::Networking::WinSock::{
+            setsockopt, WSAGetLastError, IPPROTO_TCP, SOCKET, SOCKET_ERROR, TCP_MAXRT,
+        };
+        // `TCP_MAXRT` se donne en secondes, dans un DWORD (4 octets).
+        const LONGUEUR_DWORD: i32 = 4;
+        let secondes = u32::try_from(ABANDON_TCP.as_secs()).unwrap_or(u32::MAX);
+        let valeur = secondes.to_ne_bytes();
+        // SAFETY: la socket vient d'un `TcpStream` vivant, emprunté pour toute
+        // la durée de l'appel, donc son descripteur est valide ; le tampon
+        // `valeur` vit sur la pile jusqu'au retour et sa longueur (4 octets,
+        // un DWORD) est celle que `TCP_MAXRT` attend.
+        let rc = unsafe {
+            setsockopt(
+                socket.as_raw_socket() as SOCKET,
+                IPPROTO_TCP,
+                TCP_MAXRT,
+                valeur.as_ptr(),
+                LONGUEUR_DWORD,
+            )
+        };
+        if rc == SOCKET_ERROR {
+            // SAFETY: lecture de l'erreur du dernier appel Winsock de ce fil,
+            // sans argument ni effet de bord.
+            let code = unsafe { WSAGetLastError() };
+            return Err(std::io::Error::from_raw_os_error(code));
+        }
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
+    {
+        let _ = socket;
+        Ok(())
+    }
+}
+
 /// Compteurs d'un tunnel, partages entre le relais et l'interface.
 ///
 /// Atomiques : mis a jour depuis des taches concurrentes, lus a tout moment
@@ -1397,6 +1464,9 @@ impl AvashSession {
         // une session interactive (voir `config`).
         if let Err(e) = socket.set_nodelay(true) {
             tracing::warn!("TCP_NODELAY refusé sur {host}:{port} : {e}");
+        }
+        if let Err(e) = borner_les_acquittements(&socket) {
+            tracing::warn!("Délai d'acquittement TCP refusé sur {host}:{port} : {e}");
         }
         Self::etablir(socket, host, port, auth, delai, echeance, false).await
     }
@@ -3332,5 +3402,33 @@ mod tests_premiers_contacts {
         );
         assert!(cle_reste_a_montrer("bon", 22, "SHA256:y"));
         assert!(!cle_reste_a_montrer("hote", 22, ""));
+    }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+mod tests_abandon_tcp {
+    /// Audit du 27 novembre 2026 (FI-3) : la socket d'une session ne portait
+    /// que `TCP_NODELAY`, et une coupure en plein envoi figeait l'onglet
+    /// jusqu'à l'abandon TCP du noyau (924 s). Elle porte désormais un délai
+    /// d'acquittement, relu ici par `getsockopt`.
+    #[tokio::test]
+    async fn la_socket_d_une_session_porte_un_delai_d_acquittement() {
+        let ecoute = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = ecoute.local_addr().unwrap().port();
+        let socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        assert_eq!(
+            socket2::SockRef::from(&socket).tcp_user_timeout().unwrap(),
+            None,
+            "le défaut du noyau, avant réglage"
+        );
+        super::borner_les_acquittements(&socket).unwrap();
+        assert_eq!(
+            socket2::SockRef::from(&socket).tcp_user_timeout().unwrap(),
+            Some(super::ABANDON_TCP)
+        );
     }
 }

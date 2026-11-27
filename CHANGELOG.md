@@ -72,6 +72,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   sa socket et la session SSH pour toujours, même tunnel arrêté. La
   négociation SOCKS a dix secondes, et arrêter un tunnel termine ses
   connexions.
+- **Une coupure réseau en plein envoi ne fige plus l'onglet un quart
+  d'heure.** Audit du 27 novembre 2026 (FI-3) : quand le VPN tombait pendant
+  un envoi SFTP (ou un collage volumineux, un tunnel montant), russh
+  attendait que le noyau puisse écrire, hors de sa boucle : plus de keepalive,
+  un terminal « vivant » qui avalait les frappes jusqu'à l'abandon TCP,
+  environ 924 s sous Linux. La socket d'une session porte désormais un délai
+  d'acquittement de 90 s (`TCP_USER_TIMEOUT` sous Linux, `TCP_MAXRT` sous
+  Windows), qui n'agit que sur des octets envoyés et jamais acquittés : une
+  session calme n'est pas concernée.
 
 ## [0.16.0] - 2026-11-26
 

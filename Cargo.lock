@@ -339,9 +339,11 @@ dependencies = [
  "serde_json",
  "serialport",
  "sha1",
+ "socket2",
  "tokio",
  "tracing",
  "whoami",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
