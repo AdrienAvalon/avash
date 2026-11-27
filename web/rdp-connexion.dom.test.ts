@@ -17,7 +17,20 @@ const principal = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: () => Promise.resolve(() => {}) }) }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen: () => Promise.resolve() }) }));
+// La fenêtre : `isMinimized` et ses deux événements sont pilotés par les tests
+// de la pause (audit du 27 novembre 2026, PR-5).
+const fenetre = vi.hoisted(() => ({
+  reduite: false,
+  ecouteurs: [] as (() => void)[],
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    setFullscreen: () => Promise.resolve(),
+    isMinimized: () => Promise.resolve(fenetre.reduite),
+    onResized: (f: () => void) => { fenetre.ecouteurs.push(f); return Promise.resolve(() => {}); },
+    onFocusChanged: (f: () => void) => { fenetre.ecouteurs.push(f); return Promise.resolve(() => {}); },
+  }),
+}));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => presse);
 vi.mock("@tauri-apps/plugin-dialog", () => dialogue);
 vi.mock("./main", () => principal);
@@ -358,5 +371,119 @@ describe("texte copié sur le bureau distant", () => {
     expect(String(avis.notifyErreur.mock.calls[0][0])).toContain("presse-papiers du poste");
     presse.writeText.mockReset();
     presse.writeText.mockImplementation(() => Promise.resolve());
+  });
+});
+
+describe("pause d'un bureau que personne ne regarde (audit du 27 novembre 2026)", () => {
+  const pauses = (ws: FauxWebSocket) => ws.envoyes.filter((m) => m[0] === 11).map((m) => m[1]);
+
+  it("un_bureau_masque_avant_l_ouverture_de_sa_websocket_est_en_pause_des_qu_elle_s_ouvre", async () => {
+    // PF-3 : `marquerVisibilite` ne peut rien envoyer avant l'ouverture, et
+    // `onopen` ne disait que le jeton et le presse-papiers : un bureau masqué
+    // pendant la poignée de main restait en flux plein.
+    const { id, ws } = await ouvrir("v1");
+    const s = rdp.rdpSessions.get(id)!;
+    ws.envoyes = [];
+    ws.readyState = 0; // CONNECTING
+    rdp.marquerVisibilite(s, false);
+    expect(pauses(ws)).toEqual([]);
+    ws.readyState = 1;
+    ws.envoyes = [];
+    ws.onopen!();
+    expect(ws.envoyes.map((m) => m[0])).toEqual([...new TextEncoder().encode("jeton").slice(0, 1), 12, 11]);
+    expect(pauses(ws)).toEqual([1]);
+  });
+
+  it("apres_une_reprise_le_bureau_reannonce_sa_pause_et_le_reglage_du_presse_papiers", async () => {
+    // PF-3 et SE-6 : une reprise (redirection RDS, GNOME Remote Desktop, canal
+    // graphique) refait la session distante, et le processus repartait avec le
+    // partage actif et sans pause. Le [1] qui la termine fait tout redire.
+    localStorage.setItem("avash.rdp.clipboard", "0");
+    try {
+      const { id, ws } = await ouvrir("v2");
+      ws.recoit(1, ...u16(1280), ...u16(800));
+      rdp.marquerVisibilite(rdp.rdpSessions.get(id)!, false);
+      ws.recoit(23); // reprise
+      ws.envoyes = [];
+      ws.recoit(1, ...u16(1280), ...u16(800));
+      expect(ws.envoyes.find((m) => m[0] === 12)).toEqual(new Uint8Array([12, 0]));
+      expect(pauses(ws)).toEqual([1]);
+    } finally {
+      localStorage.removeItem("avash.rdp.clipboard");
+    }
+  });
+
+  it("reduire_la_fenetre_met_en_pause_le_bureau_affiche_et_la_restaurer_le_relance", async () => {
+    // PR-5, PF-2 : la pause ne suivait que l'onglet affiché ; Avash réduit avec
+    // un bureau au premier plan le décodait et le peignait comme regardé.
+    const { ws } = await ouvrir("v3");
+    ws.recoit(1, ...u16(1280), ...u16(800));
+    ws.envoyes = [];
+    vi.useFakeTimers();
+    try {
+      fenetre.reduite = true;
+      for (const f of fenetre.ecouteurs) f();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(pauses(ws)).toEqual([1]);
+      fenetre.reduite = false;
+      for (const f of fenetre.ecouteurs) f();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(pauses(ws)).toEqual([1, 0]);
+      // Un événement de plus sans changement d'état n'envoie rien.
+      for (const f of fenetre.ecouteurs) f();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(pauses(ws)).toEqual([1, 0]);
+    } finally {
+      vi.useRealTimers();
+      fenetre.reduite = false;
+    }
+  });
+
+  it("une_page_masquee_met_aussi_les_bureaux_en_pause", async () => {
+    const { ws } = await ouvrir("v4");
+    ws.envoyes = [];
+    rdp.surEtatFenetre({ cachee: true });
+    expect(pauses(ws)).toEqual([1]);
+    // Un onglet affiché dans une fenêtre cachée reste en pause.
+    rdp.marquerVisibilite(rdp.rdpSessions.get([...rdp.rdpSessions.keys()].at(-1)!)!, true);
+    expect(pauses(ws)).toEqual([1, 1]);
+    rdp.surEtatFenetre({ cachee: false });
+    expect(pauses(ws)).toEqual([1, 1, 0]);
+  });
+
+  it("le_partage_coupe_part_avec_le_lancement_du_processus", async () => {
+    // SE-6 : le processus naissait partage actif et ne l'apprenait coupé qu'au
+    // [12] de l'ouverture de la WebSocket, puis plus du tout après une reprise.
+    await ouvrir("v7");
+    expect((appels("rdp_open").at(-1) as unknown[])[1]).toMatchObject({ options: { sansPressePapiers: false } });
+    localStorage.setItem("avash.rdp.clipboard", "0");
+    try {
+      await ouvrir("v8");
+      expect((appels("rdp_open").at(-1) as unknown[])[1]).toMatchObject({ options: { sansPressePapiers: true } });
+    } finally {
+      localStorage.removeItem("avash.rdp.clipboard");
+    }
+  });
+
+  it("partage_coupe_la_liste_des_fichiers_copies_sur_le_distant_ne_s_affiche_pas", async () => {
+    // PF-3 : le bras « fichiers copiés » ne regardait pas le réglage ; la
+    // pastille apparaissait et la réception restait possible.
+    const liste = { dossier: "/tmp", fichiers: [{ chemin: "a.txt", taille: 3, dossier: false }], octets: 3 };
+    // Contrôle : partage actif, la pastille apparaît.
+    const actif = await ouvrir("v5");
+    actif.ws.recoitJson(15, liste);
+    expect(rdp.rdpSessions.get(actif.id)!.badge!.hidden).toBe(false);
+    localStorage.setItem("avash.rdp.clipboard", "0");
+    try {
+      const { id, ws } = await ouvrir("v6");
+      ws.recoitJson(15, liste);
+      const s = rdp.rdpSessions.get(id)!;
+      expect(s.badge!.hidden).toBe(true);
+      expect(s.fichiers ?? null).toBeNull();
+      await rdp.recevoirFichiers(id);
+      expect(ws.envoyes.some((m) => m[0] === 16)).toBe(false);
+    } finally {
+      localStorage.removeItem("avash.rdp.clipboard");
+    }
   });
 });

@@ -55,7 +55,7 @@ use avash_rdp::acces_local::Poste;
 use avash_rdp::args::parse_args;
 use avash_rdp::connexion::{FermeeApresAuthentification, TOURS_MAX};
 use avash_rdp::empreintes::chemin_canal_graphique;
-use avash_rdp::session::{executer, Suite};
+use avash_rdp::session::{executer, EtatInterface, Suite};
 use avash_rdp::{capture, egfx, fichiers, magnetoscope, vnc};
 
 /// Sous cargo-llvm-cov (`cfg(coverage)`, posé par lui seul), le profil
@@ -242,9 +242,20 @@ async fn main() -> Result<()> {
     let memoire = chemin_canal_graphique();
     let cle = format!("{}:{}", args.host, args.port);
     let mut graphique = egfx::Politique::pour(&cle, memoire.as_deref());
+    // Partage du presse-papiers et pause : ce que l'interface a dit vaut pour
+    // tous les tours (audit du 27 novembre 2026, SE-6, PF-3).
+    let etat = EtatInterface::depuis(&args);
     for _ in 0..TOURS_MAX {
         let dessine = std::sync::atomic::AtomicBool::new(false);
-        let issue = executer(&args, redirection.take(), &mut poste, graphique, &dessine).await;
+        let issue = executer(
+            &args,
+            redirection.take(),
+            &mut poste,
+            graphique,
+            &dessine,
+            &etat,
+        )
+        .await;
         // Une session qui se termine sans avoir affiché la moindre image, alors
         // qu'on lui refusait le canal graphique, désigne un serveur qui n'a que
         // celui-là. GNOME Remote Desktop ne patiente même pas : son pipeline ne

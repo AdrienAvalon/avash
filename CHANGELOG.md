@@ -86,6 +86,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **Le partage du presse-papiers coupé le reste après une reprise de
+  connexion.** Le processus RDP partait partage actif et n'apprenait le
+  réglage qu'à l'ouverture de la liaison avec la page ; après une redirection
+  (ferme RDS, GNOME Remote Desktop) ou une reprise avec le canal graphique, il
+  le croyait de nouveau actif et réclamait au serveur le contenu de chaque
+  copie distante, contrairement à ce que promet `SECURITY.md`. La page jetait
+  ce texte, mais une barrière sur deux était tombée. Le réglage part
+  désormais au lancement (`--sans-presse-papiers`), se garde d'un tour à
+  l'autre et se redit à chaque reprise, comme la pause d'un onglet masqué.
+  Partage coupé, la liste des fichiers copiés sur le distant ne s'affiche
+  plus et ne peut plus se recevoir (audit du 27 novembre 2026).
 - **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
   couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
   SSH s'affichait dans la police proportionnelle de l'interface, colonnes
@@ -102,6 +113,14 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Amélioré
 
+- **Avash réduit, le bureau distant affiché se met en pause lui aussi.** La
+  pause ne suivait que l'onglet affiché : réduire Avash avec un bureau au
+  premier plan (pour lire ses courriels) le laissait recevoir, décoder et
+  peindre chaque image comme s'il était regardé. Sous Windows, WebView2 ne
+  signale même pas la page cachée à la réduction ; Avash suit donc l'état de
+  la fenêtre. La restauration relance le bureau. Et revenir sur un onglet de
+  bureau ne redemande plus l'écran entier quand le canevas a gardé son image :
+  Avash regarde au lieu de supposer (audit du 27 novembre 2026).
 - **Un bureau distant masqué ne coûte plus rien au processeur.** Derrière un
   onglet SSH, un bureau qui bouge (vidéo, tableau de bord, journal qui
   défile) restait décodé à pleine cadence : la pause de l'onglet ne retenait

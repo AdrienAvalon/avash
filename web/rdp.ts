@@ -134,7 +134,7 @@ export function pousseAuGeste(vnc: boolean, evenement: "focus" | "mousedown" | "
  *  `texteDistant` : le dernier texte que ce bureau a dans son presse-papiers à
  *  notre connaissance (copié par lui, ou annoncé par nous), pour ne pas le
  *  réannoncer à chaque Ctrl+V. */
-export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; etat: "connecting" | "live" | "closed"; presseEnAttente?: string | null; texteDistant?: string; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean; audio?: LecteurAudio }>();
+export const rdpSessions = new Map<number, { canvas: HTMLCanvasElement; tab: HTMLElement; ws: WebSocket | null; etat: "connecting" | "live" | "closed"; affiche?: boolean; presseEnAttente?: string | null; texteDistant?: string; ro?: ResizeObserver; detachRect?: () => void; hostId?: string; syncSize?: () => void; target?: RdpTarget; badge?: HTMLElement; fichiers?: FichiersDistants | null; reception?: boolean; audio?: LecteurAudio }>();
 
 /** État d'un bureau enregistré pour sa pastille : `live` si l'une de ses
  *  sessions est connectée, `connecting` si l'une se connecte, rien sinon.
@@ -229,6 +229,8 @@ export function fichiersARecevoir(): boolean {
 export async function recevoirFichiers(id: number): Promise<void> {
   const s = rdpSessions.get(id);
   if (!s) return;
+  // Le partage a pu être coupé après l'arrivée de la liste (PF-3).
+  if (!partageClipboard()) { notify(t("rdp-fichiers-aucun")); return; }
   const f = s.fichiers;
   if (!f) { notify(t("rdp-fichiers-aucun")); return; }
   if (s.reception) return;
@@ -342,12 +344,34 @@ export function prochainRedimensionnement(
  *    perdu. Se fier au seul `display` supprimerait le rafraîchissement dans ce
  *    cas et rejouerait le flash noir consigné plus haut.
  *
- *  Un canvas déjà affiché et non reparenté n'a rien perdu : pas de [9]. */
-export function doitRafraichir(etaitAffiche: boolean, aEteReparente: boolean, wsOuverte: boolean): boolean {
-  return wsOuverte && (!etaitAffiche || aEteReparente);
+ *  Un canvas déjà affiché et non reparenté n'a rien perdu : pas de [9].
+ *
+ *  Audit du 27 novembre 2026 (PF-5) : un canvas qui revient de `display:none`
+ *  n'a pas forcément perdu son image (l'écran noir du 30 août venait d'avant le
+ *  canevas logiciel), et chaque retour sur un bureau coûtait un écran entier,
+ *  même immobile. On regarde donc (`canvasVide`) au lieu de supposer : les
+ *  trames sont opaques, un pixel transparent dit que le bitmap a été vidé. Le
+ *  reparentage garde le [9] d'office, c'est là que la perte a été vue. */
+export function doitRafraichir(etaitAffiche: boolean, aEteReparente: boolean, wsOuverte: boolean, canvasVide = true): boolean {
+  return wsOuverte && (aEteReparente || (!etaitAffiche && canvasVide));
+}
+
+/** Le canvas a-t-il perdu son image ? Les trames du processus RDP sont opaques
+ *  (alpha 255, `trames.rs`) : un premier pixel transparent veut dire un bitmap
+ *  vidé, ou jamais peint. Lecture d'un seul pixel, bon marché sur un canevas
+ *  logiciel (`willReadFrequently`). Illisible : on suppose le pire, l'ancien
+ *  comportement. */
+export function canvasVide(canvas: HTMLCanvasElement): boolean {
+  try {
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    return !ctx || ctx.getImageData(0, 0, 1, 1).data[3] === 0;
+  } catch {
+    return true;
+  }
 }
 
 export async function openRdp(cible: RdpTarget) {
+  suivreFenetre();
   const id = state.nextId++;
   // Onglet
   const tabs = $("tabs");
@@ -663,6 +687,9 @@ export async function openRdp(cible: RdpTarget) {
         tlsHerite: cible.tlsHerite === true || tlsHeriteAccepte.has(`${cible.host}:${cible.port ?? 3389}`),
         vnc: cible.vnc === true,
         sansSon: !sonBureau(),
+        // Coupé dès le lancement, avant même l'ouverture de la WebSocket et
+        // pour toute reprise (audit du 27 novembre 2026, SE-6).
+        sansPressePapiers: !partageClipboard(),
       },
       partage: cible.partage ?? null,
     });
@@ -677,7 +704,12 @@ export async function openRdp(cible: RdpTarget) {
     session.ws = ws;
     ws.onopen = () => {
       ws.send(new TextEncoder().encode(conn.token));
-      annoncerPartageClip(ws);
+      // Partage du presse-papiers ET visibilité : un bureau masqué entre
+      // `new WebSocket` et ici (restauration des onglets, qui enchaîne les
+      // ouvertures) restait en flux plein jusqu'au prochain changement
+      // d'onglet, `marquerVisibilite` ne pouvant rien envoyer avant
+      // l'ouverture (audit du 27 novembre 2026, PF-3).
+      annoncerEtat(session);
       // Annonce initiale du presse-papiers seulement en VNC (le sidecar le retient
       // jusqu'au collage explicite). En RDP, rien à la connexion : l'annoncer sans
       // geste ferait fuir le presse-papiers vers un serveur qu'on vient d'ouvrir.
@@ -735,6 +767,14 @@ export async function openRdp(cible: RdpTarget) {
           // en place (elle restait éteinte jusqu'au rendu suivant, signalé par
           // Adrien le 11 septembre 2026), titre : `poserEtat`.
           poserEtat(id, "live");
+          // Un [1] suit aussi toute reprise (redirection d'un courtier RDS,
+          // GNOME Remote Desktop, reprise avec le canal graphique), qui refait
+          // la session distante par en dessous : partage du presse-papiers et
+          // pause y repartaient à leur valeur par défaut, le partage actif
+          // même coupé par l'utilisateur. On les redit à chaque fois (audit du
+          // 27 novembre 2026, PF-3 et SE-6) ; le processus les garde aussi de
+          // son côté, d'un tour à l'autre.
+          { const s = rdpSessions.get(id); if (s) annoncerEtat(s); }
           // Aligner les verrous du bureau distant sur ceux du poste.
           void currentLocks().then((l) => { if (l !== null) send([10, l]); });
           // Renégociation terminée : si la fenêtre a encore bougé entre-temps, on
@@ -787,6 +827,10 @@ export async function openRdp(cible: RdpTarget) {
         }
         case "fichiers-copies": {
           // Fichiers par le presse-papiers : la liste copiée sur le distant.
+          // Partage coupé, elle ne s'affiche pas plus que le texte : la pastille
+          // « N fichiers copiés » apparaissait quand même, et la réception
+          // restait possible (audit du 27 novembre 2026, PF-3).
+          if (!partageClipboard()) return;
           const s = rdpSessions.get(id);
           if (!s) return;
           const f: FichiersDistants = tr.liste;
@@ -963,8 +1007,79 @@ export function annoncerPartageClip(ws: WebSocket): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(new Uint8Array([12, partageClipboard() ? 1 : 0]));
 }
 
-export function marquerVisibilite(s: { ws: WebSocket | null }, visible: boolean): void {
-  if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([11, visible ? 0 : 1]));
+export function marquerVisibilite(s: { ws: WebSocket | null; affiche?: boolean }, visible: boolean): void {
+  s.affiche = visible;
+  envoyerVisibilite(s);
+}
+
+/** La fenêtre d'Avash est-elle réduite, ou la page masquée ? Alors aucun bureau
+ *  n'est vu, quel que soit l'onglet affiché.
+ *
+ *  Trouvé par l'audit du 27 novembre 2026 (PR-5, PF-2) : la pause ne suivait
+ *  que l'onglet affiché dans la fenêtre. Avash réduit avec un bureau au premier
+ *  plan (« je réduis pour lire mes courriels ») continuait de recevoir, de
+ *  peindre et d'accuser chaque image, et le processus RDP de les décoder ; sous
+ *  Windows, WebView2 ne passe même pas `document.hidden` à vrai à la réduction
+ *  (wry n'appelle pas `SetIsVisible(false)`), d'où l'événement de la fenêtre. */
+let fenetreReduite = false;
+let pageCachee = false;
+
+/** Ce bureau est-il regardé ? Son onglet est affiché (dernier avis
+ *  d'`appliquerVue`, affiché par défaut tant qu'elle ne s'est pas prononcée) et
+ *  la fenêtre est à l'écran. */
+export function bureauVu(s: { affiche?: boolean }): boolean {
+  return s.affiche !== false && !fenetreReduite && !pageCachee;
+}
+
+function envoyerVisibilite(s: { ws: WebSocket | null; affiche?: boolean }): void {
+  if (s.ws && s.ws.readyState === WebSocket.OPEN) s.ws.send(new Uint8Array([11, bureauVu(s) ? 0 : 1]));
+}
+
+/** Redit au processus RDP ce que la page sait de lui : le partage du
+ *  presse-papiers ([12]) puis la visibilité ([11]). À l'ouverture de la
+ *  WebSocket et après toute reprise (PF-3). */
+function annoncerEtat(s: { ws: WebSocket | null; affiche?: boolean }): void {
+  if (!s.ws) return;
+  annoncerPartageClip(s.ws);
+  envoyerVisibilite(s);
+}
+
+/** La fenêtre a été réduite ou restaurée, la page masquée ou montrée : chaque
+ *  bureau apprend s'il est encore vu. Exportée pour les tests. */
+export function surEtatFenetre(etat: { reduite?: boolean; cachee?: boolean }): void {
+  const avant = fenetreReduite || pageCachee;
+  if (etat.reduite !== undefined) fenetreReduite = etat.reduite;
+  if (etat.cachee !== undefined) pageCachee = etat.cachee;
+  if ((fenetreReduite || pageCachee) === avant) return;
+  for (const s of rdpSessions.values()) envoyerVisibilite(s);
+}
+
+/** Branche, une seule fois, le suivi de la fenêtre. L'état réduit se relit par
+ *  `isMinimized()` sur deux événements : le redimensionnement (Windows envoie
+ *  WM_SIZE à la réduction) et la perte ou le retour du focus (une réduction
+ *  fait perdre le focus partout, une restauration le rend), regroupés comme
+ *  dans `titre.ts` pour ne pas saturer le pont IPC pendant un glissé. */
+let suiviFenetre = false;
+function suivreFenetre(): void {
+  if (suiviFenetre) return;
+  suiviFenetre = true;
+  document.addEventListener("visibilitychange", () => surEtatFenetre({ cachee: document.hidden }));
+  let win: ReturnType<typeof getCurrentWindow>;
+  try {
+    win = getCurrentWindow();
+  } catch {
+    return; // hors de Tauri : la visibilité de la page reste suivie
+  }
+  if (typeof win.isMinimized !== "function") return;
+  let relecture: number | undefined;
+  const relire = () => {
+    window.clearTimeout(relecture);
+    relecture = window.setTimeout(() => {
+      win.isMinimized().then((reduite) => surEtatFenetre({ reduite }), () => { /* état illisible : inchangé */ });
+    }, 150);
+  };
+  win.onResized?.(relire).catch(() => {});
+  win.onFocusChanged?.(relire).catch(() => {});
 }
 
 /** Donne le focus clavier au bureau, et s'assure qu'il l'a bien pris.
@@ -1020,7 +1135,10 @@ export function focusRdp(id: number) {
       // de trame hors cadencement. Trouvé par l'audit du 7 septembre 2026.
       const aEteReparente = (s.canvas.parentElement?.parentElement ?? null) !== parentAvant;
       const wsOuverte = !!s.ws && s.ws.readyState === WebSocket.OPEN;
-      if (doitRafraichir(etaitAffiche, aEteReparente, wsOuverte) && s.ws) s.ws.send(new Uint8Array([9]));
+      // Un canvas déjà affiché ou reparenté ne se sonde pas : la décision n'en
+      // dépend pas, et la lecture est épargnée au clic sur l'onglet actif.
+      const vide = !etaitAffiche && !aEteReparente && canvasVide(s.canvas);
+      if (doitRafraichir(etaitAffiche, aEteReparente, wsOuverte, vide) && s.ws) s.ws.send(new Uint8Array([9]));
     }
   }
   state.sessions.forEach((s) => { s.tab.classList.remove("active"); });

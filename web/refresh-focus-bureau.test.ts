@@ -36,11 +36,12 @@ function corpsIndex(): string {
   return corps.replace(/<script[\s\S]*?<\/script>/g, "");
 }
 
-let doitRafraichir: (etaitAffiche: boolean, aEteReparente: boolean, wsOuverte: boolean) => boolean;
+let doitRafraichir: (etaitAffiche: boolean, aEteReparente: boolean, wsOuverte: boolean, canvasVide?: boolean) => boolean;
+let canvasVide: (canvas: HTMLCanvasElement) => boolean;
 
 beforeAll(async () => {
   document.body.innerHTML = corpsIndex();
-  ({ doitRafraichir } = await import("./rdp"));
+  ({ doitRafraichir, canvasVide } = await import("./rdp"));
 });
 
 describe("doitRafraichir — faut-il redemander l'image entière ([9]) au focus d'un bureau", () => {
@@ -72,5 +73,34 @@ describe("doitRafraichir — faut-il redemander l'image entière ([9]) au focus 
     expect(doitRafraichir(false, false, false)).toBe(false);
     expect(doitRafraichir(false, true, false)).toBe(false);
     expect(doitRafraichir(true, true, false)).toBe(false);
+  });
+});
+
+describe("un canvas revenu de display:none qui a gardé son image (audit du 27 novembre 2026, PF-5)", () => {
+  // Chaque retour sur un bureau faisait envoyer l'écran entier (8,3 Mo en
+  // 1080p), même immobile : la perte de l'image était supposée, jamais vue.
+  it("un_canvas_qui_a_garde_son_image_ne_redemande_pas_l_ecran_entier", () => {
+    expect(doitRafraichir(false, false, true, false)).toBe(false);
+  });
+
+  it("un_canvas_vide_au_retour_redemande_l_ecran_entier", () => {
+    expect(doitRafraichir(false, false, true, true)).toBe(true);
+  });
+
+  it("le_reparentage_redemande_l_ecran_meme_si_le_canvas_parait_intact", () => {
+    expect(doitRafraichir(true, true, true, false)).toBe(true);
+    expect(doitRafraichir(false, true, true, false)).toBe(true);
+  });
+
+  it("la_sonde_lit_l_alpha_du_premier_pixel", () => {
+    const canvas = document.createElement("canvas");
+    let alpha = 255;
+    canvas.getContext = (() => ({ getImageData: () => ({ data: [0, 0, 0, alpha] }) })) as unknown as typeof canvas.getContext;
+    expect(canvasVide(canvas)).toBe(false);
+    alpha = 0;
+    expect(canvasVide(canvas)).toBe(true);
+    // Illisible (contexte absent ou lecture refusée) : l'ancien comportement.
+    canvas.getContext = (() => { throw new Error("refusé"); }) as unknown as typeof canvas.getContext;
+    expect(canvasVide(canvas)).toBe(true);
   });
 });
