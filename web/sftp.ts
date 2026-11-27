@@ -678,7 +678,7 @@ $("sftp-context").addEventListener("click", (e) => {
   else if (act === "copy-to" && entry) sftpOuvrirCopie(entry, path);
   else if (act === "cd") {
     const target = entry?.is_dir ? full : path;
-    invoke("pty_write", { id: s.id, data: `cd ${shellQuote(target)}\r` }).catch(() => {});
+    s.ecrire(`cd ${shellQuote(target)}\r`);
     s.term.focus();
   } else if (act === "copy") {
     // Le rejet de writeText (WebKitGTK : permission, contexte) etait avale : le
