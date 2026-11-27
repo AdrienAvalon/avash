@@ -937,8 +937,15 @@ impl SftpHandle {
                 // deviendrait un chemin qui sort du dossier de réception (ou
                 // du dossier cible, pour un relais). On s'arrête, plutôt que
                 // d'ignorer une entrée d'un serveur qui ment.
+                //
+                // Audit du 27 novembre 2026 (WI-5) : la règle NTFS (« : »,
+                // noms réservés…) s'appliquait ici aussi, sous Windows, donc
+                // au relais d'un Linux à un autre, qui n'écrit rien sur le
+                // poste : elle ne s'applique plus qu'au téléchargement, et
+                // sans arrêter le dossier (`ecarter_les_noms_impossibles`).
+                // La règle d'évasion, elle, reste stricte et commune.
                 anyhow::ensure!(
-                    nom_d_entree_sur(&e.name),
+                    nom_sans_evasion(&e.name),
                     "Le serveur annonce une entrée au nom interdit sous {chemin} : {:?}",
                     e.name
                 );
@@ -992,7 +999,10 @@ impl SftpHandle {
     }
 
     /// Télécharge un dossier distant entier dans `local` (créé), fichier par
-    /// fichier, chacun repris s'il l'avait été à moitié.
+    /// fichier, chacun repris s'il l'avait été à moitié. Rend les octets
+    /// reçus ; une entrée que le disque du poste ne peut pas nommer est
+    /// écartée (voir [`download_dir_bilan`](Self::download_dir_bilan)) et
+    /// signalée au journal.
     pub async fn download_dir_with(
         &self,
         remote_dir: &str,
@@ -1000,7 +1010,31 @@ impl SftpHandle {
         annulation: Option<&Annulation>,
         progress: impl FnMut(Avancement),
     ) -> Result<u64> {
-        let entrees = self.parcourir(remote_dir).await?;
+        let bilan = self
+            .download_dir_bilan(remote_dir, local, annulation, progress)
+            .await?;
+        if !bilan.ecartes.is_empty() {
+            tracing::warn!(
+                "{} : {} entrée(s) non téléchargée(s), nom impossible sur ce système : {:?}",
+                remote_dir,
+                bilan.ecartes.len(),
+                bilan.ecartes
+            );
+        }
+        Ok(bilan.octets)
+    }
+
+    /// Comme [`download_dir_with`](Self::download_dir_with), avec la liste
+    /// des entrées écartées, pour que l'interface la montre.
+    pub async fn download_dir_bilan(
+        &self,
+        remote_dir: &str,
+        local: &Path,
+        annulation: Option<&Annulation>,
+        progress: impl FnMut(Avancement),
+    ) -> Result<BilanDossier> {
+        let (entrees, ecartes) =
+            ecarter_les_noms_impossibles(self.parcourir(remote_dir).await?, cfg!(windows));
         let total: u64 = entrees.iter().map(|e| e.taille).sum();
         tokio::fs::create_dir_all(local)
             .await
@@ -1046,6 +1080,7 @@ impl SftpHandle {
             },
         )
         .await
+        .map(|octets| BilanDossier { octets, ecartes })
     }
 
     /// Téléverse un dossier local entier sous `remote_dir` (créé), fichier par
@@ -1746,6 +1781,89 @@ impl SftpHandle {
     }
 }
 
+/// Ce qu'un téléchargement de dossier a fait.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BilanDossier {
+    /// Octets reçus.
+    pub octets: u64,
+    /// Entrées écartées (chemins relatifs à la racine), parce que le disque
+    /// du poste ne peut pas les nommer ; ce qu'elles contiennent l'est aussi.
+    pub ecartes: Vec<String>,
+}
+
+/// Sépare d'un parcours ce que le disque local peut nommer de ce qu'il ne
+/// peut pas (`windows` : la règle NTFS s'applique). Une entrée écartée est
+/// rendue une fois, sans le contenu d'un dossier écarté, qui part avec lui.
+///
+/// Audit du 27 novembre 2026 (WI-5) : sous Windows, un seul nom à deux-points
+/// faisait échouer tout le dossier (« Le serveur annonce une entrée au nom
+/// interdit »). Or ces noms sont courants sous Linux : chaque message d'un
+/// Maildir (`1700000000.M1P2.hote:2,S`), les horodatages ISO
+/// (`sauvegarde-10:00.tar`). Deux issues étaient possibles. Transcrire le nom
+/// (`%3A`, comme `WinSCP`) change ce que l'utilisateur retrouve, peut tomber sur
+/// un fichier voisin déjà nommé ainsi (et l'écraser, ou le dédoubler), et ne
+/// sait pas quoi faire d'un `CON` ; écarter l'entrée et le dire ne crée rien
+/// que le serveur n'ait nommé, n'écrase rien et laisse le reste arriver.
+/// C'est le choix retenu, le plus sûr ; la transcription reste au mainteneur.
+/// La règle d'évasion de dossier (`..`, `/`, `\`, NUL) n'est pas ici : elle
+/// arrête toujours le parcours, sur toutes les plateformes.
+pub(crate) fn ecarter_les_noms_impossibles(
+    entrees: Vec<EntreeDistante>,
+    windows: bool,
+) -> (Vec<EntreeDistante>, Vec<String>) {
+    let mut gardees = Vec::with_capacity(entrees.len());
+    let mut ecartes: Vec<String> = Vec::new();
+    // Un parcours peut compter cent mille entrées (un Maildir) : la recherche
+    // des déjà écartées ne doit pas être quadratique.
+    let mut vus = std::collections::HashSet::new();
+    for e in entrees {
+        let mut prefixe = String::new();
+        let mut sous_un_ecarte = false;
+        for (i, nom) in e.chemin.split('/').enumerate() {
+            if i > 0 {
+                prefixe.push('/');
+            }
+            prefixe.push_str(nom);
+            if !nom_representable_localement(nom, windows) {
+                if vus.insert(prefixe.clone()) {
+                    ecartes.push(prefixe.clone());
+                }
+                sous_un_ecarte = true;
+                break;
+            }
+        }
+        if !sous_un_ecarte {
+            gardees.push(e);
+        }
+    }
+    (gardees, ecartes)
+}
+
+/// Un nom qu'on peut créer tel quel sur le disque du poste. Sous Windows
+/// (`windows`), NTFS refuse `< > : " | ? *` et les caractères de contrôle,
+/// retire un point ou une espace final (et retombe sur un autre nom), et lit
+/// CON, NUL, COM1… comme des périphériques. Pure, la plateforme en paramètre :
+/// la règle se teste partout.
+pub(crate) fn nom_representable_localement(nom: &str, windows: bool) -> bool {
+    !windows
+        || !(piege_ntfs(nom)
+            || nom.contains(['<', '>', '"', '|', '?', '*'])
+            || nom.chars().any(|c| u32::from(c) < 0x20))
+}
+
+/// Les pièges NTFS d'un nom que le reste du chemin ne voit pas : flux de
+/// données alternatif (« : »), point ou espace final retiré, nom réservé.
+fn piege_ntfs(nom: &str) -> bool {
+    nom.contains(':') || nom.ends_with('.') || nom.ends_with(' ') || nom_reserve_windows(nom)
+}
+
+/// Un nom qui ne fait pas sortir du dossier où on le recopie : un seul
+/// composant, sans séparateur ni octet nul, ni `.` ni `..`. Commun à toutes les
+/// plateformes et à tous les transferts (voir `parcourir`).
+pub(crate) fn nom_sans_evasion(nom: &str) -> bool {
+    !nom.is_empty() && nom != "." && nom != ".." && !nom.contains(['/', '\\', '\0'])
+}
+
 /// Un nom d'entrée qu'on accepte de recopier tel quel sous un dossier, et
 /// plus largement un nom de fichier qu'on accepte de créer : un seul
 /// composant, sans séparateur ni octet nul, ni `.` ni `..`. Un serveur SFTP
@@ -1760,15 +1878,7 @@ impl SftpHandle {
 /// périphérique et non un fichier, et un point ou une espace final est retiré
 /// par le système, ce qui fait retomber sur un autre nom.
 pub(crate) fn nom_d_entree_sur(nom: &str) -> bool {
-    !nom.is_empty()
-        && nom != "."
-        && nom != ".."
-        && !nom.contains(['/', '\\', '\0'])
-        && !(cfg!(windows)
-            && (nom.contains(':')
-                || nom.ends_with('.')
-                || nom.ends_with(' ')
-                || nom_reserve_windows(nom)))
+    nom_sans_evasion(nom) && !(cfg!(windows) && piege_ntfs(nom))
 }
 
 /// Vrai si `nom` est un nom de périphérique réservé par Windows (CON, PRN,
@@ -1963,6 +2073,58 @@ mod tests_bandes {
         assert!(!nom_d_entree_sur("a/b"));
         assert!(!nom_d_entree_sur("a\\b"));
         assert!(!nom_d_entree_sur("nul\0"));
+    }
+
+    /// Audit du 27 novembre 2026 (WI-5) : la règle d'évasion vaut partout et
+    /// pour tout transfert ; la règle NTFS ne vaut que pour le disque d'un
+    /// poste Windows, sans arrêter le dossier.
+    #[test]
+    fn un_nom_a_deux_points_n_est_ecarte_que_du_disque_windows() {
+        use super::{nom_representable_localement, nom_sans_evasion};
+        for nom in [
+            "1700000000.M1P2.hote:2,S",
+            "sauvegarde-10:00.tar",
+            "CON",
+            "a?b",
+            "fin.",
+        ] {
+            assert!(nom_sans_evasion(nom), "{nom} ne sort pas du dossier");
+            assert!(nom_representable_localement(nom, false), "{nom} sous Linux");
+            assert!(
+                !nom_representable_localement(nom, true),
+                "{nom} sous Windows"
+            );
+        }
+        assert!(nom_representable_localement("rapport.md", true));
+        assert!(!nom_sans_evasion(".."));
+        assert!(!nom_sans_evasion("a\\b"));
+    }
+
+    /// Le dossier se télécharge sans ce qu'il ne peut pas nommer : l'entrée est
+    /// rendue une fois, son contenu part avec elle, le reste arrive.
+    #[test]
+    fn un_dossier_garde_ce_que_le_disque_peut_nommer_et_rend_le_reste() {
+        use super::{ecarter_les_noms_impossibles, EntreeDistante};
+        let e = |chemin: &str, dossier: bool| EntreeDistante {
+            chemin: chemin.to_owned(),
+            dossier,
+            taille: 1,
+            mtime: None,
+        };
+        let parcours = vec![
+            e("Maildir", true),
+            e("Maildir/cur:x", true),
+            e("a.txt", false),
+            e("Maildir/1.M1:2,S", false),
+            e("Maildir/cur:x/y", false),
+            e("Maildir/propre", false),
+        ];
+        let (gardees, ecartes) = ecarter_les_noms_impossibles(parcours.clone(), true);
+        let noms: Vec<&str> = gardees.iter().map(|g| g.chemin.as_str()).collect();
+        assert_eq!(noms, ["Maildir", "a.txt", "Maildir/propre"]);
+        assert_eq!(ecartes, ["Maildir/cur:x", "Maildir/1.M1:2,S"]);
+        let (tout, rien) = ecarter_les_noms_impossibles(parcours.clone(), false);
+        assert_eq!((tout, rien), (parcours, Vec::<String>::new()));
     }
 
     #[test]

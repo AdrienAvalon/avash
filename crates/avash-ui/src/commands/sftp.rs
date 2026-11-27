@@ -303,7 +303,7 @@ pub async fn sftp_download(
     let mut report = progress_reporter(&app, id, transfert, &name, "download");
     let annulation = inscrire(&transferts, transfert);
     let issue = if is_dir.unwrap_or(false) {
-        sftp.download_dir_with(
+        sftp.download_dir_bilan(
             &remote,
             std::path::Path::new(&local),
             Some(&annulation),
@@ -322,10 +322,43 @@ pub async fn sftp_download(
             },
         )
         .await
+        .map(|octets| avash::sftp::BilanDossier {
+            octets,
+            ecartes: Vec::new(),
+        })
     };
     retirer(&transferts, transfert);
-    let n = issue.map_err(|e| format!("{e:#}"))?;
-    Ok(format!("{local} ({n} octets)"))
+    let bilan = issue.map_err(|e| format!("{e:#}"))?;
+    Ok(message_de_telechargement(&local, &bilan))
+}
+
+/// Ce que la barre d'état dit d'un téléchargement réussi.
+///
+/// Audit du 27 novembre 2026 (WI-5) : sous Windows, une entrée qu'NTFS ne peut
+/// pas nommer est écartée au lieu de faire échouer tout le dossier ; le
+/// message le dit, avec les premiers noms, pour que rien ne manque en silence.
+/// En français, comme les messages d'erreur du cœur : une clé de traduction
+/// appartiendrait à `web/i18n.ts`, hors de ce lot.
+fn message_de_telechargement(local: &str, bilan: &avash::sftp::BilanDossier) -> String {
+    const MONTRES: usize = 5;
+    let n = bilan.octets;
+    if bilan.ecartes.is_empty() {
+        return format!("{local} ({n} octets)");
+    }
+    let mut noms = bilan
+        .ecartes
+        .iter()
+        .take(MONTRES)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if bilan.ecartes.len() > MONTRES {
+        noms.push_str(", …");
+    }
+    format!(
+        "{local} ({n} octets) ; {} élément(s) non téléchargé(s), nom impossible sous Windows : {noms}",
+        bilan.ecartes.len()
+    )
 }
 
 /// Téléverse un fichier ou un dossier local dans un dossier distant, sous son
@@ -554,6 +587,34 @@ pub async fn sftp_rename(
 ) -> Result<(), String> {
     let sftp = sftp_of(&state, id).await?;
     sftp.rename(&from, &to).await.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests_message {
+    use super::message_de_telechargement;
+    use avash::sftp::BilanDossier;
+
+    /// Audit du 27 novembre 2026 (WI-5) : un dossier dont des entrées ont été
+    /// écartées le dit, avec les cinq premiers noms et leur nombre.
+    #[test]
+    fn un_telechargement_dit_ce_qu_il_a_ecarte() {
+        let propre = BilanDossier {
+            octets: 12,
+            ecartes: Vec::new(),
+        };
+        assert_eq!(message_de_telechargement("/d", &propre), "/d (12 octets)");
+        let bilan = BilanDossier {
+            octets: 3,
+            ecartes: (0..7).map(|i| format!("m{i}:2,S")).collect(),
+        };
+        let m = message_de_telechargement("/d", &bilan);
+        assert!(m.contains("7 élément(s) non téléchargé(s)"), "{m}");
+        assert!(
+            m.contains("m0:2,S, m1:2,S") && m.contains("m4:2,S, …"),
+            "{m}"
+        );
+        assert!(!m.contains("m5:2,S"), "{m}");
+    }
 }
 
 #[cfg(test)]

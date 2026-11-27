@@ -81,6 +81,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   d'acquittement de 90 s (`TCP_USER_TIMEOUT` sous Linux, `TCP_MAXRT` sous
   Windows), qui n'agit que sur des octets envoyés et jamais acquittés : une
   session calme n'est pas concernée.
+- **Sous Windows, un nom contenant « : » ne fait plus échouer tout un
+  dossier.** Audit du 27 novembre 2026 (WI-5) : la copie directe d'un dossier
+  d'un serveur Linux à un autre échouait pour un seul nom à deux-points,
+  alors que rien n'est écrit sur le poste, et télécharger un Maildir (dont
+  chaque message en porte un) ou des sauvegardes horodatées échouait en
+  entier. Le relais n'applique plus que la règle qui empêche de sortir du
+  dossier ; le téléchargement écarte ce que NTFS ne peut pas nommer
+  (`< > : " | ? *`, noms réservés, point final) et le dit dans la barre
+  d'état, au lieu de tout arrêter. Les noms ne sont pas transcrits : rien
+  n'est créé sous un nom que le serveur n'a pas donné, rien n'est écrasé.
 
 ## [0.16.0] - 2026-11-26
 
