@@ -1790,10 +1790,16 @@ async fn une_carte_de_reprise_survit_a_un_part_tronque() {
 
 /// Même chose en montée : la carte `.envoi.reprise` note ce qui est
 /// sûrement écrit, la reprise repart de là et le fichier distant finit entier.
+///
+/// Audit du 27 novembre 2026 (QT-10) : le test n'exigeait qu'une reprise
+/// « au-delà de zéro », et ne regardait pas ce que le serveur réécrivait. Une
+/// annulation vide la file d'écritures puis inscrit TOUT ce qui est parti
+/// (`fait`, et non le dernier point de contrôle) : l'annulation étant levée dès
+/// 9 Mio, multiple de 64 Kio, la reprise repart pile de 9 Mio, et la seconde
+/// passe n'écrit que la fin. (L'auditeur proposait 8 Mio, le dernier point de
+/// contrôle : faux sur ce chemin, comme l'a relevé sa vérification.)
 #[tokio::test]
 async fn un_envoi_annule_reprend_sans_renvoyer_les_bandes_faites() {
-    // Douze mégaoctets : au moins deux points de contrôle (tous les 4 Mio)
-    // avant l'annulation, pour que la reprise ait quelque chose à reprendre.
     let gros = motif(12 * 1024 * 1024 + 5, 4);
     let local = dossier_temp("envoi").join("gros.bin");
     std::fs::write(&local, &gros).unwrap();
@@ -1817,6 +1823,7 @@ async fn un_envoi_annule_reprend_sans_renvoyer_les_bandes_faites() {
     let carte = local.with_file_name("gros.bin.envoi.reprise");
     assert!(carte.exists(), "la carte d'envoi reste");
     let mut premiere = None;
+    fs_oublier_octets_ecrits("/fs/envoi/gros.bin");
     let n = sftp
         .upload_reprise(&local, "/fs/envoi/gros.bin", true, None, |fait, _| {
             premiere.get_or_insert(fait);
@@ -1824,9 +1831,16 @@ async fn un_envoi_annule_reprend_sans_renvoyer_les_bandes_faites() {
         .await
         .unwrap();
     assert_eq!(n as usize, gros.len());
-    assert!(
-        premiere.unwrap_or(0) > 0,
-        "la reprise repart de ce qui était fait"
+    let reprise = 9 * 1024 * 1024u64;
+    assert_eq!(
+        premiere,
+        Some(reprise),
+        "la reprise repart de tout ce que l'annulation a vidé"
+    );
+    assert_eq!(
+        fs_octets_ecrits("/fs/envoi/gros.bin"),
+        gros.len() as u64 - reprise,
+        "la seconde passe ne réécrit que la fin"
     );
     assert_eq!(fs_lire("/fs/envoi/gros.bin").unwrap(), gros);
     assert!(!carte.exists());
@@ -2852,17 +2866,37 @@ fn huit_petits_fichiers(racine: &str) -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
+/// Seize petits fichiers sous `racine` (un dossier `lent` : le serveur fait
+/// attendre chaque lecture et chaque écriture, ce qui laisse au client le
+/// temps d'ouvrir tout ce qu'il peut avant qu'un premier fichier ne se ferme).
+fn seize_petits_fichiers(racine: &str) -> Vec<(String, Vec<u8>)> {
+    (0..16)
+        .map(|i| {
+            let chemin = format!("{racine}/f{i:02}.txt");
+            let contenu = format!("contenu {i}").into_bytes();
+            fs_poser(&chemin, &contenu);
+            (chemin, contenu)
+        })
+        .collect()
+}
+
 /// Audit du 12 septembre 2026 (C-perf-3 b) : un dossier passait un fichier
 /// après l'autre, cinq allers-retours strictement séquentiels par petit
 /// fichier. Plusieurs fichiers sont désormais en vol à la fois.
+///
+/// Audit du 27 novembre 2026 (PR-3, QT-10) : seize petits fichiers à la fois,
+/// et non plus quatre (25 fichiers par seconde à 40 ms). Le test n'exigeait que
+/// « plus d'un » : un parallélisme réduit à deux passait. Le serveur ralenti
+/// laisse les seize ouvertures arriver avant la première fermeture ; le
+/// téléchargement les émet toutes dans le même tour, d'où l'égalité.
 #[tokio::test]
 async fn un_dossier_de_petits_fichiers_garde_plusieurs_descripteurs_ouverts_a_la_fois() {
-    let fichiers = huit_petits_fichiers("/fs/en-vol-dl");
+    let fichiers = seize_petits_fichiers("/fs/lent/en-vol-dl");
     let sftp = sftp_de_test().await;
     let local = dossier_temp("en-vol-dl");
     let mut dernier = avash::sftp::Avancement::default();
     let n = sftp
-        .download_dir_with("/fs/en-vol-dl", &local, None, |a| dernier = a)
+        .download_dir_with("/fs/lent/en-vol-dl", &local, None, |a| dernier = a)
         .await
         .unwrap();
     for (chemin, contenu) in &fichiers {
@@ -2871,58 +2905,72 @@ async fn un_dossier_de_petits_fichiers_garde_plusieurs_descripteurs_ouverts_a_la
     }
     let attendu: usize = fichiers.iter().map(|(_, c)| c.len()).sum();
     assert_eq!(n as usize, attendu);
-    assert_eq!((dernier.termines, dernier.nombre, dernier.fait), (8, 8, n));
-    let max = fs_max_ouverts_sous("/fs/en-vol-dl/");
-    assert!(max > 1, "un seul descripteur ouvert à la fois ({max})");
+    assert_eq!(
+        (dernier.termines, dernier.nombre, dernier.fait),
+        (16, 16, n)
+    );
+    let max = fs_max_ouverts_sous("/fs/lent/en-vol-dl/");
+    assert_eq!(max, 16, "seize petits fichiers en vol");
     let _ = std::fs::remove_dir_all(&local);
     sftp.close().await.unwrap();
 }
 
-/// Même promesse pour l'envoi d'un dossier.
+/// Même promesse pour l'envoi d'un dossier. Chaque envoi lit d'abord les
+/// attributs de son fichier local (sur la réserve de fils de tokio), d'où un
+/// ordre d'ouverture qui n'est pas figé : on exige la moitié, ce qu'un
+/// parallélisme réduit à quatre (l'ancienne borne) ne peut pas atteindre.
 #[tokio::test]
 async fn un_envoi_de_dossier_garde_plusieurs_fichiers_en_vol() {
     let local = dossier_temp("en-vol-up");
-    for i in 0..8 {
-        std::fs::write(local.join(format!("f{i}.txt")), format!("envoi {i}")).unwrap();
+    for i in 0..16 {
+        std::fs::write(local.join(format!("f{i:02}.txt")), format!("envoi {i}")).unwrap();
     }
     let sftp = sftp_de_test().await;
     let mut dernier = avash::sftp::Avancement::default();
-    sftp.upload_dir_with(&local, "/fs/en-vol-up", None, |a| dernier = a)
+    sftp.upload_dir_with(&local, "/fs/lent/en-vol-up", None, |a| dernier = a)
         .await
         .unwrap();
-    for i in 0..8 {
+    for i in 0..16 {
         assert_eq!(
-            fs_lire(&format!("/fs/en-vol-up/f{i}.txt")).unwrap(),
+            fs_lire(&format!("/fs/lent/en-vol-up/f{i:02}.txt")).unwrap(),
             format!("envoi {i}").into_bytes()
         );
     }
-    assert_eq!((dernier.termines, dernier.nombre), (8, 8));
-    let max = fs_max_ouverts_sous("/fs/en-vol-up/");
-    assert!(max > 1, "un seul fichier en vol à la fois ({max})");
+    assert_eq!((dernier.termines, dernier.nombre), (16, 16));
+    let max = fs_max_ouverts_sous("/fs/lent/en-vol-up/");
+    assert!(
+        max >= 8,
+        "{max} fichier(s) en vol à la fois, au lieu de seize"
+    );
     let _ = std::fs::remove_dir_all(&local);
     sftp.close().await.unwrap();
 }
 
-/// Même promesse pour le relais d'un dossier d'un serveur à l'autre.
+/// Même promesse pour le relais d'un dossier d'un serveur à l'autre (même
+/// réserve que l'envoi : chaque relais commence par des allers-retours chez
+/// la cible, l'ordre des ouvertures chez la source n'est pas figé).
 #[tokio::test]
 async fn un_relais_de_dossier_garde_plusieurs_fichiers_en_vol() {
-    let fichiers = huit_petits_fichiers("/fs/en-vol-src");
+    let fichiers = seize_petits_fichiers("/fs/lent/en-vol-src");
     let source = sftp_de_test().await;
     let cible = sftp_de_test().await;
     let mut dernier = avash::sftp::Avancement::default();
     source
-        .relayer_dir_vers("/fs/en-vol-src", &cible, "/fs/en-vol-dst", None, |a| {
+        .relayer_dir_vers("/fs/lent/en-vol-src", &cible, "/fs/en-vol-dst", None, |a| {
             dernier = a;
         })
         .await
         .unwrap();
     for (chemin, contenu) in &fichiers {
-        let copie = chemin.replace("en-vol-src", "en-vol-dst");
+        let copie = chemin.replace("lent/en-vol-src", "en-vol-dst");
         assert_eq!(&fs_lire(&copie).unwrap(), contenu, "{copie}");
     }
-    assert_eq!((dernier.termines, dernier.nombre), (8, 8));
-    let max = fs_max_ouverts_sous("/fs/en-vol-src/");
-    assert!(max > 1, "un seul fichier relayé à la fois ({max})");
+    assert_eq!((dernier.termines, dernier.nombre), (16, 16));
+    let max = fs_max_ouverts_sous("/fs/lent/en-vol-src/");
+    assert!(
+        max >= 8,
+        "{max} fichier(s) relayé(s) à la fois, au lieu de seize"
+    );
     source.close().await.unwrap();
     cible.close().await.unwrap();
 }
@@ -3106,6 +3154,158 @@ async fn un_envoi_sous_latence_garde_plusieurs_ecritures_en_vol() {
     assert!(
         duree < ALLER_RETOUR * 24,
         "4 Mio montés en {duree:?} à 40 ms d'aller-retour : une écriture à la fois"
+    );
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
+
+/// Audit du 27 novembre 2026 (PR-3) : un petit fichier d'un dossier coûtait
+/// quatre allers-retours en descente, dont un `STAT` qui relisait la taille
+/// que le `READDIR` du parcours venait de donner. Il n'y a plus de `STAT` :
+/// une ouverture, une lecture, la lecture de fin de fichier (gardée : un
+/// fichier qui grossit pendant la lecture est lu jusqu'au bout), et la
+/// fermeture, que personne n'attend.
+#[tokio::test]
+async fn un_petit_fichier_d_un_dossier_descend_sans_relire_ses_attributs() {
+    fs_poser("/fs/pr3-dl/a.txt", &motif(4096, 9));
+    let (sftp, obs) = sftp_observe().await;
+    let local = dossier_temp("pr3-dl");
+    sftp.download_dir_with("/fs/pr3-dl", &local, None, |_| {})
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(local.join("a.txt")).unwrap(), motif(4096, 9));
+    let requetes = obs.requetes_pour("/fs/pr3-dl/a.txt");
+    assert!(
+        !requetes.iter().any(|r| *r == "STAT" || *r == "LSTAT"),
+        "attributs relus : {requetes:?}"
+    );
+    assert_eq!(
+        requetes.iter().filter(|r| **r == "READ").count(),
+        2,
+        "{requetes:?}"
+    );
+    assert_eq!(requetes.first(), Some(&"OPEN"), "{requetes:?}");
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
+
+/// Même chose en montée : un fichier d'un dossier envoyé sans carte de
+/// reprise ne lit plus les attributs distants. Le `STAT` ne servait qu'à
+/// valider une carte ou à refuser un écrasement, qu'un dossier ne refuse pas.
+#[tokio::test]
+async fn un_petit_fichier_d_un_dossier_monte_sans_lire_les_attributs_distants() {
+    let local = dossier_temp("pr3-up");
+    std::fs::write(local.join("a.txt"), motif(4096, 10)).unwrap();
+    let (sftp, obs) = sftp_observe().await;
+    sftp.upload_dir_with(&local, "/fs/pr3-up", None, |_| {})
+        .await
+        .unwrap();
+    assert_eq!(fs_lire("/fs/pr3-up/a.txt").unwrap(), motif(4096, 10));
+    let requetes = obs.requetes_pour("/fs/pr3-up/a.txt");
+    assert_eq!(requetes, ["OPEN", "WRITE", "CLOSE"], "{requetes:?}");
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
+
+/// L'envoi UNITAIRE, lui, garde son `STAT` : c'est lui qui refuse d'écraser
+/// une cible existante (audit du 7 septembre 2026), durcissement intact.
+#[tokio::test]
+async fn un_envoi_unitaire_lit_encore_les_attributs_pour_refuser_l_ecrasement() {
+    let local = dossier_temp("pr3-unitaire").join("a.txt");
+    std::fs::write(&local, b"alpha").unwrap();
+    let (sftp, obs) = sftp_observe().await;
+    sftp.upload_reprise(&local, "/fs/pr3-unitaire/a.txt", true, None, |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        obs.requetes_pour("/fs/pr3-unitaire/a.txt").first(),
+        Some(&"STAT")
+    );
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
+
+/// Audit du 27 novembre 2026 (PR-4, FI-4) : quatre gros fichiers d'un dossier,
+/// huit bandes chacun, demandaient au serveur 8 Mio d'un coup (32 lectures de
+/// 256 Kio). Le serveur répondant dans l'ordre au débit du lien, la dernière
+/// réponse dépassait le délai de russh-sftp dès 6,7 Mbit/s, et le dossier
+/// entier échouait. Les lectures d'une session se partagent désormais un
+/// budget de 2 Mio ; l'observation additionne les longueurs demandées et pas
+/// encore servies.
+#[tokio::test]
+async fn un_dossier_de_gros_fichiers_ne_demande_pas_plus_que_le_budget_de_la_session() {
+    let fichiers: Vec<(String, Vec<u8>)> = (0..4)
+        .map(|i| {
+            let chemin = format!("/fs/lent/budget/g{i}.bin");
+            let contenu = motif(2 * 1024 * 1024, 20 + i);
+            fs_poser(&chemin, &contenu);
+            (chemin, contenu)
+        })
+        .collect();
+    let (sftp, obs) = sftp_observe().await;
+    let local = dossier_temp("budget");
+    sftp.download_dir_with("/fs/lent/budget", &local, None, |_| {})
+        .await
+        .unwrap();
+    for (chemin, contenu) in &fichiers {
+        let nom = chemin.rsplit('/').next().unwrap();
+        assert_eq!(&std::fs::read(local.join(nom)).unwrap(), contenu, "{nom}");
+    }
+    let max = obs.max_octets_lus_en_vol();
+    assert!(
+        max <= 2 * 1024 * 1024,
+        "{max} octets de lecture demandés à la fois, au-delà du budget de 2 Mio"
+    );
+    assert!(
+        max > 1024 * 1024,
+        "{max} octets en vol : les bandes ne sont plus menées de front"
+    );
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
+
+/// Audit du 27 novembre 2026 (PR-2, QT-10) : avec seize écritures en vol, une
+/// coupure en plein envoi (ici, le serveur refuse tout ce qui dépasse 9 Mio,
+/// sans le vidage qu'une annulation fait) perd les écritures en vol. La carte
+/// de reprise ne doit promettre que ce qu'un vidage a fait accuser, jamais ce
+/// qui était seulement parti : relancé, l'envoi rend un fichier exact. C'est
+/// le chemin du point de contrôle, que l'annulation ne prend pas : le premier
+/// tombe à 4 Mio, un suivant n'est posé qu'après deux secondes (PR-7).
+#[tokio::test]
+async fn une_coupure_en_plein_envoi_ne_promet_que_ce_qui_est_accuse() {
+    let gros = motif(12 * 1024 * 1024 + 3, 11);
+    let local = dossier_temp("coupe-envoi").join("gros.bin");
+    std::fs::write(&local, &gros).unwrap();
+    let distant = "/fs/coupe-envoi/gros.bin";
+    let sftp = sftp_de_test().await;
+    FS_COUPE_ENVOI.store(true, std::sync::atomic::Ordering::SeqCst);
+    let issue = sftp
+        .upload_reprise(&local, distant, true, None, |_, _| {})
+        .await;
+    FS_COUPE_ENVOI.store(false, std::sync::atomic::Ordering::SeqCst);
+    let e = issue.expect_err("la coupure doit se voir");
+    assert!(!e.to_string().contains(avash::sftp::ANNULE), "{e:#}");
+    let mut premiere = None;
+    let n = sftp
+        .upload_reprise(&local, distant, true, None, |fait, _| {
+            premiere.get_or_insert(fait);
+        })
+        .await
+        .unwrap();
+    assert_eq!(n as usize, gros.len());
+    let premiere = premiere.unwrap();
+    assert!(
+        premiere <= COUPE_ENVOI_A,
+        "la reprise repart de {premiere}, au-delà de ce que le serveur a accepté"
+    );
+    assert!(
+        premiere >= 4 * 1024 * 1024,
+        "la reprise repart de {premiere} : le premier point de contrôle (4 Mio) manque"
+    );
+    assert_eq!(
+        fs_lire(distant).unwrap(),
+        gros,
+        "le fichier repris est faux"
     );
     let _ = std::fs::remove_dir_all(local.parent().unwrap());
     sftp.close().await.unwrap();
