@@ -85,14 +85,20 @@ function options(argv) {
   return o;
 }
 
+/** Sous Windows, seuls npm et npx sont des scripts (.cmd) qu'il faut lancer
+ *  par le shell. Tout le reste s'exécute sans lui : cmd.exe prend `^` pour un
+ *  caractère d'échappement, et « HEAD^{commit} » arrivait à git amputé
+ *  (« git rev-parse : code 128 », vu en CI Windows le 27 novembre 2026). */
+const parShell = (cmd) => WINDOWS && (cmd === "npm" || cmd === "npx");
+
 function lancer(cmd, args, opts = {}) {
   console.log(`\n$ ${cmd} ${args.join(" ")}${opts.cwd ? `   (dans ${opts.cwd})` : ""}`);
-  const r = spawnSync(cmd, args, { stdio: "inherit", shell: WINDOWS, ...opts });
+  const r = spawnSync(cmd, args, { stdio: "inherit", shell: parShell(cmd), ...opts });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} : code ${r.status}`);
 }
 
 function capturer(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { encoding: "utf8", shell: WINDOWS, maxBuffer: 64 * 1024 * 1024, ...opts });
+  const r = spawnSync(cmd, args, { encoding: "utf8", shell: parShell(cmd), maxBuffer: 64 * 1024 * 1024, ...opts });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} : code ${r.status}\n${r.stderr}`);
   return r.stdout;
 }
