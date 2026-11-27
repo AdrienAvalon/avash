@@ -1,6 +1,6 @@
 pkgbase = avash
 	pkgdesc = Gestionnaire de connexions SSH et RDP, natif, rapide, sécurisé (Tauri 2 + Rust)
-	pkgver = 0.16.0
+	pkgver = 0.16.1
 	pkgrel = 1
 	url = https://github.com/AdrienAvalon/avash
 	arch = x86_64
@@ -18,7 +18,7 @@ pkgbase = avash
 	optdepends = kwallet: trousseau des mots de passe (Secret Service)
 	optdepends = putty: conversion des clés .ppk lors de l import PuTTY
 	options = !lto
-	source = avash-0.16.0.tar.gz::https://github.com/AdrienAvalon/avash/archive/refs/tags/v0.16.0.tar.gz
-	sha256sums = 326d100a85db61633a3de8d6be65be4d67433e684dd5841396300720fb6f34ac
+	source = avash-0.16.1.tar.gz::https://github.com/AdrienAvalon/avash/archive/refs/tags/v0.16.1.tar.gz
+	sha256sums = cf9b569cba58e170e3d05183b49249f26244865bcf06ac997d97631b6abcff96
 
 pkgname = avash
