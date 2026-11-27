@@ -306,13 +306,37 @@ void getVersion()
 const passModal = () => $("pass-modal");
 let passResolve: ((v: { password: string; remember: boolean } | null) => void) | null = null;
 
+/** Les demandes de mot de passe en attente de leur tour : une à la fois.
+ *
+ *  Audit du 27 novembre 2026 (FI-11) : la modale est unique, et une seconde
+ *  demande résolvait la première par `null`, comme une annulation ; deux
+ *  double-clics sur des hôtes sans clé laissaient le premier onglet figé sur
+ *  « connexion en cours ». Pire, l'étiquette changeait sous les doigts de
+ *  l'utilisateur, qui pouvait taper le mot de passe du premier hôte et
+ *  l'envoyer au second. Les demandes suivantes attendent désormais la fin de
+ *  la précédente. */
+let filePass: Promise<unknown> = Promise.resolve();
+
 /**
  * Demande un mot de passe et rend la reponse.
  *
  * Rend `null` si l'utilisateur annule — l'appelant doit alors renoncer
  * proprement plutot que de tenter une connexion sans identifiant.
+ *
+ * `encoreVoulu` est relu quand vient le tour de la demande : un onglet fermé
+ * pendant qu'il attendait n'ouvre pas la modale pour rien (`null`).
  */
-export function askPassword(target: string, erreur?: string): Promise<{ password: string; remember: boolean } | null> {
+export function askPassword(
+  target: string,
+  erreur?: string,
+  encoreVoulu: () => boolean = () => true,
+): Promise<{ password: string; remember: boolean } | null> {
+  const tour = filePass.then(() => (encoreVoulu() ? ouvrirPass(target, erreur) : null));
+  filePass = tour.catch(() => {});
+  return tour;
+}
+
+function ouvrirPass(target: string, erreur?: string): Promise<{ password: string; remember: boolean } | null> {
   $("pass-target").textContent = target;
   ($("pass-input") as HTMLInputElement).value = "";
   ($("pass-remember") as HTMLInputElement).checked = false;

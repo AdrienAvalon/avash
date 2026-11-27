@@ -183,6 +183,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   mille d'entre elles (800 Ko) gardaient 233 Mo et gelaient la page 9 s. Les
   repères sont rendus, aucun n'est posé journal coupé, et fermer l'onglet
   libère le capteur du journal (ME-1, PF-7).
+- **Annuler la demande de mot de passe ne fige plus l'onglet** : il se dit
+  fermé et Entrée relance la connexion. Deux demandes à la suite attendent
+  leur tour au lieu que la seconde annule la première (et change d'hôte sous
+  les doigts de l'utilisateur) (FI-11).
 - **Journal des commandes** : la forme des frappes (longueur d'un mot de passe
   tapé à `sudo` comprise) n'est plus retenue pour le diagnostic quand le
   journal est coupé (SE-8).
