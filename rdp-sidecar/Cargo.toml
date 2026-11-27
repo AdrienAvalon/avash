@@ -23,6 +23,15 @@ path = "src/lib.rs"
 name = "avash-rdp"
 path = "src/main.rs"
 
+# Micro-banc du décodeur RLGR (entropie RemoteFX) : `cargo bench --bench rlgr`.
+# La copie portée d'ironrdp-graphics n'est pas membre de cet espace de
+# travail, ses tests ignorés ne se lancent pas d'ici ; le banc passe donc par
+# le décodeur tel qu'Avash l'appelle (ironrdp::graphics, corrigé par
+# [patch.crates-io] vers vendor/).
+[[bench]]
+name = "rlgr"
+harness = false
+
 [dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ironrdp = { version = "0.17", default-features = false, features = ["connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr", "rdpsnd", "rdpdr", "pdu", "core"] }

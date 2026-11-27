@@ -699,25 +699,16 @@ mod tests {
             ),
             ("origine", crate::rlgr_reference::decode),
         ] {
-            // Cinq passes, chacune un échantillon : le banc (scripts/banc.mjs)
-            // récolte la ligne BANC du décodeur de production.
-            let mut echantillons = Vec::new();
+            let debut = std::time::Instant::now();
             for _ in 0..5 {
-                let debut = std::time::Instant::now();
                 for (t, _) in &tuiles {
                     f(EntropyAlgorithm::Rlgr3, t, &mut sortie).expect("décodage");
                 }
-                echantillons.push(debut.elapsed().as_secs_f64() * 1e6 / tuiles.len() as f64);
             }
-            let moyenne = echantillons.iter().sum::<f64>() / echantillons.len() as f64;
-            println!("{nom} : {moyenne:.1} µs par tuile 64×64");
-            if nom == "rapide" {
-                let liste: Vec<String> = echantillons.iter().map(|v| format!("{v:.2}")).collect();
-                println!(
-                    r#"BANC {{"cle":"M/rlgr3-tuile-dense","unite":"µs","sens":"bas","echantillons":[{}]}}"#,
-                    liste.join(",")
-                );
-            }
+            println!(
+                "{nom} : {:.1} µs par tuile 64×64",
+                debut.elapsed().as_secs_f64() * 1e6 / (5.0 * tuiles.len() as f64)
+            );
         }
     }
 }

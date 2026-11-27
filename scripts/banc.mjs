@@ -18,7 +18,10 @@
 //                 aller-retour injectée sur la boucle locale (netem, sudo) ;
 //   --informatif  publie la comparaison sans jamais échouer ;
 //   --forcer      mesure même sur une machine chargée (chiffres douteux) ;
-//   --garder      garde les worktrees de construction.
+//   --garder      garde les worktrees de construction ;
+//   --specs       remplace les scénarios du jeu (liste séparée par des
+//                 virgules, chemins relatifs à e2e/), pour compléter un
+//                 résultat existant dans la même --sortie.
 //
 // Variables passées aux scénarios : BANC_XRDP, BANC_XRDP_MDP, BANC_RDP_WINDOWS,
 // BANC_RDP_WINDOWS_MDP (voir e2e/banc/sessions.spec.js).
@@ -60,7 +63,7 @@ export function lignesBanc(texte) {
 }
 
 function options(argv) {
-  const o = { tete: "HEAD", base: null, jeu: "rapide", repetitions: 3, sortie: null, cache: null, latenceMs: null, informatif: false, forcer: false, garder: false };
+  const o = { specs: null, tete: "HEAD", base: null, jeu: "rapide", repetitions: 3, sortie: null, cache: null, latenceMs: null, informatif: false, forcer: false, garder: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const valeur = () => { const v = argv[++i]; if (v === undefined) throw new Error(`${a} attend une valeur`); return v; };
@@ -74,6 +77,7 @@ function options(argv) {
     else if (a === "--informatif") o.informatif = true;
     else if (a === "--forcer") o.forcer = true;
     else if (a === "--garder") o.garder = true;
+    else if (a === "--specs") o.specs = valeur();
     else throw new Error(`option inconnue : ${a}`);
   }
   if (!["rapide", "complet", "endurance"].includes(o.jeu)) throw new Error(`jeu inconnu : ${o.jeu}`);
@@ -102,13 +106,35 @@ function tripletHote() {
  *  n'imprime pas de ligne BANC. Ce ne sont que des programmes de mesure : ils
  *  ne changent rien au binaire mesuré. */
 function apporterOutillage(arbre) {
-  for (const f of ["crates/avash/examples/banc_sftp.rs", "crates/avash/benches/config_ssh.rs", "crates/avash-ui/benches/utf8.rs"]) {
+  for (const f of ["crates/avash/examples/banc_sftp.rs", "crates/avash/benches/config_ssh.rs", "crates/avash-ui/benches/utf8.rs", "rdp-sidecar/benches/rlgr.rs"]) {
     mkdirSync(join(arbre, f, ".."), { recursive: true });
     copyFileSync(join(RACINE, f), join(arbre, f));
   }
   const manifeste = join(arbre, "crates/avash/Cargo.toml");
   const s = readFileSync(manifeste, "utf8");
   if (!s.includes('name = "config_ssh"')) writeFileSync(manifeste, `${s.trimEnd()}\n\n[[bench]]\nname = "config_ssh"\nharness = false\n`);
+  const sidecar = join(arbre, "rdp-sidecar/Cargo.toml");
+  const t = readFileSync(sidecar, "utf8");
+  if (!t.includes('name = "rlgr"')) writeFileSync(sidecar, `${t.trimEnd()}\n\n[[bench]]\nname = "rlgr"\nharness = false\n`);
+}
+
+/** Le worktree d'une référence, prêt à compiler avash-ui : outillage de
+ *  mesure apporté, front construit (le binaire l'embarque) et processus RDP
+ *  posé dans binaries/ (ressource embarquée, exigée avant la compilation,
+ *  comme dans ci.yml). Idempotent. */
+function preparerArbre(info, o) {
+  const { arbre, commit } = info;
+  if (!existsSync(arbre)) lancer("git", ["worktree", "add", "--detach", arbre, commit], { cwd: RACINE });
+  apporterOutillage(arbre);
+  const cibleSidecar = { ...process.env, CARGO_TARGET_DIR: join(o.cache, "cible-sidecar") };
+  if (!existsSync(join(arbre, "web", "dist", "index.html"))) {
+    lancer("npm", ["ci", "--no-audit", "--no-fund"], { cwd: join(arbre, "web") });
+    lancer("npx", ["vite", "build"], { cwd: join(arbre, "web") });
+  }
+  lancer("cargo", ["build", "--locked", "--release", "--manifest-path", join(arbre, "rdp-sidecar", "Cargo.toml")], { env: cibleSidecar });
+  mkdirSync(join(arbre, "crates/avash-ui/binaries"), { recursive: true });
+  copyFileSync(join(o.cache, "cible-sidecar", "release", exe("avash-rdp")),
+    join(arbre, "crates/avash-ui/binaries", `avash-rdp-${tripletHote()}${WINDOWS ? ".exe" : ""}`));
 }
 
 /** Construit une référence (profil release) et rend le dossier de ses binaires. */
@@ -122,18 +148,8 @@ function construire(ref, o) {
     console.log(`\n${ref} (${court}) : binaires déjà construits dans ${binDir}`);
     return info;
   }
-  if (!existsSync(arbre)) lancer("git", ["worktree", "add", "--detach", arbre, commit], { cwd: RACINE });
-  apporterOutillage(arbre);
+  preparerArbre(info, o);
   const cible = { ...process.env, CARGO_TARGET_DIR: join(o.cache, "cible") };
-  const cibleSidecar = { ...process.env, CARGO_TARGET_DIR: join(o.cache, "cible-sidecar") };
-  lancer("npm", ["ci", "--no-audit", "--no-fund"], { cwd: join(arbre, "web") });
-  lancer("npx", ["vite", "build"], { cwd: join(arbre, "web") });
-  lancer("cargo", ["build", "--locked", "--release", "--manifest-path", join(arbre, "rdp-sidecar", "Cargo.toml")], { env: cibleSidecar });
-  // avash-ui déclare le processus RDP en ressource embarquée (externalBin) :
-  // il doit exister avant la compilation (comme dans ci.yml).
-  mkdirSync(join(arbre, "crates/avash-ui/binaries"), { recursive: true });
-  copyFileSync(join(o.cache, "cible-sidecar", "release", exe("avash-rdp")),
-    join(arbre, "crates/avash-ui/binaries", `avash-rdp-${tripletHote()}${WINDOWS ? ".exe" : ""}`));
   // Sous Windows, le harnais passe par le serveur WebDriver embarqué : c'est
   // la seule fois où cette fonctionnalité est posée, et ce binaire ne quitte
   // pas la machine (cache du banc, jamais publié).
@@ -183,7 +199,7 @@ async function passe(info, json, o, extra = {}) {
     BANC_SORTIE: json,
     BANC_REFERENCE: info.ref,
     BANC_COMMIT: info.commit,
-    BANC_SPECS: SPECS[o.jeu].specs.join(","),
+    BANC_SPECS: o.specs ?? SPECS[o.jeu].specs.join(","),
     BANC_PALIERS: SPECS[o.jeu].paliers,
     BANC_SFTP_BIN: join(info.binDir, exe("banc_sftp")),
     ...extra,
@@ -206,15 +222,23 @@ async function microBancs(info, json, o) {
   const { verser } = await import("../e2e/banc/commun.js");
   const env = { ...process.env, BANC_SORTIE: json, BANC_REFERENCE: info.ref, BANC_COMMIT: info.commit };
   const arbre = info.arbre;
+  // Binaires repris du cache : le worktree a pu être retiré depuis, et
+  // avash-ui ne compile pas sans son front ni son processus RDP.
+  preparerArbre(info, o);
   const sorties = [];
   const cible = { ...process.env, CARGO_TARGET_DIR: join(o.cache, "cible") };
   const cibleSidecar = { ...process.env, CARGO_TARGET_DIR: join(o.cache, "cible-sidecar") };
-  try {
-    sorties.push(capturer("cargo", ["bench", "--locked", "-p", "avash", "--bench", "config_ssh"], { cwd: arbre, env: cible }));
-    sorties.push(capturer("cargo", ["bench", "--locked", "-p", "avash-ui", "--bench", "utf8"], { cwd: arbre, env: cible }));
-    sorties.push(capturer("cargo", ["test", "--locked", "--release", "-p", "ironrdp-graphics", "--", "--ignored", "--nocapture", "vitesse"], { cwd: join(arbre, "rdp-sidecar"), env: cibleSidecar }));
-  } catch (e) {
-    console.warn(`\n⚠ micro-bancs ${info.ref} : ${e.message.split("\n")[0]}`);
+  // Chacun à part : un micro-banc qui échoue ne prive pas les autres.
+  for (const [args, cwd, env] of [
+    [["bench", "--locked", "-p", "avash", "--bench", "config_ssh"], arbre, cible],
+    [["bench", "--locked", "-p", "avash-ui", "--bench", "utf8"], arbre, cible],
+    [["bench", "--locked", "--bench", "rlgr"], join(arbre, "rdp-sidecar"), cibleSidecar],
+  ]) {
+    try {
+      sorties.push(capturer("cargo", args, { cwd, env }));
+    } catch (e) {
+      console.warn(`\n⚠ micro-banc ${info.ref} (cargo ${args.slice(0, 5).join(" ")}) : ${e.message.split("\n").slice(0, 3).join(" | ")}`);
+    }
   }
   const ancien = process.env.BANC_SORTIE;
   Object.assign(process.env, env);
@@ -226,6 +250,10 @@ async function principal() {
   const o = options(process.argv.slice(2));
   o.cache ??= WINDOWS ? join(process.env.LOCALAPPDATA ?? homedir(), "avash-banc") : join(homedir(), ".cache", "avash-banc");
   o.sortie ??= join(RACINE, "e2e", "banc", "resultats", new Date().toISOString().replace(/[:.]/g, "-"));
+  // Chemins absolus : le harnais tourne depuis e2e/, et un chemin relatif
+  // désignait alors un autre dossier (vu au premier passage en CI).
+  o.sortie = resolve(o.sortie);
+  o.cache = resolve(o.cache);
   mkdirSync(o.sortie, { recursive: true });
 
   const depart = await charge();

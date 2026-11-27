@@ -9,7 +9,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { verser, absent } from "./commun.js";
-import { SSH_PORT, CLE_CLIENTE } from "../wdio.conf.js";
+import { SSH_PORT, CLE_CLIENTE, ENV_APP } from "../wdio.conf.js";
 import { cheminDistant } from "./sondes.js";
 import { userInfo } from "node:os";
 
@@ -27,7 +27,12 @@ describe("Banc : SFTP", () => {
     const dossier = cheminDistant(join(process.env.AVASH_E2E_SANDBOX));
     const { stdout } = await executer(bin,
       ["127.0.0.1", String(SSH_PORT), userInfo().username, CLE_CLIENTE, dossier, String(REPETITIONS)],
-      { maxBuffer: 16 * 1024 * 1024, timeout: 30 * 60 * 1000 });
+      // L'environnement du bac à sable, comme l'application : l'exemple tient
+      // son known_hosts dans le répertoire personnel. Lancé avec le vrai, il
+      // y avait inscrit la clé du sshd de test, régénérée à chaque passage,
+      // et les passages suivants échouaient sur « LA CLÉ D'HÔTE A CHANGÉ »
+      // (27 novembre 2026 ; l'entrée a été retirée du known_hosts réel).
+      { env: ENV_APP, maxBuffer: 16 * 1024 * 1024, timeout: 30 * 60 * 1000 });
     for (const l of stdout.split("\n").filter((x) => x.startsWith("{"))) {
       const m = JSON.parse(l);
       verser(`${m.cle}${suffixe}`, { unite: m.unite, sens: m.sens }, [m.valeur]);

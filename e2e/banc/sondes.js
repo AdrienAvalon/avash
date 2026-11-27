@@ -256,15 +256,24 @@ export const cheminDistant = (p) => (process.platform === "win32" ? `/${p.replac
 export async function lancerTelechargementSftp(dossier, nom) {
   await browser.waitUntil(async () => $("#sftp-toggle").isEnabled(), { timeout: 10000, timeoutMsg: "bouton SFTP jamais activé" });
   if (!(await $("#sftp-panel").getAttribute("class")).includes("open")) await $("#sftp-toggle").click();
-  await browser.execute((c) => {
-    const el = document.getElementById("sftp-path");
-    el.focus();
-    el.value = c;
-    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-  }, dossier);
-  await browser.waitUntil(async () => browser.execute((n) =>
-    [...document.querySelectorAll("#sftp-list .sftp-entry .nm")].some((e) => e.textContent === n), nom),
-  { timeout: 15000, timeoutMsg: `« ${nom} » absent du panneau SFTP` });
+  // La liste a pu être lue avant que le fichier n'existe (vu une fois sur
+  // cinq passages) : on renavigue, ce qui la relit, jusqu'à trois fois.
+  const present = () => browser.execute((n) =>
+    [...document.querySelectorAll("#sftp-list .sftp-entry .nm")].some((e) => e.textContent === n), nom);
+  for (let essai = 1; ; essai++) {
+    await browser.execute((c) => {
+      const el = document.getElementById("sftp-path");
+      el.focus();
+      el.value = c;
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    }, dossier);
+    try {
+      await browser.waitUntil(present, { timeout: 5000, interval: 200 });
+      break;
+    } catch (e) {
+      if (essai >= 3) throw new Error(`« ${nom} » absent du panneau SFTP après ${essai} lectures de ${dossier}`, { cause: e });
+    }
+  }
   await browser.execute((n) => {
     const ligne = [...document.querySelectorAll("#sftp-list .sftp-entry")].find((e) => e.querySelector(".nm")?.textContent === n);
     ligne.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
