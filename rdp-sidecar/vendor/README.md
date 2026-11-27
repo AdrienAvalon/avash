@@ -592,3 +592,25 @@ complet raisonnable qui passe, et la valeur du plafond.
 
 Défaut d'IronRDP, pas propre à avash : dès qu'une version publiée borne le
 réassemblage, supprimer ce répertoire et sa ligne `[patch.crates-io]`.
+
+## `ironrdp-graphics` : une luminance hostile faisait déborder la conversion de couleurs
+
+Trouvé le 27 novembre 2026 par la cible cargo-fuzz `egfx_progressif` (audit,
+QT-11), en 150 exécutions. `ycbcr_to_rgba` et `ycbcr_to_argb` passent la
+luminance à `yuv` (0.8.20), qui calcule `y + 4096` sur un `i16` : au-delà de
+28 671, l'addition déborde. En debug, le processus RDP paniquait (la panique
+était rattrapée par le `catch_unwind` du décodeur progressif, pas par le
+chemin RemoteFX) ; en release, l'addition bouclait et donnait des couleurs
+fausses. Aucun pixel valide n'approche cette valeur : elle ne vient que d'un
+flux hostile ou corrompu.
+
+`color_conversion.rs` sature désormais la luminance à `i16::MAX - 4096` avant
+l'appel, sur une copie qui ne se fait que lorsqu'une valeur dépasse (un flux
+valide n'est pas recopié). Tests : `une_luminance_hostile_ne_fait_pas_paniquer_la_conversion`,
+`une_luminance_valide_n_est_pas_touchee` (mêmes pixels que l'appel direct).
+
+### À retirer quand l'amont corrigera
+
+Le défaut est dans `yuv` ; si une version de `yuv` ou d'IronRDP borne la
+luminance elle-même, retirer `luminance_bornee` et ses tests.
+
