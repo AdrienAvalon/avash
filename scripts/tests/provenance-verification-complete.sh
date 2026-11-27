@@ -12,10 +12,9 @@
 # provenance (sans `--predicate-type`) impose aussi le tag (`--source-ref`) et
 # refuse les exécuteurs auto-hébergés.
 #
-# Fichiers lus : les deux README, SECURITY.md et release.yml (commentaires et
-# notes de la release compris). RELEASE.md et le site (site/index.html,
-# site/en/index.html) portent encore l'ancienne commande : hors du lot qui a
-# écrit cette garde, ils sont à corriger puis à ajouter à FICHIERS.
+# Fichiers lus : les deux README, SECURITY.md, RELEASE.md, release.yml
+# (commentaires et notes de la release compris) et la vitrine (français et
+# anglais).
 set -euo pipefail
 RACINE="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$RACINE"
@@ -24,7 +23,8 @@ python3 - <<'PY'
 import re
 import sys
 
-FICHIERS = ["README.md", "README.en.md", "SECURITY.md", ".github/workflows/release.yml"]
+FICHIERS = ["README.md", "README.en.md", "SECURITY.md", "RELEASE.md", ".github/workflows/release.yml",
+            "site/index.html", "site/en/index.html"]
 SIGNATAIRE = "--signer-workflow AdrienAvalon/avash/.github/workflows/release.yml"
 SIGNATAIRE_CI = "--signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml"
 

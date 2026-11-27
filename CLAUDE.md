@@ -124,6 +124,15 @@ ce qui n'est pas ici n'existe pas pour eux.
   les refus sont notés dans `.github/dependabot.yml` avec leur raison.
 - Windows : Edge WebDriver ≥ 133 ne lance plus une application WebView2 ; la
   suite passe par le serveur embarqué. macOS : même chemin, aucun pilote.
+- **Les binaires publiés se construisent à froid** : aucun cache
+  (rust-cache, cache npm de setup-node) dans les jobs de `release.yml` et
+  `essai-windows.yml` qui livrent, et tauri-cli s'installe à part
+  (`$RUNNER_TEMP/outil-tauri`). Un cache écrit par un autre workflow de
+  `main` pouvait y glisser un binaire ou un outil compromis, que le job de
+  signature aurait signé (audit du 27 novembre 2026, SE-1). Garde :
+  `scripts/tests/release-construit-sans-cache.sh` ; la publication refuse
+  aussi tout binaire qui contient le serveur WebDriver embarqué
+  (`scripts/verifier-sans-webdriver.sh`).
 - Publication : voir `RELEASE.md` (version dans `Cargo.toml` de l'espace de
   travail, `CHANGELOG.md` section `[Non publié]` → version datée, tag `vX.Y.Z`,
   workflow Release, `latest.json` signé). Le mainteneur décide du moment.

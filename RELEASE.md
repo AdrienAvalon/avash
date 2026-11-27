@@ -134,7 +134,7 @@ est fourni.
 - `.syft.yaml` : la nomenclature logicielle (SBOM, SPDX 2.3) jointe à chaque
   release, calculée sur les fichiers de verrouillage de ce qui est livré et
   attestée à son tour, liée aux binaires. Vérification :
-  `gh attestation verify --predicate-type https://spdx.dev/Document/v2.3 <fichier> --repo AdrienAvalon/avash`.
+  `gh attestation verify --predicate-type https://spdx.dev/Document/v2.3 <fichier> --repo AdrienAvalon/avash --signer-workflow AdrienAvalon/avash/.github/workflows/release.yml`.
 - `scripts/release.sh` : build validé + `SHA256SUMS` + signature GPG optionnelle.
 - `check.sh` : la porte qualité exécutée avant chaque release.
 - `LICENSE` (**AGPL-3.0-or-later**), icônes multi-résolutions
