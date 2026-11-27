@@ -1247,6 +1247,14 @@ void listen<{ message: string }>("trousseau-indisponible", (ev) => {
   notifyErreur(ev.payload.message);
 }).catch((e) => console.warn("Écoute du trousseau indisponible :", e));
 
+// Windows : Avash lancé sur l'écran du poste puis repris par RDP, ou
+// l'inverse. Les arguments de WebView2 (composition logicielle contre les
+// carrés noirs) sont figés au lancement : seul un redémarrage les adapte.
+// Le cœur le signale une fois (audit du 27 novembre 2026, WI-10).
+void listen<{ distante: boolean }>("session-distante-changee", (ev) => {
+  notify(t(ev.payload.distante ? "session-devenue-distante" : "session-redevenue-locale"), "info");
+}).catch((e) => console.warn("Écoute du type de session indisponible :", e));
+
 /** L'ecran d'accueil s'adapte : sans hote, « double-clic » n'aide personne. */
 function refreshEmptyHint() {
   $("empty-hint").textContent =

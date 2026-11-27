@@ -107,7 +107,11 @@ fn lock_bits_from_leds(racine: &std::path::Path) -> Option<u8> {
     connu.then_some(bits)
 }
 
+// Même signature que les autres plateformes, où l'état peut être inconnu
+// (relevé par le clippy croisé pour Windows du 27 novembre 2026, que la CI ne
+// joue pas).
 #[cfg(windows)]
+#[allow(clippy::unnecessary_wraps)]
 fn lock_bits() -> Option<u8> {
     // Bit de poids faible de GetKeyState : état de bascule de la touche.
     // `#[link]` explicite : ne pas dépendre du hasard qu'une autre caisse du

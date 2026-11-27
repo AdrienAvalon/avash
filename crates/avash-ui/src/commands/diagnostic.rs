@@ -169,6 +169,37 @@ fn systeme() -> String {
 }
 
 fn session_graphique() -> String {
+    // Audit du 27 novembre 2026 (WI-10) : sous Windows, le diagnostic ne
+    // disait ni si Avash s'affiche à travers une session distante, ni si la
+    // composition logicielle (posée au lancement en session distante, contre
+    // les carrés noirs) est en vigueur ; les deux changent tout le rendu.
+    #[cfg(windows)]
+    {
+        let logicielle = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+            .is_ok_and(|v| v.contains("--disable-gpu-compositing"));
+        session_windows_texte(crate::session_distante(), logicielle)
+    }
+    #[cfg(not(windows))]
+    session_graphique_unix()
+}
+
+/// Ce que le diagnostic dit de l'affichage sous Windows. Pur, pour être testé
+/// sans poste Windows.
+#[cfg(any(windows, test))]
+fn session_windows_texte(distante: bool, composition_logicielle: bool) -> String {
+    format!(
+        "{}, composition logicielle : {}",
+        if distante {
+            "session distante (RDP)"
+        } else {
+            "écran du poste"
+        },
+        if composition_logicielle { "oui" } else { "non" }
+    )
+}
+
+#[cfg(not(windows))]
+fn session_graphique_unix() -> String {
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
     let x11 = std::env::var_os("DISPLAY").is_some();
     match (wayland, x11) {
@@ -284,17 +315,29 @@ fn agent_windows_texte(tube_openssh: bool, pageant: bool) -> String {
 }
 
 /// Pageant répond-il ? Pageant classique ne passe pas par le tube OpenSSH mais
-/// par sa fenêtre cachée (WM_COPYDATA) : on le sonde par le même transport que
+/// par sa fenêtre cachée (`WM_COPYDATA`) : on le sonde par le même transport que
 /// l'auth (`pageant::PageantStream`, tel que `connect_pageant` l'ouvre). Sonde
 /// brève sur un fil dédié avec son propre runtime, pour ne dépendre d'aucun
 /// runtime tokio déjà actif dans le contexte de la commande de diagnostic.
+///
+/// Audit du 27 novembre 2026 (WI-7) : `PageantStream::new` réussit toujours
+/// quand le tube nommé échoue, car son repli par message de fenêtre ne cherche
+/// pas la fenêtre de Pageant à la construction (il crée un canal et une
+/// tâche) ; le diagnostic disait « Pageant présent » sur tout poste sans agent,
+/// la fausse piste inversée de celle du 7 septembre. On cherche donc la
+/// fenêtre de Pageant elle-même, puis son tube nommé (Pageant récent l'expose).
 #[cfg(windows)]
 fn pageant_present() -> bool {
+    if pageant::wmmessage::is_pageant_running() {
+        return true;
+    }
     std::thread::spawn(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .is_ok_and(|rt| rt.block_on(async { pageant::PageantStream::new().await.is_ok() }))
+            .is_ok_and(|rt| {
+                rt.block_on(async { pageant::namedpipes::PageantStream::new().await.is_ok() })
+            })
     })
     .join()
     .unwrap_or(false)
@@ -423,6 +466,30 @@ mod tests_diagnostic {
     use super::{collecter, composer, diagnostic_noter_rendu, ecrire_diagnostic, Faits};
     use crate::commands::tests::{app_de_test, with_ssh_config};
     use tauri::Manager as _;
+
+    /// Audit du 27 novembre 2026 (WI-7) : la sonde valait toujours vrai sous
+    /// Windows. L'exécuteur Windows de la CI n'a pas de Pageant : elle doit
+    /// dire non.
+    #[cfg(windows)]
+    #[test]
+    fn sans_pageant_la_sonde_ne_le_voit_pas() {
+        assert!(!super::pageant_present());
+    }
+
+    /// Audit du 27 novembre 2026 (WI-10) : le diagnostic dit sous Windows si
+    /// la session est distante et si la composition logicielle est posée.
+    #[test]
+    fn le_diagnostic_windows_dit_la_session_et_la_composition() {
+        use super::session_windows_texte;
+        assert_eq!(
+            session_windows_texte(true, true),
+            "session distante (RDP), composition logicielle : oui"
+        );
+        assert_eq!(
+            session_windows_texte(false, false),
+            "écran du poste, composition logicielle : non"
+        );
+    }
 
     #[test]
     fn le_webgl_du_terminal_suit_le_compositing_sous_linux() {

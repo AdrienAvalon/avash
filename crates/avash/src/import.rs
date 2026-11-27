@@ -541,8 +541,11 @@ pub fn parse_reg_query(sortie: &str) -> Lecture {
 #[cfg(windows)]
 #[must_use]
 pub fn putty_sessions_registre() -> Lecture {
-    let sortie = std::process::Command::new("reg")
+    // Par son chemin dans System32 et sans console (audit du 27 novembre 2026,
+    // WI-9, voir `systeme_windows`).
+    let sortie = crate::systeme_windows::commande("reg")
         .args(["query", r"HKCU\Software\SimonTatham\PuTTY\Sessions", "/s"])
+        .stdin(std::process::Stdio::null())
         .output();
     match sortie {
         // Trouvé par l'audit du 8 septembre 2026 : `reg query` écrit dans la
@@ -560,9 +563,60 @@ pub fn putty_sessions_registre() -> Lecture {
 // ---------- MobaXterm ----------
 
 /// Le chemin d'une clé tel que `MobaXterm` l'écrit : `_CurrentDrive_` pour le
-/// lecteur système, antislashs Windows.
-fn chemin_moba(brut: &str) -> String {
-    brut.replace("_CurrentDrive_", "C").trim().to_string()
+/// lecteur d'où il tourne, antislashs Windows.
+///
+/// Audit du 27 novembre 2026 (WI-16) : `_CurrentDrive_` devenait `C` en dur,
+/// alors que `MobaXterm` portable, courant en entreprise, tourne souvent d'une
+/// clé ou d'un `D:` ; ses clés n'étaient pas trouvées. Le lecteur est celui du
+/// fichier lu (voir [`lecteur_de`]).
+fn chemin_moba(brut: &str, lecteur: &str) -> String {
+    brut.replace("_CurrentDrive_", lecteur).trim().to_string()
+}
+
+/// La lettre du lecteur d'un chemin Windows (`D:\Outils\MobaXterm.ini` donne
+/// `D`), `C` à défaut. Lue dans le texte du chemin pour être testée partout.
+#[must_use]
+pub fn lecteur_de(chemin: &std::path::Path) -> String {
+    let texte = chemin.to_string_lossy();
+    let texte = texte.strip_prefix(r"\\?\").unwrap_or(&texte);
+    let mut car = texte.chars();
+    match (car.next(), car.next()) {
+        (Some(l), Some(':')) if l.is_ascii_alphabetic() => l.to_ascii_uppercase().to_string(),
+        _ => "C".to_owned(),
+    }
+}
+
+/// Le texte d'un fichier `MobaXterm` : UTF-8 s'il l'est (marque d'ordre
+/// retirée), sinon la page ANSI du poste sous Windows.
+///
+/// Audit du 27 novembre 2026 (WI-16) : `read_to_string` exigeait de l'UTF-8 ;
+/// un fichier écrit dans la page ANSI, au premier nom de session accentué,
+/// était ignoré **sans un mot** à l'emplacement par défaut, ou refusé quand on
+/// le désignait. Hors Windows, aucune page ANSI n'a de sens : décodage UTF-8
+/// permissif, qui garde les sessions et remplace l'octet en cause.
+#[must_use]
+pub fn texte_mobaxterm(octets: &[u8]) -> String {
+    let octets = octets.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(octets);
+    match std::str::from_utf8(octets) {
+        Ok(t) => t.to_owned(),
+        #[cfg(windows)]
+        Err(_) => page_de_code::decoder(octets, page_de_code::CP_ACP),
+        #[cfg(not(windows))]
+        Err(_) => String::from_utf8_lossy(octets).into_owned(),
+    }
+}
+
+/// Lit un `MobaXterm.ini` ou un export `.mxtsessions` sur le disque : texte
+/// décodé par [`texte_mobaxterm`], lecteur courant déduit de son chemin.
+///
+/// # Errors
+/// Si le fichier ne se lit pas.
+pub fn lire_mobaxterm(chemin: &std::path::Path) -> std::io::Result<Lecture> {
+    let octets = std::fs::read(chemin)?;
+    Ok(parse_mobaxterm_ini_sur(
+        &texte_mobaxterm(&octets),
+        &lecteur_de(chemin),
+    ))
 }
 
 /// Bureau RDP `MobaXterm` (`#91#`) : hôte, port, utilisateur aux mêmes places
@@ -583,9 +637,16 @@ fn bureau_moba(nom: &str, hostname: &str, champs: &[&str], dossier: &str) -> Bur
     }
 }
 
-/// Lit un `MobaXterm.ini` (ou un export `.mxtsessions`, même forme).
+/// Lit un `MobaXterm.ini` (ou un export `.mxtsessions`, même forme), le
+/// lecteur courant de `MobaXterm` étant `C`.
 #[must_use]
 pub fn parse_mobaxterm_ini(contenu: &str) -> Lecture {
+    parse_mobaxterm_ini_sur(contenu, "C")
+}
+
+/// [`parse_mobaxterm_ini`], `_CurrentDrive_` valant `lecteur`.
+#[must_use]
+pub fn parse_mobaxterm_ini_sur(contenu: &str, lecteur: &str) -> Lecture {
     let mut lecture = Lecture::default();
     let mut dans_signets = false;
     let mut dossier = String::new();
@@ -640,7 +701,7 @@ pub fn parse_mobaxterm_ini(contenu: &str) -> Lecture {
                 let identity_file = champs
                     .get(14)
                     .filter(|s| !s.trim().is_empty())
-                    .map(|s| chemin_moba(s))
+                    .map(|s| chemin_moba(s, lecteur))
                     .and_then(|c| clé_reprise(&c, &mut remarques, &mut ppk));
                 if champs
                     .get(19)
@@ -980,6 +1041,47 @@ mod tests {
     }
 
     const MOBA: &str = "[Bookmarks]\r\nSubRep=\r\nImgNum=42\r\nDeck=#109#0%192.168.137.40%22%deck%%0%0%%%%%0%0%0%%%-1%0%0%0%%1080%%0%0%1%#MobaFont%10%0%0%-1%15%236,236,236%30,30,30%180,180,192%0%-1%0%%xterm%-1%0%_Std_Colors_0_%80%24%0%1%-1%<none>%%0%0%-1%-1#0# #-1\r\nBureau=#91#4%10.0.0.9%3389%adrien%...\r\n\r\n[Bookmarks_1]\r\nSubRep=Clients\\Acme\r\nImgNum=41\r\nweb acme=#109#0%web.acme.fr%2222%%%-1%-1%%%%%0%0%0%_CurrentDrive_:\\Users\\a\\.ssh\\id_ed25519%%-1%0%0%0%%1080%%0%0%1%#MobaFont%10#0# #-1\r\n";
+
+    /// Audit du 27 novembre 2026 (WI-16) : `_CurrentDrive_` est le lecteur
+    /// d'où tourne `MobaXterm` (portable sur `D:` ou une clé), pas `C`.
+    #[test]
+    fn le_lecteur_courant_de_mobaxterm_est_celui_du_fichier_lu() {
+        assert_eq!(
+            lecteur_de(std::path::Path::new(r"D:\Outils\MobaXterm.ini")),
+            "D"
+        );
+        assert_eq!(
+            lecteur_de(std::path::Path::new(r"\\?\e:\Moba\MobaXterm.ini")),
+            "E"
+        );
+        assert_eq!(
+            lecteur_de(std::path::Path::new("/home/ada/MobaXterm.ini")),
+            "C"
+        );
+        let l = parse_mobaxterm_ini_sur(MOBA, "D");
+        let cle = l
+            .sessions
+            .iter()
+            .find_map(|s| s.host.identity_file.clone())
+            .expect("la session à clé");
+        assert!(cle.starts_with(r"D:\Users"), "{cle}");
+    }
+
+    /// Audit du 27 novembre 2026 (WI-16) : un fichier hors UTF-8 (page ANSI,
+    /// nom de session accentué) était ignoré sans un mot. Ses sessions
+    /// arrivent désormais ; sous Windows, l'accent est décodé.
+    #[test]
+    fn un_ini_mobaxterm_en_page_ansi_n_est_plus_ignore() {
+        let octets = b"[Bookmarks]\r\nSubRep=\r\nr\xe9seau=#109#0%10.0.0.1%22%ada%\r\n";
+        let l = parse_mobaxterm_ini(&texte_mobaxterm(octets));
+        assert_eq!(l.sessions.len(), 1, "{l:?}");
+        #[cfg(windows)]
+        assert_eq!(l.sessions[0].nom_origine, "réseau");
+        // La marque d'ordre UTF-8 d'un fichier enregistré par le Bloc-notes
+        // n'entre pas dans le nom de la première section.
+        let bom = texte_mobaxterm(b"\xEF\xBB\xBF[Bookmarks]\r\nh=#109#0%10.0.0.2%22%u%\r\n");
+        assert_eq!(parse_mobaxterm_ini(&bom).sessions.len(), 1);
+    }
 
     #[test]
     fn un_ini_mobaxterm_donne_les_sessions_ssh_avec_leur_dossier() {

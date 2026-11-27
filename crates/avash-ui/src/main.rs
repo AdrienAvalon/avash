@@ -143,18 +143,18 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         let herite = std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_some();
-        match action_webview2(herite, session_distante(), automatisation) {
+        match action_webview2(herite, avash_ui_lib::session_distante(), automatisation) {
             // SAFETY: sous Windows, set_var et remove_var sont toujours sûrs
             // (std::env, section Safety) ; on est de surcroît avant WebView2 et
             // avant tout autre fil (le profilage est lancé plus bas).
             ActionWebview2::Poser(v) => unsafe {
-                std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", v)
+                std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", v);
             },
             // SAFETY: même garantie que le bras précédent (audit du 12 septembre
             // 2026, C-unsafe-5 : un commentaire au-dessus du premier bras ne
             // couvre pas le second).
             ActionWebview2::Retirer => unsafe {
-                std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+                std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
             },
             ActionWebview2::NePasToucher => {}
         }
@@ -168,28 +168,6 @@ fn main() {
     ecrire_le_profil_en_continu();
 
     avash_ui_lib::run();
-}
-
-/// Vrai quand le processus s'exécute dans une session RDP (Terminal Services),
-/// et non sur un écran physique. `GetSystemMetrics(SM_REMOTESESSION)` renvoie
-/// une valeur non nulle exactement dans ce cas — c'est le test que Microsoft
-/// documente pour distinguer les deux, plus fiable qu'un reniflage de variables
-/// d'environnement. FFI directe vers user32 : une seule fonction, aucune caisse
-/// supplémentaire à embarquer. `#[link]` explicite pour ne pas dépendre du hasard
-/// qu'une autre caisse du graphe lie déjà user32.
-#[cfg(target_os = "windows")]
-fn session_distante() -> bool {
-    // SM_REMOTESESSION, cf. MS-RDPBCGR / winuser.h.
-    const SM_REMOTESESSION: i32 = 0x1000;
-    // SAFETY: GetSystemMetrics n'a ni pointeur, ni précondition, ni effet de
-    // bord : l'assertion de sûreté remonte à la déclaration (`safe fn`, Rust
-    // 1.82), et l'appel n'a plus besoin de bloc (audit du 12 septembre 2026,
-    // C-unsafe-5).
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        safe fn GetSystemMetrics(n_index: i32) -> i32;
-    }
-    GetSystemMetrics(SM_REMOTESESSION) != 0
 }
 
 /// Là où les distributions rangent `libwayland-client` : Arch et dérivées,
