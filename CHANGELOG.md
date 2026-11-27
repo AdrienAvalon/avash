@@ -37,6 +37,24 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   RDP après la coupure, et le bureau RDP affiche bien l'image du serveur, lue
   pixel par pixel dans le canevas (audit du 27 novembre 2026, QT-4 et QT-13).
 
+- **Un banc de mesures qui rejoue l'usage réel, sous Linux et sous Windows.**
+  Demandé par le mainteneur, qui se sert d'Avash au travail avec une dizaine
+  de sessions ouvertes (SSH, RDP vers Windows, xrdp, SFTP) : améliorer encore,
+  mais sur des chiffres. `scripts/banc.mjs` construit une ou deux versions en
+  profil de publication, les pilote en alternance sur la même machine avec le
+  harnais bout en bout, et compare : démarrage, latence de frappe, `cat` de
+  50 Mo, dix sessions mixtes puis 20 et 30 (mémoire, processeur, frappe avec
+  un transfert SFTP en cours, ouverture d'onglet), bureau à distance (mire
+  1080p, xrdp et Windows réels), débits SFTP par les fonctions de production,
+  endurance (pente de la mémoire sur 30 minutes) et micro-bancs Rust. Le
+  verdict exige un écart au-delà du seuil **et** des dispersions disjointes :
+  la 0.16.0 mesurée contre elle-même ne donne que du bruit. Le workflow
+  « Banc » le joue sur chaque PR (Linux et Windows) et chaque nuit. Il a
+  trouvé, dès son premier passage, un bureau RemoteFX masqué qui continuait
+  d'être décodé à pleine cadence (environ trois cœurs avec dix sessions
+  ouvertes et la mire en fond).
+- Le harnais bout en bout pilote le binaire que désigne `AVASH_E2E_APP`.
+
 ### Amélioré
 
 - **Avash réduit, le bureau distant affiché se met en pause lui aussi.** La
@@ -268,6 +286,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   n'importe quel workflow du dépôt passait. Les README, `SECURITY.md` et les
   notes de chaque release donnent désormais `--signer-workflow` sur
   `release.yml`, `--source-ref` sur le tag et `--deny-self-hosted-runners`.
+
+### Retiré
+
+- `e2e/mesures/` et `wdio.mesures.conf.js`, remplacés par le banc ;
+  `scripts/mesures-front.sh` lance désormais le banc (jeu rapide).
 
 ## [0.16.1] - 2026-11-27
 
