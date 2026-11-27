@@ -1504,6 +1504,14 @@
           <label><span data-i18n="param-taille">Taille du texte (pixels)</span>
             <input type="number" id="param-taille" step="1" inputmode="numeric" />
           </label>
+          <label><span data-i18n="param-historique">Historique de chaque terminal</span>
+            <select id="param-historique">
+              <option value="1000" data-i18n="historique-1000">1 000 lignes</option>
+              <option value="5000" data-i18n="historique-5000">5 000 lignes</option>
+              <option value="10000" data-i18n="historique-10000">10 000 lignes</option>
+              <option value="50000" data-i18n="historique-50000">50 000 lignes</option>
+            </select>
+          </label>
           <label class="check"><input type="checkbox" id="param-ctrl" aria-describedby="param-ctrl-aide" /><span data-i18n="param-ctrl">Ctrl+C et Ctrl+V copient et collent, comme dans Windows Terminal</span></label>
           <p class="field-hint" id="param-ctrl-aide" data-i18n="param-ctrl-aide">Ctrl+C copie quand du texte est sélectionné, et sinon interrompt la commande ; Ctrl+V colle (dans vim, Ctrl+Q fait la sélection en bloc). Ctrl+Maj+C et Ctrl+Maj+V marchent dans tous les cas.</p>
         </fieldset>

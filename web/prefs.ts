@@ -230,3 +230,34 @@ export function setTailleTexte(px: number): void {
     /* stockage indisponible : le réglage vaut pour la session en cours */
   }
 }
+
+/** Lignes d'historique gardées par chaque terminal.
+ *
+ *  Audit du 27 novembre 2026 (ME-2), choix du mainteneur : 10 000 lignes
+ *  étaient figées. xterm garde douze octets par cellule : un historique plein
+ *  pèse 13 Mo à 80 colonnes, 26 Mo à 200, par onglet, jusqu'à sa fermeture.
+ *  Le réglage vit dans la fenêtre Paramètres, quatre valeurs, 10 000 par
+ *  défaut (Windows Terminal en garde 9 001, VTE 10 000). Une valeur hors
+ *  liste dans le stockage retombe sur le défaut. */
+const HISTORIQUE_KEY = "avash.terminal.historique";
+export const HISTORIQUE_CHOIX = [1000, 5000, 10000, 50000] as const;
+export const HISTORIQUE_DEFAUT = 10000;
+
+export function historiqueTerminal(): number {
+  try {
+    const n = Number(localStorage.getItem(HISTORIQUE_KEY));
+    if ((HISTORIQUE_CHOIX as readonly number[]).includes(n)) return n;
+  } catch {
+    /* stockage indisponible */
+  }
+  return HISTORIQUE_DEFAUT;
+}
+
+export function setHistoriqueTerminal(lignes: number): void {
+  if (!(HISTORIQUE_CHOIX as readonly number[]).includes(lignes)) return;
+  try {
+    localStorage.setItem(HISTORIQUE_KEY, String(lignes));
+  } catch {
+    /* stockage indisponible : le réglage vaut pour la session en cours */
+  }
+}

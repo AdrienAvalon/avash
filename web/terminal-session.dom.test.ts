@@ -195,6 +195,17 @@ describe("création d'un terminal", () => {
     expect(appels("diagnostic_noter_rendu").at(-1)).toEqual(["diagnostic_noter_rendu", { rendu: "dom" }]);
   });
 
+  it("l_historique_du_nouveau_terminal_suit_le_reglage", async () => {
+    // Audit du 27 novembre 2026 (ME-2) : `scrollback: 10000` était figé.
+    localStorage.setItem("avash.terminal.historique", "1000");
+    try {
+      await main.openSession(hote("srv-hist"));
+      expect(derniere().term.options.scrollback).toBe(1000);
+    } finally {
+      localStorage.removeItem("avash.terminal.historique");
+    }
+  });
+
   it("un_lien_osc8_passe_par_open_external", async () => {
     // FS-3 : sans `linkHandler`, xterm activait un lien OSC 8 par un confirm()
     // natif en anglais puis window.open, hors de la liste blanche de Rust.

@@ -234,3 +234,19 @@ describe("taille du texte des terminaux", () => {
     }
   });
 });
+
+// Audit du 27 novembre 2026 (ME-2) : une valeur abîmée ou hors liste dans le
+// stockage ne donne pas un historique démesuré, elle retombe sur 10 000.
+describe("historique du terminal", () => {
+  it("vaut 10 000 lignes par défaut et refuse une valeur hors liste", async () => {
+    const prefs = await import("./prefs");
+    localStorage.removeItem("avash.terminal.historique");
+    expect(prefs.historiqueTerminal()).toBe(10000);
+    prefs.setHistoriqueTerminal(1000);
+    expect(prefs.historiqueTerminal()).toBe(1000);
+    prefs.setHistoriqueTerminal(999_999);
+    expect(prefs.historiqueTerminal()).toBe(1000);
+    localStorage.setItem("avash.terminal.historique", "1e9");
+    expect(prefs.historiqueTerminal()).toBe(10000);
+  });
+});
