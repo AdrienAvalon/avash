@@ -37,6 +37,7 @@ import { enregistrementsOpen } from "./enregistrements";
 import { basculerJournal, brancherJournal, journalOpen, majReperesJournal, purgerJournal } from "./journal-commandes";
 import "./panneaux";
 import { appliquerLangue, langue, setLangue, t } from "./i18n";
+import { creerEcrivainOrdonne } from "./ecriture-ordonnee";
 
 // Tous les modules sont évalués ; ce qui suit est l'initialisation d'avash.
 performance.mark("avash:modules-evalues");
@@ -807,7 +808,7 @@ async function newSessionShell(label: string) {
       return;
     }
     s.capteur?.frappe(data);
-    invoke("pty_write", { id, data }).catch((e) => term.write(`\r\n⚠️ write: ${nettoyerPourTerminal(String(e))}\r\n`));
+    s.ecrire(data);
   });
   // Le shell distant n'a besoin que de la taille finale : on attend une
   // courte accalmie avant de la lui envoyer (un SIGWINCH par image le
@@ -820,7 +821,11 @@ async function newSessionShell(label: string) {
     }, 60);
   });
 
-  const s: Session = { id, alias: label, term, fit, tab, search, serialiser, closed: false, etat: "connecting", reconnect: null, sftpPath: "" };
+  const s: Session = { id, alias: label, term, fit, tab, search, serialiser, closed: false, etat: "connecting", reconnect: null, sftpPath: "",
+    ecrire: creerEcrivainOrdonne(
+      (data) => invoke("pty_write", { id, data }),
+      (e) => term.write(`\r\n⚠️ write: ${nettoyerPourTerminal(String(e))}\r\n`),
+    ) };
   s.capteur = brancherJournal(s, term);
   state.sessions.set(id, s);
   // Le nouvel onglet prend la place de l'actif (ou son volet, en vue

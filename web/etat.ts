@@ -56,6 +56,10 @@ export type Session = {
    *  Posé sur chaque terminal ; il ne note rien tant que le journal est coupé
    *  pour l'onglet. */
   capteur?: import("./journal-capteur").CapteurCommandes;
+  /** Envoie au shell, dans l'ordre (voir `ecriture-ordonnee.ts`). Tout ce qui
+   *  part au PTY de l'onglet passe par là, frappes comme commandes du panneau
+   *  SFTP, sans quoi les deux pouvaient se doubler. */
+  ecrire: (data: string) => void;
 };
 
 /**

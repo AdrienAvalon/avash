@@ -96,6 +96,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **Une frappe rapide sur un poste chargé n'arrive plus dans le désordre.**
+  Chaque touche partait au cœur par son propre appel, que Tauri traite en
+  parallèle : deux frappes rapprochées pouvaient se doubler avant le canal
+  SSH, et « echo » arrivait « cho » ou « ehco ». Vu par la suite bout en bout
+  Linux le 27 novembre 2026, puis reproduit en local en chargeant le
+  processeur (trois échecs sur quatre). Un seul envoi est désormais en vol par
+  onglet, les frappes arrivées entre-temps partent ensemble dans l'ordre, et
+  les commandes du panneau SFTP prennent le même chemin. Sous la même charge,
+  le scénario passe six fois sur six.
+
 - **La montée SFTP retrouve son débit derrière un VPN.** Audit du 27 novembre
   2026 (PR-2) : depuis la 0.16.0 et russh-sftp 4, un envoi n'avait plus
   qu'une écriture en vol, chaque bloc de 64 Kio attendant l'accusé du
