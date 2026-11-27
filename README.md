@@ -127,11 +127,18 @@ macOS est construite et testée en intégration continue mais n'a pas encore ét
 
 ```bash
 sha256sum -c SHA256SUMS                                             # intégrité
-gh attestation verify Avash_x.y.z_amd64.AppImage --repo AdrienAvalon/avash   # provenance
+gh attestation verify Avash_x.y.z_amd64.AppImage --repo AdrienAvalon/avash \
+  --signer-workflow AdrienAvalon/avash/.github/workflows/release.yml \
+  --source-ref refs/tags/vx.y.z --deny-self-hosted-runners            # provenance
 ```
 
-La seconde vérification prouve que le fichier vient de ce dépôt, de ce commit,
-produit par notre chaîne d'intégration continue (attestation Sigstore).
+La seconde vérification prouve que le fichier a été attesté (Sigstore) par le
+workflow de publication de ce dépôt, `release.yml`, lancé sur le tag de cette
+version et sur un exécuteur hébergé par GitHub. Remplacez `x.y.z` par la
+version téléchargée. Avec `--repo` seul, gh n'imposerait que le dépôt : une
+attestation produite par n'importe quel autre workflow du dépôt serait
+acceptée, notamment par la vérification hors ligne (`--bundle`). Détails dans
+[SECURITY.md](SECURITY.md).
 
 ### Depuis les sources
 

@@ -659,6 +659,58 @@ avant chaque publication. Toutes les commandes cargo des chaînes sont en
 `--locked` et les outils de la chaîne en version exacte : le graphe construit
 est celui du `Cargo.lock` commité, que décrit le SBOM attesté.
 
+**Les bundles publiés sont construits sans cache.** Le job qui construit les
+binaires publiés (`build` de `release.yml`, et l'installeur d'essai
+d'`essai-windows.yml`) ne restaure aucun cache d'Actions, ni Rust ni npm, et
+installe tauri-cli dans un dossier à lui avant de l'appeler par ce chemin.
+Jusqu'au 27 novembre 2026, il restaurait par `Swatinem/rust-cache`
+`./target`, `rdp-sidecar/target` et `~/.cargo` : la clé de ce cache tient à
+l'identifiant du job, pas au workflow, et le job `build` de `ci.yml`, qui
+exécute bien plus de code (serveurs de test, outils d'audit compilés depuis
+leurs sources, ESLint, vitest), écrivait l'entrée que la publication Linux
+reprenait. Tout code qui tourne dans un job de `main` peut d'ailleurs écrire
+une entrée de cache sous n'importe quelle clé : une dépendance de
+développement compromise n'importe où dans la chaîne aurait suffi à faire
+signer un binaire piégé, des bibliothèques compilées ou un `cargo-tauri`
+déposés là étant repris tels quels. La construction à froid coûte dix à vingt
+minutes par plateforme et par publication, rien à l'exécution. Le job
+`securite` de la publication garde son cache de fuzzing : il ne produit rien
+de livré. Garde : `scripts/tests/release-construit-sans-cache.sh`, jouée par
+`./check.sh`.
+
+**Le serveur WebDriver n'entre pas dans un binaire publié.** La suite bout en
+bout pilote l'application, sous Windows et macOS, par un serveur WebDriver
+qu'elle embarque (fonctionnalité cargo `webdriver`) ; il écoute sur la boucle
+locale et donnerait à tout processus du poste le pilotage complet d'Avash.
+La publication ne pose jamais cette fonctionnalité (la garde ci-dessus refuse
+toute option `--features` dans les jobs qui livrent), et, depuis le
+27 novembre 2026, elle cherche dans le binaire assemblé deux littéraux propres
+au greffon (`scripts/verifier-sans-webdriver.sh`) et échoue s'il en porte un,
+avant d'envoyer quoi que ce soit à signer. Les jobs bout en bout qui
+construisent avec `webdriver` jouent le contrôle inverse : leur binaire doit
+porter ces littéraux, sans quoi une montée du greffon rendrait la garde muette.
+
+**Vérifier la provenance d'un fichier.** Chaque release est attestée par
+Sigstore depuis le job `publier`. La vérification doit imposer le workflow
+signataire et le tag, pas seulement le dépôt :
+
+```bash
+gh attestation verify <fichier> --repo AdrienAvalon/avash \
+  --signer-workflow AdrienAvalon/avash/.github/workflows/release.yml \
+  --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+```
+
+Avec `--repo` seul, gh vérifie le dépôt inscrit dans le certificat, ni le
+workflow qui a signé ni la référence. Or cinq jobs du dépôt peuvent obtenir un
+jeton OIDC (l'agent Claude piloté par des commentaires, sa revue, Scorecard,
+la publication du site, `publier`) : le chemin hors ligne (`--bundle`, lot
+`.intoto.jsonl` joint à la release) accepterait alors un lot signé par
+n'importe lequel d'entre eux. Le chemin en ligne est mieux tenu (seul
+`publier` a `attestations: write`), mais la commande ci-dessus vaut pour les
+deux. La même règle s'applique à l'attestation du SBOM (`--predicate-type
+https://spdx.dev/Document/v2.3`). Constaté par l'audit du 27 novembre 2026
+(SE-3).
+
 **L'exécuteur GitLab et le poste qui signe.** La chaîne GitLab tourne sur le
 poste du mainteneur, dans un exécuteur Docker privilégié qui monte le socket du
 démon : chaque job, et donc chaque `npm ci`, `build.rs` ou scénario bout en

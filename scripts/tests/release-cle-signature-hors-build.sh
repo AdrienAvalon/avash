@@ -39,6 +39,7 @@ CLE = "TAURI_SIGNING_PRIVATE_KEY"
 # paquets, interpréteurs de scripts de projet.
 INTERDIT = re.compile(
     r"\bcargo\s+(?:\+\S+\s+)?(?:build|test|check|clippy|run|install|fuzz|llvm-cov|mutants|tauri\s+build)\b"
+    r"|\bcargo-tauri\"?\s+build\b"
     r"|\bnpm\b|\bnpx\b|\byarn\b|\bpnpm\b|\bpip3?\b|\bmake\b|\brustup\b|\bapt-get\b|\bbrew\b"
 )
 ACTIONS_PERMISES = ("actions/download-artifact@", "actions/upload-artifact@")
@@ -86,7 +87,10 @@ for chemin in sorted(glob.glob(".github/workflows/*.yml")):
     for nom_job, job in (wf.get("jobs") or {}).items():
         for etape in job.get("steps") or []:
             run = str(etape.get("run", ""))
-            if re.search(r"\bcargo\s+tauri\s+build\b", run) and '"createUpdaterArtifacts":false' not in run.replace(" ", ""):
+            # Les deux formes : `cargo tauri build`, et l'appel par le chemin
+            # de l'outil installé à part (`…/bin/cargo-tauri" build`, audit du
+            # 27 novembre 2026, SE-1), que l'ancienne expression ne voyait pas.
+            if re.search(r"\bcargo(?:\s+|-)tauri\"?\s+build\b", run) and '"createUpdaterArtifacts":false' not in run.replace(" ", ""):
                 echecs.append(f"{nom_wf}:{nom_job} : `cargo tauri build` sans --config coupant createUpdaterArtifacts (Tauri réclamerait la clé)")
 
 if not any(j.startswith("release.yml:") for j in jobs_a_cle):

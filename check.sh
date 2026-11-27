@@ -265,6 +265,12 @@ if python3 -c "import yaml" >/dev/null 2>&1; then
   # Aucun humain n'approuvait avant que la clé serve et que `publier` réécrive
   # latest.json : les jobs passent par l'environnement `release` (C-chaine-3).
   run "release : environnement protégé" "$ROOT" ./scripts/tests/release-environnement-protege.sh
+  # Le job `build` de la publication restaurait un cache que le job `build` de
+  # ci.yml écrivait (même identifiant de job), et tauri-cli pouvait venir de
+  # `~/.cargo/bin` restauré : construction à froid, outil installé à part,
+  # aucune fonctionnalité cargo, binaire vérifié (audit du 27 novembre 2026,
+  # SE-1 et SE-2).
+  run "release : construite sans cache ni webdriver" "$ROOT" ./scripts/tests/release-construit-sans-cache.sh
   # `--version "^2"` : tauri-cli, qui assemble et signait les bundles, prenait
   # la dernière version publiée au moment du run ; les autres outils aussi, et
   # Dependabot ne voit pas ces lignes (C-chaine-5).
@@ -313,6 +319,10 @@ run "porté : un échec de test reste visible" "$ROOT" ./scripts/tests/porte-sid
 # avant `cargo tauri build`. Ce contrôle rejoue la vraie ligne de copie pour une
 # cible Windows (suffixe .exe) et Linux (sans).
 run "release : suffixe .exe du sidecar (windows)" "$ROOT" ./scripts/tests/release-sidecar-suffixe-windows.sh
+# La publication cherche dans son binaire les littéraux du serveur WebDriver
+# embarqué : la garde doit rougir sur un binaire qui les porte (audit du
+# 27 novembre 2026, SE-2).
+run "release : la garde webdriver rougit sur un binaire qui le porte" "$ROOT" ./scripts/tests/garde-webdriver-binaire.sh
 # captures-readme.sh lisait le mot de passe RDP par `CAPTURES_RDP_MDP="$(secret-tool
 # lookup …)"` : secret-tool sort non nul quand le trousseau est vide, si bien que
 # sous `set -e` le script mourait AVANT la garde qui disait quoi enregistrer (arrêt
@@ -418,6 +428,10 @@ run "docs : README.en.md porte la section Documentation" "$ROOT" ./scripts/tests
 # plateformes » quand le workflow en construit trois, sans ligne macOS au
 # tableau. Le contrôle accorde RELEASE.md au workflow, au metainfo et aux paquets.
 run "docs : RELEASE.md, emplacements de version complets" "$ROOT" ./scripts/tests/release-emplacements-version-complets.sh
+# La commande de vérification de provenance donnée aux utilisateurs n'imposait
+# que le dépôt (`--repo`) : une attestation signée par n'importe quel workflow
+# du dépôt passait, hors ligne (audit du 27 novembre 2026, SE-3).
+run "docs : vérification de provenance par le workflow signataire" "$ROOT" ./scripts/tests/provenance-verification-complete.sh
 # SECURITY.md déclarait « 0.6.x » comme la dernière série supportée alors que le
 # dépôt était en 0.9.2 (figé depuis la 0.6.2, sept versions plus tôt) : un
 # rapporteur sur la 0.9.2 y lisait sa version comme non supportée. La section est

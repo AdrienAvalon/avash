@@ -30,7 +30,10 @@ fichiers = sorted(
 )
 
 CARGO = re.compile(r"\bcargo(?:\s+\+\S+)?\s+(build|test|check|clippy|run)\b")
-TAURI = re.compile(r"\bcargo\s+tauri\s+build\b")
+# `cargo tauri build`, ou l'outil appelé par son chemin (`…/bin/cargo-tauri"
+# build`) depuis que la publication l'installe à part (audit du 27 novembre
+# 2026, SE-1).
+TAURI = re.compile(r"\bcargo(?:\s+|-)tauri\"?\s+build\b")
 DENY = re.compile(r"\bcargo\s+deny\b")
 MUTANTS = re.compile(r"\bcargo\s+mutants\b")
 FIN = re.compile(r"\s(?:&&|\|\||\||;)\s|\s(?:&&|\|\|)$")
