@@ -26,10 +26,12 @@ pub(crate) const TAILLE_MAX: u64 = 1024 * 1024;
 const NOM: &str = "avash.log";
 
 /// Le répertoire du journal, sous le répertoire de configuration d'Avash
-/// (qui suit `AVASH_HOME`, comme les tests et la suite bout en bout l'exigent).
+/// (qui suit `AVASH_HOME`, comme les tests et la suite bout en bout l'exigent),
+/// et sous Windows sous `%LOCALAPPDATA%`, hors du profil itinérant comme le
+/// journal des commandes (audit du 27 novembre 2026, WI-14).
 #[must_use]
 pub fn repertoire() -> Option<PathBuf> {
-    avash::repertoire_configuration().map(|d| d.join("avash").join("journal"))
+    avash::donnees_locales::repertoire_de_base().map(|d| d.join("avash").join("journal"))
 }
 
 /// Le niveau retenu d'après `AVASH_JOURNAL`. Pur, pour être testé.

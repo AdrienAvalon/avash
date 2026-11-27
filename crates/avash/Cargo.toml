@@ -95,6 +95,11 @@ pageant = "0.2.5"
 # `TCP_MAXRT` sur la socket d'une session (FI-3), que socket2 n'expose pas.
 # Même version que celle que socket2 tire déjà sous Windows.
 windows-sys = { version = "0.61", features = ["Win32_Networking_WinSock"] }
+# Le trousseau Windows range ses identifiants en persistance « Enterprise »
+# (itinérante) si on ne lui dit rien ; `keyring` n'expose ni les modificateurs
+# ni la recherche, son cœur si (audit du 27 novembre 2026, WI-11). Même version
+# que celle que `keyring` tire déjà : rien de nouveau dans le graphe.
+keyring-core = "1.1"
 
 [dev-dependencies]
 # Auto-dépendance : les tests d'intégration (`tests/integration.rs`) et les

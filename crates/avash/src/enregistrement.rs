@@ -46,10 +46,12 @@ impl std::fmt::Debug for Enregistreur {
     }
 }
 
-/// Le répertoire des enregistrements : `<config>/avash/enregistrements`.
+/// Le répertoire des enregistrements : `<config>/avash/enregistrements`, et
+/// sous Windows `%LOCALAPPDATA%\avash\enregistrements`, hors du profil
+/// itinérant (audit du 27 novembre 2026, SE-5 ; voir `donnees_locales`).
 #[must_use]
 pub fn repertoire() -> Option<PathBuf> {
-    crate::repertoire_configuration().map(|c| c.join("avash").join("enregistrements"))
+    crate::donnees_locales::repertoire_de_base().map(|c| c.join("avash").join("enregistrements"))
 }
 
 /// Un nom de fichier sûr, dérivé du libellé de la session et de l'heure :

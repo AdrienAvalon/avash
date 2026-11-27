@@ -82,8 +82,103 @@ fn cle_memoire(account: &str) -> String {
     format!("{home}\u{0}{account}")
 }
 
+#[cfg(not(windows))]
 fn entry(account: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, account).map_err(|e| anyhow!("Trousseau inaccessible : {e}"))
+}
+
+/// Sous Windows, chaque entrée est écrite en persistance « Local Machine ».
+///
+/// Audit du 27 novembre 2026 (WI-11), choix du mainteneur : « tout en local ».
+/// Sans modificateur, le magasin Windows de `keyring` crée des identifiants
+/// génériques `CRED_PERSIST_ENTERPRISE` : sur un profil itinérant de domaine,
+/// les mots de passe SSH et RDP suivaient l'utilisateur sur tous les postes où
+/// il ouvre une session, et partaient (chiffrés par DPAPI) dans le profil du
+/// serveur de fichiers. `CRED_PERSIST_LOCAL_MACHINE` les garde sur ce poste.
+/// La persistance ne s'applique qu'à l'écriture : les entrées existantes sont
+/// réécrites une fois par [`migrer_vers_la_persistance_locale`].
+#[cfg(windows)]
+fn entry(account: &str) -> Result<keyring::Entry> {
+    entree_locale(account, None)
+}
+
+/// Une entrée `avash` en persistance locale ; `cible` reprend tel quel le nom
+/// d'un identifiant existant, pour le réécrire à la même place.
+#[cfg(windows)]
+fn entree_locale(account: &str, cible: Option<&str>) -> Result<keyring::Entry> {
+    // Le premier appel initialise le magasin par défaut de `keyring` (une
+    // seule fois pour le processus) ; le cœur s'en sert ensuite.
+    keyring::Entry::store_status()
+        .as_ref()
+        .map_err(|e| anyhow!("Trousseau inaccessible : {e}"))?;
+    let mut modificateurs = std::collections::HashMap::from([("persistence", "Local")]);
+    if let Some(c) = cible {
+        modificateurs.insert("target", c);
+    }
+    let inner = keyring_core::Entry::new_with_modifiers(SERVICE, account, &modificateurs)
+        .map_err(|e| anyhow!("Trousseau inaccessible : {e}"))?;
+    Ok(keyring::Entry { inner })
+}
+
+/// Une entrée doit-elle être réécrite en persistance locale ? Toute autre
+/// persistance que « Local » (« Enterprise », celle d'avant ; « Session »
+/// n'est jamais écrite par Avash) part du poste ou s'y perd. Pure, pour être
+/// testée partout.
+#[must_use]
+pub fn a_rendre_locale<S: std::hash::BuildHasher>(
+    attributs: &std::collections::HashMap<String, String, S>,
+) -> bool {
+    attributs
+        .get("persistence")
+        .is_some_and(|p| !p.eq_ignore_ascii_case("Local"))
+}
+
+/// Réécrit en persistance « Local Machine » les mots de passe d'Avash
+/// rangés en « Enterprise » par les versions précédentes, et rend leur nombre.
+///
+/// Sans perte : le secret est relu puis réécrit sous le **même** nom
+/// d'identifiant ; `CredWriteW` remplace l'identifiant d'un seul tenant, et un
+/// échec laisse l'ancien intact. Sans danger à rejouer : une entrée déjà
+/// locale est laissée. Ne touche que les identifiants dont le nom finit par
+/// `.avash` (forme `utilisateur@hôte:port.avash` du magasin).
+///
+/// # Errors
+/// Si le trousseau est inaccessible ou si une réécriture échoue ; les entrées
+/// déjà traitées le restent.
+#[cfg(windows)]
+pub fn migrer_vers_la_persistance_locale() -> Result<usize> {
+    if en_memoire() || en_panne() {
+        return Ok(0);
+    }
+    keyring::Entry::store_status()
+        .as_ref()
+        .map_err(|e| anyhow!("Trousseau inaccessible : {e}"))?;
+    let motif = std::collections::HashMap::from([("pattern", r"\.avash$")]);
+    let trouvees = keyring_core::Entry::search(&motif)
+        .map_err(|e| anyhow!("Recherche dans le trousseau impossible : {e}"))?;
+    let mut rendues = 0;
+    for ancienne in trouvees {
+        let attributs = ancienne
+            .get_attributes()
+            .map_err(|e| anyhow!("Lecture dans le trousseau impossible : {e}"))?;
+        if !a_rendre_locale(&attributs) {
+            continue;
+        }
+        let (Some(cible), Some(compte)) = (attributs.get("target_name"), attributs.get("username"))
+        else {
+            continue;
+        };
+        let secret = Zeroizing::new(
+            ancienne
+                .get_secret()
+                .map_err(|e| anyhow!("Lecture dans le trousseau impossible : {e}"))?,
+        );
+        entree_locale(compte, Some(cible))?
+            .set_secret(&secret)
+            .map_err(|e| anyhow!("Écriture dans le trousseau impossible : {e}"))?;
+        rendues += 1;
+    }
+    Ok(rendues)
 }
 
 /// Enregistre un mot de passe.
@@ -194,6 +289,61 @@ pub fn forget(account: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit du 27 novembre 2026 (WI-11) : seules les entrées qui ne sont pas
+    /// déjà en persistance locale sont réécrites ; une entrée sans attribut de
+    /// persistance (autre magasin) n'est pas touchée.
+    #[test]
+    fn seules_les_entrees_itinerantes_sont_rendues_locales() {
+        let avec =
+            |p: &str| std::collections::HashMap::from([("persistence".to_owned(), p.to_owned())]);
+        assert!(a_rendre_locale(&avec("Enterprise")));
+        assert!(a_rendre_locale(&avec("Session")));
+        assert!(!a_rendre_locale(&avec("Local")));
+        assert!(!a_rendre_locale(&avec("local")));
+        assert!(!a_rendre_locale(&std::collections::HashMap::new()));
+    }
+
+    /// Sur le vrai Gestionnaire d'identifiants (exécuteur Windows de la CI) :
+    /// une entrée écrite en « Enterprise » par une version précédente passe en
+    /// « Local », avec le même secret, et une nouvelle écriture naît locale.
+    #[cfg(windows)]
+    #[test]
+    fn une_entree_itinerante_devient_locale_sans_perdre_son_secret() {
+        let verrou = crate::testutil::verrou_environnement();
+        crate::testutil::poser_variable(&verrou, "AVASH_TROUSSEAU", None);
+        let compte = format!("migration-{}@test.invalid:22", std::process::id());
+        let ancienne = keyring::Entry::new(SERVICE, &compte).unwrap();
+        // Valeur factice en constante : écrite à côté de « password », elle
+        // passait pour un secret aux yeux de GitGuardian (27 novembre 2026).
+        const VALEUR: &str = "valeur-d-essai-itinerante";
+        ancienne.set_password(VALEUR).unwrap();
+        assert_eq!(
+            ancienne.inner.get_attributes().unwrap()["persistence"],
+            "Enterprise"
+        );
+
+        assert!(migrer_vers_la_persistance_locale().unwrap() >= 1);
+
+        let relue = entry(&compte).unwrap();
+        assert_eq!(relue.get_password().unwrap(), VALEUR);
+        assert_eq!(
+            relue.inner.get_attributes().unwrap()["persistence"],
+            "Local"
+        );
+        // Rejouée, elle n'a plus rien à faire pour cette entrée.
+        migrer_vers_la_persistance_locale().unwrap();
+        assert_eq!(
+            entry(&compte).unwrap().inner.get_attributes().unwrap()["persistence"],
+            "Local"
+        );
+        save(&compte, "neuf").unwrap();
+        assert_eq!(
+            entry(&compte).unwrap().inner.get_attributes().unwrap()["persistence"],
+            "Local"
+        );
+        forget(&compte).unwrap();
+    }
 
     #[test]
     fn account_id_est_lisible_dans_le_trousseau() {

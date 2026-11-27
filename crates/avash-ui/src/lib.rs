@@ -116,6 +116,39 @@ fn greffons() -> tauri::Builder<tauri::Wry> {
         .plugin(tauri_plugin_clipboard_manager::init())
 }
 
+/// Les mots de passe d'Avash rangés en persistance « Enterprise » (itinérante)
+/// passent en « Local Machine », hors du fil de l'interface : le Gestionnaire
+/// d'identifiants n'est pas instantané. Voir `avash::secrets`.
+fn migrer_le_trousseau() {
+    #[cfg(windows)]
+    std::thread::spawn(
+        || match avash::secrets::migrer_vers_la_persistance_locale() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("{n} mot(s) de passe du trousseau rendu(s) locaux au poste"),
+            Err(e) => tracing::warn!("trousseau : passage en persistance locale incomplet : {e:#}"),
+        },
+    );
+}
+
+/// Les données du poste quittent le profil itinérant de Windows, une fois
+/// (audit du 27 novembre 2026, SE-5, WI-14 et WI-11), puis le journal de
+/// l'application s'installe. Le déplacement passe avant le journal, qui
+/// s'ouvre dans l'un des répertoires déplacés ; son bilan y est écrit juste
+/// après. Ailleurs que sous Windows, les deux répertoires coïncident : rien.
+fn demarrer_journal_et_migrations() {
+    let migration = avash::donnees_locales::migrer_vers_le_local();
+    // Le journal d'abord : tout ce qui suit peut avoir à y écrire (C-SIL-2).
+    journal::installer();
+    match migration {
+        Ok(bilan) if bilan != avash::donnees_locales::Bilan::default() => {
+            tracing::info!(?bilan, "données déplacées hors du profil itinérant");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("déplacement des données hors du profil itinérant : {e:#}"),
+    }
+    migrer_le_trousseau();
+}
+
 /// Réglages posés une fois l'application construite : raccourcis de
 /// navigateur et reprise du moteur de rendu, que Tauri n'expose pas (voir
 /// `fenetre_windows`), et veille du type de session (WI-10).
@@ -144,8 +177,7 @@ fn crochets(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Le journal d'abord : tout ce qui suit peut avoir à y écrire (C-SIL-2).
-    journal::installer();
+    demarrer_journal_et_migrations();
     let builder = crochets(gerer_les_etats(greffons()))
         // Quatre commandes ont été retirées de cette liste : `run_command`,
         // `snippet_vars`, `password_known`, puis `enregistrement_en_cours`
