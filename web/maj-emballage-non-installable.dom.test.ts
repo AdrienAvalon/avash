@@ -13,10 +13,11 @@
 //    dossier portable en arrière, qui reproposerait la mise à jour à chaque
 //    lancement (canal « archive ») : on renvoie vers la page de release.
 // Le front interroge désormais la commande canal_de_mise_a_jour et, hors du
-// canal « greffon », court-circuite la vérification. Ces tests verrouillent que
-// checkUpdate() et downloadAndInstall ne sont alors jamais appelés, que chaque
-// canal affiche son message, et que le chemin greffon (AppImage/Windows installé)
-// reste intact.
+// canal « greffon », court-circuite l'installation. Ces tests verrouillent que
+// downloadAndInstall n'est alors jamais appelé (ni checkUpdate pour le
+// gestionnaire de paquets ; l'archive, elle, lit le manifeste depuis l'audit
+// du 27 novembre 2026, WI-2), que chaque canal affiche son message, et que le
+// chemin greffon (AppImage/Windows installé) reste intact.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const check = vi.hoisted(() => vi.fn());
@@ -69,17 +70,34 @@ describe("la vérification des mises à jour respecte l'emballage", () => {
     expect(notifyErreur).not.toHaveBeenCalled();
   });
 
-  it("canal « archive » (portable Windows) : ni checkUpdate ni téléchargement, on renvoie à la page de release", async () => {
+  // Audit du 27 novembre 2026 (WI-2) : sur l'archive portable, le message
+  // affirmait toujours qu'une version existait, sans rien vérifier. Le
+  // manifeste est désormais lu ; rien n'est jamais téléchargé sur ce canal.
+  it("canal « archive » (portable Windows) : la version disponible est nommée, sans téléchargement", async () => {
     invoke.mockResolvedValue("archive"); // canal_de_mise_a_jour
+    const downloadAndInstall = vi.fn();
+    const download = vi.fn();
+    check.mockResolvedValue({ version: "9.9.9", currentVersion: "1.2.3", downloadAndInstall, download });
     await chargerEtCliquer();
     await vi.waitFor(() => expect(notify).toHaveBeenCalled());
 
     expect(invoke).toHaveBeenCalledWith("canal_de_mise_a_jour");
-    expect(check).not.toHaveBeenCalled();
+    expect(check).toHaveBeenCalledTimes(1);
     // Message distinct : surtout pas « gestionnaire de paquets » sur Windows.
     expect(notify).toHaveBeenCalledWith("maj-archive-portable", "info");
     expect(notify).not.toHaveBeenCalledWith("maj-gere-par-paquet", "info");
+    expect(downloadAndInstall).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+    expect(askConfirm).not.toHaveBeenCalled();
     expect(notifyErreur).not.toHaveBeenCalled();
+  });
+
+  it("canal « archive » à jour : la pastille dit « à jour » et ne prétend pas qu'une version existe", async () => {
+    invoke.mockResolvedValue("archive");
+    check.mockResolvedValue(null);
+    await chargerEtCliquer();
+    await vi.waitFor(() => expect(document.getElementById("app-version")!.textContent).toBe("maj-a-jour"));
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("canal « greffon » (AppImage/Windows installé) : checkUpdate est appelée et l'installation intégrée reste possible", async () => {

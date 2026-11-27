@@ -11,6 +11,7 @@ import { libelleSur } from "./filters";
 import { t } from "./i18n";
 import { confirmerFermetureOnglet } from "./prefs";
 import { installerGardesRechargement } from "./rechargement";
+import { brancherSessionsPourMaj } from "./maj";
 
 // ---------- Raccourcis d'onglets ----------
 
@@ -56,6 +57,25 @@ function closeActiveTab() {
   if (state.active === null) return;
   void fermerOnglet({ kind: rdpSessions.has(state.active) ? "rdp" : "ssh", id: state.active });
 }
+
+// Ce que la mise à jour Windows doit savoir avant que l'installeur ne ferme
+// Avash (audit du 27 novembre 2026, WI-3) : combien de sessions seraient
+// coupées, et de quoi les fermer proprement.
+brancherSessionsPourMaj({
+  nombre: () =>
+    [...state.sessions.values()].filter((s) => !s.closed).length +
+    [...rdpSessions.values()].filter((r) => r.etat !== "closed").length,
+  fermerTout: async () => {
+    for (const o of orderedTabs()) {
+      if (o.kind === "ssh") closeSession(o.id);
+      else closeRdp(o.id);
+    }
+    // `pty_close` et `rdp_close` partent sans être attendus : on leur laisse
+    // le temps d'arrêter les processus de bureau, dont l'installeur remplace
+    // l'exécutable, et d'envoyer le `disconnect` SSH.
+    await new Promise((r) => setTimeout(r, 800));
+  },
+});
 
 // F5, Ctrl+R et le menu « Recharger » ne rechargent plus l'interface (audit du
 // 27 novembre 2026, WI-1) : voir rechargement.ts.
