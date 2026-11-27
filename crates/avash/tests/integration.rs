@@ -3310,3 +3310,104 @@ async fn une_coupure_en_plein_envoi_ne_promet_que_ce_qui_est_accuse() {
     let _ = std::fs::remove_dir_all(local.parent().unwrap());
     sftp.close().await.unwrap();
 }
+
+// ---------- Tunnels : client muet (audit du 27 novembre 2026) ----------
+
+/// Un service local qui débite sans fin vers chaque client, comme `yes`.
+async fn service_bavard() -> u16 {
+    let ecoute = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = ecoute.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut c, _)) = ecoute.accept().await {
+            tokio::spawn(async move {
+                let bloc = vec![b'y'; 64 * 1024];
+                while c.write_all(&bloc).await.is_ok() {}
+            });
+        }
+    });
+    port
+}
+
+/// Un port local libre, pour un tunnel.
+async fn port_libre() -> u16 {
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    l.local_addr().unwrap().port()
+}
+
+/// Audit du 27 novembre 2026 (FI-1) : un client local qui ne lisait plus
+/// faisait attendre la boucle de la session russh du tunnel (file du canal
+/// pleine), et toutes les autres connexions restaient muettes, keepalive
+/// compris. Le premier client ouvre la connexion et ne lit rien ; le second
+/// doit être servi, et le premier finit coupé, la ligne du tunnel le disant.
+#[tokio::test]
+async fn un_client_local_muet_ne_gele_pas_les_autres_connexions_du_tunnel() {
+    let service = service_bavard().await;
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let bind = port_libre().await;
+    let def = TunnelDef::new("test", TunnelKind::Local, bind, "127.0.0.1", service, "");
+    let tunnel = Tunnel::open(session, def).await.unwrap();
+
+    let muet = tokio::net::TcpStream::connect(("127.0.0.1", bind))
+        .await
+        .unwrap();
+    // De quoi remplir tampons de socket et file du canal plusieurs fois.
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    let mut second = tokio::net::TcpStream::connect(("127.0.0.1", bind))
+        .await
+        .unwrap();
+    let mut buf = vec![0u8; 1024];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(3), second.read(&mut buf))
+        .await
+        .expect("le second client attend : le tunnel est gelé")
+        .unwrap();
+    assert!(n > 0 && buf[..n].iter().all(|&o| o == b'y'));
+    drop(second);
+
+    let snap = attendre_compteurs(
+        &tunnel,
+        |s| s.last_error.is_some(),
+        "la coupure du client muet, dite dans la ligne du tunnel",
+    )
+    .await;
+    assert!(
+        snap.last_error.as_deref().unwrap_or("").contains(
+            "ne \
+         lisait plus"
+        ),
+        "{:?}",
+        snap.last_error
+    );
+    assert!(snap.alive, "le tunnel lui-même reste debout");
+    drop(muet);
+    tunnel.close().await;
+}
+
+/// Audit du 27 novembre 2026 (ME-7) : un client qui se connecte au mandataire
+/// SOCKS sans rien envoyer tenait sa tâche, sa socket et la session pour
+/// toujours, et `close` ne coupait que la boucle d'écoute. Arrêter le tunnel
+/// termine désormais ses relais : la socket du client muet est fermée.
+#[tokio::test]
+async fn arreter_le_tunnel_termine_ses_relais() {
+    let port = spawn_test_sshd().await;
+    let session = connect_for_tunnel(port).await;
+    let bind = port_libre().await;
+    let def = TunnelDef::new("test", TunnelKind::Dynamic, bind, "", 0, "");
+    let tunnel = Tunnel::open(session, def).await.unwrap();
+    let mut muet = tokio::net::TcpStream::connect(("127.0.0.1", bind))
+        .await
+        .unwrap();
+    // Que la connexion soit acceptée et sa négociation en attente.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    tunnel.close().await;
+    let mut buf = [0u8; 8];
+    let lu = tokio::time::timeout(std::time::Duration::from_secs(3), muet.read(&mut buf))
+        .await
+        .expect("le relais survit à l'arrêt du tunnel");
+    assert!(matches!(lu, Ok(0) | Err(_)), "{lu:?}");
+}
