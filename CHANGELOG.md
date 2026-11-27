@@ -7,6 +7,70 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Ajouté
+
+- **L'historique des terminaux se règle** dans la fenêtre Paramètres : 1 000,
+  5 000, 10 000 ou 50 000 lignes, 10 000 par défaut comme avant. Le choix vaut
+  pour les terminaux ouverts et les suivants. Un historique plein pèse 13 Mo à
+  80 colonnes et 26 Mo à 200, par onglet (audit du 27 novembre 2026, ME-2).
+
+### Amélioré
+
+- **Avash réduit, le bureau distant affiché se met en pause lui aussi.** La
+  pause ne suivait que l'onglet affiché : réduire Avash avec un bureau au
+  premier plan (pour lire ses courriels) le laissait recevoir, décoder et
+  peindre chaque image comme s'il était regardé. Sous Windows, WebView2 ne
+  signale même pas la page cachée à la réduction ; Avash suit donc l'état de
+  la fenêtre. La restauration relance le bureau. Et revenir sur un onglet de
+  bureau ne redemande plus l'écran entier quand le canevas a gardé son image :
+  Avash regarde au lieu de supposer (audit du 27 novembre 2026).
+- **Chaque image d'un bureau distant n'alloue plus un tampon neuf.** Le
+  processus RDP allouait puis libérait à chaque image un tampon à la taille
+  du message (8,3 Mo en 1080p) ; sous Windows, un bloc de cette taille
+  retourne au système à chaque libération, et le noyau remettait à zéro
+  quelque 200 Mo de pages par seconde sur un bureau animé. Le tampon sert
+  désormais d'une image à l'autre, RDP comme VNC (audit du 27 novembre 2026).
+- **Un bureau distant masqué ne coûte plus rien au processeur.** Derrière un
+  onglet SSH, un bureau qui bouge (vidéo, tableau de bord, journal qui
+  défile) restait décodé à pleine cadence : la pause de l'onglet ne retenait
+  que l'envoi à la page, le serveur continuait d'envoyer et le processus RDP
+  de décoder, jusqu'à 300 % d'un cœur au banc. Une seconde après le masquage,
+  Avash demande désormais au serveur de suspendre son affichage (Suppress
+  Output, comme mstsc quand on réduit sa fenêtre), et le lui fait reprendre
+  au retour, avec un rafraîchissement complet. Seulement auprès d'un serveur
+  qui l'annonce, et après une première image. Le serveur apprend ainsi qu'un
+  onglet est masqué, ce que mstsc lui dit déjà. Notre copie du connecteur
+  IronRDP garde pour cela deux capacités du serveur qu'elle jetait ; la mire
+  du serveur de test honore la suspension, pour que le banc la voie
+  (audit du 27 novembre 2026).
+
+- **Sous Windows, tout reste sur le poste.** Le journal des commandes, les
+  enregistrements et le journal de l'application passent de
+  `AppData\Roaming` (recopié sur un serveur de fichiers par les profils
+  itinérants et la redirection de dossiers) à `AppData\Local` ; les fichiers
+  existants y sont déplacés une fois au lancement, sans rien écraser. Les mots
+  de passe du trousseau passent de la persistance « Enterprise » (itinérante)
+  à « Local Machine », les entrées existantes étant réécrites à l'identique.
+  La configuration (hôtes, dossiers, bureaux) reste dans `AppData\Roaming`
+  (audit du 27 novembre 2026, SE-5, WI-14, WI-11).
+- **Mise à jour sous Windows : Avash demande avant de fermer les sessions.**
+  L'installeur termine Avash ; un clic sur « Installer » coupait sans prévenir
+  toutes les sessions, transferts compris. Si des sessions sont ouvertes,
+  Avash le dit et propose d'installer maintenant (onglets fermés proprement,
+  après le téléchargement) ou au prochain lancement (WI-3).
+- **La version portable dit vraiment s'il existe une mise à jour.** Elle
+  affirmait toujours qu'une nouvelle version était disponible, sans rien
+  vérifier ni dire laquelle ; elle lit désormais le manifeste signé et répond
+  « à jour » ou nomme la version, sans rien télécharger (WI-2).
+- **Windows, session reprise à distance** : Avash lancé sur l'écran du poste
+  puis repris par RDP (ou l'inverse) le signale et propose de redémarrer pour
+  adapter l'affichage ; le diagnostic dit si la session est distante et si la
+  composition logicielle est posée (WI-10).
+- **Windows, outils du système** : `icacls`, `reg` et `whoami` partent de
+  `System32` par leur chemin absolu, sans console qui clignote ; le droit sur
+  une clé privée est accordé par le SID du compte, que les comptes Entra ID et
+  les homonymes locaux ne faussent plus (WI-9).
+
 ### Corrigé
 
 - **La montée SFTP retrouve son débit derrière un VPN.** Audit du 27 novembre
@@ -122,58 +186,6 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   l'autre et se redit à chaque reprise, comme la pause d'un onglet masqué.
   Partage coupé, la liste des fichiers copiés sur le distant ne s'affiche
   plus et ne peut plus se recevoir (audit du 27 novembre 2026).
-
-### Amélioré
-
-- **Avash réduit, le bureau distant affiché se met en pause lui aussi.** La
-  pause ne suivait que l'onglet affiché : réduire Avash avec un bureau au
-  premier plan (pour lire ses courriels) le laissait recevoir, décoder et
-  peindre chaque image comme s'il était regardé. Sous Windows, WebView2 ne
-  signale même pas la page cachée à la réduction ; Avash suit donc l'état de
-  la fenêtre. La restauration relance le bureau. Et revenir sur un onglet de
-  bureau ne redemande plus l'écran entier quand le canevas a gardé son image :
-  Avash regarde au lieu de supposer (audit du 27 novembre 2026).
-- **Chaque image d'un bureau distant n'alloue plus un tampon neuf.** Le
-  processus RDP allouait puis libérait à chaque image un tampon à la taille
-  du message (8,3 Mo en 1080p) ; sous Windows, un bloc de cette taille
-  retourne au système à chaque libération, et le noyau remettait à zéro
-  quelque 200 Mo de pages par seconde sur un bureau animé. Le tampon sert
-  désormais d'une image à l'autre, RDP comme VNC (audit du 27 novembre 2026).
-- **Un bureau distant masqué ne coûte plus rien au processeur.** Derrière un
-  onglet SSH, un bureau qui bouge (vidéo, tableau de bord, journal qui
-  défile) restait décodé à pleine cadence : la pause de l'onglet ne retenait
-  que l'envoi à la page, le serveur continuait d'envoyer et le processus RDP
-  de décoder, jusqu'à 300 % d'un cœur au banc. Une seconde après le masquage,
-  Avash demande désormais au serveur de suspendre son affichage (Suppress
-  Output, comme mstsc quand on réduit sa fenêtre), et le lui fait reprendre
-  au retour, avec un rafraîchissement complet. Seulement auprès d'un serveur
-  qui l'annonce, et après une première image. Le serveur apprend ainsi qu'un
-  onglet est masqué, ce que mstsc lui dit déjà. Notre copie du connecteur
-  IronRDP garde pour cela deux capacités du serveur qu'elle jetait ; la mire
-  du serveur de test honore la suspension, pour que le banc la voie
-  (audit du 27 novembre 2026).
-
-## [0.16.1] - 2026-11-27
-
-- **Mise à jour sous Windows : Avash demande avant de fermer les sessions.**
-  L'installeur termine Avash ; un clic sur « Installer » coupait sans prévenir
-  toutes les sessions, transferts compris. Si des sessions sont ouvertes,
-  Avash le dit et propose d'installer maintenant (onglets fermés proprement,
-  après le téléchargement) ou au prochain lancement (WI-3).
-- **La version portable dit vraiment s'il existe une mise à jour.** Elle
-  affirmait toujours qu'une nouvelle version était disponible, sans rien
-  vérifier ni dire laquelle ; elle lit désormais le manifeste signé et répond
-  « à jour » ou nomme la version, sans rien télécharger (WI-2).
-- **Windows, session reprise à distance** : Avash lancé sur l'écran du poste
-  puis repris par RDP (ou l'inverse) le signale et propose de redémarrer pour
-  adapter l'affichage ; le diagnostic dit si la session est distante et si la
-  composition logicielle est posée (WI-10).
-- **Windows, outils du système** : `icacls`, `reg` et `whoami` partent de
-  `System32` par leur chemin absolu, sans console qui clignote ; le droit sur
-  une clé privée est accordé par le SID du compte, que les comptes Entra ID et
-  les homonymes locaux ne faussent plus (WI-9).
-
-### Corrigé
 
 - **F5, Ctrl+R et le menu « Recharger » ne rechargent plus l'interface.** Sous
   Windows, WebView2 gardait ses raccourcis de navigateur : F5 dans la barre
