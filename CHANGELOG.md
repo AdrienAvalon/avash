@@ -164,6 +164,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   affirmait toujours qu'une nouvelle version était disponible, sans rien
   vérifier ni dire laquelle ; elle lit désormais le manifeste signé et répond
   « à jour » ou nomme la version, sans rien télécharger (WI-2).
+- **Windows, session reprise à distance** : Avash lancé sur l'écran du poste
+  puis repris par RDP (ou l'inverse) le signale et propose de redémarrer pour
+  adapter l'affichage ; le diagnostic dit si la session est distante et si la
+  composition logicielle est posée (WI-10).
+- **Windows, outils du système** : `icacls`, `reg` et `whoami` partent de
+  `System32` par leur chemin absolu, sans console qui clignote ; le droit sur
+  une clé privée est accordé par le SID du compte, que les comptes Entra ID et
+  les homonymes locaux ne faussent plus (WI-9).
+
 ### Corrigé
 
 - **F5, Ctrl+R et le menu « Recharger » ne rechargent plus l'interface.** Sous
@@ -187,6 +196,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   fermé et Entrée relance la connexion. Deux demandes à la suite attendent
   leur tour au lieu que la seconde annule la première (et change d'hôte sous
   les doigts de l'utilisateur) (FI-11).
+- **Diagnostic Windows** : « Pageant présent » s'affichait sur tout poste sans
+  agent ; la sonde cherche désormais la fenêtre de Pageant ou son tube (WI-7).
+- **Import MobaXterm sous Windows** : `_CurrentDrive_` suit le lecteur du
+  fichier lu (MobaXterm portable sur `D:` ou une clé), et un fichier écrit dans
+  la page ANSI n'est plus ignoré sans un mot (WI-16).
 - **Journal des commandes** : la forme des frappes (longueur d'un mot de passe
   tapé à `sudo` comprise) n'est plus retenue pour le diagnostic quand le
   journal est coupé (SE-8).

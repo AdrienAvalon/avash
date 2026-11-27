@@ -21,6 +21,7 @@ pub mod serie;
 pub mod sftp;
 pub mod snippet;
 pub mod ssh;
+pub mod systeme_windows;
 pub mod tunnel;
 
 use serde::{Deserialize, Serialize};

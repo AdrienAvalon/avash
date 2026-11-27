@@ -362,6 +362,13 @@ describe("connexion", () => {
     expect(s.closed).toBe(true);
   });
 
+  it("un_changement_de_type_de_session_propose_de_redemarrer", () => {
+    // Audit du 27 novembre 2026 (WI-10) : Avash repris par RDP gardait la
+    // composition du lancement, sans que rien ne le dise.
+    ecouteurs.get("session-distante-changee")!({ payload: { distante: true } });
+    expect(document.getElementById("toasts")!.textContent).toContain("Redémarre-le");
+  });
+
   it("un_trousseau_indisponible_est_signale", () => {
     // C-SIL-8, contrat K1 : un trousseau en panne passait pour « pas de mot de
     // passe », et CredSSP échouait en « mot de passe refusé ».

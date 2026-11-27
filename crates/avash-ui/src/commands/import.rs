@@ -74,10 +74,13 @@ fn lectures_par_defaut() -> (Vec<avash::import::Lecture>, Vec<String>) {
         consultes.push(r"HKCU\Software\SimonTatham\PuTTY\Sessions".to_string());
         lectures.push(avash::import::putty_sessions_registre());
     }
+    // Lu en octets puis décodé (UTF-8, sinon la page ANSI du poste), le
+    // lecteur de `_CurrentDrive_` déduit du chemin : voir `lire_mobaxterm`
+    // (audit du 27 novembre 2026, WI-16).
     for chemin in avash::import::chemins_mobaxterm() {
-        if let Ok(contenu) = std::fs::read_to_string(&chemin) {
+        if let Ok(lecture) = avash::import::lire_mobaxterm(&chemin) {
             consultes.push(chemin.display().to_string());
-            lectures.push(avash::import::parse_mobaxterm_ini(&contenu));
+            lectures.push(lecture);
         }
     }
     (lectures, consultes)
@@ -97,9 +100,8 @@ pub fn import_scan(chemin: Option<String>) -> Result<BilanImport, String> {
             let lecture = if p.is_dir() {
                 avash::import::putty_sessions_dans(p)
             } else {
-                let contenu = std::fs::read_to_string(p)
-                    .map_err(|e| format!("Lecture de {c} impossible : {e}"))?;
-                avash::import::parse_mobaxterm_ini(&contenu)
+                avash::import::lire_mobaxterm(p)
+                    .map_err(|e| format!("Lecture de {c} impossible : {e}"))?
             };
             (vec![lecture], vec![c.to_string()])
         }

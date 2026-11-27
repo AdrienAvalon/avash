@@ -93,6 +93,62 @@ fn gerer_les_etats<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Buil
         .manage(commands::RenduTerminal::default())
 }
 
+/// Vrai quand le processus s'exécute dans une session RDP (Terminal Services),
+/// et non sur un écran physique. `GetSystemMetrics(SM_REMOTESESSION)` renvoie
+/// une valeur non nulle exactement dans ce cas — c'est le test que Microsoft
+/// documente pour distinguer les deux, plus fiable qu'un reniflage de variables
+/// d'environnement. FFI directe vers user32 : une seule fonction, aucune caisse
+/// supplémentaire à embarquer. `#[link]` explicite pour ne pas dépendre du hasard
+/// qu'une autre caisse du graphe lie déjà user32.
+#[cfg(windows)]
+#[must_use]
+pub fn session_distante() -> bool {
+    // SM_REMOTESESSION, cf. MS-RDPBCGR / winuser.h.
+    const SM_REMOTESESSION: i32 = 0x1000;
+    // SAFETY: GetSystemMetrics n'a ni pointeur, ni précondition, ni effet de
+    // bord : l'assertion de sûreté remonte à la déclaration (`safe fn`, Rust
+    // 1.82), et l'appel n'a plus besoin de bloc (audit du 12 septembre 2026,
+    // C-unsafe-5).
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        safe fn GetSystemMetrics(n_index: i32) -> i32;
+    }
+    GetSystemMetrics(SM_REMOTESESSION) != 0
+}
+
+/// Le type de session a-t-il changé depuis le lancement ? Rend le nouveau,
+/// une seule fois : le remède est un redémarrage.
+#[cfg(any(windows, test))]
+fn changement_de_session(au_lancement: bool, maintenant: bool) -> Option<bool> {
+    (au_lancement != maintenant).then_some(maintenant)
+}
+
+/// Prévient la page quand Avash, lancé sur l'écran du poste, est repris à
+/// distance par RDP, ou l'inverse.
+///
+/// Audit du 27 novembre 2026 (WI-10) : la composition logicielle n'est posée
+/// que si Avash **démarre** en session distante, parce que les arguments de
+/// `WebView2` sont figés à la création de la vue. Le cas courant au travail
+/// (lancé au bureau, repris le soir par RDP) gardait le réglage du lancement :
+/// carrés noirs à distance, composition logicielle inutile au retour. Une
+/// lecture de `GetSystemMetrics` toutes les cinq secondes ne coûte rien ; au
+/// premier changement, la page propose de redémarrer et la veille s'arrête.
+#[cfg(windows)]
+fn surveiller_le_type_de_session(app: tauri::AppHandle) {
+    let au_lancement = session_distante();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if let Some(distante) = changement_de_session(au_lancement, session_distante()) {
+            commands::emettre(
+                &app,
+                "session-distante-changee",
+                serde_json::json!({ "distante": distante }),
+            );
+            break;
+        }
+    });
+}
+
 /// Au début de chaque chargement de la fenêtre principale, le cœur ferme ce
 /// que possédait la page précédente (audit du 27 novembre 2026, WI-1, FI-2,
 /// ME-3) : une page neuve n'a aucun onglet, donc aucune session. Le premier
@@ -160,6 +216,7 @@ fn preparer(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(fenetre) = app.get_webview_window("main") {
             fenetre_windows::regler(&fenetre);
         }
+        surveiller_le_type_de_session(app.handle().clone());
     }
     #[cfg(not(windows))]
     let _ = app;
@@ -300,6 +357,18 @@ pub fn run() {
 #[cfg(test)]
 mod tests_lancement {
     use super::rapporter_echec_lancement;
+
+    /// Audit du 27 novembre 2026 (WI-10) : un changement de type de session
+    /// (écran du poste vers RDP, ou retour) se signale ; l'absence de
+    /// changement, non.
+    #[test]
+    fn un_changement_de_type_de_session_se_signale() {
+        use super::changement_de_session;
+        assert_eq!(changement_de_session(false, true), Some(true));
+        assert_eq!(changement_de_session(true, false), Some(false));
+        assert_eq!(changement_de_session(true, true), None);
+        assert_eq!(changement_de_session(false, false), None);
+    }
 
     /// Audit du 12 septembre 2026 (C-panique-9) : un échec de lancement se dit
     /// en clair et rend le code 1, au lieu d'une panique invisible sous Windows.

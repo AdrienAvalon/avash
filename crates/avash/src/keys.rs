@@ -84,10 +84,15 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
     if mode & 0o077 != 0 {
         return Ok(()); // fichier public (clé .pub) : rien à restreindre
     }
-    let user = crate::ssh::current_username();
+    // Le droit va au SID du compte, sans ambiguïté de domaine ; le nom ne sert
+    // plus que de repli si `whoami` ne répond pas (audit du 27 novembre 2026,
+    // WI-9). `icacls` part de System32, sans console (voir `systeme_windows`).
+    let user = crate::systeme_windows::sid_courant()
+        .map_or_else(crate::ssh::current_username, |sid| format!("*{sid}"));
     let chemin = path.to_string_lossy().to_string();
-    let sortie = std::process::Command::new("icacls")
+    let sortie = crate::systeme_windows::commande("icacls")
         .args(icacls_args(&chemin, &user, path.is_dir()))
+        .stdin(std::process::Stdio::null())
         .output()
         .with_context(|| format!("Restriction des droits sur {}", path.display()))?;
     if !sortie.status.success() {
@@ -366,6 +371,15 @@ mod tests {
         assert_eq!(dossier[3], "x:(OI)(CI)F");
         let fichier = icacls_args("C:\\Users\\x\\.ssh\\cle", "x", false);
         assert_eq!(fichier[3], "x:(F)", "un fichier n'a rien à transmettre");
+    }
+
+    /// Audit du 27 novembre 2026 (WI-9) : le droit s'accorde par le SID du
+    /// compte (`*S-…`, forme qu'`icacls` reconnaît), pas par un nom sans
+    /// domaine qu'un compte local homonyme ou Entra ID résolvait mal.
+    #[test]
+    fn icacls_accorde_le_droit_par_sid() {
+        let a = icacls_args("C:\\Users\\x\\.ssh\\cle", "*S-1-5-21-1-2-3-1001", false);
+        assert_eq!(a[3], "*S-1-5-21-1-2-3-1001:(F)");
     }
 
     #[test]
