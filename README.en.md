@@ -127,11 +127,17 @@ tested in CI but has not been tried on a real machine yet: feedback welcome.
 
 ```bash
 sha256sum -c SHA256SUMS                                             # integrity
-gh attestation verify Avash_x.y.z_amd64.AppImage --repo AdrienAvalon/avash   # provenance
+gh attestation verify Avash_x.y.z_amd64.AppImage --repo AdrienAvalon/avash \
+  --signer-workflow AdrienAvalon/avash/.github/workflows/release.yml \
+  --source-ref refs/tags/vx.y.z --deny-self-hosted-runners            # provenance
 ```
 
-The second check proves the file comes from this repository, at this commit,
-built by our CI (Sigstore attestation).
+The second check proves the file was attested (Sigstore) by this
+repository's release workflow, `release.yml`, run on this version's tag and on
+a GitHub-hosted runner. Replace `x.y.z` with the version you downloaded. With
+`--repo` alone, gh would only enforce the repository: an attestation produced
+by any other workflow of the repository would be accepted, notably by offline
+verification (`--bundle`). Details in [SECURITY.md](SECURITY.md) (in French).
 
 ### From source
 

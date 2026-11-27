@@ -389,6 +389,13 @@ jobs:
       - name: Aucun runtime Visual C++ redistribuable
         shell: pwsh
         run: ./scripts/verifier-runtime-windows.ps1 rdp-sidecar/target/release/avash-rdp.exe target/release/avash-ui.exe
+      # Contrôle inverse de la garde de release.yml (audit du 27 novembre 2026,
+      # SE-2) : ce binaire construit avec `--features webdriver` doit porter
+      # les littéraux que la publication refuse, sinon une montée du greffon
+      # qui les renommerait rendrait cette garde muette.
+      - name: La garde webdriver reconnaît ce binaire
+        shell: bash
+        run: bash scripts/verifier-sans-webdriver.sh --doit-contenir target/release/avash-ui.exe
       - name: Serveurs RDP et VNC de test
         shell: pwsh
         run: |
@@ -465,6 +472,13 @@ jobs:
       # plus. C'est la première fois que l'interface est exercée sur macOS.
       - name: Construire l'app (serveur WebDriver embarqué)
         run: cargo build --locked --release -p avash-ui --features webdriver
+      # Contrôle inverse de la garde de release.yml (audit du 27 novembre 2026,
+      # SE-2) : ce binaire construit avec `--features webdriver` doit porter
+      # les littéraux que la publication refuse, sinon une montée du greffon
+      # qui les renommerait rendrait cette garde muette.
+      - name: La garde webdriver reconnaît ce binaire
+        shell: bash
+        run: bash scripts/verifier-sans-webdriver.sh --doit-contenir target/release/avash-ui
       - name: E2E — dépendances
         working-directory: e2e
         run: npm ci

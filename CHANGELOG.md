@@ -234,6 +234,35 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   des feuilles construites, que la CSP ne restreint pas
   (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
   police et la chasse fixe du terminal.
+- **Les binaires publiés ne sont plus construits sur un cache que d'autres
+  workflows écrivent.** Trouvé par l'audit du 27 novembre 2026 (SE-1) : le job
+  `build` de la publication restaurait `./target`, `rdp-sidecar/target` et
+  `~/.cargo` par Swatinem/rust-cache, dont la clé tient à l'identifiant du
+  job ; le job `build` de la CI, homonyme et sur la même image, écrivait à
+  chaque poussée sur `main` l'entrée que la publication Linux reprenait. Tout
+  code de ce job (serveurs de test, outils d'audit, ESLint, vitest) pouvait
+  ainsi atteindre le binaire signé, et `cargo install tauri-cli` ne
+  réinstallait pas un outil déjà présent dans `~/.cargo/bin` restauré. La
+  publication (et l'installeur d'essai Windows) construit désormais à froid,
+  sans cache Rust ni npm, avec un tauri-cli installé dans son propre dossier
+  et appelé par ce chemin. Garde : `scripts/tests/release-construit-sans-cache.sh`.
+- **La commande de vérification de provenance impose le workflow qui a
+  signé.** Audit du 27 novembre 2026 (SE-3) : `gh attestation verify --repo`
+  seul n'imposait que le dépôt, et une attestation hors ligne signée par
+  n'importe quel workflow du dépôt passait. Les README, `SECURITY.md` et les
+  notes de chaque release donnent désormais `--signer-workflow` sur
+  `release.yml`, `--source-ref` sur le tag et `--deny-self-hosted-runners`.
+
+### Ajouté
+
+- **La publication vérifie que son binaire ne porte pas le serveur WebDriver
+  de la suite bout en bout.** Audit du 27 novembre 2026 (SE-2) : la règle ne
+  tenait qu'à l'absence d'une option dans une commande. Le job `build` cherche
+  dans `avash-ui` deux littéraux propres au greffon
+  (`scripts/verifier-sans-webdriver.sh`) avant d'envoyer quoi que ce soit à
+  signer, et les jobs bout en bout Windows et macOS, qui construisent avec
+  `--features webdriver`, jouent le contrôle inverse pour que la garde ne
+  devienne pas muette à une montée du greffon.
 
 ## [0.16.0] - 2026-11-26
 
