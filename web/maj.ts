@@ -7,6 +7,113 @@ import { $ } from "./etat";
 import { askConfirm } from "./dialogues";
 import { notify, notifyErreur } from "./notifications";
 import { t } from "./i18n";
+import { estWindows } from "./vnc-clavier";
+
+/** La mise à jour rendue par `check`, nommée ici plutôt qu'importée : la
+ *  garde des permissions (scripts/tests/permissions-utilisees-par-le-front.sh)
+ *  lit les imports du greffon comme autant de permissions demandées. Ses
+ *  `download` et `install` relèvent d'`updater:default`, déjà accordé. */
+type Update = NonNullable<Awaited<ReturnType<typeof checkUpdate>>>;
+
+// ---------- Sessions ouvertes au moment d'installer ----------
+
+/** Ce que la mise à jour doit savoir des onglets, branché par `raccourcis.ts`
+ *  (ce module ne dépend pas de la page entière, ses tests non plus). */
+export type SessionsOuvertes = {
+  /** Sessions SSH, consoles série et bureaux distants non fermés. */
+  nombre(): number;
+  /** Ferme tous les onglets, comme Ctrl+W sans confirmation. */
+  fermerTout(): Promise<void>;
+};
+let sessions: SessionsOuvertes = { nombre: () => 0, fermerTout: async () => {} };
+export function brancherSessionsPourMaj(s: SessionsOuvertes): void {
+  sessions = s;
+}
+
+/** La mise à jour reportée au prochain lancement : sa version. */
+const CLE_AU_LANCEMENT = "avash.maj.au-prochain-lancement";
+function lireReport(): string | null {
+  try {
+    return localStorage.getItem(CLE_AU_LANCEMENT);
+  } catch {
+    return null;
+  }
+}
+function ecrireReport(version: string | null): void {
+  try {
+    if (version === null) localStorage.removeItem(CLE_AU_LANCEMENT);
+    else localStorage.setItem(CLE_AU_LANCEMENT, version);
+  } catch {
+    /* stockage refusé : la mise à jour se reproposera au prochain clic */
+  }
+}
+
+/** Sous Windows, l'installeur ferme Avash : le greffon lance le setup NSIS
+ *  puis termine le processus (`std::process::exit`), sans retour à la page.
+ *
+ *  Audit du 27 novembre 2026 (WI-3), choix du mainteneur : un clic sur
+ *  « Installer » coupait sur-le-champ toutes les sessions, transferts SFTP
+ *  compris, sans le dire. Si des sessions sont ouvertes, on demande : installer
+ *  maintenant (les onglets sont fermés proprement avant, ce qui arrête aussi
+ *  les processus de bureau avant que l'installeur ne remplace leur exécutable),
+ *  ou au prochain lancement. Rend vrai pour installer tout de suite. */
+async function accordAvantFermeture(version: string): Promise<boolean> {
+  const n = sessions.nombre();
+  if (n === 0) return true;
+  const maintenant = await askConfirm(
+    t(n > 1 ? "maj-sessions-fermees-pluriel" : "maj-sessions-fermees", { n }) + "\n\n" + t("maj-sessions-question"),
+    { danger: true, ok: t("maj-installer-maintenant"), annuler: t("maj-au-prochain-lancement") },
+  );
+  if (!maintenant) {
+    ecrireReport(version);
+    notify(t("maj-reportee", { version }), "info");
+    return false;
+  }
+  await sessions.fermerTout();
+  return true;
+}
+
+/** Télécharge puis installe sous Windows, après accord si des sessions sont
+ *  ouvertes. Le téléchargement passe d'abord : un réseau coupé ne ferme rien. */
+async function installerSousWindows(update: Update): Promise<void> {
+  try {
+    await update.download();
+  } catch (e) {
+    notifyErreur(t("maj-installation-impossible", { e: String(e) }));
+    return;
+  }
+  if (!(await accordAvantFermeture(update.version))) return;
+  ecrireReport(null);
+  try {
+    await update.install(); // ne revient pas : l'installeur prend la main
+  } catch (e) {
+    notifyErreur(t("maj-installation-impossible", { e: String(e) }));
+  }
+}
+
+/** Au lancement, la mise à jour reportée s'installe, avant que l'utilisateur
+ *  n'ait rouvert ses sessions. Si une session s'est ouverte pendant le
+ *  téléchargement, la même question revient. */
+export async function installerLaMajReportee(): Promise<void> {
+  if (!lireReport()) return;
+  const canal = await invoke<string>("canal_de_mise_a_jour").catch(() => "greffon");
+  if (canal !== "greffon" || !estWindows()) {
+    ecrireReport(null);
+    return;
+  }
+  let update: Update | null;
+  try {
+    update = await checkUpdate();
+  } catch {
+    return; // hors ligne : on réessaiera au prochain lancement
+  }
+  if (!update) {
+    ecrireReport(null); // déjà installée, ou retirée
+    return;
+  }
+  notify(t("maj-installation-reportee", { version: update.version }), "info");
+  await installerSousWindows(update);
+}
 
 // ---------- Mise à jour ----------
 
@@ -35,8 +142,20 @@ async function checkForUpdates() {
       return;
     }
     if (canal === "archive") {
+      // Audit du 27 novembre 2026 (WI-2) : ce canal rendait la main avant
+      // toute vérification et affirmait toujours « Une nouvelle version est
+      // disponible », archive à jour comprise, sans dire laquelle. Le
+      // manifeste signé se lit comme ailleurs (le greffon en vérifie la
+      // signature) ; rien n'est téléchargé ni installé : l'URL qu'il donne
+      // est celle du setup NSIS, qui s'installerait hors du dossier portable.
+      const update = await checkUpdate();
+      if (!update) {
+        ver.textContent = t("maj-a-jour");
+        setTimeout(() => (ver.textContent = prev), 1800);
+        return;
+      }
       ver.textContent = prev;
-      notify(t("maj-archive-portable"), "info");
+      notify(t("maj-archive-portable", { version: update.version }), "info");
       return;
     }
     const update = await checkUpdate();
@@ -52,6 +171,10 @@ async function checkForUpdates() {
       { danger: false, ok: t("maj-installer") },
     );
     if (!ok) return;
+    if (estWindows()) {
+      await installerSousWindows(update);
+      return;
+    }
     // Trouvé par l'audit du 7 septembre 2026 : un seul catch englobait
     // checkUpdate(), downloadAndInstall() et relaunch(), si bien qu'une signature
     // invalide, un réseau coupé pendant le téléchargement ou un AppImage non
@@ -85,3 +208,4 @@ async function checkForUpdates() {
   }
 }
 $("app-version").addEventListener("click", checkForUpdates);
+void installerLaMajReportee();

@@ -191,8 +191,15 @@ export const FR: Record<string, string> = {
   "maj-redemarrage-impossible":
     "Mise à jour installée, mais le redémarrage a échoué : {e}. Elle prendra effet au prochain lancement d'Avash.",
   "maj-gere-par-paquet": "Mises à jour gérées par ton gestionnaire de paquets (pacman, flatpak…).",
+  "maj-sessions-fermees": "{n} session ouverte sera fermée.",
+  "maj-sessions-fermees-pluriel": "{n} sessions ouvertes seront fermées.",
+  "maj-sessions-question": "L'installeur ferme Avash. Installer maintenant ou au prochain lancement ?",
+  "maj-installer-maintenant": "Installer maintenant",
+  "maj-au-prochain-lancement": "Au prochain lancement",
+  "maj-reportee": "La version {version} s'installera au prochain lancement d'Avash.",
+  "maj-installation-reportee": "Installation de la version {version}, reportée au lancement…",
   "maj-archive-portable":
-    "Une nouvelle version est disponible. Version portable : télécharge la nouvelle archive sur https://github.com/AdrienAvalon/avash/releases/latest",
+    "Version {version} disponible. Version portable : télécharge la nouvelle archive sur https://github.com/AdrienAvalon/avash/releases/latest",
   "hote-supprimer-question": "Supprimer l'hôte « {alias} » de ~/.ssh/config ?\n\nSon mot de passe mémorisé sera aussi oublié. Cette action est définitive.",
   "hote-mdp-oublie": "Mot de passe oublié pour {alias}.",
   "hote-mdp-non-oublie": "Le mot de passe n'a pas pu être oublié : {e}",
@@ -703,8 +710,15 @@ export const EN: Record<string, string> = {
   "maj-redemarrage-impossible":
     "Update installed, but the restart failed: {e}. It will take effect the next time Avash starts.",
   "maj-gere-par-paquet": "Updates are handled by your package manager (pacman, flatpak…).",
+  "maj-sessions-fermees": "{n} open session will be closed.",
+  "maj-sessions-fermees-pluriel": "{n} open sessions will be closed.",
+  "maj-sessions-question": "The installer closes Avash. Install now or at next launch?",
+  "maj-installer-maintenant": "Install now",
+  "maj-au-prochain-lancement": "At next launch",
+  "maj-reportee": "Version {version} will be installed the next time Avash starts.",
+  "maj-installation-reportee": "Installing version {version}, postponed to this launch…",
   "maj-archive-portable":
-    "A new version is available. Portable build: download the new archive from https://github.com/AdrienAvalon/avash/releases/latest",
+    "Version {version} is available. Portable build: download the new archive from https://github.com/AdrienAvalon/avash/releases/latest",
   "hote-supprimer-question": "Delete host “{alias}” from ~/.ssh/config?\n\nIts remembered password will be forgotten too. This cannot be undone.",
   "hote-mdp-oublie": "Password forgotten for {alias}.",
   "hote-mdp-non-oublie": "The password could not be forgotten: {e}",

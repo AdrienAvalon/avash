@@ -146,7 +146,7 @@ export function intercepterCollageNatif(el: HTMLElement, term: Pick<Terminal, "p
 }
 
 let confirmResolve: ((v: boolean) => void) | null = null;
-export function askConfirm(text: string, opts: { ok?: string; danger?: boolean } = {}): Promise<boolean> {
+export function askConfirm(text: string, opts: { ok?: string; danger?: boolean; annuler?: string } = {}): Promise<boolean> {
   const [title, ...rest] = text.split("\n\n");
   $("confirm-title").textContent = title;
   const msg = $("confirm-message");
@@ -158,6 +158,10 @@ export function askConfirm(text: string, opts: { ok?: string; danger?: boolean }
   // posée par data-i18n. En interface anglaise, toute suppression sans option
   // `ok` affichait « Confirmer » face à « Cancel ». On passe par t("confirmer").
   okBtn.textContent = opts.ok ?? t("confirmer");
+  // Le second choix peut être une vraie réponse et non un renoncement (« Au
+  // prochain lancement », audit du 27 novembre 2026, WI-3) : son libellé se
+  // pose à chaque appel, comme celui du bouton principal.
+  $("confirm-cancel").textContent = opts.annuler ?? t("annuler");
   // Rouge par défaut : la plupart des confirmations gardent une action destructive.
   const dangereux = opts.danger !== false;
   okBtn.classList.toggle("btn-danger", dangereux);

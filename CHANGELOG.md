@@ -155,6 +155,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [0.16.1] - 2026-11-27
 
+- **Mise à jour sous Windows : Avash demande avant de fermer les sessions.**
+  L'installeur termine Avash ; un clic sur « Installer » coupait sans prévenir
+  toutes les sessions, transferts compris. Si des sessions sont ouvertes,
+  Avash le dit et propose d'installer maintenant (onglets fermés proprement,
+  après le téléchargement) ou au prochain lancement (WI-3).
+- **La version portable dit vraiment s'il existe une mise à jour.** Elle
+  affirmait toujours qu'une nouvelle version était disponible, sans rien
+  vérifier ni dire laquelle ; elle lit désormais le manifeste signé et répond
+  « à jour » ou nomme la version, sans rien télécharger (WI-2).
 ### Corrigé
 
 - **F5, Ctrl+R et le menu « Recharger » ne rechargent plus l'interface.** Sous
@@ -177,6 +186,10 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 - **Journal des commandes** : la forme des frappes (longueur d'un mot de passe
   tapé à `sudo` comprise) n'est plus retenue pour le diagnostic quand le
   journal est coupé (SE-8).
+
+## [0.16.1] - 2026-11-27
+
+### Corrigé
 
 - **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
   couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
