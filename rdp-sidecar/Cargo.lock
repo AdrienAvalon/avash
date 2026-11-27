@@ -175,6 +175,7 @@ name = "avash-rdp"
 version = "0.16.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "dirs",
  "futures-util",
  "image",

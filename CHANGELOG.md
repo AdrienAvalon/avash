@@ -145,6 +145,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   la fenêtre. La restauration relance le bureau. Et revenir sur un onglet de
   bureau ne redemande plus l'écran entier quand le canevas a gardé son image :
   Avash regarde au lieu de supposer (audit du 27 novembre 2026).
+- **Chaque image d'un bureau distant n'alloue plus un tampon neuf.** Le
+  processus RDP allouait puis libérait à chaque image un tampon à la taille
+  du message (8,3 Mo en 1080p) ; sous Windows, un bloc de cette taille
+  retourne au système à chaque libération, et le noyau remettait à zéro
+  quelque 200 Mo de pages par seconde sur un bureau animé. Le tampon sert
+  désormais d'une image à l'autre, RDP comme VNC (audit du 27 novembre 2026).
 - **Un bureau distant masqué ne coûte plus rien au processeur.** Derrière un
   onglet SSH, un bureau qui bouge (vidéo, tableau de bord, journal qui
   défile) restait décodé à pleine cadence : la pause de l'onglet ne retenait

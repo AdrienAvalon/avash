@@ -46,6 +46,10 @@ anyhow = "1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 x509-cert = "0.3"
 tokio-tungstenite = "0.30"
+# Le tampon des messages d'image, réutilisé d'une image à l'autre et passé à
+# tungstenite sans copie (audit du 27 novembre 2026, PR-9). Déjà dans l'arbre
+# par tungstenite, dont les messages binaires sont des `Bytes`.
+bytes = "1"
 futures-util = "0.3.34"
 rand = "0.10.2"
 sha2 = "0.11"

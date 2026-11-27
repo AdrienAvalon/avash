@@ -22,7 +22,7 @@
 
 use crate::acces_local::{etablir_poste, Poste};
 use crate::args::{taille_sure, Args};
-use crate::trames::{ajouter_rect, frame_msg, frames_msg, nouvelle_taille};
+use crate::trames::{ajouter_rect, nouvelle_taille, TamponTrames};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use ironrdp::graphics::image_processing::PixelFormat;
@@ -358,6 +358,8 @@ pub async fn executer(args: &Args) -> Result<()> {
     sink.send(Message::Binary(hello.into())).await?;
 
     let mut pointeur = Pointeur::default();
+    // Voir `TamponTrames` (audit du 27 novembre 2026, PR-9).
+    let mut tampon = TamponTrames::default();
     // Coupé dès le lancement si l'utilisateur l'a coupé (audit du 27 novembre
     // 2026, SE-6), comme en RDP ; `[12]` le change ensuite.
     let mut partage_clip = !args.sans_presse_papiers;
@@ -381,11 +383,11 @@ pub async fn executer(args: &Args) -> Result<()> {
     macro_rules! flush_dirty {
         () => {
             if !awaiting_ack && !en_pause && !dirty.is_empty() {
-                let msg = frames_msg(&image, &dirty);
+                let msg = tampon.frames(&image, &dirty);
                 dirty.clear();
                 stat_bytes += msg.len() as u64;
                 stat_frames += 1;
-                sink.send(Message::Binary(msg.into()))
+                sink.send(Message::Binary(msg))
                     .await
                     .context("envoi frame")?;
                 awaiting_ack = true;
@@ -424,10 +426,10 @@ pub async fn executer(args: &Args) -> Result<()> {
                             right: image.width().saturating_sub(1),
                             bottom: image.height().saturating_sub(1),
                         };
-                        let msg = frame_msg(&image, &full);
+                        let msg = tampon.frame(&image, &full);
                         stat_bytes += msg.len() as u64;
                         stat_frames += 1;
-                        sink.send(Message::Binary(msg.into())).await.context("envoi refresh")?;
+                        sink.send(Message::Binary(msg)).await.context("envoi refresh")?;
                         awaiting_ack = true;
                         last_send = Instant::now();
                         dirty.clear();

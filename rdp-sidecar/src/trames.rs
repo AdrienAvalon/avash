@@ -286,8 +286,64 @@ fn clamp_a_l_image(r: &InclusiveRectangle, image: &DecodedImage) -> Option<Inclu
 
 /// Zone sale -> message binaire. Un seul rectangle garde la forme historique
 /// `[2]` ; plusieurs empruntent `[13]`, qui porte leur nombre. Une trame, un
-/// accusé de rendu : le cadencement reste exact.
+/// accusé de rendu : le cadencement reste exact. La session passe par
+/// `TamponTrames` ; cette forme sert de référence aux tests.
+#[cfg(test)]
 pub(crate) fn frames_msg(image: &DecodedImage, zone: &[InclusiveRectangle]) -> Vec<u8> {
+    let mut m = Vec::new();
+    ecrire_frames(&mut m, image, zone);
+    m
+}
+
+/// Un rectangle de l'image -> message `[2]` (référence des tests, comme
+/// `frames_msg`).
+#[cfg(test)]
+pub(crate) fn frame_msg(image: &DecodedImage, r: &InclusiveRectangle) -> Vec<u8> {
+    let mut m = Vec::new();
+    ecrire_frame(&mut m, image, r);
+    m
+}
+
+/// Le tampon des messages d'image d'une session, réutilisé d'une image à
+/// l'autre.
+///
+/// Trouvé par l'audit du 27 novembre 2026 (PR-9) : chaque image allouait un
+/// `Vec` neuf à la taille du message, 8,3 Mo en 1080p, puis le libérait. Sous
+/// Windows, un bloc de cette taille passe par `VirtualAlloc` et retourne au
+/// système à la libération : à 25 images par seconde, environ 200 Mo/s de
+/// pages à remettre à zéro par le noyau. Le message part en `Bytes` découpé
+/// dans ce tampon ; une fois écrit par tungstenite (qui le recopie dans son
+/// propre tampon d'écriture), la référence tombe et l'allocation revient au
+/// `reserve` de l'image suivante.
+#[derive(Default)]
+pub(crate) struct TamponTrames {
+    tampon: bytes::BytesMut,
+}
+
+impl TamponTrames {
+    /// Voir `frames_msg`.
+    pub(crate) fn frames(
+        &mut self,
+        image: &DecodedImage,
+        zone: &[InclusiveRectangle],
+    ) -> bytes::Bytes {
+        ecrire_frames(&mut self.tampon, image, zone);
+        self.tampon.split().freeze()
+    }
+
+    /// Voir `frame_msg`.
+    pub(crate) fn frame(&mut self, image: &DecodedImage, r: &InclusiveRectangle) -> bytes::Bytes {
+        ecrire_frame(&mut self.tampon, image, r);
+        self.tampon.split().freeze()
+    }
+}
+
+/// Écrit dans `m`, à sa suite, le message d'une zone (voir `frames_msg`).
+fn ecrire_frames<B: bytes::BufMut + Reserver>(
+    m: &mut B,
+    image: &DecodedImage,
+    zone: &[InclusiveRectangle],
+) {
     // Chaque rectangle est borné à l'image d'abord (voir `clamp_a_l_image`) :
     // ceux qui n'en touchent rien sont jetés, si bien que tout appelant de
     // `ajouter_rect` est couvert et non seulement le chemin EGFX.
@@ -296,14 +352,14 @@ pub(crate) fn frames_msg(image: &DecodedImage, zone: &[InclusiveRectangle]) -> V
         .filter_map(|r| clamp_a_l_image(r, image))
         .collect();
     if let [seul] = rects.as_slice() {
-        return frame_msg(image, seul);
+        return ecrire_frame(m, image, seul);
     }
     let iw = usize::from(image.width());
     let data = image.data();
     // Capacité calculée d'avance : 2 octets d'en-tête + par rectangle 8 octets de
-    // géométrie et w*h*4 de pixels. Sans elle, le Vec repartait de 1 octet et
+    // géométrie et w*h*4 de pixels. Sans elle, le tampon repartait de 1 octet et
     // doublait ~20 fois sur un message plein écran (plusieurs Mo), recopiant tout
-    // le contenu déjà écrit à chaque fois — le frère `frame_msg` réservait pourtant.
+    // le contenu déjà écrit à chaque fois.
     let capacite = 2 + rects
         .iter()
         .map(|r| {
@@ -314,48 +370,67 @@ pub(crate) fn frames_msg(image: &DecodedImage, zone: &[InclusiveRectangle]) -> V
             8 + w * h * 4
         })
         .sum::<usize>();
-    let mut m = Vec::with_capacity(capacite);
-    m.push(13u8);
-    m.push(u8::try_from(rects.len()).unwrap_or(u8::MAX));
+    m.reserver(capacite);
+    m.put_u8(13);
+    m.put_u8(u8::try_from(rects.len()).unwrap_or(u8::MAX));
     for r in &rects {
         let (x, y) = (r.left, r.top);
         let (w, h) = (r.right - r.left + 1, r.bottom - r.top + 1);
-        m.extend_from_slice(&x.to_le_bytes());
-        m.extend_from_slice(&y.to_le_bytes());
-        m.extend_from_slice(&w.to_le_bytes());
-        m.extend_from_slice(&h.to_le_bytes());
+        m.put_slice(&x.to_le_bytes());
+        m.put_slice(&y.to_le_bytes());
+        m.put_slice(&w.to_le_bytes());
+        m.put_slice(&h.to_le_bytes());
         for row in 0..usize::from(h) {
             let start = ((usize::from(y) + row) * iw + usize::from(x)) * 4;
-            m.extend_from_slice(&data[start..start + usize::from(w) * 4]);
+            m.put_slice(&data[start..start + usize::from(w) * 4]);
         }
     }
-    m
 }
 
-pub(crate) fn frame_msg(
+/// Écrit dans `m`, à sa suite, le message d'un rectangle (voir `frame_msg`).
+fn ecrire_frame<B: bytes::BufMut + Reserver>(
+    m: &mut B,
     image: &DecodedImage,
-    r: &ironrdp::pdu::geometry::InclusiveRectangle,
-) -> Vec<u8> {
+    r: &InclusiveRectangle,
+) {
     // Borné à l'image d'abord (voir `clamp_a_l_image`) : un rectangle hors du
     // bureau donne une trame vide plutôt qu'un découpage hors tampon.
     let Some(r) = clamp_a_l_image(r, image) else {
-        return vec![2, 0, 0, 0, 0, 0, 0, 0, 0];
+        m.put_slice(&[2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        return;
     };
     let iw = usize::from(image.width());
     let data = image.data();
     let (x, y) = (r.left, r.top);
     let (w, h) = (r.right - r.left + 1, r.bottom - r.top + 1);
-    let mut m = Vec::with_capacity(9 + usize::from(w) * usize::from(h) * 4);
-    m.push(2);
-    m.extend_from_slice(&x.to_le_bytes());
-    m.extend_from_slice(&y.to_le_bytes());
-    m.extend_from_slice(&w.to_le_bytes());
-    m.extend_from_slice(&h.to_le_bytes());
+    m.reserver(9 + usize::from(w) * usize::from(h) * 4);
+    m.put_u8(2);
+    m.put_slice(&x.to_le_bytes());
+    m.put_slice(&y.to_le_bytes());
+    m.put_slice(&w.to_le_bytes());
+    m.put_slice(&h.to_le_bytes());
     for row in 0..usize::from(h) {
         let start = ((usize::from(y) + row) * iw + usize::from(x)) * 4;
-        m.extend_from_slice(&data[start..start + usize::from(w) * 4]);
+        m.put_slice(&data[start..start + usize::from(w) * 4]);
     }
-    m
+}
+
+/// Réserver d'avance, pour un `Vec` comme pour un `BytesMut` : `BufMut` ne le
+/// sait pas.
+trait Reserver {
+    fn reserver(&mut self, n: usize);
+}
+
+impl Reserver for Vec<u8> {
+    fn reserver(&mut self, n: usize) {
+        self.reserve(n);
+    }
+}
+
+impl Reserver for bytes::BytesMut {
+    fn reserver(&mut self, n: usize) {
+        self.reserve(n);
+    }
 }
 
 #[cfg(test)]
@@ -454,6 +529,50 @@ mod tests_zone_sale {
                 "le rectangle {e:?} n'est couvert par aucune zone"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_tampon_trames {
+    use super::{frame_msg, frames_msg, TamponTrames};
+    use ironrdp::graphics::image_processing::PixelFormat;
+    use ironrdp::pdu::geometry::InclusiveRectangle;
+    use ironrdp::session::image::DecodedImage;
+
+    fn r(l: u16, t: u16, ri: u16, b: u16) -> InclusiveRectangle {
+        InclusiveRectangle {
+            left: l,
+            top: t,
+            right: ri,
+            bottom: b,
+        }
+    }
+
+    /// Audit du 27 novembre 2026, PR-9 : le message d'une image est le même
+    /// qu'avant, et l'allocation de l'image d'avant sert à la suivante dès que
+    /// son message est parti.
+    #[test]
+    fn le_tampon_des_trames_rend_les_memes_octets_et_se_reutilise() {
+        let image = DecodedImage::new(PixelFormat::RgbA32, 64, 32);
+        let mut t = TamponTrames::default();
+        let plein = r(0, 0, 63, 31);
+        let a = t.frame(&image, &plein);
+        assert_eq!(a.as_ref(), frame_msg(&image, &plein).as_slice());
+        let adresse = a.as_ptr();
+        drop(a); // tungstenite a écrit le message : la référence tombe
+        let b = t.frame(&image, &plein);
+        assert_eq!(b.as_ptr(), adresse, "même allocation, pas de nouvelle");
+        drop(b);
+        let zone = [r(0, 0, 3, 3), r(40, 20, 50, 30)];
+        assert_eq!(
+            t.frames(&image, &zone).as_ref(),
+            frames_msg(&image, &zone).as_slice()
+        );
+        // Hors de l'image : la trame vide, comme avant.
+        assert_eq!(
+            t.frame(&image, &r(100, 100, 101, 101)).as_ref(),
+            [2, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
     }
 }
 
