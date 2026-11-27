@@ -1142,6 +1142,11 @@ export function closeSession(id: number) {
   // onglet fermé laissait un conteneur vide dans la zone centrale.
   const conteneur = s.term.element?.parentElement;
   cesserStylesXterm(s.term.element);
+  // Le capteur du journal d'abord (audit du 27 novembre 2026, ME-1) : son
+  // minuteur d'écho (1,5 s) lisait sinon le terminal détruit et notait dans le
+  // journal d'un onglet que le cœur ne connaît plus ; l'échec signalé
+  // (« journal : écriture impossible ») faisait taire les vraies erreurs.
+  s.capteur?.dispose();
   s.term.dispose();
   s.tab.remove();
   conteneur?.remove();

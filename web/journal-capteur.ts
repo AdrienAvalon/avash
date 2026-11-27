@@ -84,6 +84,14 @@ export function tapeSimple(frappes: string): string | null {
   return ligne;
 }
 
+/** Rend le repère d'un départ à xterm. Un repère vit tant que sa ligne est
+ *  dans l'historique et abonne trois écouteurs à la liste des lignes : un
+ *  repère oublié sans `dispose()` coûte à chaque ligne qui défile (audit du
+ *  27 novembre 2026, ME-1). */
+function liberer(depart: Depart | null): void {
+  depart?.marqueur.dispose();
+}
+
 export class CapteurCommandes {
   private debut: Depart | null = null;
   private invite: Depart | null = null; // OSC 133;B
@@ -126,21 +134,33 @@ export class CapteurCommandes {
 
   dispose(): void {
     for (const a of this.abonnements) a.dispose();
-    if (this.attente) clearTimeout(this.attente.minuteur);
+    if (this.attente) {
+      clearTimeout(this.attente.minuteur);
+      liberer(this.attente.depart);
+      this.attente.finale.dispose();
+    }
     this.attente = null;
+    liberer(this.debut);
+    liberer(this.invite);
+    this.debut = null;
+    this.invite = null;
   }
 
   /** À appeler pour chaque donnée que le terminal envoie au serveur. */
   frappe(data: string): void {
     this.compter("frappes");
-    // eslint-disable-next-line no-control-regex -- la forme garde justement les contrôles
-    this.diagnostic.formes.push(JSON.stringify(data.replace(/[^\x00-\x1f\x7f]/gu, "x").slice(0, 24)));
-    if (this.diagnostic.formes.length > 12) this.diagnostic.formes.shift();
     if (!this.actif()) {
       this.compter("inactif");
       this.oublierLigne();
       return;
     }
+    // La forme des frappes seulement journal allumé (audit du 27 novembre
+    // 2026, SE-8) : elle était retenue pour toute session, et sa longueur
+    // disait celle d'un mot de passe tapé à l'invite de `sudo`. Le diagnostic
+    // n'en a besoin que pour un journal actif qui reste vide.
+    // eslint-disable-next-line no-control-regex -- la forme garde justement les contrôles
+    this.diagnostic.formes.push(JSON.stringify(data.replace(/[^\x00-\x1f\x7f]/gu, "x").slice(0, 24)));
+    if (this.diagnostic.formes.length > 12) this.diagnostic.formes.shift();
     if (estReponseTerminal(data)) return this.compter("reponse-terminal");
     if (this.term.buffer.active.type === "alternate") {
       this.compter("plein-ecran");
@@ -164,6 +184,9 @@ export class CapteurCommandes {
     this.compter("entrees");
     if (this.attente) this.verifierAttente(true);
     const depart = this.invite ?? this.debut;
+    // Le repère qui ne sert pas de départ est rendu (audit du 27 novembre
+    // 2026, ME-1) : voir `liberer`.
+    if (depart !== this.debut) liberer(this.debut);
     const attendu = tapeSimple(this.tape + data.slice(0, entree));
     this.debut = null;
     this.invite = null;
@@ -184,6 +207,7 @@ export class CapteurCommandes {
   }
 
   private oublierLigne(): void {
+    liberer(this.debut);
     this.debut = null;
     this.tape = "";
   }
@@ -203,10 +227,20 @@ export class CapteurCommandes {
       this.enCommande = false;
     } else if (genre === "B") {
       this.enCommande = false;
-      this.invite = this.ici();
+      // Le repère remplacé est rendu, et aucun n'est posé journal coupé (audit
+      // du 27 novembre 2026, ME-1 et PF-7) : chaque `B` posait un repère
+      // jamais libéré. 100 000 `B` sur une ligne (800 Ko de sortie) en
+      // laissaient 100 000 vivants, 233 Mo de tas, puis 8,7 s de fil principal
+      // au défilement, chaque ligne sortie de l'historique notifiant tous
+      // leurs écouteurs ; l'interface entière gelait, pas seulement l'onglet.
+      // Si le journal s'allume en cours de ligne, la première frappe retombe
+      // sur la position du curseur, comme sans OSC 133.
+      liberer(this.invite);
+      this.invite = this.actif() ? this.ici() : null;
       // Ce qui a été tapé avant que l'invite ne s'affiche appartient à la ligne
       // qui vient : l'oublier ici faisait noter « ho … » pour « echo … » tapé
       // pendant que fish démarrait (suite bout en bout, PR #113).
+      liberer(this.debut);
       this.debut = null;
     } else if (genre === "C") {
       this.oscComplet = true;
@@ -216,6 +250,7 @@ export class CapteurCommandes {
       // ferait sinon noter un texte que personne n'a tapé (revue de sécurité
       // automatique de la PR #113).
       if (this.attente) this.verifierAttente(true);
+      liberer(this.invite);
       this.invite = null;
       this.oublierLigne();
       this.enCommande = true;
@@ -238,6 +273,7 @@ export class CapteurCommandes {
     if (this.actif()) this.lireEtNoter(a.depart, a.finale, a.attendu, a.yFinale);
     else this.compter("lecture-inactif");
     a.finale.dispose();
+    liberer(a.depart);
   }
 
   /** La commande en attente peut-elle être lue ? Quand les frappes donnent
