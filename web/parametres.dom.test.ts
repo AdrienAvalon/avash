@@ -126,6 +126,28 @@ describe("fenêtre des paramètres", () => {
     expect(outils.setFontSize).toHaveBeenCalledWith(18);
   });
 
+  // Audit du 27 novembre 2026 (ME-2), choix du mainteneur : l'historique,
+  // figé à 10 000 lignes, se règle ici (1 000 à 50 000) et vaut aussi pour les
+  // terminaux déjà ouverts.
+  it("l'historique du terminal vaut 10 000 lignes par défaut et suit le réglage, terminaux ouverts compris", async () => {
+    const { state } = await import("./etat");
+    const term = { options: { scrollback: 10000 } };
+    state.sessions.set(91, { term } as never);
+    try {
+      parametres.parametresOpen();
+      expect($("param-historique").value).toBe("10000");
+      changer("param-historique", "5000");
+      expect(prefs.historiqueTerminal()).toBe(5000);
+      expect(term.options.scrollback).toBe(5000);
+      changer("param-historique", "50000");
+      expect(term.options.scrollback).toBe(50000);
+      parametres.parametresOpen();
+      expect($("param-historique").value).toBe("50000");
+    } finally {
+      state.sessions.delete(91);
+    }
+  });
+
   it("changer de langue retraduit la page et la barre latérale", () => {
     parametres.parametresOpen();
     changer("param-langue", "en");

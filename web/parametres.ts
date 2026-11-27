@@ -14,11 +14,13 @@ import {
   confirmerFermetureOnglet,
   ctrlCopierColler,
   dureeJournal,
+  historiqueTerminal,
   journalGlobal,
   partageClipboard,
   setConfirmerFermetureOnglet,
   setCtrlCopierColler,
   setDureeJournal,
+  setHistoriqueTerminal,
   setPartageClipboard,
   setSonBureau,
   setSondeAuDemarrage,
@@ -47,6 +49,7 @@ function rendre(): void {
   caseA("param-fermeture").checked = confirmerFermetureOnglet();
   caseA("param-sante").checked = sondeAuDemarrage();
   ($("param-taille") as HTMLInputElement).value = String(state.terminalFontSize);
+  choix("param-historique").value = String(historiqueTerminal());
   caseA("param-ctrl").checked = ctrlCopierColler(estWindows());
   caseA("param-clip").checked = partageClipboard();
   caseA("param-son").checked = sonBureau();
@@ -94,6 +97,14 @@ export function brancherParametres(apres: { langue: () => void }): void {
     const n = Number(taille.value);
     if (Number.isFinite(n)) setFontSize(Math.round(n));
     taille.value = String(state.terminalFontSize);
+  });
+  // Les terminaux ouverts suivent tout de suite : xterm retaille son tampon
+  // circulaire (les lignes les plus anciennes partent si l'on réduit).
+  choix("param-historique").addEventListener("change", () => {
+    setHistoriqueTerminal(Number(choix("param-historique").value));
+    const lignes = historiqueTerminal();
+    for (const s of state.sessions.values()) s.term.options.scrollback = lignes;
+    choix("param-historique").value = String(lignes);
   });
   caseA("param-ctrl").addEventListener("change", () => setCtrlCopierColler(caseA("param-ctrl").checked));
   caseA("param-clip").addEventListener("change", () => {

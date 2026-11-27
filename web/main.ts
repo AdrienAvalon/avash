@@ -10,7 +10,7 @@ import { majMemoireOnglets, proposerRestauration } from "./onglets-restauration"
 import { appliquerVue, basculerPartage, ongletsAffiches, surFermeture, surFocus, vuePartagee } from "./vue-partagee";
 import { listen } from "@tauri-apps/api/event";
 import { ic, hydrateIcons } from "./icons";
-import { confirmerFermetureOnglet, ctrlCopierColler, journalGlobal, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage, tailleTexte } from "./prefs";
+import { confirmerFermetureOnglet, ctrlCopierColler, journalGlobal, partageClipboard, setConfirmerFermetureOnglet, setPartageClipboard, setSonBureau, setSondeAuDemarrage, sonBureau, sondeAuDemarrage, tailleTexte, historiqueTerminal } from "./prefs";
 import { filterHosts, isPasswordRequired, isHostKeyChanged, nettoyerMarqueurs, libelleSur, estRaccourciApplicatif, gesteCopierCollerCtrl, ouvrePaletteOuPanneau, nettoyerPourTerminal, etiquetteHote, hostInitials, hostHue, osBadge, type Host, type OsInfo, buildFolderTree, folderNodeCount, type FolderNode, classeSante, santePerimee, ilYA, santesARestaurer } from "./filters";
 import { $, type RdpHostT, type Sante, type Session, collapsedFolders, osByHost, rememberOs, saveCollapsed, state } from "./etat";
 import { brancherParametres, parametresOpen } from "./parametres";
@@ -611,7 +611,8 @@ async function newSessionShell(label: string) {
     cursorBlink: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
     cursorStyle: "bar",
     cursorWidth: 2,
-    scrollback: 10000,
+    // Réglable dans Paramètres (audit du 27 novembre 2026, ME-2).
+    scrollback: historiqueTerminal(),
     macOptionIsMeta: true,
     allowProposedApi: true,
     // Marge interieure : du texte colle au bord se lit mal.
