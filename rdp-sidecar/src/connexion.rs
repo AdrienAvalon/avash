@@ -394,6 +394,44 @@ async fn connecter_tcp(
     }
 }
 
+/// Silence toléré avant la première sonde TCP, puis écart entre deux sondes,
+/// puis nombre de sondes sans réponse avant de déclarer le lien mort.
+const SONDE_APRES: Duration = Duration::from_secs(30);
+const SONDE_ECART: Duration = Duration::from_secs(10);
+const SONDES_MAX: u32 = 3;
+
+/// Délai au-delà duquel des octets envoyés et jamais acquittés ferment la
+/// connexion (Linux, `TCP_USER_TIMEOUT`) : le même ordre que les sondes.
+#[cfg(target_os = "linux")]
+const ACQUITTEMENT_MAX: Duration = Duration::from_secs(60);
+
+/// Pose les sondes de vie TCP (`SO_KEEPALIVE`) et, sous Linux, le délai
+/// d'acquittement.
+///
+/// Trouvé par l'audit du 27 novembre 2026 (FI-6) : la session RDP n'avait ni
+/// sonde, ni délai, ni heartbeat. Un bureau immobile n'envoie rien, un lien
+/// mort (VPN qui change d'adresse, poste qui sort de veille ailleurs) était
+/// indiscernable d'un écran fixe : l'onglet restait vert et le `[9]` du retour
+/// montrait l'image gardée. Sans entrée de l'utilisateur, rien n'était jamais
+/// non acquitté, donc la pile TCP ne levait rien. Les sondes, elles, agissent
+/// sur un bureau immobile : 30 s de silence, puis trois sondes à 10 s,
+/// soit une minute environ. `TCP_USER_TIMEOUT` couvre l'autre cas, des
+/// entrées envoyées dans le vide (15 minutes d'abandon TCP sous Linux sinon).
+/// Le heartbeat RDP (MS-RDPBCGR 2.2.16) toucherait le connecteur porté : à
+/// part.
+pub(crate) fn sondes_de_vie(tcp: &TcpStream) -> std::io::Result<()> {
+    let s = socket2::SockRef::from(tcp);
+    s.set_tcp_keepalive(
+        &socket2::TcpKeepalive::new()
+            .with_time(SONDE_APRES)
+            .with_interval(SONDE_ECART)
+            .with_retries(SONDES_MAX),
+    )?;
+    #[cfg(target_os = "linux")]
+    s.set_tcp_user_timeout(Some(ACQUITTEMENT_MAX))?;
+    Ok(())
+}
+
 pub(crate) async fn connect(
     a: &Args,
     clip_backend: ClipBackend,
@@ -416,6 +454,12 @@ pub(crate) async fn connect(
     .await?;
     // Nagle OFF : les entrées et les petits rectangles d'écran partent sans délai.
     tcp.set_nodelay(true).ok();
+    // Sans elles, un bureau dont le réseau a disparu restait « connecté »
+    // indéfiniment (audit du 27 novembre 2026, FI-6). Un échec ne coûte que la
+    // détection : la session part quand même.
+    if let Err(e) = sondes_de_vie(&tcp) {
+        eprintln!("sondes TCP non posées : {e}");
+    }
     let client_addr = tcp.local_addr()?;
     let mut framed = ironrdp_tokio::TokioFramed::new(tcp);
     let (egfx, canal_egfx, file_egfx) = egfx::Egfx::nouveau();
@@ -1000,5 +1044,36 @@ mod tests_configuration {
         }
         assert_eq!(c.domain.as_deref(), Some("TEST"));
         assert!(c.request_data.is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests_sondes_de_vie {
+    use super::sondes_de_vie;
+
+    /// Audit du 27 novembre 2026, FI-6 : la socket du bureau ne portait que
+    /// `TCP_NODELAY`. Les sondes de vie y sont, avec leurs délais.
+    #[tokio::test]
+    async fn la_socket_du_bureau_porte_des_sondes_de_vie() {
+        let ecoute = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let adresse = ecoute.local_addr().unwrap();
+        let tcp = tokio::net::TcpStream::connect(adresse).await.unwrap();
+        let s = socket2::SockRef::from(&tcp);
+        assert!(
+            !s.keepalive().unwrap(),
+            "rien par défaut : le test voit le changement"
+        );
+        sondes_de_vie(&tcp).unwrap();
+        assert!(s.keepalive().unwrap());
+        #[cfg(not(windows))]
+        assert_eq!(s.tcp_keepalive_time().unwrap(), super::SONDE_APRES);
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(s.tcp_keepalive_interval().unwrap(), super::SONDE_ECART);
+            assert_eq!(s.tcp_keepalive_retries().unwrap(), super::SONDES_MAX);
+            assert_eq!(s.tcp_user_timeout().unwrap(), Some(super::ACQUITTEMENT_MAX));
+        }
     }
 }

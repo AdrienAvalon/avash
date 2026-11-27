@@ -86,6 +86,20 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Corrigé
 
+- **Un bureau distant dont le réseau a disparu finit par se dire fermé.**
+  Rien ne surveillait la liaison : un bureau immobile n'envoie rien, et un
+  VPN qui change d'adresse laissait l'onglet vert indéfiniment, l'image
+  gardée affichée au retour, sans réponse au clic. La liaison porte
+  désormais des sondes de vie TCP (30 s de silence, puis trois sondes à
+  10 s), et sous Linux un délai d'acquittement d'une minute pour les
+  frappes envoyées dans le vide : l'incrustation « Connexion RDP fermée »
+  arrive en une minute environ (deux sous Windows) (audit du 27 novembre
+  2026).
+- **Un serveur RemoteFX hostile ne fait plus tomber le processus RDP par un
+  index de quantification.** Un TileSet qui désignait une table de
+  quantification absente (`numQuant = 0`) faisait paniquer le processus, sur
+  un chemin que rien n'isole. Il est refusé dès le décodage, dans notre copie
+  d'IronRDP (audit du 27 novembre 2026).
 - **Le partage du presse-papiers coupé le reste après une reprise de
   connexion.** Le processus RDP partait partage actif et n'apprenait le
   réglage qu'à l'ouverture de la liaison avec la page ; après une redirection
