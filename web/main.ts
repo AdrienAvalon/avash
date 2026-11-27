@@ -920,8 +920,15 @@ async function connectByAlias(s: Session, h: Host) {
     // `host_needs_password` tient compte du trousseau : si un mot de passe
     // y est deja memorise, on ne redemande rien.
     if (await invoke<boolean>("host_needs_password", { alias: h.alias })) {
-      const rep = await askPassword(label);
-      if (!rep) return; // annulation : ne pas ouvrir d'onglet mort
+      const rep = await askPassword(label, undefined, () => state.sessions.has(id));
+      // Annulation : l'onglet existe déjà (créé avant la connexion), il doit
+      // dire qu'il est fermé et se relancer par Entrée. Audit du 27 novembre
+      // 2026 (FI-11) : ce `return` nu datait d'avant la création anticipée de
+      // l'onglet, qui restait figé sur « connexion en cours » pour toujours.
+      if (!rep) {
+        markClosed(s, t("connexion-annulee"));
+        return;
+      }
       password = rep.password;
       rememberAsked = rep.remember;
     }
@@ -1002,6 +1009,7 @@ async function connectByAlias(s: Session, h: Host) {
       const rep = await askPassword(
         label,
         password === null ? undefined : t("mdp-refuse-nouvelle-tentative"),
+        () => state.sessions.has(id),
       );
       if (!rep) {
         markClosed(s, t("connexion-annulee"));

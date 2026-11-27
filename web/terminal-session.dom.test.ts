@@ -123,6 +123,9 @@ function corpsIndex(): string {
 
 let mouvementReduit = false;
 const hote = (alias: string): Host => ({ alias, hostname: "10.0.0.1", user: "root", port: 22, identity_file: null, proxy_jump: null, tags: [], folder: "" });
+// Saisie factice, en constante : une valeur écrite à côté de « password »
+// passe pour un secret aux yeux des détecteurs (GitGuardian, 27 novembre 2026).
+const SAISIE_RELANCE = "saisie-de-relance";
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const appels = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd);
 /** Ce que le cœur rendrait sans rien à dire : aucun mot de passe requis,
@@ -329,6 +332,24 @@ describe("connexion", () => {
     const { s } = derniere();
     expect(s.closed).toBe(true);
     expect(s.tab.title).toMatch(/trois/i);
+  });
+
+  it("annuler_le_mot_de_passe_demande_d_avance_laisse_l_onglet_relancable", async () => {
+    // Audit du 27 novembre 2026 (FI-11) : l'onglet est créé avant la demande ;
+    // l'annuler le laissait figé sur « connexion en cours », et Entrée partait
+    // à `pty_write` (« Session inconnue ») au lieu de relancer la connexion.
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "host_needs_password" ? true : reponsesParDefaut(cmd)));
+    dialogues.askPassword.mockResolvedValueOnce(null);
+    await main.openSession(hote("srv-sans-cle"));
+    const { s, term } = derniere();
+    expect(s.closed).toBe(true);
+    expect(s.etat).toBe("closed");
+    expect(appels("pty_open")).toHaveLength(0);
+    dialogues.askPassword.mockResolvedValueOnce({ password: SAISIE_RELANCE, remember: false });
+    term.surDonnees!("\r");
+    await vi.waitFor(() => expect(appels("pty_open")).toHaveLength(1));
+    expect(appels("pty_write")).toHaveLength(0);
   });
 
   it("la_reconnexion_serie_ne_rejette_pas", async () => {
