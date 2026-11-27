@@ -169,6 +169,15 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   et bureaux de l'ancienne page ; un moteur de rendu WebView2 tombé est
   relancé au lieu de laisser une page d'erreur (audit du 27 novembre 2026,
   WI-1, FI-2, ME-3, WI-12).
+- **Une sortie hostile ne gèle plus l'interface** : chaque séquence OSC 133;B
+  posait un repère du terminal jamais libéré, journal coupé compris ; cent
+  mille d'entre elles (800 Ko) gardaient 233 Mo et gelaient la page 9 s. Les
+  repères sont rendus, aucun n'est posé journal coupé, et fermer l'onglet
+  libère le capteur du journal (ME-1, PF-7).
+- **Journal des commandes** : la forme des frappes (longueur d'un mot de passe
+  tapé à `sudo` comprise) n'est plus retenue pour le diagnostic quand le
+  journal est coupé (SE-8).
+
 - **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
   couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
   SSH s'affichait dans la police proportionnelle de l'interface, colonnes

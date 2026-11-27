@@ -311,3 +311,60 @@ describe("journal des commandes : frappes ordinaires", () => {
     expect(tapeSimple("ls\x15pwd")).toBeNull(); // Ctrl+U
   });
 });
+
+// Audit du 27 novembre 2026 (ME-1 = PF-7) : chaque `OSC 133;B` posait un repère
+// xterm jamais libéré, journal coupé compris. 100 000 `B` sur une ligne
+// laissaient 100 000 repères vivants (233 Mo de tas, 8,7 s de gel au
+// défilement) : une sortie hostile gelait toute l'interface.
+describe("journal des commandes : les repères OSC 133 sont rendus", () => {
+  /** Les repères vivants du tampon normal (interne à xterm 6). */
+  const reperesVivants = () =>
+    (term as unknown as { _core: { buffers: { normal: { markers: unknown[] } } } })._core.buffers.normal.markers.length;
+
+  it("cent mille OSC 133;B ne laissent qu'un repère vivant", async () => {
+    await afficher(OSC("B").repeat(100_000));
+    expect(reperesVivants()).toBeLessThanOrEqual(1);
+  });
+
+  it("journal coupé, une invite OSC 133 ne pose aucun repère", async () => {
+    actif = false;
+    await afficher(`${OSC("A")}$ ${OSC("B")}`);
+    expect(reperesVivants()).toBe(0);
+  });
+
+  it("une commande lue ne laisse aucun repère derrière elle", async () => {
+    await afficher(`${OSC("A")}$ ${OSC("B")}`);
+    await taperAvecEcho("ls");
+    taper("\r");
+    await afficher(`\r\n${OSC("C")}a b\r\n${OSC("D;0")}${OSC("A")}$ `);
+    expect(notees).toEqual(["ls"]);
+    expect(reperesVivants()).toBe(0);
+  });
+
+  it("libérer le capteur rend ses repères et arrête son minuteur", async () => {
+    await afficher(`${OSC("A")}$ ${OSC("B")}`);
+    await taperAvecEcho("echo");
+    taper("\r"); // écho de fin de ligne jamais revenu : la lecture attend
+    capteur.dispose();
+    expect(reperesVivants()).toBe(0);
+    await new Promise((r) => setTimeout(r, 1600));
+    expect(notees).toEqual([]);
+  });
+});
+
+// Audit du 27 novembre 2026 (SE-8) : la forme de chaque frappe (un « x » par
+// caractère) était retenue journal coupé, et `window.__journalDiagnostic`
+// l'exposait : la longueur d'un mot de passe tapé à `sudo` s'y lisait.
+describe("journal des commandes : diagnostic", () => {
+  it("journal coupé : aucune forme de frappe retenue", () => {
+    actif = false;
+    for (const c of "hunter2\r") taper(c);
+    expect(capteur.diagnostic.formes).toEqual([]);
+    expect(capteur.diagnostic.compteurs.inactif).toBe(8);
+  });
+
+  it("journal allumé : la forme reste, jamais le contenu", () => {
+    taper("ab");
+    expect(capteur.diagnostic.formes).toEqual(['"xx"']);
+  });
+});
