@@ -68,7 +68,7 @@ VNC sur `35900` (`vnc.spec.js`, mot de passe `test`, image connue qui réagit
 aux entrées) et `35903`/`35904` (`vnc-tls`, VeNCrypt derrière son terminateur
 TLS).
 
-## Couverture (89 scénarios, 40 fichiers)
+## Couverture (90 scénarios, 40 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|
@@ -83,7 +83,7 @@ TLS).
 | `axe.spec.js`         | **audit axe-core** de l'application réelle : vue principale, thème clair, boîte de connexion manuelle (voir plus bas) |
 | `isolation.spec.js`   | **garde-fou d'isolation** : chaque fichier part de l'état semé, sans reste des autres scénarios |
 | `modals.spec.js`      | « Connexion directe » ne se ferme pas au clic dehors, se ferme à Échap ; palette Ctrl+K |
-| `ssh.spec.js`         | **connexion SSH réelle** (sshd local, auth par clé) → session live |
+| `ssh.spec.js`         | **connexion SSH réelle** (sshd local, auth par clé) → session live ; police à chasse fixe du terminal (rendu DOM sous la CSP) |
 | `sftp.spec.js`        | **panneau SFTP** sur la session SSH : listing du répertoire distant, **téléchargement d'un dossier entier** par la file des transferts (octets comparés), **copie d'un fichier vers un autre onglet SSH** sans passer par le disque du poste |
 | `rdp.spec.js`         | **connexion RDP réelle** (serveur dédié) → handshake CredSSP + canvas (`.state.live`) |
 | `rdp-clipboard.spec.js` | **presse-papiers RDP** (distant → poste) : pilote le sidecar sur son WebSocket, sans toucher au presse-papiers du système |
