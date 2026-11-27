@@ -91,10 +91,15 @@ jobs:
 
       - name: Serveur RDP de test et dépendances du harnais
         shell: bash
+        env:
+          # Sous Windows, Git Bash réécrit « /CN=localhost » en chemin de
+          # fichier (C:/Program Files/Git/CN=localhost) et openssl échoue :
+          # vu au premier passage de ce workflow.
+          MSYS_NO_PATHCONV: "1"
         run: |
           cargo build --locked --release --manifest-path test-rdp-server/Cargo.toml
           openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost" \
-            -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
+            -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem
           (cd e2e && npm ci)
 
       - name: Références à comparer
