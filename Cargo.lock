@@ -329,6 +329,7 @@ dependencies = [
  "futures",
  "hmac",
  "keyring",
+ "keyring-core",
  "nix 0.32.0",
  "pageant",
  "rand",

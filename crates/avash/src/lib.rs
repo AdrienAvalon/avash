@@ -7,6 +7,7 @@
 #[doc(hidden)]
 pub mod testutil;
 
+pub mod donnees_locales;
 pub mod enregistrement;
 pub mod folders;
 pub mod import;

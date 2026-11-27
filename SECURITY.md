@@ -166,6 +166,17 @@ Le déverrouillage, le chiffrement et la révocation sont délégués au systèm
 Chaque entrée est identifiée de façon lisible (`user@hôte:port`), ce qui permet
 de la retrouver et de la révoquer à la main dans l'outil du système.
 
+**Sous Windows, les mots de passe restent sur le poste** (audit du 27 novembre
+2026, choix du mainteneur). Le magasin Windows de `keyring` range par défaut ses
+identifiants en persistance « Enterprise » : sur un profil itinérant de
+domaine, ils suivaient l'utilisateur sur chaque poste où il ouvre une session
+et partaient, chiffrés par DPAPI, dans le profil du serveur de fichiers. Avash
+les écrit désormais en persistance « Local Machine »
+(`CRED_PERSIST_LOCAL_MACHINE`) ; au lancement, les entrées `*.avash` laissées en
+« Enterprise » par une version précédente sont relues puis réécrites sous le
+même nom en « Local Machine » (une réécriture refusée laisse l'ancienne intacte).
+Le prix : un mot de passe mémorisé sur un poste n'est plus connu des autres.
+
 ### Mot de passe RDP transmis par stdin
 
 Le mot de passe RDP est passé au sidecar `avash-rdp` **sur son entrée standard
@@ -415,9 +426,17 @@ n'est noté que s'il se lit tel quel à l'écran. Le journal est un aide-mémoir
 de ce qu'on a fait ; ce n'est pas une trace d'audit inviolable face à un
 serveur qui ne l'est pas.
 
-**Où il vit** : `<config>/avash/journal-commandes/`, un fichier par jour en
-JSON Lines, né en 0600 dans un répertoire 0700 (un fichier retrouvé plus ouvert
-est refermé à l'écriture suivante). Les jours au-delà de la durée de
+**Où il vit** : `<config>/avash/journal-commandes/` (`~/.config` sous Linux),
+un fichier par jour en JSON Lines, né en 0600 dans un répertoire 0700 (un
+fichier retrouvé plus ouvert est refermé à l'écriture suivante). Sous Windows,
+`%LOCALAPPDATA%\avash\journal-commandes\`, comme les enregistrements et le
+journal de l'application : jamais dans `AppData\Roaming`, que les profils
+itinérants et la redirection de dossiers recopient sur un serveur de fichiers
+(audit du 27 novembre 2026, SE-5 ; les fichiers d'une version précédente y sont
+déplacés une fois au lancement, sans écraser ce qui s'y trouve). Les bits 0600
+et 0700 n'existent pas sous Windows : ces fichiers prennent les droits hérités
+du profil de l'utilisateur (`AppData\Local` n'est ouvert qu'à lui, au système
+et aux administrateurs), sans ACL propre à Avash. Les jours au-delà de la durée de
 conservation (90 jours par défaut, réglable de 30 jours à 2 ans dans la
 fenêtre du journal) sont effacés au démarrage ; seuls les fichiers qui portent
 un nom de jour sont touchés. L'export passe par la boîte « Enregistrer sous »

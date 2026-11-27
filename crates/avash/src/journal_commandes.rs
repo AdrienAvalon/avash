@@ -73,10 +73,12 @@ struct Ligne {
     code: Option<i32>,
 }
 
-/// Le répertoire du journal : `<config>/avash/journal-commandes`.
+/// Le répertoire du journal : `<config>/avash/journal-commandes`, et sous
+/// Windows `%LOCALAPPDATA%\avash\journal-commandes`, hors du profil itinérant
+/// (audit du 27 novembre 2026, SE-5 ; voir `donnees_locales`).
 #[must_use]
 pub fn repertoire() -> Option<PathBuf> {
-    crate::repertoire_configuration().map(|c| c.join("avash").join("journal-commandes"))
+    crate::donnees_locales::repertoire_de_base().map(|c| c.join("avash").join("journal-commandes"))
 }
 
 /// Secondes depuis l'époque.
