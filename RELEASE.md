@@ -199,7 +199,12 @@ suivante, la télécharge et redémarre :
    distincts, le sidecar étant hors espace de travail :
    `cargo update -w -p avash -p avash-ui` (verrou du workspace) et
    `cargo update --manifest-path rdp-sidecar/Cargo.toml -p avash-rdp` (celui du
-   sidecar).
+   sidecar). Les cibles de fuzzing ont aussi les leurs, qui dépendent de ces
+   paquets : `cargo update --manifest-path fuzz/Cargo.toml -p avash` et
+   `cargo update --manifest-path fuzz/rdp/Cargo.toml -p avash-rdp`. Oublier
+   celui de `fuzz/rdp` fait échouer le fuzzing du job « Sécurité avant
+   publication » (`--locked`), donc la publication : vu le 27 novembre 2026
+   sur l'essai à froid de la branche du lot chaîne.
 2. Renseigner le `CHANGELOG.md`.
 3. `NO_STRIP=1 ./scripts/release.sh` — valide, construit, et **régénère la
    distribution locale**. Ne pas sauter cette étape : sans elle, on essaie la
