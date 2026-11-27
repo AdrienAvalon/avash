@@ -14,6 +14,29 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   pour les terminaux ouverts et les suivants. Un historique plein pèse 13 Mo à
   80 colonnes et 26 Mo à 200, par onglet (audit du 27 novembre 2026, ME-2).
 
+- **La publication vérifie que son binaire ne porte pas le serveur WebDriver
+  de la suite bout en bout.** Audit du 27 novembre 2026 (SE-2) : la règle ne
+  tenait qu'à l'absence d'une option dans une commande. Le job `build` cherche
+  dans `avash-ui` deux littéraux propres au greffon
+  (`scripts/verifier-sans-webdriver.sh`) avant d'envoyer quoi que ce soit à
+  signer, et les jobs bout en bout Windows et macOS, qui construisent avec
+  `--features webdriver`, jouent le contrôle inverse pour que la garde ne
+  devienne pas muette à une montée du greffon.
+- **La mutation regarde les chemins exposés au réseau.** Audit du 27 novembre
+  2026 (QT-6) : cargo-mutants ne mutait que `ssh.rs`, `keys.rs`, `secrets.rs`
+  et `lib.rs`. Le workflow « Qualité » mute désormais aussi `sftp.rs`,
+  `journal_commandes.rs` et, dans le processus RDP, `disque.rs`,
+  `empreintes.rs`, `acces_local.rs` et `vnc_tls.rs`, un job par groupe.
+- **Une cible de fuzzing pour l'assemblage du canal graphique et de RemoteFX
+  Progressive** (`egfx_progressif`), par la bibliothèque du processus RDP, avec
+  des graines tirées des enregistrements de vrais serveurs. Audit du
+  27 novembre 2026 (QT-11) : ce code d'Avash n'était secoué que par une
+  mutation à graine fixe.
+- **Trois scénarios bout en bout** : une session SSH terminée par le serveur
+  se reconnecte à Entrée dans le même onglet, « Reconnecter » rend le bureau
+  RDP après la coupure, et le bureau RDP affiche bien l'image du serveur, lue
+  pixel par pixel dans le canevas (audit du 27 novembre 2026, QT-4 et QT-13).
+
 ### Amélioré
 
 - **Avash réduit, le bureau distant affiché se met en pause lui aussi.** La
@@ -217,23 +240,6 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   tapé à `sudo` comprise) n'est plus retenue pour le diagnostic quand le
   journal est coupé (SE-8).
 
-## [0.16.1] - 2026-11-27
-
-### Corrigé
-
-- **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
-  couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
-  SSH s'affichait dans la police proportionnelle de l'interface, colonnes
-  décalées, art ASCII et cadres cassés, couleurs du thème absentes. Depuis la
-  0.14.2, les terminaux passent au rendu DOM sous Linux (compositing de
-  WebKitGTK coupé) ; ce rendu met sa police, ses tailles et ses couleurs dans
-  des éléments `<style>` que la politique de sécurité de la page refusait :
-  Tauri y ajoute un nonce, et un nonce fait ignorer `'unsafe-inline'`. Le
-  rendu WebGL de Windows dessine sur un canevas et n'était pas touché. La
-  politique reste telle quelle : le CSS que xterm.js génère est recopié dans
-  des feuilles construites, que la CSP ne restreint pas
-  (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
-  police et la chasse fixe du terminal.
 - **Les binaires publiés ne sont plus construits sur un cache que d'autres
   workflows écrivent.** Trouvé par l'audit du 27 novembre 2026 (SE-1) : le job
   `build` de la publication restaurait `./target`, `rdp-sidecar/target` et
@@ -253,30 +259,23 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   notes de chaque release donnent désormais `--signer-workflow` sur
   `release.yml`, `--source-ref` sur le tag et `--deny-self-hosted-runners`.
 
-### Ajouté
+## [0.16.1] - 2026-11-27
 
-- **La publication vérifie que son binaire ne porte pas le serveur WebDriver
-  de la suite bout en bout.** Audit du 27 novembre 2026 (SE-2) : la règle ne
-  tenait qu'à l'absence d'une option dans une commande. Le job `build` cherche
-  dans `avash-ui` deux littéraux propres au greffon
-  (`scripts/verifier-sans-webdriver.sh`) avant d'envoyer quoi que ce soit à
-  signer, et les jobs bout en bout Windows et macOS, qui construisent avec
-  `--features webdriver`, jouent le contrôle inverse pour que la garde ne
-  devienne pas muette à une montée du greffon.
-- **La mutation regarde les chemins exposés au réseau.** Audit du 27 novembre
-  2026 (QT-6) : cargo-mutants ne mutait que `ssh.rs`, `keys.rs`, `secrets.rs`
-  et `lib.rs`. Le workflow « Qualité » mute désormais aussi `sftp.rs`,
-  `journal_commandes.rs` et, dans le processus RDP, `disque.rs`,
-  `empreintes.rs`, `acces_local.rs` et `vnc_tls.rs`, un job par groupe.
-- **Une cible de fuzzing pour l'assemblage du canal graphique et de RemoteFX
-  Progressive** (`egfx_progressif`), par la bibliothèque du processus RDP, avec
-  des graines tirées des enregistrements de vrais serveurs. Audit du
-  27 novembre 2026 (QT-11) : ce code d'Avash n'était secoué que par une
-  mutation à graine fixe.
-- **Trois scénarios bout en bout** : une session SSH terminée par le serveur
-  se reconnecte à Entrée dans le même onglet, « Reconnecter » rend le bureau
-  RDP après la coupure, et le bureau RDP affiche bien l'image du serveur, lue
-  pixel par pixel dans le canevas (audit du 27 novembre 2026, QT-4 et QT-13).
+### Corrigé
+
+- **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
+  couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
+  SSH s'affichait dans la police proportionnelle de l'interface, colonnes
+  décalées, art ASCII et cadres cassés, couleurs du thème absentes. Depuis la
+  0.14.2, les terminaux passent au rendu DOM sous Linux (compositing de
+  WebKitGTK coupé) ; ce rendu met sa police, ses tailles et ses couleurs dans
+  des éléments `<style>` que la politique de sécurité de la page refusait :
+  Tauri y ajoute un nonce, et un nonce fait ignorer `'unsafe-inline'`. Le
+  rendu WebGL de Windows dessine sur un canevas et n'était pas touché. La
+  politique reste telle quelle : le CSS que xterm.js génère est recopié dans
+  des feuilles construites, que la CSP ne restreint pas
+  (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
+  police et la chasse fixe du terminal.
 
 ## [0.16.0] - 2026-11-26
 
