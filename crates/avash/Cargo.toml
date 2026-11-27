@@ -69,6 +69,11 @@ zeroize = "1.7"
 hmac = "0.13"
 sha1 = "0.11"
 data-encoding = "2"
+# Délai d'acquittement TCP des sessions (`TCP_USER_TIMEOUT`, audit du
+# 27 novembre 2026, FI-3) : la bibliothèque standard et tokio n'exposent pas
+# l'option. Déjà dans l'arbre (tokio, mio), même version : rien de neuf à
+# compiler. `all` porte les options propres à Linux.
+socket2 = { version = "0.6", features = ["all"] }
 # Seulement pour le serveur SSH de test (`outils-de-test`).
 bytes = { version = "1.12.1", optional = true }
 
@@ -87,6 +92,9 @@ outils-de-test = ["dep:bytes"]
 # effet sur les autres plateformes.
 [target.'cfg(windows)'.dependencies]
 pageant = "0.2.5"
+# `TCP_MAXRT` sur la socket d'une session (FI-3), que socket2 n'expose pas.
+# Même version que celle que socket2 tire déjà sous Windows.
+windows-sys = { version = "0.61", features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 # Auto-dépendance : les tests d'intégration (`tests/integration.rs`) et les
