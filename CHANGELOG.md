@@ -91,6 +91,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   (`< > : " | ? *`, noms réservés, point final) et le dit dans la barre
   d'état, au lieu de tout arrêter. Les noms ne sont pas transcrits : rien
   n'est créé sous un nom que le serveur n'a pas donné, rien n'est écrasé.
+- **Un onglet lent ne fait plus attendre les transferts des autres.** Audit
+  du 27 novembre 2026 (FI-7) : la file comptait trois transferts en cours
+  toutes sessions confondues ; trois sauvegardes lentes sur un serveur
+  bloquaient le petit fichier glissé vers un autre. La borne vaut désormais
+  par onglet (trois), avec six transferts au plus en tout.
 
 ## [0.16.0] - 2026-11-26
 

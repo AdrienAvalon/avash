@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   aLancer, appliquerProgression, boutonAnnulerVisible, conclure, detailTransfert, effacableAuClic,
-  nouveauTransfert, pourcentage, PARALLELE, type Transfert,
+  nouveauTransfert, pourcentage, PARALLELE, PARALLELE_TOTAL, type Transfert,
 } from "./sftp-transferts";
 import { humanSize } from "./filters";
 import { langue, t } from "./i18n";
@@ -46,6 +46,31 @@ describe("file des transferts : qui part", () => {
     conclure(file[0], { ok: false, erreur: "Connexion perdue" });
     expect(planifier(file).map((x) => x.id)).toEqual([5]);
     expect(file[3].etat).toBe("annule");
+  });
+
+  // Audit du 27 novembre 2026 (FI-7) : la borne de trois était commune à
+  // toutes les sessions ; trois transferts lents d'un onglet faisaient attendre
+  // ceux de tous les autres.
+  it("un transfert d'un autre onglet n'attend pas la file d'un onglet occupé", () => {
+    const a = { onglet: "A" };
+    const b = { onglet: "B" };
+    const file: Transfert[] = [
+      ...[1, 2, 3, 4].map((i) => ({ ...transfert(i), session: a })),
+      { ...transfert(5), session: b },
+    ];
+    expect(planifier(file).map((x) => x.id)).toEqual([1, 2, 3, 5]);
+    expect(file[3].etat).toBe("attente");
+    // L'onglet A reste plein : seul un de ses transferts finis lui rend une place.
+    conclure(file[4], { ok: true, message: "fait" });
+    expect(planifier(file)).toEqual([]);
+    conclure(file[0], { ok: true, message: "fait" });
+    expect(planifier(file).map((x) => x.id)).toEqual([4]);
+  });
+
+  it("la borne commune à toutes les sessions tient encore", () => {
+    const file: Transfert[] = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => ({ ...transfert(i), session: { onglet: i } }));
+    expect(planifier(file).map((x) => x.id)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(PARALLELE_TOTAL).toBe(6);
   });
 
   it("aucune ligne ne part si la file est vide ou toute terminée", () => {
