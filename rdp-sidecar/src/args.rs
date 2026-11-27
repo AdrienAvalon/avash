@@ -39,6 +39,12 @@ pub struct Args {
     pub vnc: bool,
     /// `--sans-son` : ne pas annoncer le canal audio (réglage de l'interface).
     pub(crate) sans_son: bool,
+    /// `--sans-presse-papiers` : le partage du presse-papiers est coupé dès le
+    /// lancement. Il naissait actif et n'était coupé qu'au message `[12]` de
+    /// l'interface, à l'ouverture de sa WebSocket : entre le démarrage et ce
+    /// message, et après chaque reprise, le processus réclamait au serveur le
+    /// contenu de ses copies (audit du 27 novembre 2026, SE-6).
+    pub(crate) sans_presse_papiers: bool,
     /// `--lecteur <dossier>` : ce dossier du poste est servi au bureau distant
     /// comme lecteur « Avash » (redirection de lecteur, MS-RDPEFS).
     pub(crate) lecteur: Option<String>,
@@ -73,7 +79,13 @@ const OPTIONS_A_VALEUR: &[&str] = &[
 ];
 
 /// Drapeaux, reconnus seulement en position de clé.
-const DRAPEAUX: &[&str] = &["--vnc", "--sans-nla", "--tls-herite", "--sans-son"];
+const DRAPEAUX: &[&str] = &[
+    "--vnc",
+    "--sans-nla",
+    "--tls-herite",
+    "--sans-son",
+    "--sans-presse-papiers",
+];
 
 /// La ligne de commande lue position par position.
 ///
@@ -209,6 +221,7 @@ fn parse_args_de_pa(a: &Pa, pass: String, detecter: impl FnOnce() -> u32) -> Res
         sans_nla: a.drapeau("--sans-nla"),
         tls_herite: a.drapeau("--tls-herite"),
         sans_son: a.drapeau("--sans-son"),
+        sans_presse_papiers: a.drapeau("--sans-presse-papiers"),
         lecteur: a.opt("--lecteur").filter(|l| !l.trim().is_empty()),
         layout: a
             .opt("--layout")

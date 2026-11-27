@@ -194,7 +194,8 @@ fn partage_designe(
 /// retient) ou s'il est celui que `rdp.yaml` enregistre déjà pour ce bureau.
 /// Signature vue du front, inchangée :
 /// `invoke("rdp_open", { id, host, port, user, password, width, height,
-/// desktopScaleFactor, options: { sansNla, tlsHerite, vnc, sansSon }, partage })`.
+/// desktopScaleFactor, options: { sansNla, tlsHerite, vnc, sansSon,
+/// sansPressePapiers }, partage })`.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn rdp_open<R: tauri::Runtime>(
@@ -692,6 +693,12 @@ pub struct Options {
     pub vnc: bool,
     /// Le son du bureau distant est coupé dans la palette.
     pub sans_son: bool,
+    /// Le partage du presse-papiers est coupé. Passé au lancement, il vaut dès
+    /// la première connexion et pour chaque reprise ; le message `[12]` de la
+    /// page ne venait qu'à l'ouverture de sa WebSocket (audit du 27 novembre
+    /// 2026, SE-6). Absent du JSON, il vaut « non coupé », comme avant.
+    #[serde(default)]
+    pub sans_presse_papiers: bool,
 }
 
 /// Les options du sidecar, dans l'ordre : chacune n'apparaît que demandée.
@@ -701,6 +708,7 @@ fn drapeaux(options: Options, partage: Option<&str>) -> Vec<String> {
         tls_herite,
         vnc,
         sans_son,
+        sans_presse_papiers,
     } = options;
     let mut v = Vec::new();
     if sans_nla {
@@ -714,6 +722,9 @@ fn drapeaux(options: Options, partage: Option<&str>) -> Vec<String> {
     }
     if sans_son {
         v.push("--sans-son".to_owned());
+    }
+    if sans_presse_papiers {
+        v.push("--sans-presse-papiers".to_owned());
     }
     if let Some(p) = partage {
         v.push("--lecteur".to_owned());
@@ -794,6 +805,23 @@ mod tests_designations {
 mod tests_drapeaux {
     use super::{drapeaux, Options};
 
+    /// Audit du 27 novembre 2026, SE-6 : un `options` sans le champ du
+    /// presse-papiers (ancienne page, scénario de test) reste lisible, partage
+    /// non coupé ; avec, il est lu.
+    #[test]
+    fn le_partage_coupe_se_lit_des_options_du_front() {
+        let sans: Options = serde_json::from_str(
+            r#"{"sansNla":false,"tlsHerite":false,"vnc":false,"sansSon":false}"#,
+        )
+        .unwrap();
+        assert!(!sans.sans_presse_papiers);
+        let coupe: Options = serde_json::from_str(
+            r#"{"sansNla":false,"tlsHerite":false,"vnc":false,"sansSon":false,"sansPressePapiers":true}"#,
+        )
+        .unwrap();
+        assert_eq!(drapeaux(coupe, None), ["--sans-presse-papiers"]);
+    }
+
     /// Rien de demandé, rien de passé ; tout demandé, tout passé, le dossier
     /// après son drapeau.
     #[test]
@@ -804,6 +832,7 @@ mod tests_drapeaux {
             tls_herite: true,
             vnc: true,
             sans_son: true,
+            sans_presse_papiers: true,
         };
         assert_eq!(
             drapeaux(tout, Some("/srv/partage")),
@@ -812,6 +841,7 @@ mod tests_drapeaux {
                 "--tls-herite",
                 "--vnc",
                 "--sans-son",
+                "--sans-presse-papiers",
                 "--lecteur",
                 "/srv/partage"
             ]
@@ -1582,6 +1612,7 @@ mod tests_sidecar_factice {
             tls_herite: true,
             vnc: true,
             sans_son: true,
+            sans_presse_papiers: true,
         };
         d.partage = Some(partage.display().to_string());
         ouvrir_avec(app.handle(), Some(Factice::bin()), d)
@@ -1589,7 +1620,7 @@ mod tests_sidecar_factice {
             .unwrap();
         let argv = f.lire("argv").unwrap();
         let fin = format!(
-            "--sans-nla\n--tls-herite\n--vnc\n--sans-son\n--lecteur\n{}\n",
+            "--sans-nla\n--tls-herite\n--vnc\n--sans-son\n--sans-presse-papiers\n--lecteur\n{}\n",
             partage.display()
         );
         assert!(argv.ends_with(&fin), "{argv}");

@@ -32,6 +32,35 @@ use ironrdp_tokio::FramedWrite as _;
 use std::time::{Duration, Instant};
 use tokio_tungstenite::tungstenite::Message;
 
+/// Ce que l'interface a dit au processus et qui doit survivre à une reprise :
+/// le partage du presse-papiers (`[12]`) et la pause de l'onglet (`[11]`).
+///
+/// Trouvé par l'audit du 27 novembre 2026 (PF-3, SE-6) : les deux vivaient
+/// dans `executer`, recréés à chaque tour. Une redirection (courtier RDS,
+/// GNOME Remote Desktop) ou une reprise avec le canal graphique repartait donc
+/// avec le partage actif, même coupé par l'utilisateur, ce que `SECURITY.md`
+/// exclut (« n'est plus ni annoncé ni réclamé au serveur »), et sans pause : un
+/// onglet quitté avant la reprise revenait en flux plein. Créé une fois par
+/// `main`, partagé par tous les tours.
+pub struct EtatInterface {
+    pub(crate) partage: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) pause: std::sync::atomic::AtomicBool,
+}
+
+impl EtatInterface {
+    /// L'état au lancement : partage selon `--sans-presse-papiers`, onglet
+    /// affiché (l'interface ouvre un bureau au premier plan).
+    #[must_use]
+    pub fn depuis(args: &Args) -> Self {
+        Self {
+            partage: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                !args.sans_presse_papiers,
+            )),
+            pause: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
 pub enum Suite {
     /// Rien n'a été dessiné : ce serveur n'a probablement que le canal
     /// graphique, qu'il faut lui offrir — donc se reconnecter.
@@ -48,6 +77,7 @@ pub async fn executer(
     poste: &mut Option<Poste>,
     graphique: egfx::Politique,
     dessine: &std::sync::atomic::AtomicBool,
+    etat: &EtatInterface,
 ) -> Result<Suite> {
     // Un poste déjà établi signifie qu'un tour précédent a annoncé `[1]
     // CONNECTED` : celui-ci est une redirection ou une reprise avec le canal
@@ -63,9 +93,9 @@ pub async fn executer(
     }
     let local_text: LocalClip = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (clip_tx, mut clip_rx) = tokio::sync::mpsc::unbounded_channel::<ClipReq>();
-    // Actif par défaut — parité avec les autres clients RDP ; l'interface
-    // annonce aussitôt le réglage retenu par l'utilisateur (message [12]).
-    let partage_clip = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    // Le réglage de l'utilisateur, passé au lancement puis par `[12]`, gardé
+    // d'un tour à l'autre (voir `EtatInterface`).
+    let partage_clip = etat.partage.clone();
     let clip_backend = ClipBackend {
         partage: partage_clip.clone(),
         local_text: local_text.clone(),
@@ -217,7 +247,11 @@ pub async fn executer(
     // continuait d'envoyer et le processus de décoder un bureau que personne ne
     // regardait (audit du 27 novembre 2026, PR-1). Elle suspend désormais aussi
     // le serveur, quand il l'annonce.
-    let mut cadence = Cadence::nouvelle(affichage, false, Instant::now());
+    let mut cadence = Cadence::nouvelle(
+        affichage,
+        etat.pause.load(std::sync::atomic::Ordering::Relaxed),
+        Instant::now(),
+    );
     // Le serveur dessine-t-il par le chemin classique ? Voir ATTENTE_EGFX.
     let mut dessin_classique = false;
     let mut silence: Option<Instant> = None;
@@ -488,7 +522,9 @@ pub async fn executer(
                             dossier: Option<String>,
                         }
                         let demande: Demande = serde_json::from_slice(&b[1..]).unwrap_or_default();
-                        if reception.is_none() {
+                        // Partage coupé depuis l'arrivée de la liste : rien ne
+                        // se reçoit (audit du 27 novembre 2026, PF-3).
+                        if reception.is_none() && partage_clip.load(std::sync::atomic::Ordering::Relaxed) {
                             if let Some((liste, data_id)) = fichiers_distants.clone() {
                                 let dossier = demande
                                     .dossier
@@ -562,6 +598,7 @@ pub async fn executer(
                         // PAUSE : 1 = l'onglet est passé à l'arrière-plan. La
                         // suspension du serveur attend l'anti-rebond (au tic) ;
                         // la reprise, elle, part aussitôt.
+                        etat.pause.store(b[1] != 0, std::sync::atomic::Ordering::Relaxed);
                         ordonner!(cadence.pause(b[1] != 0, Instant::now()));
                         flush_dirty!();
                     }
@@ -581,6 +618,7 @@ pub async fn executer(
                         // Lève la pause (voir `Cadence::rafraichir`) et, si le
                         // serveur était suspendu, le relance : l'image gardée
                         // part d'abord, le serveur la remplace aussitôt après.
+                        etat.pause.store(false, std::sync::atomic::Ordering::Relaxed);
                         ordonner!(cadence.rafraichir(Instant::now()));
                     }
                     Some(Ok(Message::Binary(b))) => {
@@ -1138,12 +1176,14 @@ mod tests_reprise_annoncee {
         )
         .unwrap();
         let dessine = std::sync::atomic::AtomicBool::new(false);
+        let etat = super::EtatInterface::depuis(&args);
         let issue = executer(
             &args,
             None,
             &mut poste,
             crate::egfx::Politique::Accepter,
             &dessine,
+            &etat,
         )
         .await;
         assert!(issue.is_err(), "personne n'écoute sur ce port");
@@ -1154,5 +1194,41 @@ mod tests_reprise_annoncee {
             matches!(&premier, Some(Ok(Message::Binary(b))) if b.as_ref() == [23u8]),
             "le tour de reprise doit s'annoncer par [23] : {premier:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_etat_interface {
+    use super::EtatInterface;
+    use std::sync::atomic::Ordering;
+
+    fn args(drapeaux: &[&str]) -> crate::args::Args {
+        let mut v = vec!["--host", "h", "-u", "x"];
+        v.extend_from_slice(drapeaux);
+        crate::args::parse_args_de(&v, "p").unwrap()
+    }
+
+    /// Audit du 27 novembre 2026, SE-6 : le partage naissait actif à chaque
+    /// tour. Coupé au lancement, il l'est avant même la première connexion.
+    #[test]
+    fn le_partage_coupe_au_lancement_l_est_des_le_premier_tour() {
+        assert!(!EtatInterface::depuis(&args(&["--sans-presse-papiers"]))
+            .partage
+            .load(Ordering::Relaxed));
+        assert!(EtatInterface::depuis(&args(&[]))
+            .partage
+            .load(Ordering::Relaxed));
+    }
+
+    /// Le dos du presse-papiers d'un tour neuf lit le même drapeau que celui
+    /// que `[12]` a coupé au tour d'avant : une reprise ne le rallume pas.
+    #[test]
+    fn le_partage_coupe_survit_a_une_reprise() {
+        let etat = EtatInterface::depuis(&args(&[]));
+        let tour_1 = etat.partage.clone();
+        tour_1.store(false, Ordering::Relaxed); // [12, 0] reçu au premier tour
+        drop(tour_1);
+        let tour_2 = etat.partage.clone();
+        assert!(!tour_2.load(Ordering::Relaxed));
     }
 }

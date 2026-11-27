@@ -358,7 +358,9 @@ pub async fn executer(args: &Args) -> Result<()> {
     sink.send(Message::Binary(hello.into())).await?;
 
     let mut pointeur = Pointeur::default();
-    let mut partage_clip = true;
+    // Coupé dès le lancement si l'utilisateur l'a coupé (audit du 27 novembre
+    // 2026, SE-6), comme en RDP ; `[12]` le change ensuite.
+    let mut partage_clip = !args.sans_presse_papiers;
     // Le presse-papiers du poste mémorisé : l'annonce [8] le remplit, le collage
     // explicite [22] le pousse au serveur (voir presse_papiers_vers_serveur).
     let mut memoire_clip: Option<String> = None;
