@@ -7,12 +7,30 @@ use yuv::{
 
 use crate::image_processing::PixelFormat;
 
+/// Plus grande luminance que `yuv` convertit sans déborder : il calcule
+/// `y + 4096` sur un i16. Une valeur au-delà ne vient que d'un flux hostile ou
+/// corrompu (un pixel valide reste loin en dessous) ; elle est saturée, comme
+/// le serait le pixel. Trouvé par cargo-fuzz le 27 novembre 2026 (Avash, cible
+/// egfx_progressif) : panique en debug, couleurs fausses en release.
+const LUMINANCE_MAX: i16 = i16::MAX - 4096;
+
+/// La luminance telle quelle, ou une copie saturée si une valeur dépasse
+/// `LUMINANCE_MAX` : la copie ne se paie que sur un flux hostile.
+fn luminance_bornee(y: &[i16]) -> std::borrow::Cow<'_, [i16]> {
+    if y.iter().all(|&v| v <= LUMINANCE_MAX) {
+        std::borrow::Cow::Borrowed(y)
+    } else {
+        std::borrow::Cow::Owned(y.iter().map(|&v| v.min(LUMINANCE_MAX)).collect())
+    }
+}
+
 // FIXME: used for the test suite, we may want to drop it
 pub fn ycbcr_to_argb(input: YCbCrBuffer<'_>, output: &mut [u8]) -> io::Result<()> {
+    let y = luminance_bornee(input.y);
     let len = u32::try_from(output.len()).map_err(io::Error::other)?;
     let width = len / 4;
     let planar = YuvPlanarImage {
-        y_plane: input.y,
+        y_plane: &y,
         y_stride: width,
         u_plane: input.cb,
         u_stride: width,
@@ -25,10 +43,11 @@ pub fn ycbcr_to_argb(input: YCbCrBuffer<'_>, output: &mut [u8]) -> io::Result<()
 }
 
 pub fn ycbcr_to_rgba(input: YCbCrBuffer<'_>, output: &mut [u8]) -> io::Result<()> {
+    let y = luminance_bornee(input.y);
     let len = u32::try_from(output.len()).map_err(io::Error::other)?;
     let width = len / 4;
     let planar = YuvPlanarImage {
-        y_plane: input.y,
+        y_plane: &y,
         y_stride: width,
         u_plane: input.cb,
         u_stride: width,
@@ -149,4 +168,46 @@ pub struct Rgb {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+}
+
+#[cfg(test)]
+mod tests_luminance_hostile {
+    use super::*;
+
+    /// Trouvé par cargo-fuzz le 27 novembre 2026 (cible egfx_progressif, audit
+    /// QT-11) : `yuv` calcule `y + 4096` sur un i16, et une luminance hostile
+    /// au-delà de 28 671 débordait (panique en debug, couleurs fausses en
+    /// release).
+    #[test]
+    fn une_luminance_hostile_ne_fait_pas_paniquer_la_conversion() {
+        let y = [i16::MAX; 4];
+        let c = [0i16; 4];
+        let mut sortie = [0u8; 16];
+        ycbcr_to_rgba(YCbCrBuffer { y: &y, cb: &c, cr: &c }, &mut sortie).expect("conversion");
+        assert_eq!(&sortie[..3], &[255, 255, 255], "luminance saturée : blanc");
+        let mut argb = [0u8; 16];
+        ycbcr_to_argb(YCbCrBuffer { y: &y, cb: &c, cr: &c }, &mut argb).expect("conversion");
+    }
+
+    #[test]
+    fn une_luminance_valide_n_est_pas_touchee() {
+        let y: Vec<i16> = (0..64).map(|i| i * 40 - 1200).collect();
+        let c: Vec<i16> = (0..64).map(|i| i * 3 - 90).collect();
+        assert!(matches!(luminance_bornee(&y), std::borrow::Cow::Borrowed(_)));
+        let mut sortie = vec![0u8; 256];
+        ycbcr_to_rgba(YCbCrBuffer { y: &y, cb: &c, cr: &c }, &mut sortie).expect("conversion");
+        let planar = YuvPlanarImage {
+            y_plane: &y,
+            y_stride: 64,
+            u_plane: &c,
+            u_stride: 64,
+            v_plane: &c,
+            v_stride: 64,
+            width: 64,
+            height: 1,
+        };
+        let mut attendu = vec![0u8; 256];
+        rdp_yuv444_to_rgba(&planar, &mut attendu, 256).expect("référence");
+        assert_eq!(sortie, attendu);
+    }
 }
