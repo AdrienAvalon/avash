@@ -105,7 +105,10 @@ jobs:
   fuzz:
     name: Fuzzing des parseurs (cargo-fuzz)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 et non plus 30 : la cible egfx_progressif tire IronRDP et tokio
+    # (audit du 27 novembre 2026, QT-11), dont la compilation à froid sous
+    # nightly s'ajoute aux treize campagnes de 45 s.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -114,7 +117,11 @@ jobs:
           toolchain: nightly
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          workspaces: fuzz
+          # fuzz/rdp : le crate de fuzzing du processus RDP, qui a son propre
+          # target (audit du 27 novembre 2026, QT-11).
+          workspaces: |
+            fuzz
+            fuzz/rdp
       # Version exacte, la même que release.yml (garde ci-outils-epingles.sh).
       - name: cargo-fuzz
         run: cargo install cargo-fuzz --version 0.13.2 --locked
@@ -130,7 +137,7 @@ jobs:
         if: github.event_name != 'pull_request'
         with:
           path: fuzz/corpus
-          key: fuzz-corpus-${{ hashFiles('fuzz/seeds/**', 'fuzz/fuzz_targets/**') }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ hashFiles('fuzz/seeds/**', 'fuzz/fuzz_targets/**', 'fuzz/rdp/fuzz_targets/**') }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-
       # Trouvé par l'audit du 7 septembre 2026 : le job était sauté sur les PR
       # (`if: github.event_name != 'pull_request'`) et `check.sh` ne compile pas
@@ -143,7 +150,10 @@ jobs:
       # le non-déterminisme d'une campagne.
       - name: Compilation des cibles (PR)
         if: github.event_name == 'pull_request'
-        run: cargo +nightly fuzz build
+        # Les deux crates : le cœur, et le processus RDP (fuzz/rdp, QT-11).
+        run: |
+          cargo +nightly fuzz build
+          cargo +nightly fuzz build --fuzz-dir rdp
         working-directory: fuzz
       # Toutes les cibles sont jouées puis le bilan rougit s'il y a eu au moins
       # un plantage (le script s'arrêtait à la première cible tombée, masquant
@@ -157,5 +167,7 @@ jobs:
         if: failure()
         with:
           name: fuzz-artefacts
-          path: fuzz/artifacts
+          path: |
+            fuzz/artifacts
+            fuzz/rdp/artifacts
           if-no-files-found: ignore

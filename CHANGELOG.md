@@ -263,6 +263,11 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   signer, et les jobs bout en bout Windows et macOS, qui construisent avec
   `--features webdriver`, jouent le contrôle inverse pour que la garde ne
   devienne pas muette à une montée du greffon.
+- **Une cible de fuzzing pour l'assemblage du canal graphique et de RemoteFX
+  Progressive** (`egfx_progressif`), par la bibliothèque du processus RDP, avec
+  des graines tirées des enregistrements de vrais serveurs. Audit du
+  27 novembre 2026 (QT-11) : ce code d'Avash n'était secoué que par une
+  mutation à graine fixe.
 
 ## [0.16.0] - 2026-11-26
 

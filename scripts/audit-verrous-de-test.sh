@@ -31,6 +31,9 @@ auditer() { # dossier d'où lancer, verrou (relatif à ce dossier)
 OPTIONS=("$@")
 
 auditer . fuzz/Cargo.lock
+# Le crate de fuzzing du processus RDP tire les dépendances du processus RDP :
+# il passe sous sa liste d'exceptions (audit du 27 novembre 2026, QT-11).
+auditer rdp-sidecar ../fuzz/rdp/Cargo.lock
 auditer test-vnc-server Cargo.lock
 auditer test-rdp-server Cargo.lock
 auditer test-rdp-server vendor/ironrdp-server/Cargo.lock
