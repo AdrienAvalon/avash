@@ -73,6 +73,9 @@ pub struct TestSshServer {
     /// Commandes de dépôt de clé (`authorized_keys`) déjà reçues : la même,
     /// reçue une seconde fois, répond « déjà présente ».
     pub depots_de_cle: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// Ce que les sous-systèmes SFTP de CE serveur ont vu passer : requêtes
+    /// reçues, et combien attendaient leur réponse à la fois.
+    pub sftp: ObservationSftp,
 }
 
 impl russh::server::Server for TestSshServer {
@@ -88,6 +91,7 @@ impl russh::server::Server for TestSshServer {
             fermetures: self.fermetures.clone(),
             sous_systemes_sftp: self.sous_systemes_sftp.clone(),
             depots_de_cle: self.depots_de_cle.clone(),
+            sftp: self.sftp.clone(),
             ..Default::default()
         }
     }
@@ -115,6 +119,7 @@ pub struct TestSshSession {
     depots_de_cle: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// Canaux de CETTE connexion déjà comptés dans `fermetures`.
     canaux_finis: std::collections::HashSet<ChannelId>,
+    sftp: ObservationSftp,
 }
 
 impl TestSshSession {
@@ -624,14 +629,253 @@ impl russh::server::Handler for TestSshSession {
             let channel = self.channels.lock().await.remove(&channel_id).unwrap();
             let _ = session.channel_success(channel_id);
             let sftp = TestSftpSession::default();
+            let flux = observer_sftp(channel.into_stream(), self.sftp.clone());
             tokio::spawn(async move {
-                russh_sftp::server::run(channel.into_stream(), sftp).await;
+                russh_sftp::server::run(flux, sftp).await;
             });
         } else {
             let _ = session.channel_failure(channel_id);
         }
         Ok(())
     }
+}
+
+// ---------- Observation du protocole SFTP ----------
+//
+// Audit du 27 novembre 2026 (PR-2, QT-1) : la montée SFTP n'avait plus qu'une
+// écriture en vol depuis russh-sftp 4, et rien ne pouvait le voir. Le serveur
+// russh-sftp traite une requête après l'autre ; compté chez lui, le nombre de
+// requêtes « sans réponse » vaudrait toujours un. On intercale donc un relais
+// qui lit le canal SANS attendre le serveur et note chaque requête à son
+// arrivée, puis chaque réponse à son départ : la différence est exactement ce
+// que le client a mis en vol, sans aucune horloge. Le même relais compte les
+// octets de lecture demandés et pas encore servis (budget d'octets en vol,
+// PR-4) et garde la suite des requêtes par chemin (allers-retours d'un petit
+// fichier, PR-3).
+
+/// Ce que les sous-systèmes SFTP d'un serveur de test ont vu passer.
+#[derive(Clone, Default)]
+pub struct ObservationSftp(Arc<EtatObservationSftp>);
+
+#[derive(Default)]
+struct EtatObservationSftp {
+    /// Le plus d'écritures (`SSH_FXP_WRITE`) en attente de réponse à la fois,
+    /// sur un même canal.
+    max_ecritures_en_vol: std::sync::atomic::AtomicUsize,
+    /// Le plus d'octets de lecture demandés (`SSH_FXP_READ`) et pas encore
+    /// servis, à la fois, sur un même canal.
+    max_octets_lus_en_vol: std::sync::atomic::AtomicU64,
+    /// Requêtes reçues, dans l'ordre : (type, chemin visé). Le chemin est le
+    /// nom de fichier d'un `OPEN`, `STAT` ou `LSTAT`, et le chemin que porte la
+    /// poignée (`fs:<chemin>`) d'un `READ`, `WRITE` ou `CLOSE`.
+    requetes: std::sync::Mutex<Vec<(&'static str, String)>>,
+}
+
+impl ObservationSftp {
+    /// Le plus d'écritures en vol vues à la fois sur un canal.
+    pub fn max_ecritures_en_vol(&self) -> usize {
+        self.0
+            .max_ecritures_en_vol
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Le plus d'octets de lecture demandés et non servis à la fois.
+    pub fn max_octets_lus_en_vol(&self) -> u64 {
+        self.0
+            .max_octets_lus_en_vol
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Les types des requêtes reçues pour `chemin`, dans l'ordre.
+    pub fn requetes_pour(&self, chemin: &str) -> Vec<&'static str> {
+        self.0
+            .requetes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, c)| c == chemin)
+            .map(|(t, _)| *t)
+            .collect()
+    }
+}
+
+/// Nom d'un type de paquet SFTP (draft-ietf-secsh-filexfer-02).
+fn nom_requete(t: u8) -> &'static str {
+    match t {
+        3 => "OPEN",
+        4 => "CLOSE",
+        5 => "READ",
+        6 => "WRITE",
+        7 => "LSTAT",
+        8 => "FSTAT",
+        11 => "OPENDIR",
+        12 => "READDIR",
+        13 => "REMOVE",
+        14 => "MKDIR",
+        16 => "REALPATH",
+        17 => "STAT",
+        18 => "RENAME",
+        200 => "EXTENDED",
+        _ => "AUTRE",
+    }
+}
+
+/// Une chaîne SFTP (`u32` de longueur puis les octets) à partir de `pos`.
+fn chaine_sftp(corps: &[u8], pos: usize) -> Option<(&[u8], usize)> {
+    let long = u32::from_be_bytes(corps.get(pos..pos + 4)?.try_into().ok()?) as usize;
+    let fin = pos + 4 + long;
+    Some((corps.get(pos + 4..fin)?, fin))
+}
+
+/// Lit une trame SFTP entière (longueur comprise), ou `None` à la fin du flux.
+async fn lire_trame<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+    let mut long = [0u8; 4];
+    r.read_exact(&mut long).await.ok()?;
+    let mut trame = vec![0u8; 4 + u32::from_be_bytes(long) as usize];
+    trame[..4].copy_from_slice(&long);
+    r.read_exact(&mut trame[4..]).await.ok()?;
+    Some(trame)
+}
+
+/// Relaie un canal SFTP vers le serveur en notant requêtes et réponses (voir
+/// le commentaire de section). Rend l'extrémité que le serveur doit servir.
+fn observer_sftp(
+    canal: russh::ChannelStream<Msg>,
+    obs: ObservationSftp,
+) -> tokio::io::DuplexStream {
+    use std::sync::atomic::Ordering::SeqCst;
+    use tokio::io::AsyncWriteExt as _;
+    // Assez grand pour qu'un client ne soit jamais freiné par le relais : il
+    // doit voir le client tel qu'il est, pas tel que le relais le laisse être.
+    let (cote_serveur, cote_relais) = tokio::io::duplex(16 << 20);
+    let (mut canal_r, mut canal_w) = tokio::io::split(canal);
+    let (mut relais_r, mut relais_w) = tokio::io::split(cote_relais);
+    // Requêtes en attente de réponse, sur CE canal : identifiant → (type,
+    // octets de lecture demandés).
+    let attente: Arc<std::sync::Mutex<HashMap<u32, (u8, u64)>>> = Arc::default();
+    let attente_montee = attente.clone();
+    let obs_montee = obs.clone();
+    tokio::spawn(async move {
+        while let Some(trame) = lire_trame(&mut canal_r).await {
+            let corps = &trame[4..];
+            if let (Some(&t), Some(id)) = (corps.first(), corps.get(1..5)) {
+                // INIT (1) ne porte pas d'identifiant : on ne le compte pas.
+                if t != 1 {
+                    let id = u32::from_be_bytes(id.try_into().unwrap());
+                    let chaine = chaine_sftp(corps, 5);
+                    let chemin = chaine.map_or_default(|(c, _)| {
+                        let c = String::from_utf8_lossy(c);
+                        c.strip_prefix("fs:").unwrap_or(&c).to_owned()
+                    });
+                    // READ : poignée, décalage (u64), longueur (u32).
+                    let lus = if t == 5 {
+                        chaine
+                            .and_then(|(_, p)| corps.get(p + 8..p + 12))
+                            .map_or(0, |l| u64::from(u32::from_be_bytes(l.try_into().unwrap())))
+                    } else {
+                        0
+                    };
+                    obs_montee
+                        .0
+                        .requetes
+                        .lock()
+                        .unwrap()
+                        .push((nom_requete(t), chemin));
+                    let mut a = attente_montee.lock().unwrap();
+                    a.insert(id, (t, lus));
+                    let ecritures = a.values().filter(|(t, _)| *t == 6).count();
+                    let octets: u64 = a.values().map(|(_, n)| n).sum();
+                    obs_montee
+                        .0
+                        .max_ecritures_en_vol
+                        .fetch_max(ecritures, SeqCst);
+                    obs_montee.0.max_octets_lus_en_vol.fetch_max(octets, SeqCst);
+                }
+            }
+            if relais_w.write_all(&trame).await.is_err() {
+                break;
+            }
+        }
+        let _ = relais_w.shutdown().await;
+    });
+    tokio::spawn(async move {
+        while let Some(trame) = lire_trame(&mut relais_r).await {
+            if let Some(id) = trame.get(5..9) {
+                attente
+                    .lock()
+                    .unwrap()
+                    .remove(&u32::from_be_bytes(id.try_into().unwrap()));
+            }
+            if canal_w.write_all(&trame).await.is_err() {
+                break;
+            }
+        }
+        let _ = canal_w.shutdown().await;
+    });
+    cote_serveur
+}
+
+/// Relais TCP qui retarde chaque sens de `delai`, sans borner le débit : un
+/// délai de propagation, comme un VPN lointain. Rend le port local à joindre
+/// à la place de `port_cible`.
+///
+/// Audit du 27 novembre 2026 (QT-1) : les tests tournaient sur la boucle
+/// locale, où une écriture par aller-retour reste rapide ; la montée SFTP
+/// tombée à 1,5 Mo/s derrière un VPN ne se voyait qu'au banc. Les octets
+/// reçus sont datés et rendus à leur échéance, sans attendre ceux d'avant :
+/// un aller-retour coûte `2 × delai`, quel que soit le volume en vol.
+pub async fn relais_a_latence(port_cible: u16, delai: std::time::Duration) -> u16 {
+    let ecoute = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = ecoute.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((client, _)) = ecoute.accept().await {
+            let Ok(serveur) = tokio::net::TcpStream::connect(("127.0.0.1", port_cible)).await
+            else {
+                continue;
+            };
+            let _ = client.set_nodelay(true);
+            let _ = serveur.set_nodelay(true);
+            let (cr, cw) = client.into_split();
+            let (sr, sw) = serveur.into_split();
+            retarder(cr, sw, delai);
+            retarder(sr, cw, delai);
+        }
+    });
+    port
+}
+
+/// Un sens du relais à latence : lit, date, rend à l'échéance.
+fn retarder(
+    mut de: tokio::net::tcp::OwnedReadHalf,
+    mut vers: tokio::net::tcp::OwnedWriteHalf,
+    delai: std::time::Duration,
+) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; 64 * 1024];
+        while let Ok(n) = de.read(&mut buf).await {
+            if n == 0
+                || tx
+                    .send((tokio::time::Instant::now() + delai, buf[..n].to_vec()))
+                    .is_err()
+            {
+                break;
+            }
+        }
+    });
+    tokio::spawn(async move {
+        while let Some((echeance, octets)) = rx.recv().await {
+            tokio::time::sleep_until(echeance).await;
+            if vers.write_all(&octets).await.is_err() {
+                break;
+            }
+        }
+        let _ = vers.shutdown().await;
+    });
 }
 
 // ---------- Système de fichiers SFTP factice en mémoire ----------
@@ -821,6 +1065,16 @@ pub fn parent_de(chemin: &str) -> &str {
     chemin.rsplit_once('/').map_or("", |(a, _)| a)
 }
 
+/// Un fichier sous un dossier `lent` fait attendre chaque lecture et chaque
+/// écriture : le serveur traitant une requête après l'autre, le client a le
+/// temps d'en mettre d'autres en vol, que l'observation SFTP compte. Cinq
+/// millisecondes valent cent fois l'écart d'ordonnancement d'une boucle locale.
+async fn ralentir(chemin: &str) {
+    if chemin.contains("/lent") {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
 /// Le nom que ce serveur a donné à une poignée (`fs:<chemin>`, `fsdir:<chemin>`,
 /// `file`, `dir`). russh-sftp 4 transporte les poignées en octets opaques
 /// (`SftpHandle`) et non plus en `String` ; celles d'ici sont toujours du texte
@@ -910,6 +1164,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
         let agrandi = self.petit_agrandi;
         async move {
             if let Some(chemin) = handle.strip_prefix("fs:") {
+                ralentir(chemin).await;
                 let Some(contenu) = fs_lire(chemin) else {
                     return Err(StatusCode::NoSuchFile);
                 };
@@ -983,6 +1238,7 @@ impl russh_sftp::server::Handler for TestSftpSession {
         let handle = nom_de_poignee(&handle);
         async move {
             if let Some(chemin) = handle.strip_prefix("fs:") {
+                ralentir(chemin).await;
                 let mut g = fs_fichiers();
                 let Some(f) = g.as_mut().unwrap().get_mut(chemin) else {
                     return Err(StatusCode::NoSuchFile);
@@ -1373,6 +1629,7 @@ pub struct ServeurDeTest {
     pub rafale_finie: Arc<std::sync::atomic::AtomicBool>,
     pub fermetures: Arc<std::sync::atomic::AtomicUsize>,
     pub sous_systemes_sftp: Arc<std::sync::atomic::AtomicUsize>,
+    pub sftp: ObservationSftp,
 }
 
 /// Démarre un serveur de test sur un port libre de 127.0.0.1.
@@ -1394,6 +1651,7 @@ pub async fn lancer_serveur() -> ServeurDeTest {
         rafale_finie: server.rafale_finie.clone(),
         fermetures: server.fermetures.clone(),
         sous_systemes_sftp: server.sous_systemes_sftp.clone(),
+        sftp: server.sftp.clone(),
     };
     tokio::spawn(async move {
         let _ = server.run_on_socket(config, &listener).await;

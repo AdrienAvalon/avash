@@ -11,6 +11,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// en dessous, la progression est fine mais les allers-retours coutent.
 const CHUNK: usize = 64 * 1024;
 
+/// Écritures SFTP en vol par fichier (voir `SftpHandle::sous_systeme`).
+const ECRITURES_EN_VOL: usize = 16;
+
 /// Nom du fichier temporaire d'un téléchargement : `rapport.pdf.part`.
 fn chemin_partiel(local: &Path) -> PathBuf {
     let mut nom = local.as_os_str().to_owned();
@@ -93,26 +96,40 @@ impl SftpHandle {
 
     async fn sous_systeme(session: &mut AvashSession) -> Result<SftpSession> {
         let channel = session.open_sftp_channel().await?;
-        // Une requête à la fois par fichier, en lecture comme en écriture.
-        // russh-sftp 4 lit et écrit en avance (seize requêtes en vol par
+        // Une lecture à la fois par fichier, seize écritures en vol.
+        //
+        // Lectures : russh-sftp 4 lit en avance (seize requêtes en vol par
         // fichier, par défaut) ; or le parallélisme est déjà fait ici, par
-        // bandes, et la reprise repose sur ce qu'on sait acquitté : la carte
-        // des bandes reçues et le point de contrôle des envois. Avec la
-        // lecture anticipée, une bande débordait sur la suivante (octets relus
-        // dans une bande déjà faite) et une annulation laissait des requêtes
-        // en vol qui faisaient expirer la suivante (trois tests d'intégration
-        // rouges à la montée du 21 novembre 2026).
+        // bandes, et la reprise repose sur ce qu'on sait reçu : la carte des
+        // bandes. Avec la lecture anticipée, une bande débordait sur la
+        // suivante (octets relus dans une bande déjà faite) et une annulation
+        // laissait des requêtes en vol qui faisaient expirer la suivante
+        // (trois tests d'intégration rouges à la montée du 21 novembre 2026,
+        // quatre rejoués le 27 novembre avec les seules lectures anticipées).
+        //
+        // Écritures : le 21 novembre, elles avaient été bridées à une aussi,
+        // par prudence. Audit du 27 novembre 2026 (PR-2) : c'était la cause de
+        // la montée à 1,5 Mo/s derrière un VPN à 40 ms (64 Kio par
+        // aller-retour), contre 10,9 Mo/s mesurés le 4 septembre avec les huit
+        // écritures de russh-sftp 2. Aucun des défauts du 21 novembre ne tient
+        // aux écritures : rejouée avec seize écritures en vol, la suite entière
+        // reste verte, et la reprise d'un envoi n'inscrit sa carte qu'après un
+        // `flush`, qui attend tous les accusés en attente. Une erreur en plein
+        // envoi perd les écritures en vol, que la carte ne promettait pas.
+        // Seize (le défaut de russh-sftp 4) plutôt que huit : 4 Mio montés à
+        // 40 ms d'aller-retour en 0,44 s contre 0,64 s (0,9 Mo/s → 9,5 Mo/s
+        // depuis une écriture à la fois, 3,1 s), test
+        // `un_envoi_sous_latence_garde_plusieurs_ecritures_en_vol`.
         //
         // Taille des écritures : russh-sftp 4 préfère 32 Kio par paquet là où
         // la 2 prenait la limite annoncée par le serveur (ou la taille maximale
-        // du paquet). Avec une seule écriture en vol, 32 Kio multiplierait les
-        // allers-retours par huit : on garde l'ancienne règle en alignant la
-        // préférence sur la taille maximale du paquet, le serveur restant
-        // maître par `limits@openssh.com`.
+        // du paquet). On garde l'ancienne règle en alignant la préférence sur
+        // la taille maximale du paquet, le serveur restant maître par
+        // `limits@openssh.com` ; les blocs d'Avash font 64 Kio (`CHUNK`).
         let defaut = russh_sftp::client::Config::default();
         let reglages = russh_sftp::client::Config {
             max_concurrent_reads: 1,
-            max_concurrent_writes: 1,
+            max_concurrent_writes: ECRITURES_EN_VOL,
             max_write_packet_len: defaut.max_packet_len,
             ..defaut
         };
@@ -274,8 +291,8 @@ impl SftpHandle {
     ///
     /// `File` de russh-sftp n'émet **qu'une** requête `SSH_FXP_READ` à la fois
     /// et attend sa réponse : le débit descendant plafonnait donc à
-    /// `CHUNK / aller-retour`. La montée, elle, est déjà pipelinée par la
-    /// bibliothèque (huit écritures en vol).
+    /// `CHUNK / aller-retour`. La montée, elle, est pipelinée par la
+    /// bibliothèque (`ECRITURES_EN_VOL` écritures en vol par fichier).
     ///
     /// Mesuré contre un vrai `internal-sftp` d'OpenSSH, sur 8 Mio
     /// (`examples/sftp_probe.rs`, latence introduite par un relais qui modélise
@@ -1189,10 +1206,11 @@ impl SftpHandle {
 
     /// Téléversement d'un fichier, annulable, repris là où il s'était arrêté.
     ///
-    /// Une seule écriture après l'autre, **pas** de bandes : `File` de
-    /// russh-sftp pipeline déjà huit écritures, et la mesure (voir la feuille
-    /// de route, axe 3) a tranché contre huit descripteurs en parallèle,
-    /// quatre fois plus lents en réseau local pour 1,2 × à 40 ms d'aller-retour.
+    /// Un seul descripteur, **pas** de bandes : `File` de russh-sftp tient
+    /// déjà `ECRITURES_EN_VOL` écritures en vol (une seule du 21 au 27 novembre
+    /// 2026, voir `sous_systeme`), et la mesure (voir la feuille de route,
+    /// axe 3) a tranché contre huit descripteurs en parallèle, quatre fois plus
+    /// lents en réseau local pour 1,2 × à 40 ms d'aller-retour.
     ///
     /// La reprise : une carte `<local>.envoi.reprise` note, à chaque point de
     /// contrôle (toutes les `POINT_DE_CONTROLE` octets, après un vidage), ce

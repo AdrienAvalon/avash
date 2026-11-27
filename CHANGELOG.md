@@ -24,6 +24,17 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   des feuilles construites, que la CSP ne restreint pas
   (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
   police et la chasse fixe du terminal.
+- **La montée SFTP retrouve son débit derrière un VPN.** Audit du 27 novembre
+  2026 (PR-2) : depuis la 0.16.0 et russh-sftp 4, un envoi n'avait plus
+  qu'une écriture en vol, chaque bloc de 64 Kio attendant l'accusé du
+  précédent : 1,5 Mo/s à 40 ms d'aller-retour, plus d'une minute pour 100 Mo.
+  Le bridage visait la lecture anticipée, cause réelle des trois tests rougis
+  le 21 novembre ; les écritures y avaient été prises par prudence. Seize
+  écritures sont de nouveau en vol (4 Mio montés en 0,44 s au lieu de 3,1 s
+  à 40 ms), et la reprise reste juste : sa carte n'est écrite qu'après un
+  vidage qui attend tous les accusés. Deux tests le gardent désormais : l'un
+  compte les écritures en attente de réponse chez le serveur de test, l'autre
+  chronomètre un envoi derrière un relais à latence.
 
 ## [0.16.0] - 2026-11-26
 
