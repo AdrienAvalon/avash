@@ -3040,3 +3040,73 @@ async fn un_serveur_muet_fait_echouer_avash_run_en_temps_borne() {
     assert!(stderr.contains("n'a pas répondu en 1 s"), "{stderr}");
     let _ = std::fs::remove_dir_all(&bac);
 }
+
+// ---------- Débit SFTP sous latence (audit du 27 novembre 2026) ----------
+
+/// Une session SFTP sur un serveur neuf, avec ce que son sous-système observe.
+async fn sftp_observe() -> (avash::sftp::SftpHandle, ObservationSftp) {
+    let serveur = lancer_serveur().await;
+    let session = connect_for_tunnel(serveur.port).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    (sftp, serveur.sftp)
+}
+
+/// Audit du 27 novembre 2026 (PR-2, QT-1) : depuis russh-sftp 4 (commit
+/// `2f50e22`), la session était réglée sur UNE écriture en vol. Chaque bloc de
+/// 64 Kio attendait l'accusé du précédent : 1,5 Mo/s derrière un VPN à 40 ms,
+/// contre 10,9 Mo/s mesurés le 4 septembre avec les huit écritures de
+/// russh-sftp 2. Le serveur de test fait attendre chaque écriture sous
+/// `/fs/lent` ; le client a donc le temps d'en empiler, et l'observation
+/// compte celles qui attendent leur réponse, sans horloge.
+#[tokio::test]
+async fn l_envoi_garde_plusieurs_ecritures_en_vol() {
+    let contenu = motif(2 * 1024 * 1024, 7);
+    let local = dossier_temp("ecritures-en-vol").join("gros.bin");
+    std::fs::write(&local, &contenu).unwrap();
+    let (sftp, obs) = sftp_observe().await;
+    let n = sftp
+        .upload_reprise(&local, "/fs/lent/ecritures.bin", true, None, |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(n as usize, contenu.len());
+    assert_eq!(fs_lire("/fs/lent/ecritures.bin").unwrap(), contenu);
+    let max = obs.max_ecritures_en_vol();
+    assert!(
+        max >= 4,
+        "{max} écriture(s) en vol à la fois : la montée attend chaque accusé"
+    );
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
+
+/// Le même défaut, vu comme l'utilisateur le voit : derrière un relais qui
+/// retarde chaque sens de 20 ms (40 ms d'aller-retour, le VPN du banc), 4 Mio
+/// montés une écriture de 64 Kio à la fois coûtent au moins 64 allers-retours
+/// (2,6 s). Pipelinés par huit, une dizaine. Le seuil de 24 allers-retours
+/// laisse un facteur deux de chaque côté : la charge d'un exécuteur ne peut que
+/// ralentir, jamais faire passer un envoi séquentiel sous ce seuil.
+#[tokio::test]
+async fn un_envoi_sous_latence_garde_plusieurs_ecritures_en_vol() {
+    const ALLER_RETOUR: std::time::Duration = std::time::Duration::from_millis(40);
+    let contenu = motif(4 * 1024 * 1024, 8);
+    let local = dossier_temp("envoi-latence").join("gros.bin");
+    std::fs::write(&local, &contenu).unwrap();
+    let port = spawn_test_sshd().await;
+    let relais = relais_a_latence(port, ALLER_RETOUR / 2).await;
+    let session = connect_for_tunnel(relais).await;
+    let sftp = avash::sftp::SftpHandle::open(session).await.unwrap();
+    let depart = std::time::Instant::now();
+    let n = sftp
+        .upload_reprise(&local, "/fs/latence/envoi.bin", true, None, |_, _| {})
+        .await
+        .unwrap();
+    let duree = depart.elapsed();
+    assert_eq!(n as usize, contenu.len());
+    assert_eq!(fs_lire("/fs/latence/envoi.bin").unwrap(), contenu);
+    assert!(
+        duree < ALLER_RETOUR * 24,
+        "4 Mio montés en {duree:?} à 40 ms d'aller-retour : une écriture à la fois"
+    );
+    let _ = std::fs::remove_dir_all(local.parent().unwrap());
+    sftp.close().await.unwrap();
+}
