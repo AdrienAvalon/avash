@@ -49,7 +49,7 @@ USAGE:
 
   --mire <HZ>  pousse une image plein écran neuve HZ fois par seconde, au lieu
                d'un rectangle de bruit toutes les 100 ms : la charge du banc
-               d'affichage (e2e/mesures/rdp.spec.js).
+               d'affichage (e2e/banc/rdp.spec.js).
 ";
 
 #[tokio::main(flavor = "current_thread")]

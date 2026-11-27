@@ -43,6 +43,32 @@ npx wdio run wdio.conf.js --spec specs/rdp.spec.js   # un seul fichier
 > Après toute modification du front, **recompiler `avash-ui`** : le binaire release
 > embarque `web/dist`. Un simple `vite build` ne suffit pas pour l'E2E.
 
+## Banc de mesures (`banc/`, hors de la suite)
+
+Le même harnais pilote le banc de mesures, mais ce n'est pas un test : aucune
+assertion sur les chiffres, et ses fichiers (`banc/*.spec.js`,
+`wdio.banc.conf.js`) ne sont ni dans `npm test` ni dans le compteur de
+scénarios. Il rejoue l'usage réel (démarrage, frappe, `cat` de 50 Mo, dix
+sessions mixtes puis 20 et 30, bureau à distance, SFTP, endurance) et verse
+des échantillons bruts dans un JSON que `banc/comparer.js` juge.
+
+```bash
+# Depuis la racine, machine au repos. Ligne de base de l'arbre courant :
+node scripts/banc.mjs --jeu rapide
+# Deux versions, construites chacune dans son worktree, mesurées en alternance :
+node scripts/banc.mjs --base v0.16.0 --tete HEAD --jeu complet --repetitions 5
+# Avec un xrdp et un Windows réels (mots de passe par l'environnement) :
+BANC_XRDP=127.0.0.1:3390:essai BANC_XRDP_MDP=… node scripts/banc.mjs --jeu complet
+```
+
+Le harnais lit le binaire à piloter dans `AVASH_E2E_APP` (par défaut celui de
+`target/release`) : c'est ainsi que le lanceur mesure deux versions avec le
+harnais de l'arbre courant. Les binaires de banc vivent dans
+`~/.cache/avash-banc` (Windows : `%LOCALAPPDATA%\avash-banc`) et n'en sortent
+pas : sous Windows, ils embarquent le serveur WebDriver. Conception et choix :
+`docs/superpowers/specs/2026-11-27-banc-et-audit-design.md` ; seuils et
+garde de CI : `docs/qualite.md`, « Banc de performance ».
+
 ## Isolation
 
 `wdio.conf.js` (`onPrepare`) crée un `HOME`/`XDG_CONFIG_HOME` temporaire et y **sème**

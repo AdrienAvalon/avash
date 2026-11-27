@@ -177,7 +177,7 @@ impl DecodingContext {
         // Une tuile de 64×64 ne dépend d'aucune autre ; c'était pourtant tout
         // le décodage, sur un seul cœur, qui plafonnait un bureau RemoteFX
         // plein écran à 13 images par seconde (mesuré par la mire du banc
-        // d'affichage, e2e/mesures/rdp.spec.js). La recopie s'arrête à la
+        // d'affichage, e2e/banc/rdp.spec.js). La recopie s'arrête à la
         // première tuile en erreur, comme la boucle d'origine : l'image
         // garde les tuiles d'avant, et l'erreur rendue est la même.
         let rectangles: Vec<InclusiveRectangle> =

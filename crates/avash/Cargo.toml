@@ -125,3 +125,7 @@ nix = { version = "0.32", default-features = false, features = ["term", "fs"] }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "config_ssh"
+harness = false

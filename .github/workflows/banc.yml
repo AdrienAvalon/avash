@@ -1,0 +1,168 @@
+name: Banc
+
+# Banc de mesures A/B (scripts/banc.mjs) : la base de la PR et sa tête, construites
+# en profil de publication et mesurées en alternance sur le MÊME exécuteur, sous
+# Linux et sous Windows. Il échoue sur une régression d'une métrique gardée
+# (e2e/banc/seuils.json) au-delà de son seuil et hors du bruit. La nuit, il
+# compare `main` à la dernière version publiée et fait tourner l'endurance
+# (fuite de mémoire).
+#
+# Les binaires mesurés ne quittent jamais l'exécuteur : seuls les résultats
+# JSON et le tableau de comparaison sont versés, et les exécutables sont
+# retirés du cache de compilation avant sa sauvegarde (sous Windows, ils
+# portent le serveur WebDriver embarqué).
+#
+# Conception : docs/superpowers/specs/2026-11-27-banc-et-audit-design.md.
+
+concurrency:
+  group: banc-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "site/**"
+      - "packaging/**"
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+    inputs:
+      a_vide:
+        description: "Calibration : la tête contre elle-même, 10 répétitions"
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  banc:
+    name: Banc (A/B, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # La base de la PR et le dernier tag doivent être résolubles.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/avash-banc/cible
+            ${{ runner.temp }}/avash-banc/cible-sidecar
+          key: banc-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rdp-sidecar/Cargo.lock') }}
+          restore-keys: banc-${{ runner.os }}-
+
+      - name: Dépendances système + WebDriver (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf \
+            webkit2gtk-driver xvfb socat
+          cargo install tauri-driver --version 2.0.6 --locked
+          # Comme dans ci.yml : les ports fixes des serveurs de test hors de
+          # la plage des connexions sortantes.
+          sudo sysctl -w net.ipv4.ip_local_reserved_ports=33890-33915,35900-35910
+      - name: OpenSSH Server et shell bash (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+          New-Item -Path HKLM:\SOFTWARE\OpenSSH -Force | Out-Null
+          New-ItemProperty -Path HKLM:\SOFTWARE\OpenSSH -Name DefaultShell `
+            -Value "C:\Program Files\Git\bin\bash.exe" -PropertyType String -Force | Out-Null
+
+      - name: Serveur RDP de test et dépendances du harnais
+        shell: bash
+        run: |
+          cargo build --locked --release --manifest-path test-rdp-server/Cargo.toml
+          openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=localhost" \
+            -keyout test-rdp-server/key.pem -out test-rdp-server/cert.pem 2>/dev/null
+          (cd e2e && npm ci)
+
+      - name: Références à comparer
+        id: refs
+        shell: bash
+        env:
+          EVENEMENT: ${{ github.event_name }}
+          A_VIDE: ${{ inputs.a_vide }}
+          BASE_PR: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENEMENT" = "pull_request" ]; then
+            echo "base=$BASE_PR" >> "$GITHUB_OUTPUT"; echo "repetitions=3" >> "$GITHUB_OUTPUT"
+          elif [ "$A_VIDE" = "true" ]; then
+            echo "base=HEAD" >> "$GITHUB_OUTPUT"; echo "repetitions=10" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=$(git describe --tags --abbrev=0 --match 'v*' HEAD)" >> "$GITHUB_OUTPUT"
+            echo "repetitions=3" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Banc A/B (jeu rapide)
+        shell: bash
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          REPETITIONS: ${{ steps.refs.outputs.repetitions }}
+          # Sous Windows, le bruit des exécuteurs peut rendre la garde aveugle :
+          # elle devient alors informative (docs/qualite.md, « Banc »).
+          INFORMATIF: ${{ runner.os == 'Windows' && '--informatif' || '' }}
+        run: |
+          node scripts/banc.mjs --base "$BASE" --tete HEAD --jeu rapide \
+            --repetitions "$REPETITIONS" --cache "$RUNNER_TEMP/avash-banc" \
+            --sortie banc-sortie --forcer $INFORMATIF
+      - name: Tableau dans le résumé du job
+        if: always()
+        shell: bash
+        run: |
+          if [ -f banc-sortie/comparaison.md ]; then
+            cat banc-sortie/comparaison.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # La nuit : l'endurance de `main` (30 minutes, 10 sessions), jugée sur la
+      # pente de la mémoire (seuils.json, « absolus »).
+      - name: Endurance (nuit)
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          node scripts/banc.mjs --tete HEAD --jeu endurance --repetitions 1 \
+            --cache "$RUNNER_TEMP/avash-banc" --sortie banc-endurance --forcer
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: banc-${{ runner.os }}
+          path: |
+            banc-sortie/*.json
+            banc-sortie/*.md
+            banc-endurance/*.json
+          if-no-files-found: ignore
+
+      # Avant la sauvegarde du cache (étape « post ») : aucun exécutable final
+      # ne doit y entrer, et sous Windows ils embarquent le serveur WebDriver.
+      - name: Exécutables retirés du cache
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/avash-banc/bin" "$RUNNER_TEMP/avash-banc/arbres"
+          for c in cible cible-sidecar; do
+            d="$RUNNER_TEMP/avash-banc/$c/release"
+            [ -d "$d" ] || continue
+            find "$d" -maxdepth 2 -type f \( -name 'avash-ui*' -o -name 'avash_ui*' -o -name 'avash-rdp*' \
+              -o -name 'avash_rdp*' -o -name 'banc_sftp*' \) -delete
+          done

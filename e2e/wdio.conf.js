@@ -56,7 +56,13 @@ const chemin = (p) => (WINDOWS ? p.replace(/\\/g, "/") : p);
 // Windows, sur demande ailleurs.
 export const EMBARQUE = WINDOWS || !!process.env.E2E_EMBARQUE;
 const PORT_EMBARQUE = 4445;
-const APP = join(import.meta.dirname, "..", "target", "release", WINDOWS ? "avash-ui.exe" : "avash-ui");
+// Le binaire piloté : celui de l'arbre par défaut, ou celui que désigne
+// AVASH_E2E_APP (chemin absolu). Le banc de mesures (scripts/banc.mjs) s'en
+// sert pour mesurer deux versions construites chacune dans son worktree, avec
+// le harnais de la tête. Le processus RDP se cherche à côté du binaire, comme
+// pour l'application installée.
+export const APP = process.env.AVASH_E2E_APP
+  ?? join(import.meta.dirname, "..", "target", "release", WINDOWS ? "avash-ui.exe" : "avash-ui");
 
 // L'environnement de l'application pilotée, quel que soit le chemin qui la
 // lance. AVASH_HOME en plus de HOME/XDG_CONFIG_HOME : sous Windows, l'API qui
@@ -123,6 +129,12 @@ async function lancerAppEmbarquee() {
   }
   app.kill();
   throw new Error("le serveur WebDriver embarqué n'a jamais répondu (60 s)");
+}
+
+/** PID de l'application lancée par le harnais (chemin embarqué), ou null :
+ *  le banc de mesures en relève la mémoire et le processeur, page comprise. */
+export function pidAppEmbarquee() {
+  return appEmbarquee?.pid ?? null;
 }
 
 /** Arrête l'application lancée par le harnais, et attend sa sortie. */
@@ -432,7 +444,7 @@ export const config = {
     }],
   ],
   capabilities: [
-    { "tauri:options": { application: WINDOWS ? "../target/release/avash-ui.exe" : "../target/release/avash-ui" }, "wdio:maxInstances": 1 },
+    { "tauri:options": { application: APP }, "wdio:maxInstances": 1 },
   ],
   logLevel: "error",
   framework: "mocha",

@@ -380,6 +380,7 @@ run "docs : règle des portes cohérente avec le hook" "$ROOT" ./scripts/tests/p
 # compteur. Le contrôle prend la somme des `it(` de e2e/specs pour vérité et
 # exige que ces deux fichiers la citent (les autres compteurs vivent ailleurs).
 run "docs : compteur de scénarios e2e à jour" "$ROOT" ./scripts/tests/compteur-scenarios-e2e.sh
+run "e2e : binaire désigné, banc hors de la suite" "$ROOT" ./scripts/tests/e2e-binaire-designe.sh
 # e2e/README.md attribuait le serveur RDP de test à `onPrepare` (« démarre aussi
 # un serveur RDP local 33899 »), alors qu'onPrepare ne monte que le sshd et que
 # chaque spec RDP/VNC lance son propre serveur ; et « En CI (E2E_NO_RDP=1)… »
@@ -533,7 +534,11 @@ run "sshd vérifié au démarrage (e2e)" "$ROOT" node --test scripts/tests/e2e-s
 # mkdtempSync dans /tmp : sur un tmpfs, chaque run consommait de la mémoire vive
 # (clé privée cliente résiduelle, ~6 Mo de données par run) jusqu'au redémarrage.
 run "nettoyage des temporaires (e2e)" "$ROOT" node --test scripts/tests/e2e-nettoyage-temporaires.mjs
-run "lint"               "$WEB" npx eslint .
+# Le banc de mesures ne juge pas les chiffres qu'il relève, mais ce qu'il
+# calcule (statistiques, verdict, ordre des exécutions) doit être juste : un
+# comparateur faux bloquerait une PR saine ou laisserait passer une régression.
+run "banc de mesures (calculs)" "$ROOT" node --test scripts/tests/banc-commun.test.mjs scripts/tests/banc-comparer.test.mjs scripts/tests/banc-lanceur.test.mjs
+run "lint"             "$WEB" npx eslint .
 # Le CSS vit dans index.html : stylelint le lit à travers postcss-html.
 run "lint css"           "$WEB" npx stylelint index.html
 # knip : fichiers jamais importés, exports jamais lus, dépendances jamais

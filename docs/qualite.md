@@ -98,6 +98,39 @@ scripts/parc-rdp.sh up tous && CONFORMITE_RDP=1 PARC=tous ./check.sh
 ```
 
 
+### Banc de performance : mesurer avant de croire
+
+Depuis le 27 novembre 2026, `scripts/banc.mjs` mesure la vraie application
+sur des scénarios qui rejouent l'usage du mainteneur (dix sessions mixtes et
+plus), sous Linux et sous Windows, et compare deux versions construites en
+profil de publication et mesurées **en alternance sur la même machine**.
+Détail des scénarios et usage : `e2e/README.md`, « Banc de mesures ».
+
+**Le verdict.** Une métrique régresse quand l'écart des médianes dépasse son
+seuil (10 % par défaut, `e2e/banc/seuils.json`) **et** que les dispersions
+(premier et troisième quartiles) ne se chevauchent pas. Un seul des deux
+critères ne suffit pas : sur une machine partagée, une médiane bouge de 15 %
+sans que rien n'ait changé. Mesurée contre elle-même (trois répétitions, poste
+de développement), la 0.16.0 donne « bruit » sur les dix-sept métriques, avec
+des écarts de médiane jusqu'à 17 % sur la frappe à dix sessions : c'est
+pour cela qu'un écart seul ne bloque rien.
+
+**En CI.** Le workflow « Banc » joue le jeu rapide en A/B (base de la PR
+contre sa tête) sur chaque PR qui touche du code, sous Linux et sous Windows,
+et publie le tableau dans le résumé du job. Seules les métriques **gardées**
+(`garde: true` dans `seuils.json`) bloquent ; elles le sont après calibration
+sur les exécuteurs (la tête contre elle-même, dix répétitions, déclenchement
+manuel `a_vide`), avec un seuil de deux fois le plus grand écart vu à vide.
+Sous Windows, si le bruit des exécuteurs rend la garde aveugle, le job est
+informatif. La nuit, `main` est comparée à la dernière version publiée, et
+l'endurance (dix sessions pendant trente minutes) échoue si la mémoire monte
+de plus de `absolus["S8/pente-memoire"].max` Mo par heure.
+
+**Ce qui ne quitte pas la machine.** Les binaires de banc (sous Windows, ils
+embarquent le serveur WebDriver) restent dans le cache de l'exécuteur ; seuls
+les JSON et le tableau sont versés, et les exécutables sont retirés du cache
+de compilation avant sa sauvegarde.
+
 ### Couverture et mutations : le workflow hebdomadaire
 
 `.github/workflows/qualite.yml` (chaque lundi, ou à la demande) mesure ce que
