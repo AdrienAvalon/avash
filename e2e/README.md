@@ -68,7 +68,7 @@ VNC sur `35900` (`vnc.spec.js`, mot de passe `test`, image connue qui réagit
 aux entrées) et `35903`/`35904` (`vnc-tls`, VeNCrypt derrière son terminateur
 TLS).
 
-## Couverture (90 scénarios, 40 fichiers)
+## Couverture (93 scénarios, 40 fichiers)
 
 | Fichier | Ce qui est vérifié |
 |---|---|

@@ -117,7 +117,7 @@
       <div class="conteneur">
         <h2>Tested on every commit</h2>
         <div class="chiffres">
-          <div class="chiffre"><b>2091</b><span>tests, from the Rust core to the real application</span></div>
+          <div class="chiffre"><b>2094</b><span>tests, from the Rust core to the real application</span></div>
           <div class="chiffre"><b>2</b><span>independent CI pipelines</span></div>
           <div class="chiffre"><b>3</b><span>operating systems built and tested</span></div>
           <div class="chiffre"><b>10</b><span>fuzzing targets</span></div>
@@ -170,8 +170,8 @@ sudo dnf install ./Avash-*.x86_64.rpm       # Fedora</code></pre>
 
         <h3>Verify what you downloaded</h3>
 <pre><code>sha256sum -c SHA256SUMS                                          # integrity
-gh attestation verify Avash_*_amd64.AppImage --repo AdrienAvalon/avash   # provenance</code></pre>
-        <p class="note">The second command proves the file comes from this repository, at this commit, built by our CI (Sigstore attestation).</p>
+gh attestation verify Avash_x.y.z_amd64.AppImage --repo AdrienAvalon/avash --signer-workflow AdrienAvalon/avash/.github/workflows/release.yml --source-ref refs/tags/vx.y.z --deny-self-hosted-runners   # provenance</code></pre>
+        <p class="note">The second command proves the file was attested (Sigstore) by this repository's release workflow, run on this version's tag on a GitHub-hosted runner. Replace <code>x.y.z</code> with the version you downloaded.</p>
 
         <h3>First launch, in three moves</h3>
         <div class="deux">
