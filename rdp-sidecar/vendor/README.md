@@ -330,7 +330,7 @@ lit 64 bits d'un coup et compte une série de zéros ou de uns d'une seule
 instruction, là où l'original passait par des tranches `bitvec` (`split_at`,
 `leading_ones`, `load_be`) à chaque lecture. Le 26 novembre 2026, le profil
 (`perf`) du processus RDP sur un bureau RemoteFX plein écran qui change à
-chaque image (la mire du banc, `e2e/mesures/rdp.spec.js`) y mettait plus de la
+chaque image (la mire du banc, aujourd'hui `e2e/banc/rdp.spec.js`) y mettait plus de la
 moitié du temps ; sur une tuile dense, le décodage passe de 108 à 55 µs.
 
 Le comportement est celui d'origine au bit près, flux tronqué ou hostile

@@ -1,28 +1,11 @@
 #!/usr/bin/env bash
-# Mesure le front sur la vraie application, avec le harnais de la suite bout
-# en bout : démarrage (chargement et exécution du paquet JavaScript) et
-# latence à la frappe sur la session SSH locale. Les chiffres sortent sur la
-# console et dans e2e/mesures/resultat.json ; ils se reportent dans
-# docs/feuille-de-route.md (axe 3 et tableau des indicateurs).
+# Mesures sur la vraie application : remplacé le 27 novembre 2026 par le banc
+# de mesures (scripts/banc.mjs, e2e/banc/), qui mesure le démarrage, la frappe,
+# le débit du terminal, dix sessions mixtes et le bureau à distance, sous Linux
+# comme sous Windows, et compare deux versions. Ce script garde l'ancien point
+# d'entrée : une ligne de base de l'arbre courant, jeu rapide.
 #
-# Usage : scripts/mesures-front.sh
-#
-# À lancer après un build release, machine au repos : une compilation en
-# parallèle fausse tout ce qui suit.
+# Usage : scripts/mesures-front.sh [options de scripts/banc.mjs]
 set -euo pipefail
 cd "$(dirname "$0")/.."
-[ -x target/release/avash-ui ] || {
-  echo "target/release/avash-ui absent : cargo build --release -p avash-ui d'abord" >&2
-  exit 1
-}
-[ -x test-rdp-server/target/release/test-rdp-server ] || {
-  echo "test-rdp-server absent : cargo build --release --manifest-path test-rdp-server/Cargo.toml d'abord" >&2
-  exit 1
-}
-charge="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)"
-if [ "${charge%%.*}" -ge 4 ]; then
-  echo "charge moyenne à $charge : la machine n'est pas au repos, les chiffres seraient faux" >&2
-  exit 1
-fi
-cd e2e
-xvfb-run -a -s "-screen 0 1440x900x24" npx wdio run wdio.mesures.conf.js
+exec node scripts/banc.mjs --jeu rapide --repetitions 1 "$@"

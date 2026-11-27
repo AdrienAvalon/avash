@@ -7,6 +7,25 @@ fn main() {
     let source: Vec<u8> = ligne.repeat(20_000).into_bytes();
     let total = source.len();
 
+    // Ligne récoltée par le banc (scripts/banc.mjs) : blocs de 64 octets, le
+    // cas le plus défavorable, en 20 échantillons (Mo/s, plus c'est mieux).
+    let mut echantillons = Vec::new();
+    for _ in 0..20 {
+        let mut d = avash_ui_lib::commands::Utf8Stream::default();
+        let t = Instant::now();
+        for bloc in source.chunks(64) {
+            std::hint::black_box(d.push(bloc));
+        }
+        echantillons.push(format!(
+            "{:.1}",
+            total as f64 / t.elapsed().as_secs_f64() / 1e6
+        ));
+    }
+    println!(
+        r#"BANC {{"cle":"M/utf8-blocs-64","unite":"Mo/s","sens":"haut","echantillons":[{}]}}"#,
+        echantillons.join(",")
+    );
+
     for taille in [64usize, 512, 4096, 16384] {
         let mut d = avash_ui_lib::commands::Utf8Stream::default();
         let t = Instant::now();

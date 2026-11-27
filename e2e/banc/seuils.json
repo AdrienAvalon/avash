@@ -1,0 +1,7 @@
+{
+  "defaut": { "seuil": 0.1 },
+  "metriques": {},
+  "absolus": {
+    "S8/pente-memoire": { "max": 60 }
+  }
+}
