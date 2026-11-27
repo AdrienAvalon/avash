@@ -66,6 +66,12 @@ tauri-plugin-wdio-webdriver = { version = "=1.5.0", optional = true }
 # OpenSSH). Même transport que l'auth de la caisse `avash`. Cible Windows seule.
 [target.'cfg(windows)'.dependencies]
 pageant = "0.2"
+# Réglages de la vue WebView2 que Tauri n'expose pas : raccourcis de
+# navigateur coupés (F5 et Ctrl+R rechargeaient l'interface) et reprise d'un
+# moteur de rendu arrêté (audit du 27 novembre 2026, WI-1 et WI-12). Mêmes
+# versions que celles de wry, déjà dans le graphe : rien de nouveau n'entre.
+webview2-com = "0.39"
+windows-core = "0.62"
 
 [dev-dependencies]
 # Moteur d'exécution factice de Tauri : de quoi construire un `State` et un

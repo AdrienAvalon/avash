@@ -367,7 +367,9 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "webview2-com",
  "whoami",
+ "windows-core",
  "zeroize",
 ]
 

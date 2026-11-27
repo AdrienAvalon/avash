@@ -7,7 +7,8 @@
 //! pas.
 
 use super::sessions::{
-    enregistrer_session, lancer_relais, Enregistrement, SessionHandle, SessionStore, SESSION_EPOCH,
+    enregistrer_session_de_la_page, lancer_relais, page_courante, Enregistrement, SessionHandle,
+    SessionStore, SESSION_EPOCH,
 };
 use avash::Verrou as _;
 use std::sync::atomic::Ordering;
@@ -38,6 +39,7 @@ pub async fn serie_open<R: tauri::Runtime>(
     vitesse: u32,
 ) -> Result<String, String> {
     state.en_cours.verrou().insert(id);
+    let page = page_courante(&state);
     // L'ouverture touche au pilote (et, sous Windows, au registre) : hors des
     // fils du runtime.
     let ouverture =
@@ -46,8 +48,11 @@ pub async fn serie_open<R: tauri::Runtime>(
     let session = match ouverture {
         Ok(s) => s,
         Err(e) => {
-            state.en_cours.verrou().remove(&id);
-            state.annules.verrou().remove(&id);
+            // Page rechargée entre-temps : voir `open_on_target`.
+            if page_courante(&state) == page {
+                state.en_cours.verrou().remove(&id);
+                state.annules.verrou().remove(&id);
+            }
             return Err(e);
         }
     };
@@ -56,9 +61,10 @@ pub async fn serie_open<R: tauri::Runtime>(
     let (resize, _resize_rx) = tokio::sync::mpsc::channel::<(u32, u32)>(1);
     let epoch = SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
     let enregistreur: Enregistrement = std::sync::Arc::new(Mutex::new(None));
-    enregistrer_session(
+    enregistrer_session_de_la_page(
         &state,
         id,
+        page,
         SessionHandle {
             securite: None,
             epoch,
