@@ -1,6 +1,6 @@
 // Connexion SSH RÉELLE : double-clic sur l'hôte « test-ssh » semé, servi par le
 // sshd local (auth par clé). Valide toute la chaîne UI → russh → PTY.
-import { attendreSessionLive, doubleCliquerHote, ecouterSortiePty, fermerOngletActif, sortiePty, taperDansLeTerminal } from "./helpers.js";
+import { attendreSessionLive, doubleCliquerHote, ecouterSortiePty, fermerOngletActif, resultatDeEcho, sortiePty, taperDansLeTerminal } from "./helpers.js";
 import { EMBARQUE } from "../wdio.conf.js";
 
 describe("SSH — connexion réelle (sshd local)", () => {
@@ -83,6 +83,36 @@ describe("SSH — connexion réelle (sshd local)", () => {
     // à la classe `open` (voir `sftpToggle` et sftp.spec.js), pas à sa
     // visibilité, que WebDriver voit vraie même panneau fermé.
     expect((await $("#sftp-panel").getAttribute("class")) ?? "").not.toContain("open");
+  });
+
+  // Audit du 27 novembre 2026 (QT-4) : la reconnexion après une coupure, geste
+  // quotidien après une veille ou une chute de VPN, n'avait aucun scénario. Le
+  // chemin traverse les gardes délicates (identifiant d'onglet réutilisé,
+  // éviction par époque côté Rust, `pty-closed` d'une session terminée) : le
+  // serveur ferme la session (`exit`), l'onglet passe à « terminé », Entrée
+  // reconnecte dans le même onglet, et la frappe repart vers la nouvelle
+  // session, pas vers la morte.
+  it("une session terminée par le serveur se reconnecte à Entrée", async () => {
+    await taperDansLeTerminal("exit");
+    await browser.keys("Enter");
+    await browser.waitUntil(async () => (await $$(".state.closed")).length === 1, {
+      timeout: 10000,
+      timeoutMsg: `l'onglet n'est pas passé à « terminé » après exit ; le terminal disait :\n${(await sortiePty()).slice(-400)}`,
+    });
+    expect((await $$(".state.live")).length).toBe(0);
+    // Le focus est resté sur le terminal de l'onglet : Entrée y relance.
+    await taperDansLeTerminal("");
+    await browser.keys("Enter");
+    await attendreSessionLive("session SSH reconnectée");
+    // Toujours un seul onglet : la reconnexion réutilise le sien.
+    expect((await $$(".tab")).length).toBe(1);
+    expect((await $$(".state.closed")).length).toBe(0);
+    // La frappe atteint la nouvelle session : l'écho revient. Jeton sans
+    // lettre doublée : la saisie synthétique de WebKitWebDriver en perdait une
+    // (« reconnexion » arrivait « reconexion », vu en écrivant ce scénario).
+    const jeton = "relance7f3b";
+    await taperDansLeTerminal(`echo R${jeton}`);
+    expect(await resultatDeEcho("R", jeton)).toBe(jeton);
   });
 
   // Audit du 12 septembre 2026 (C-front-6) : fermer une session vivante ne

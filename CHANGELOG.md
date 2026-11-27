@@ -263,11 +263,20 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   signer, et les jobs bout en bout Windows et macOS, qui construisent avec
   `--features webdriver`, jouent le contrôle inverse pour que la garde ne
   devienne pas muette à une montée du greffon.
+- **La mutation regarde les chemins exposés au réseau.** Audit du 27 novembre
+  2026 (QT-6) : cargo-mutants ne mutait que `ssh.rs`, `keys.rs`, `secrets.rs`
+  et `lib.rs`. Le workflow « Qualité » mute désormais aussi `sftp.rs`,
+  `journal_commandes.rs` et, dans le processus RDP, `disque.rs`,
+  `empreintes.rs`, `acces_local.rs` et `vnc_tls.rs`, un job par groupe.
 - **Une cible de fuzzing pour l'assemblage du canal graphique et de RemoteFX
   Progressive** (`egfx_progressif`), par la bibliothèque du processus RDP, avec
   des graines tirées des enregistrements de vrais serveurs. Audit du
   27 novembre 2026 (QT-11) : ce code d'Avash n'était secoué que par une
   mutation à graine fixe.
+- **Trois scénarios bout en bout** : une session SSH terminée par le serveur
+  se reconnecte à Entrée dans le même onglet, « Reconnecter » rend le bureau
+  RDP après la coupure, et le bureau RDP affiche bien l'image du serveur, lue
+  pixel par pixel dans le canevas (audit du 27 novembre 2026, QT-4 et QT-13).
 
 ## [0.16.0] - 2026-11-26
 

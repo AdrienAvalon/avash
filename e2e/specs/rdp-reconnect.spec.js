@@ -32,4 +32,19 @@ describe("RDP — overlay de reconnexion à la coupure", () => {
     expect(await $('.rdp-closed [data-act="reconnect"]').isExisting()).toBe(true);
     expect(await $('.rdp-closed [data-act="close"]').isExisting()).toBe(true);
   });
+
+  // Audit du 27 novembre 2026 (QT-4) : le scénario s'arrêtait à la présence
+  // des deux boutons ; personne ne cliquait, rien ne vérifiait que le bureau
+  // revenait. Le serveur repart sur le même port (même certificat, donc même
+  // empreinte TOFU) ; « Reconnecter » ferme l'onglet mort et en ouvre un neuf
+  // vers la même cible, qui doit se connecter et rester seul.
+  it("reconnecter après la coupure rend le bureau", async () => {
+    srv = startRdpServer(PORT);
+    await waitForPort(PORT);
+    await $('.rdp-closed [data-act="reconnect"]').click();
+    await attendreBureauConnecte("le bureau reconnecté");
+    expect(await $(".rdp-closed").isExisting()).toBe(false);
+    expect((await $$(".tab")).length).toBe(1);
+    await $(".rdp-container canvas").waitForExist({ timeout: 10000, timeoutMsg: "aucun canvas après la reconnexion" });
+  });
 });
