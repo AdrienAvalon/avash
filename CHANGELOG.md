@@ -7,23 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
-## [0.16.1] - 2026-11-27
-
 ### Corrigé
 
-- **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
-  couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
-  SSH s'affichait dans la police proportionnelle de l'interface, colonnes
-  décalées, art ASCII et cadres cassés, couleurs du thème absentes. Depuis la
-  0.14.2, les terminaux passent au rendu DOM sous Linux (compositing de
-  WebKitGTK coupé) ; ce rendu met sa police, ses tailles et ses couleurs dans
-  des éléments `<style>` que la politique de sécurité de la page refusait :
-  Tauri y ajoute un nonce, et un nonce fait ignorer `'unsafe-inline'`. Le
-  rendu WebGL de Windows dessine sur un canevas et n'était pas touché. La
-  politique reste telle quelle : le CSS que xterm.js génère est recopié dans
-  des feuilles construites, que la CSP ne restreint pas
-  (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
-  police et la chasse fixe du terminal.
 - **La montée SFTP retrouve son débit derrière un VPN.** Audit du 27 novembre
   2026 (PR-2) : depuis la 0.16.0 et russh-sftp 4, un envoi n'avait plus
   qu'une écriture en vol, chaque bloc de 64 Kio attendant l'accusé du
@@ -96,6 +81,24 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   toutes sessions confondues ; trois sauvegardes lentes sur un serveur
   bloquaient le petit fichier glissé vers un autre. La borne vaut désormais
   par onglet (trois), avec six transferts au plus en tout.
+
+## [0.16.1] - 2026-11-27
+
+### Corrigé
+
+- **Sous Linux, les terminaux retrouvent leur police à chasse fixe et leurs
+  couleurs.** Signalé par le mainteneur sur l'AppImage : le texte des sessions
+  SSH s'affichait dans la police proportionnelle de l'interface, colonnes
+  décalées, art ASCII et cadres cassés, couleurs du thème absentes. Depuis la
+  0.14.2, les terminaux passent au rendu DOM sous Linux (compositing de
+  WebKitGTK coupé) ; ce rendu met sa police, ses tailles et ses couleurs dans
+  des éléments `<style>` que la politique de sécurité de la page refusait :
+  Tauri y ajoute un nonce, et un nonce fait ignorer `'unsafe-inline'`. Le
+  rendu WebGL de Windows dessine sur un canevas et n'était pas touché. La
+  politique reste telle quelle : le CSS que xterm.js génère est recopié dans
+  des feuilles construites, que la CSP ne restreint pas
+  (`web/styles-xterm.ts`). Un scénario bout en bout vérifie désormais la
+  police et la chasse fixe du terminal.
 
 ## [0.16.0] - 2026-11-26
 
