@@ -3411,3 +3411,52 @@ async fn arreter_le_tunnel_termine_ses_relais() {
         .expect("le relais survit à l'arrêt du tunnel");
     assert!(matches!(lu, Ok(0) | Err(_)), "{lu:?}");
 }
+
+/// Audit du 27 novembre 2026 (WI-5) : sous Windows, la copie directe d'un
+/// dossier d'un Linux à un autre échouait pour un seul nom à deux-points,
+/// alors que rien n'est écrit sur le poste. Le relais n'applique plus que la
+/// règle d'évasion de dossier ; le test vaut sur toutes les plateformes.
+#[tokio::test]
+async fn le_relais_accepte_un_nom_a_deux_points() {
+    fs_poser("/fs/wi5-src/1700000000.M1P2.hote:2,S", b"message");
+    let source = sftp_de_test().await;
+    let cible = sftp_de_test().await;
+    source
+        .relayer_dir_vers("/fs/wi5-src", &cible, "/fs/wi5-dst", None, |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        fs_lire("/fs/wi5-dst/1700000000.M1P2.hote:2,S").unwrap(),
+        b"message"
+    );
+    source.close().await.unwrap();
+    cible.close().await.unwrap();
+}
+
+/// Le téléchargement d'un dossier qui porte un nom impossible sous Windows
+/// réussit : le reste arrive, l'entrée est écartée et rendue dans le bilan
+/// (sous Windows), ou téléchargée telle quelle (ailleurs).
+#[tokio::test]
+async fn un_nom_impossible_sous_windows_ne_fait_pas_echouer_le_dossier() {
+    fs_poser("/fs/wi5-dl/propre.txt", b"propre");
+    fs_poser("/fs/wi5-dl/sauvegarde-10:00.tar", b"horodate");
+    let sftp = sftp_de_test().await;
+    let local = dossier_temp("wi5-dl");
+    let bilan = sftp
+        .download_dir_bilan("/fs/wi5-dl", &local, None, |_| {})
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(local.join("propre.txt")).unwrap(), b"propre");
+    if cfg!(windows) {
+        assert_eq!(bilan.ecartes, ["sauvegarde-10:00.tar"]);
+        assert_eq!(bilan.octets, 6);
+    } else {
+        assert_eq!(bilan.ecartes, Vec::<String>::new());
+        assert_eq!(
+            std::fs::read(local.join("sauvegarde-10:00.tar")).unwrap(),
+            b"horodate"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&local);
+    sftp.close().await.unwrap();
+}
