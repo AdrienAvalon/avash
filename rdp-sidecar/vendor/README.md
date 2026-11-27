@@ -216,6 +216,32 @@ Après ce correctif, la séquence franchit la licence et atteint l'échange de
 capacités. Sur ce serveur-là elle échoue ensuite pour une raison qui lui est
 propre, mais elle échoue **en le disant**, au lieu de rester pendue.
 
+## `ironrdp-connector` : les capacités d'affichage du serveur étaient jetées
+
+Dans `src/connection_activation.rs` et `src/connection.rs`, trouvé par l'audit
+du 27 novembre 2026 (PR-1). L'ensemble général de capacités du serveur
+(MS-RDPBCGR 2.2.7.1.1) porte deux drapeaux propres au serveur,
+`suppressOutputSupport` et `refreshRectSupport` : ils disent si le client peut
+lui demander de cesser d'envoyer son affichage (Suppress Output, 2.2.11.3) et
+de le redessiner (Refresh Rect, 2.2.11.2), et la spécification interdit
+d'envoyer l'un ou l'autre à un serveur qui ne les annonce pas. L'amont lisait
+cet ensemble pour la seule version de protocole, puis le jetait.
+
+Sans eux, un bureau masqué derrière un onglet SSH restait décodé à pleine
+cadence : la pause de l'interface ne retenait que l'envoi à la page, et le
+serveur n'en savait rien (300 % d'un cœur au banc, mire masquée). mstsc envoie
+ce PDU à chaque réduction de fenêtre.
+
+Le paquet porté ajoute `DisplayUpdateSupport` (les deux drapeaux, tous deux
+faux en l'absence d'ensemble général, le côté sûr) et la fonction
+`display_update_support`, relevés à chaque activation, réactivation comprise :
+ils sont portés par `ConnectionActivationState::ConnectionFinalization` et
+`Finalized` (champ `display_updates`) et par `ConnectionResult`. Rien d'autre
+ne change dans la séquence. Le processus RDP s'en sert dans `src/cadence.rs`.
+Deux tests dans `connection_activation.rs` (`tests_mises_a_jour_d_affichage`).
+
+À retirer quand l'amont exposera ces drapeaux.
+
 ## `ironrdp-pdu` — ClearCodec refuse toute image d'un vrai serveur
 
 Dans `src/codecs/clearcodec/bands.rs`. Le décodeur d'une barre verticale courte

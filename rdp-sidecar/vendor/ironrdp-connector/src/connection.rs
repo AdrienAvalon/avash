@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::channel_connection::{ChannelConnectionSequence, ChannelConnectionState};
 use crate::connection_activation::{
-    ConnectionActivationFactory, ConnectionActivationSequence, ConnectionActivationState,
+    ConnectionActivationFactory, ConnectionActivationSequence, ConnectionActivationState, DisplayUpdateSupport,
 };
 use crate::license_exchange::{LicenseExchangeSequence, NoopLicenseCache};
 use crate::{
@@ -28,6 +28,9 @@ pub struct ConnectionResult {
     pub share_id: u32,
     pub static_channels: StaticChannelSet,
     pub desktop_size: DesktopSize,
+    /// Suppress Output et Refresh Rect permis par le serveur (ajout d'Avash,
+    /// voir `DisplayUpdateSupport`).
+    pub display_updates: DisplayUpdateSupport,
     pub enable_server_pointer: bool,
     pub pointer_software_rendering: bool,
     /// Factory for producing connection activation sequences.
@@ -709,6 +712,7 @@ impl Sequence for ClientConnector {
                         ConnectionActivationState::Finalized {
                             desktop_size,
                             share_id,
+                            display_updates,
                             enable_server_pointer,
                             pointer_software_rendering,
                         } => ClientConnectorState::Connected {
@@ -719,6 +723,7 @@ impl Sequence for ClientConnector {
                                 share_id,
                                 static_channels: mem::take(&mut self.static_channels),
                                 desktop_size,
+                                display_updates,
                                 enable_server_pointer,
                                 pointer_software_rendering,
                                 activation_factory: ConnectionActivationFactory::new(
