@@ -40,8 +40,20 @@ export type Transfert<S = unknown> = {
 /** Événement `sftp-progress` du cœur, rapporté à sa ligne par `transfert`. */
 export type Progression = { transfert: number; fichier: string; done: number; total: number; termines: number; nombre: number };
 
-/** Transferts menés de front ; les suivants attendent leur tour. */
+/** Transferts menés de front sur une même session ; les suivants de cette
+ *  session attendent leur tour.
+ *
+ *  Audit du 27 novembre 2026 (FI-7) : la borne était commune à toutes les
+ *  sessions. Trois sauvegardes lentes sur un serveur lointain bloquaient le
+ *  petit fichier glissé dans un autre onglet, vers un autre serveur, jusqu'à
+ *  la fin de l'une d'elles, sans un mot. Elle vaut désormais par session : elle
+ *  borne aussi ce qu'une connexion SSH porte à la fois, en plus du budget
+ *  d'octets en vol que le cœur tient par session. */
 export const PARALLELE = 3;
+
+/** Transferts menés de front, toutes sessions confondues : la borne du disque
+ *  et du lien du poste, que plusieurs onglets partagent (le même VPN). */
+export const PARALLELE_TOTAL = 6;
 
 /** Un transfert neuf, en attente. */
 export function nouveauTransfert<S>(
@@ -55,15 +67,27 @@ export function nouveauTransfert<S>(
 }
 
 /** Les transferts en attente qui peuvent partir maintenant, dans l'ordre de la
- *  file, sans dépasser `parallele` transferts en cours. */
-export function aLancer<T extends Pick<Transfert, "etat">>(file: readonly T[], parallele = PARALLELE): T[] {
-  let enCours = file.filter((x) => x.etat === "en-cours").length;
+ *  file, sans dépasser `parSession` transferts en cours sur leur session ni
+ *  `total` en tout. Une session pleine ne retient pas ceux des autres. */
+export function aLancer<T extends Pick<Transfert, "etat" | "session">>(
+  file: readonly T[], parSession = PARALLELE, total = PARALLELE_TOTAL,
+): T[] {
+  const enCoursPar = new Map<unknown, number>();
+  let enCours = 0;
+  for (const x of file) {
+    if (x.etat !== "en-cours") continue;
+    enCours++;
+    enCoursPar.set(x.session, (enCoursPar.get(x.session) ?? 0) + 1);
+  }
   const partants: T[] = [];
   for (const x of file) {
-    if (enCours >= parallele) break;
+    if (enCours >= total) break;
     if (x.etat !== "attente") continue;
+    const n = enCoursPar.get(x.session) ?? 0;
+    if (n >= parSession) continue;
     partants.push(x);
     enCours++;
+    enCoursPar.set(x.session, n + 1);
   }
   return partants;
 }

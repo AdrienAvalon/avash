@@ -24,7 +24,8 @@ export const sftp = {
 
 // ===== File des transferts =====
 //
-// Plusieurs transferts à la fois (trois en parallèle, les autres attendent),
+// Plusieurs transferts à la fois (trois par session et six en tout, les
+// autres attendent),
 // chacun avec sa ligne : nom, progression, vitesse, bouton d'annulation.
 // L'identifiant est choisi ici et suit le transfert jusque dans le cœur, qui
 // le rappelle dans chaque événement de progression et le retrouve pour
