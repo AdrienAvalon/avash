@@ -407,6 +407,19 @@ impl<'de> Decode<'de> for TileSetPdu<'de> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Ajout d'Avash (audit du 27 novembre 2026, SE-4) : chaque tuile
+        // désigne ses trois tables de quantification par un index dans
+        // `quantVals`, que rien ne rapprochait de `numQuant`. Un serveur qui
+        // annonçait `numQuant = 0` faisait paniquer le client à l'indexation
+        // (`rfx.rs`, `map_tiles_data`), sur un chemin que rien n'isole.
+        if tiles.iter().any(|t| {
+            [t.y_quant_index, t.cb_quant_index, t.cr_quant_index]
+                .iter()
+                .any(|&i| usize::from(i) >= quants.len())
+        }) {
+            return Err(invalid_field_err!("quantIdx", "quantization index out of range"));
+        }
+
         Ok(Self {
             entropy_algorithm,
             quants,
@@ -709,5 +722,62 @@ bitflags! {
         const IMAGE_MODE = 0x02; // if not set, the codec is operating in video mode
 
         const _ = !0;
+    }
+}
+
+#[cfg(test)]
+mod tests_index_de_quantification {
+    use ironrdp_core::{decode, encode_vec};
+
+    use super::{EntropyAlgorithm, Quant, Tile, TileSetPdu};
+
+    fn quant() -> Quant {
+        Quant {
+            ll3: 6,
+            lh3: 6,
+            hl3: 6,
+            hh3: 6,
+            lh2: 7,
+            hl2: 7,
+            hh2: 8,
+            lh1: 8,
+            hl1: 8,
+            hh1: 9,
+        }
+    }
+
+    fn tuile(index: u8) -> Tile<'static> {
+        Tile {
+            y_quant_index: 0,
+            cb_quant_index: index,
+            cr_quant_index: 0,
+            x: 0,
+            y: 0,
+            y_data: &[],
+            cb_data: &[],
+            cr_data: &[],
+        }
+    }
+
+    fn octets(quants: Vec<Quant>, tuiles: Vec<Tile<'static>>) -> Vec<u8> {
+        encode_vec(&TileSetPdu {
+            entropy_algorithm: EntropyAlgorithm::Rlgr3,
+            quants,
+            tiles: tuiles,
+        })
+        .unwrap()
+    }
+
+    /// Audit du 27 novembre 2026, SE-4 : un TileSet à `numQuant = 0`, ou dont
+    /// une tuile désigne une table absente, faisait paniquer le processus RDP
+    /// à l'indexation. Il est refusé dès le décodage.
+    #[test]
+    fn un_index_de_quantification_hors_liste_est_refuse_au_decodage() {
+        assert!(decode::<TileSetPdu<'_>>(&octets(vec![], vec![tuile(0)])).is_err());
+        assert!(decode::<TileSetPdu<'_>>(&octets(vec![quant()], vec![tuile(1)])).is_err());
+        // Contrôle : des index dans la liste passent.
+        let bon = octets(vec![quant(), quant()], vec![tuile(1)]);
+        let pdu = decode::<TileSetPdu<'_>>(&bon).expect("TileSet valide");
+        assert_eq!(pdu.quants.len(), 2);
     }
 }

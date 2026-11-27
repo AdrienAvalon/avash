@@ -37,6 +37,11 @@ native-tls = { version = "0.2", features = ["vendored"] }
 # VeNCrypt (VNC sous TLS) : le même rustls qu'ironrdp-tls, même fournisseur.
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "tls12"] }
 tokio = { version = "1", features = ["full"] }
+# Sondes de vie TCP et délai d'acquittement de la socket du bureau (audit du
+# 27 novembre 2026, FI-6) : la bibliothèque standard et tokio ne savent poser
+# ni l'intervalle des sondes ni `TCP_USER_TIMEOUT`. Déjà dans l'arbre par
+# tokio ; `all` ouvre ces réglages.
+socket2 = { version = "0.6", features = ["all"] }
 anyhow = "1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 x509-cert = "0.3"

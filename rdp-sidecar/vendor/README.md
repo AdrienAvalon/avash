@@ -373,6 +373,26 @@ verdicts d'un seul.
 Sur la mire 1920×1080, avec le décodeur RLGR ci-dessus : de 13 à 25 images
 par seconde, le processus RDP passant d'un cœur saturé à 2,7 cœurs.
 
+## `ironrdp-pdu` et `ironrdp-session` : un index de quantification hostile
+
+Dans `ironrdp-pdu/src/codecs/rfx/data_messages.rs` (`TileSetPdu::decode`) et
+`ironrdp-session/src/rfx.rs` (`map_tiles_data`), trouvé par l'audit du
+27 novembre 2026 (SE-4). Chaque tuile RemoteFX désigne ses trois tables de
+quantification par un index dans la liste du TileSet ; le décodage lisait
+`numQuant` et les index sans jamais les rapprocher, et `map_tiles_data`
+indexait directement. Un serveur qui envoyait un TileSet à `numQuant = 0`
+faisait paniquer le processus RDP, sur le RemoteFX du chemin rapide, que rien
+n'isole (le `catch_unwind` du sidecar ne couvre que le canal graphique).
+Défaut d'origine, présent avant le décodage parallèle.
+
+Le TileSet refuse désormais un index hors de la liste (erreur de champ, la
+session se ferme en le disant), ce qui protège tout consommateur, et
+`map_tiles_data` rend une erreur au lieu d'indexer, en défense. Le
+commentaire du décodage par lots, qui prétendait la panique isolée, dit
+maintenant ce qui est. Deux tests :
+`un_index_de_quantification_hors_liste_est_refuse_au_decodage` et
+`un_index_de_quantification_hors_liste_est_refuse`.
+
 ## `ironrdp-graphics` — la décompression ZGFX amplifiait sa sortie sans borne
 
 Deux changements dans `src/zgfx/`, trouvés par l'audit du 7 septembre 2026 :

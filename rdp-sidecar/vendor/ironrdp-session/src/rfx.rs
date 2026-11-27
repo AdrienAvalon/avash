@@ -182,7 +182,7 @@ impl DecodingContext {
         // garde les tuiles d'avant, et l'erreur rendue est la même.
         let rectangles: Vec<InclusiveRectangle> =
             tiles_to_rectangles(tile_set.tiles.as_slice(), destination).collect();
-        let donnees = map_tiles_data(tile_set.tiles.as_slice(), tile_set.quants.as_slice());
+        let donnees = map_tiles_data(tile_set.tiles.as_slice(), tile_set.quants.as_slice())?;
         let fils = fils_de_decodage();
         for (lot_rectangles, lot_donnees) in rectangles
             .chunks(LOT_TUILES)
@@ -318,9 +318,12 @@ fn decoder_lot(
                 portee.spawn(move || Travail::new().decoder(part, entropy_algorithm, sortie)),
             );
         }
-        // Une panique dans un fil (tuile hostile) remonte ici, sur le fil de
-        // la session, comme si le décodage y avait eu lieu : le sidecar
-        // l'isole de la même façon.
+        // Une panique dans un fil remonte ici, sur le fil de la session, comme
+        // si le décodage y avait eu lieu. Rien ne l'y attrape : ce chemin
+        // (RemoteFX par le chemin rapide) n'est pas sous le `catch_unwind` du
+        // canal graphique, et elle arrête le processus RDP de cette session.
+        // D'où le refus, au décodage, de ce qu'un serveur hostile pouvait y
+        // faire paniquer (audit du 27 novembre 2026, SE-4).
         fils_lances
             .into_iter()
             .flat_map(|f| {
@@ -414,16 +417,30 @@ fn tiles_to_rectangles<'a>(
     })
 }
 
-fn map_tiles_data<'a>(tiles: &[Tile<'a>], quants: &[Quant]) -> Vec<TileData<'a>> {
+/// Les tables de quantification de chaque tuile, par leur index.
+///
+/// Audit du 27 novembre 2026 (SE-4) : l'indexation directe paniquait sur un
+/// index hors de la liste (TileSet à `numQuant = 0`), et ce chemin n'est sous
+/// aucun `catch_unwind`. Le décodage du TileSet refuse désormais un tel index
+/// ; ce refus-ci couvre un `TileSet` construit autrement que par lui.
+fn map_tiles_data<'a>(tiles: &[Tile<'a>], quants: &[Quant]) -> SessionResult<Vec<TileData<'a>>> {
+    let table = |i: u8| {
+        quants
+            .get(usize::from(i))
+            .cloned()
+            .ok_or_else(|| general_err!("index de quantification RemoteFX hors de la liste"))
+    };
     tiles
         .iter()
-        .map(|t| TileData {
-            quants: [
-                quants[usize::from(t.y_quant_index)].clone(),
-                quants[usize::from(t.cb_quant_index)].clone(),
-                quants[usize::from(t.cr_quant_index)].clone(),
-            ],
-            data: [t.y_data, t.cb_data, t.cr_data],
+        .map(|t| {
+            Ok(TileData {
+                quants: [
+                    table(t.y_quant_index)?,
+                    table(t.cb_quant_index)?,
+                    table(t.cr_quant_index)?,
+                ],
+                data: [t.y_data, t.cb_data, t.cr_data],
+            })
         })
         .collect()
 }
@@ -545,6 +562,28 @@ mod tests_decodage_parallele {
                 );
             }
         }
+    }
+
+    /// Audit du 27 novembre 2026, SE-4 : l'index d'une table de
+    /// quantification hors de la liste était une panique, sur un chemin que
+    /// rien n'isole. C'est une erreur.
+    #[test]
+    fn un_index_de_quantification_hors_liste_est_refuse() {
+        let tuile = |i: u8| Tile {
+            y_quant_index: 0,
+            cb_quant_index: 0,
+            cr_quant_index: i,
+            x: 0,
+            y: 0,
+            y_data: &[],
+            cb_data: &[],
+            cr_data: &[],
+        };
+        let mut etat = 7;
+        let q = quant(&mut etat);
+        assert!(map_tiles_data(&[tuile(0)], &[]).is_err());
+        assert!(map_tiles_data(&[tuile(1)], core::slice::from_ref(&q)).is_err());
+        assert_eq!(map_tiles_data(&[tuile(0)], &[q]).unwrap().len(), 1);
     }
 
     #[test]
