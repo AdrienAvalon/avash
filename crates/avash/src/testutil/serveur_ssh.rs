@@ -982,6 +982,36 @@ pub fn fs_max_ouverts_sous(prefixe: &str) -> usize {
     max
 }
 
+/// Octets écrits sous /fs/, par chemin : de quoi affirmer qu'une reprise
+/// d'envoi n'a réécrit que la fin (audit du 27 novembre 2026, QT-10).
+pub static FS_OCTETS_ECRITS: std::sync::Mutex<Option<HashMap<String, u64>>> =
+    std::sync::Mutex::new(None);
+
+/// Octets écrits pour `chemin` depuis le dernier `fs_oublier_octets_ecrits`.
+pub fn fs_octets_ecrits(chemin: &str) -> u64 {
+    FS_OCTETS_ECRITS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(chemin).copied())
+        .unwrap_or(0)
+}
+
+/// Remet à zéro le compte d'octets écrits de `chemin`.
+pub fn fs_oublier_octets_ecrits(chemin: &str) {
+    if let Some(m) = FS_OCTETS_ECRITS.lock().unwrap().as_mut() {
+        m.remove(chemin);
+    }
+}
+
+/// Tant qu'il est levé, toute écriture d'un chemin contenant « coupe-envoi »
+/// au-delà de `COUPE_ENVOI_A` échoue : une coupure en plein envoi, sans le
+/// vidage qu'une annulation fait, avec des écritures encore en vol.
+pub static FS_COUPE_ENVOI: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Décalage à partir duquel `FS_COUPE_ENVOI` refuse les écritures.
+pub const COUPE_ENVOI_A: u64 = 9 * 1024 * 1024;
+
 /// Lectures servies sous /fs/ : (chemin, décalage).
 pub static FS_LECTURES: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
 
@@ -1239,6 +1269,18 @@ impl russh_sftp::server::Handler for TestSftpSession {
         async move {
             if let Some(chemin) = handle.strip_prefix("fs:") {
                 ralentir(chemin).await;
+                if chemin.contains("coupe-envoi")
+                    && offset >= COUPE_ENVOI_A
+                    && FS_COUPE_ENVOI.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Err(StatusCode::Failure);
+                }
+                *FS_OCTETS_ECRITS
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(HashMap::new)
+                    .entry(chemin.to_owned())
+                    .or_default() += data.len() as u64;
                 let mut g = fs_fichiers();
                 let Some(f) = g.as_mut().unwrap().get_mut(chemin) else {
                     return Err(StatusCode::NoSuchFile);
@@ -1449,6 +1491,9 @@ impl russh_sftp::server::Handler for TestSftpSession {
                             attrs: FileAttributes {
                                 size: Some(contenu.len() as u64),
                                 permissions: Some(0o100_644),
+                                // La même date que `stat` : un client qui la
+                                // prend ici valide la même carte de reprise.
+                                mtime: Some(1_700_000_000),
                                 ..Default::default()
                             },
                         });

@@ -14,6 +14,38 @@ const CHUNK: usize = 64 * 1024;
 /// Écritures SFTP en vol par fichier (voir `SftpHandle::sous_systeme`).
 const ECRITURES_EN_VOL: usize = 16;
 
+/// Ce qu'une requête de lecture peut demander : russh-sftp 4 demande la taille
+/// que le serveur annonce (`limits@openssh.com`, 255 Kio chez OpenSSH), bornée
+/// par sa taille de paquet (256 Kio), quel que soit le tampon de l'appelant.
+const LECTURE_MAX: usize = 256 * 1024;
+
+/// Octets de lecture en vol sur une session SFTP, toutes bandes et tous
+/// fichiers confondus.
+///
+/// Audit du 27 novembre 2026 (PR-4, FI-4) : russh-sftp exige la réponse de
+/// chaque requête dans un délai compté dès son écriture, et le serveur répond
+/// dans l'ordre, au débit du lien. Huit bandes demandaient 2 Mio d'un coup, un
+/// dossier de gros fichiers quatre fois plus : sur un lien lent (4G, Wi-Fi
+/// d'hôtel, VPN chargé), les dernières réponses arrivaient après le délai, et
+/// le dossier entier échouait en « Timeout » alors que le lien marchait. Le
+/// parallélisme se règle désormais en octets : chaque lecture prend sa part de
+/// ce budget avant de partir et la rend à sa réponse, et ce qui attend chez le
+/// serveur ne dépasse jamais 2 Mio, soit une fenêtre de canal SSH. Un seul gros
+/// fichier garde ses huit bandes de front ; plusieurs se les partagent, au lieu
+/// de s'additionner. Les écritures, elles, n'en ont pas besoin : elles ne
+/// partent qu'à mesure que la fenêtre SSH du serveur s'ouvre, et le délai de
+/// russh-sftp ne court qu'une fois la requête écrite.
+const BUDGET_LECTURES: usize = 2 * 1024 * 1024;
+
+/// Délai de réponse d'une requête SFTP, en secondes.
+///
+/// Audit du 27 novembre 2026 (PR-4) : les 10 s par défaut de russh-sftp
+/// faisaient de ce délai un débit plancher (2 Mio en vol en 10 s, 1,7 Mbit/s).
+/// À 30 s, avec le budget ci-dessus, le plancher tombe à 0,6 Mbit/s. Un lien
+/// mort reste vu par le keepalive SSH (30 s, trois essais) et, en plein envoi,
+/// par le délai d'acquittement TCP de la session.
+const DELAI_REQUETE_S: u64 = 30;
+
 /// Nom du fichier temporaire d'un téléchargement : `rapport.pdf.part`.
 fn chemin_partiel(local: &Path) -> PathBuf {
     let mut nom = local.as_os_str().to_owned();
@@ -69,6 +101,8 @@ pub struct SftpEntry {
 pub struct SftpHandle {
     pub sftp: SftpSession,
     _session: Option<AvashSession>,
+    /// Budget d'octets de lecture en vol de cette session (`BUDGET_LECTURES`).
+    lectures: tokio::sync::Semaphore,
 }
 
 impl SftpHandle {
@@ -78,6 +112,7 @@ impl SftpHandle {
         Ok(Self {
             sftp,
             _session: Some(session),
+            lectures: tokio::sync::Semaphore::new(BUDGET_LECTURES),
         })
     }
 
@@ -91,6 +126,7 @@ impl SftpHandle {
         Ok(Self {
             sftp,
             _session: None,
+            lectures: tokio::sync::Semaphore::new(BUDGET_LECTURES),
         })
     }
 
@@ -131,11 +167,26 @@ impl SftpHandle {
             max_concurrent_reads: 1,
             max_concurrent_writes: ECRITURES_EN_VOL,
             max_write_packet_len: defaut.max_packet_len,
+            request_timeout_secs: DELAI_REQUETE_S,
             ..defaut
         };
         SftpSession::new_with_config(channel.into_stream(), reglages)
             .await
             .context("Ouverture sous-système SFTP")
+    }
+
+    /// Prend sur le budget de la session de quoi lire `octets` en une requête
+    /// (voir `BUDGET_LECTURES`) ; la part revient au budget quand la garde
+    /// tombe, une fois la lecture rendue. Un appel à `read` sur un `File` de
+    /// russh-sftp émet au plus une requête : la garde la couvre donc entière.
+    /// Le sémaphore n'est jamais fermé ; s'il l'était, on lirait sans budget
+    /// plutôt que d'échouer.
+    async fn avant_lecture(&self, octets: u64) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        let part = usize::try_from(octets).map_or(LECTURE_MAX, |o| o.clamp(1, LECTURE_MAX));
+        self.lectures
+            .acquire_many(u32::try_from(part).unwrap_or(u32::MAX))
+            .await
+            .ok()
     }
 
     /// Liste un répertoire distant.
@@ -236,13 +287,18 @@ impl SftpHandle {
             .with_context(|| format!("Création local {}", partiel.display()))?;
         let mut buf = vec![0u8; CHUNK];
         let mut done = 0u64;
+        // Une taille connue borne ce que le serveur rendra ; inconnue, une
+        // requête entière.
+        let part = if total > 0 { total } else { LECTURE_MAX as u64 };
         let issue = async {
             loop {
                 verifier(annulation)?;
+                let garde = self.avant_lecture(part).await;
                 let n = remote_file
                     .read(&mut buf)
                     .await
                     .context("Lecture distante")?;
+                drop(garde);
                 if n == 0 {
                     break;
                 }
@@ -405,10 +461,12 @@ impl SftpHandle {
         let mut reste = fin - debut;
         while reste > 0 {
             let vise = usize::try_from(reste.min(CHUNK as u64)).unwrap_or(CHUNK);
+            let garde = self.avant_lecture(LECTURE_MAX as u64).await;
             let n = distant
                 .read(&mut buf[..vise])
                 .await
                 .context("Lecture distante")?;
+            drop(garde);
             if n == 0 {
                 break; // le fichier a rétréci depuis la lecture de sa taille
             }
@@ -541,6 +599,9 @@ pub struct EntreeDistante {
     pub chemin: String,
     pub dossier: bool,
     pub taille: u64,
+    /// Date de modification lue dans le `READDIR` : avec la taille, de quoi
+    /// valider une carte de reprise sans relire les attributs (PR-3).
+    pub mtime: Option<u64>,
 }
 
 /// Nombre d'entrées qu'un parcours accepte : un serveur peut annoncer une
@@ -558,7 +619,29 @@ pub const ANNULE: &str = "Transfert annulé.";
 /// d'aller-retour, 2 min 30 en téléchargement quel que soit le débit du lien.
 /// Quatre en vol : sous les huit bandes d'un gros fichier, bien sous la limite
 /// de descripteurs de tout serveur.
-const FICHIERS_EN_VOL: usize = 4;
+///
+/// Audit du 27 novembre 2026 (PR-3) : quatre petits fichiers à la fois, à
+/// quatre allers-retours chacun, plafonnaient à 25 fichiers par seconde à
+/// 40 ms (0,1 Mo/s en fichiers de 4 Kio). Seize petits fichiers sont en vol ;
+/// un gros fichier (en bandes) compte pour `PLACES_GROS_FICHIER`, si bien que
+/// quatre gros au plus restent de front, comme avant : leurs lectures se
+/// partagent de toute façon le budget de la session (`BUDGET_LECTURES`), et
+/// seize fois huit bandes ouvriraient cent vingt-huit descripteurs chez le
+/// serveur pour rien.
+const FICHIERS_EN_VOL: usize = 16;
+
+/// Places qu'un gros fichier (plus de deux blocs, donc en bandes ou en
+/// reprise) prend parmi les `FICHIERS_EN_VOL` d'un dossier.
+const PLACES_GROS_FICHIER: u32 = 4;
+
+/// Places qu'un fichier de `taille` octets prend dans un dossier.
+fn places_pour(taille: u64) -> u32 {
+    if taille > (2 * CHUNK) as u64 {
+        PLACES_GROS_FICHIER
+    } else {
+        1
+    }
+}
 
 /// Ce qu'un fichier en vol rapporte à la boucle qui tient la progression.
 enum Nouvelle {
@@ -629,7 +712,7 @@ fn avec_le_fichier(e: anyhow::Error, nom: &str) -> anyhow::Error {
 /// On attend qu'ils aient tous rendu la main avant de répondre, et l'erreur
 /// rendue est la vraie cause, pas l'« annulé » des fichiers qu'elle a arrêtés.
 async fn en_vol<T, F, Fut>(
-    fichiers: Vec<T>,
+    fichiers: Vec<(T, u32)>,
     total: u64,
     annulation: Option<&Annulation>,
     mut progress: impl FnMut(Avancement),
@@ -647,8 +730,21 @@ where
     let fini = std::sync::atomic::AtomicBool::new(false);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Nouvelle>();
     let arret_des_fichiers = arret.clone();
+    // Chaque fichier porte ses places (voir `places_pour`) : seize petits ou
+    // quatre gros à la fois. Le sémaphore est équitable : un gros fichier qui
+    // attend ses places ne se fait pas doubler sans fin par les petits.
+    let places = tokio::sync::Semaphore::new(FICHIERS_EN_VOL);
+    let places = &places;
+    let un_fichier = &un_fichier;
     let travaux = futures::stream::iter(fichiers)
-        .map(move |f| un_fichier(f, arret_des_fichiers.clone(), tx.clone()))
+        .map(move |(f, poids)| {
+            let arret = arret_des_fichiers.clone();
+            let tx = tx.clone();
+            async move {
+                let _place = places.acquire_many(poids).await.ok();
+                un_fichier(f, arret, tx).await
+            }
+        })
         .buffer_unordered(FICHIERS_EN_VOL);
     let consommer = async {
         // Le flux (et le dernier émetteur d'annonces qu'il tient) meurt à la
@@ -780,6 +876,30 @@ impl Reprise {
     }
 }
 
+/// Octets envoyés au moins entre deux points de contrôle d'un envoi.
+const POINT_DE_CONTROLE: u64 = 4 * 1024 * 1024;
+/// Temps au moins entre deux points de contrôle d'un envoi.
+const CADENCE_POINT_DE_CONTROLE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Faut-il poser un point de contrôle d'envoi, `octets` envoyés et `ecoule`
+/// passé depuis le précédent (ou le départ, `premier`) ?
+///
+/// Audit du 27 novembre 2026 (PR-7) : il en tombait un toutes les 4 Mio. Or
+/// un point de contrôle vide la file d'écritures (au plus un aller-retour)
+/// puis attend le `fsync@openssh.com` du serveur (un aller-retour de plus et
+/// son disque), pendant quoi rien ne part : invisible à une écriture en vol,
+/// un quart du débit une fois les seize écritures rétablies (4 Mio partent en
+/// 0,4 s à 40 ms, la bulle en coûte au moins 80 ms). Cadencé au temps, il garde
+/// la promesse de la carte, « une coupure ne coûte que quelques secondes »,
+/// sans freiner un lien rapide. Les 4 Mio restent un plancher : sur un lien
+/// lent, pas de `fsync` distant pour quelques kilo-octets. Le PREMIER point
+/// tombe toujours à 4 Mio : sans carte, un envoi unitaire interrompu ne se
+/// relance pas (le distant partiel existe, l'écrasement est refusé), et cette
+/// fenêtre ne doit pas s'allonger de 4 Mio à deux secondes de lien rapide.
+fn point_de_controle_du(octets: u64, ecoule: std::time::Duration, premier: bool) -> bool {
+    octets >= POINT_DE_CONTROLE && (premier || ecoule >= CADENCE_POINT_DE_CONTROLE)
+}
+
 /// Les bandes d'un fichier : `[debut, fin)`, au plus `BANDES_MAX`.
 fn bandes(total: u64) -> Vec<(u64, u64)> {
     const BANDES_MAX: u64 = 8;
@@ -851,6 +971,7 @@ impl SftpHandle {
                     chemin: rel_e,
                     dossier: e.is_dir,
                     taille: if e.is_dir { 0 } else { e.size },
+                    mtime: e.modified,
                 });
             }
         }
@@ -893,7 +1014,11 @@ impl SftpHandle {
                 .await
                 .with_context(|| format!("Création de {}", cible.display()))?;
         }
-        let fichiers: Vec<&EntreeDistante> = entrees.iter().filter(|e| !e.dossier).collect();
+        let fichiers: Vec<(&EntreeDistante, u32)> = entrees
+            .iter()
+            .filter(|e| !e.dossier)
+            .map(|e| (e, places_pour(e.taille)))
+            .collect();
         en_vol(
             fichiers,
             total,
@@ -903,10 +1028,14 @@ impl SftpHandle {
                 verifier(Some(&arret))?;
                 let cible = local.join(e.chemin.replace('/', std::path::MAIN_SEPARATOR_STR));
                 let suivi = Rapporteur::nouveau(e.chemin.clone(), tx);
+                // La taille et la date viennent du parcours (`READDIR`) : pas
+                // de `STAT` de plus par fichier (PR-3).
                 let n = self
-                    .download_reprise(
+                    .download_reprise_connu(
                         &joindre(remote_dir, &e.chemin),
                         &cible,
+                        e.taille,
+                        e.mtime,
                         Some(&arret),
                         |f, _| suivi.avance(f),
                     )
@@ -967,7 +1096,7 @@ impl SftpHandle {
         // Les dossiers sont créés ci-dessus, dans l'ordre ; les fichiers
         // partent plusieurs à la fois (C-perf-3 b).
         en_vol(
-            fichiers.iter().collect(),
+            fichiers.iter().map(|f| (f, places_pour(f.1))).collect(),
             total,
             annulation,
             progress,
@@ -1004,13 +1133,33 @@ impl SftpHandle {
         remote: &str,
         local: &Path,
         annulation: Option<&Annulation>,
-        mut progress: impl FnMut(u64, u64),
+        progress: impl FnMut(u64, u64),
     ) -> Result<u64> {
         let meta = self.sftp.metadata(remote).await.ok();
         let total = meta
             .as_ref()
             .map_or(0, russh_sftp::protocol::FileAttributes::len);
         let mtime = meta.as_ref().and_then(|m| m.mtime).map(u64::from);
+        self.download_reprise_connu(remote, local, total, mtime, annulation, progress)
+            .await
+    }
+
+    /// [`download_reprise`](Self::download_reprise) sur un fichier dont la
+    /// taille et la date sont déjà lues (taille 0 : inconnue).
+    ///
+    /// Audit du 27 novembre 2026 (PR-3) : un dossier lisait la taille de chaque
+    /// fichier dans le `READDIR` du parcours, la jetait, puis la redemandait
+    /// par un `STAT` : un aller-retour de plus sur les quatre d'un petit
+    /// fichier. Le motif de C-perf-3 a, un cran plus haut.
+    async fn download_reprise_connu(
+        &self,
+        remote: &str,
+        local: &Path,
+        total: u64,
+        mtime: Option<u64>,
+        annulation: Option<&Annulation>,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<u64> {
         if total <= (2 * CHUNK) as u64 {
             verifier(annulation)?;
             // La taille lue ci-dessus sert telle quelle (C-perf-3 a).
@@ -1137,10 +1286,12 @@ impl SftpHandle {
         while reste > 0 {
             verifier(annulation)?;
             let vise = usize::try_from(reste.min(CHUNK as u64)).unwrap_or(CHUNK);
+            let garde = self.avant_lecture(LECTURE_MAX as u64).await;
             let n = distant
                 .read(&mut buf[..vise])
                 .await
                 .context("Lecture distante")?;
+            drop(garde);
             if n == 0 {
                 break;
             }
@@ -1187,15 +1338,24 @@ impl SftpHandle {
         mtime: Option<u64>,
         refuser_ecrasement: bool,
     ) -> Result<u64> {
+        // Audit du 27 novembre 2026 (PR-3) : le `STAT` distant ne sert qu'à
+        // valider une carte (le distant porte-t-il encore ces octets ?) et à
+        // refuser un écrasement. Sans carte candidate, un envoi de dossier
+        // (`refuser_ecrasement` faux) le payait pour rien, un aller-retour sur
+        // les quatre d'un petit fichier. La carte locale se lit d'abord ; le
+        // refus d'écrasement d'un envoi unitaire garde son `STAT`.
+        let candidate = Reprise::lire(carte)
+            .filter(|r| r.vaut_pour(total, mtime) && r.vise(remote))
+            .and_then(|r| r.faites.first().map(|(_, fin)| *fin))
+            .filter(|fin| *fin > 0 && *fin < total);
+        if candidate.is_none() && !refuser_ecrasement {
+            return Ok(0);
+        }
         let distant = self.sftp.metadata(remote).await.ok();
         let distant_len = distant
             .as_ref()
             .map_or(0, russh_sftp::protocol::FileAttributes::len);
-        let deja = Reprise::lire(carte)
-            .filter(|r| r.vaut_pour(total, mtime) && r.vise(remote))
-            .and_then(|r| r.faites.first().map(|(_, fin)| *fin))
-            .filter(|fin| *fin <= distant_len && *fin < total)
-            .unwrap_or(0);
+        let deja = candidate.filter(|fin| *fin <= distant_len).unwrap_or(0);
         if refuser_ecrasement && deja == 0 && distant.is_some() {
             anyhow::bail!(
                 "Le fichier distant « {remote} » existe déjà : envoi refusé pour ne pas l'écraser."
@@ -1213,8 +1373,8 @@ impl SftpHandle {
     /// lents en réseau local pour 1,2 × à 40 ms d'aller-retour.
     ///
     /// La reprise : une carte `<local>.envoi.reprise` note, à chaque point de
-    /// contrôle (toutes les `POINT_DE_CONTROLE` octets, après un vidage), ce
-    /// qui est sûrement écrit chez le distant, avec la taille et la date du
+    /// contrôle (voir `point_de_controle_du`, après un vidage), ce qui est
+    /// sûrement écrit chez le distant, avec la taille et la date du
     /// fichier local. Relancer le même envoi repart de là, si le fichier n'a
     /// pas changé et si le distant porte encore au moins ces octets.
     pub async fn upload_reprise(
@@ -1227,9 +1387,6 @@ impl SftpHandle {
     ) -> Result<u64> {
         use russh_sftp::protocol::OpenFlags;
         use tokio::io::AsyncSeekExt as _;
-        /// Entre deux points de contrôle : assez rare pour ne pas ralentir,
-        /// assez fréquent pour qu'une coupure ne coûte que quelques secondes.
-        const POINT_DE_CONTROLE: u64 = 4 * 1024 * 1024;
 
         let meta = tokio::fs::metadata(local)
             .await
@@ -1285,6 +1442,7 @@ impl SftpHandle {
         };
         let mut fait = deja;
         let mut dernier_point = deja;
+        let mut dernier_instant = std::time::Instant::now();
         progress(fait, total);
         let mut buf = vec![0u8; CHUNK];
         let envoi = async {
@@ -1300,10 +1458,15 @@ impl SftpHandle {
                     .context("Écriture distante")?;
                 fait += n as u64;
                 progress(fait, total);
-                if fait - dernier_point >= POINT_DE_CONTROLE {
+                if point_de_controle_du(
+                    fait - dernier_point,
+                    dernier_instant.elapsed(),
+                    dernier_point == deja,
+                ) {
                     // Vidé, donc sûrement chez le distant : la carte peut le dire.
                     distant.flush().await.context("Vidage distant")?;
                     dernier_point = fait;
+                    dernier_instant = std::time::Instant::now();
                     reprise.faites = vec![(0, fait)];
                     reprise.ecrire(&carte);
                 }
@@ -1478,10 +1641,12 @@ impl SftpHandle {
                     while reste > 0 {
                         verifier(annulation)?;
                         let vise = usize::try_from(reste.min(CHUNK as u64)).unwrap_or(CHUNK);
+                        let garde = self.avant_lecture(LECTURE_MAX as u64).await;
                         let n = source
                             .read(&mut buf[..vise])
                             .await
                             .context("Lecture source")?;
+                        drop(garde);
                         if n == 0 {
                             break;
                         }
@@ -1545,7 +1710,11 @@ impl SftpHandle {
                 cible.mkdir(&chez_cible).await?;
             }
         }
-        let fichiers: Vec<&EntreeDistante> = entrees.iter().filter(|e| !e.dossier).collect();
+        let fichiers: Vec<(&EntreeDistante, u32)> = entrees
+            .iter()
+            .filter(|e| !e.dossier)
+            .map(|e| (e, places_pour(e.taille)))
+            .collect();
         en_vol(
             fichiers,
             total,
@@ -1667,7 +1836,38 @@ pub fn default_local_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests_bandes {
-    use super::{bandes, joindre, rel_texte, Reprise, CHUNK};
+    use super::{bandes, joindre, point_de_controle_du, rel_texte, Reprise, CHUNK};
+
+    /// Audit du 27 novembre 2026 (PR-7) : le point de contrôle d'envoi tombait
+    /// tous les 4 Mio, quel que soit le débit. Passé le premier (toujours à
+    /// 4 Mio), il faut deux secondes ET 4 Mio depuis le précédent : ni un lien
+    /// rapide freiné par un `fsync` distant à chaque fraction de seconde, ni un
+    /// lien lent qui en paierait un pour quelques octets.
+    #[test]
+    fn le_point_de_controle_suit_le_temps_et_non_les_octets() {
+        use std::time::Duration;
+        const MIO: u64 = 1024 * 1024;
+        let deux_s = Duration::from_secs(2);
+        assert!(point_de_controle_du(4 * MIO, deux_s, false));
+        assert!(point_de_controle_du(
+            400 * MIO,
+            Duration::from_secs(5),
+            false
+        ));
+        assert!(
+            !point_de_controle_du(400 * MIO, Duration::from_millis(1999), false),
+            "un lien rapide ne vide pas sa file à chaque fraction de seconde"
+        );
+        assert!(
+            !point_de_controle_du(4 * MIO - 1, Duration::from_secs(60), false),
+            "un lien lent ne paie pas un fsync distant pour quelques octets"
+        );
+        assert!(
+            point_de_controle_du(4 * MIO, Duration::ZERO, true),
+            "le premier point tombe à 4 Mio, sans attendre"
+        );
+        assert!(!point_de_controle_du(4 * MIO - 1, Duration::ZERO, true));
+    }
 
     /// Audit du 12 septembre 2026 (C-SIL-13) : une carte de reprise qui ne
     /// s'écrit pas (répertoire devenu fichier, disque plein) était avalée ;

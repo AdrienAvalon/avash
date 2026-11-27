@@ -35,6 +35,30 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   vidage qui attend tous les accusés. Deux tests le gardent désormais : l'un
   compte les écritures en attente de réponse chez le serveur de test, l'autre
   chronomètre un envoi derrière un relais à latence.
+- **Dossiers de petits fichiers : moins d'allers-retours, seize fichiers à la
+  fois.** Audit du 27 novembre 2026 (PR-3) : derrière un VPN à 40 ms, mille
+  petits fichiers prenaient 40 s dans chaque sens, quel que soit le débit
+  (25 fichiers par seconde). La descente ne relit plus les attributs que le
+  parcours du dossier vient de donner, la montée d'un dossier ne lit plus
+  ceux du distant sans carte de reprise à valider (l'envoi unitaire garde ce
+  contrôle, qui refuse d'écraser une cible), et seize petits fichiers sont en
+  vol au lieu de quatre ; un gros fichier compte pour quatre places
+  (200 fichiers de 4 Kio à 40 ms : 12,6 s → 2,5 s en descente, 12,0 s →
+  2,6 s en montée). La lecture de fin de fichier reste : un journal qui grossit pendant sa lecture
+  est toujours lu jusqu'au bout.
+- **Un dossier ne tombe plus en « Timeout » sur un lien lent.** Audit du
+  27 novembre 2026 (PR-4, FI-4) : quatre gros fichiers d'un dossier, huit
+  bandes chacun, demandaient 8 Mio d'un coup au serveur, et le délai de 10 s
+  par requête devenait un débit plancher (6,7 Mbit/s pour un dossier, 4G ou
+  Wi-Fi d'hôtel). Les lectures d'une session se partagent désormais un budget
+  de 2 Mio en vol, sans rien retirer à un gros fichier seul, et le délai passe
+  à 30 s (le keepalive SSH reste juge d'un lien mort).
+- **Le point de contrôle d'un envoi ne freine plus un lien rapide.** Audit du
+  27 novembre 2026 (PR-7) : toutes les 4 Mio, la file d'écritures était vidée
+  et un `fsync` distant attendu, une bulle d'un quart du débit une fois le
+  pipelining rétabli. Passé le premier (toujours à 4 Mio), il en tombe un
+  toutes les deux secondes : une coupure ne coûte toujours que quelques
+  secondes de transfert.
 
 ## [0.16.0] - 2026-11-26
 
