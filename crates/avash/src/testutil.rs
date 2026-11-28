@@ -125,6 +125,28 @@ pub fn memoriser_cle_hote(
         .map_err(|e| anyhow::anyhow!("known_hosts : {e}"))
 }
 
+/// Fait de `leurre` la SEULE clé connue pour `host:port` : retire d'abord ce
+/// que `chemin` retient pour ce port, puis mémorise le leurre.
+///
+/// Trouvé en préparant la 0.17.0 (28 novembre 2026), après le verrou du
+/// 6 octobre : le test du rebond à clé changée rougissait encore, une fois sur
+/// quelques dizaines. Tous les serveurs de test présentent la même clé
+/// ([`serveur_ssh::CLE_HOTE`]) et écoutent sur des ports éphémères que le
+/// système réattribue. Quand un test précédent avait appris la vraie clé pour
+/// ce port, le leurre s'ajoutait À CÔTÉ d'elle ; or la vérification accepte une
+/// clé parmi plusieurs, si bien que la connexion passait et que le test
+/// concluait à tort que le refus manquait. Rejoué à coup sûr en apprenant la
+/// vraie clé juste avant le leurre.
+pub fn remplacer_par_leurre(
+    host: &str,
+    port: u16,
+    leurre: &russh::keys::PublicKey,
+    chemin: &std::path::Path,
+) -> anyhow::Result<()> {
+    crate::ssh::forget_host_key_at(host, port, chemin)?;
+    memoriser_cle_hote(host, port, leurre, chemin)
+}
+
 /// Bascule le répertoire personnel sur un répertoire vierge, propre à ce test.
 #[must_use]
 pub fn temp_home() -> HomeGuard {
