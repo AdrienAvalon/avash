@@ -7,6 +7,16 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Corrigé
+
+- **Une boîte de dialogue refermée aussitôt ne vole plus le focus.** Les
+  demandes de texte, de confirmation et de mot de passe focalisent leur champ
+  30 ms après l'ouverture ; refermée avant, la boîte posait quand même le focus
+  sur un champ caché, et le clavier ne répondait plus là où on l'attendait.
+  Le focus en attente s'annule désormais à la fermeture. Vu au pre-commit du
+  28 novembre 2026, où le minuteur survivait au test et rendait la suite
+  Vitest rouge par intermittence (`web/focus-differe.dom.test.ts`).
+
 ## [0.17.1] - 2026-11-28
 
 La 0.17.0, étiquetée le même jour, n'a pas été publiée : le fuzzing qui
