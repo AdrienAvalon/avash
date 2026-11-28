@@ -11,7 +11,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 
 [Site](https://adrienavalon.github.io/avash/) · [Français](README.md) · [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-0.17.0-0f7a52.svg)](https://github.com/AdrienAvalon/avash/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.17.1-0f7a52.svg)](https://github.com/AdrienAvalon/avash/releases/latest)
 [![winget](https://img.shields.io/badge/winget-AdrienCros.Avash-0078d4.svg)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/AdrienCros/Avash)
 [![Plateformes](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-plateformes-informational)](#installation)
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-e05d44.svg)](LICENSE)

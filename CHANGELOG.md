@@ -7,7 +7,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
-## [0.17.0] - 2026-11-28
+## [0.17.1] - 2026-11-28
+
+La 0.17.0, étiquetée le même jour, n'a pas été publiée : le fuzzing qui
+précède toute publication a trouvé dans le décodage RemoteFX Progressive un
+débordement que son correctif ne couvrait qu'en partie (voir « Un bureau à
+distance hostile… » ci-dessous). Tout ce qu'elle portait est livré ici.
 
 ### Ajouté
 
@@ -200,10 +205,12 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
   par onglet (trois), avec six transferts au plus en tout.
 
 - **Un bureau à distance hostile ne fait plus déborder la conversion de
-  couleurs.** Une luminance hors des valeurs possibles faisait paniquer le
-  décodage RemoteFX Progressive en debug et donnait des couleurs fausses en
-  release ; elle est saturée avant la conversion (trouvé par cargo-fuzz,
-  audit du 27 novembre 2026).
+  couleurs.** Une luminance ou des chrominances hors des valeurs possibles
+  faisaient paniquer le décodage RemoteFX Progressive en debug et donnaient
+  des couleurs fausses en release ; les trois composantes sont saturées
+  avant la conversion, au double de leur plage valide (trouvé par
+  cargo-fuzz : la luminance pendant l'audit du 27 novembre 2026, les
+  chrominances le lendemain, sur la publication de la 0.17.0).
 - **« Connexion RDP fermée » dit de nouveau pourquoi.** Quand une session se
   terminait en erreur (réseau coupé, serveur redémarré brutalement), le
   processus RDP écrivait sa raison juste après la fermeture de sa liaison
@@ -3458,8 +3465,8 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.17.0...HEAD
-[0.17.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.17.0
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.17.1
 [0.16.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.16.1
 [0.16.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.16.0
 [0.15.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.15.0
