@@ -173,6 +173,9 @@ run "docs : compteurs de tests partout" "$ROOT" ./scripts/tests/compteurs-tests-
 # l'affichage : quatre badges sont restés cassés sur GitHub le 24 novembre 2026.
 run "docs : badges statiques des README" "$ROOT" ./scripts/tests/readme-badges-statiques.sh
 run "fuzz : toutes les cibles jouées" "$ROOT" ./scripts/tests/fuzz-continue-toutes-cibles.sh
+# Les verrous de fuzz/ et fuzz/rdp/ n'avaient pas suivi les dépendances des
+# lots du 27 novembre 2026 : seule la publication (--locked) l'aurait vu.
+run "fuzz : verrous à jour" "$ROOT" ./scripts/tests/verrous-fuzz-a-jour.sh
 run "release : publier attend la sécurité" "$ROOT" ./scripts/tests/release-publier-attend-securite.sh
 run "CI : main jamais annulée, groupes Dependabot" "$ROOT" ./scripts/tests/ci-main-et-groupes-dependabot.sh
 # Trouvé le 16 octobre 2026 : un profil abîmé par l'arrêt de l'application

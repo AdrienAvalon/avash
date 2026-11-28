@@ -7,6 +7,8 @@ et le projet suit le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.17.0] - 2026-11-28
+
 ### Ajouté
 
 - **L'historique des terminaux se règle** dans la fenêtre Paramètres : 1 000,
@@ -3456,7 +3458,8 @@ graphique complet (SSH et RDP), au-delà du cœur SSH initial.
   RDP transmis au sidecar par stdin, jamais en ligne de commande.
 - Diverses corrections de sécurité relevées lors d'un audit (dossiers et RDP).
 
-[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.16.1...HEAD
+[Non publié]: https://github.com/AdrienAvalon/avash/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.17.0
 [0.16.1]: https://github.com/AdrienAvalon/avash/releases/tag/v0.16.1
 [0.16.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.16.0
 [0.15.0]: https://github.com/AdrienAvalon/avash/releases/tag/v0.15.0
