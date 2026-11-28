@@ -7,34 +7,51 @@ use yuv::{
 
 use crate::image_processing::PixelFormat;
 
-/// Plus grande luminance que `yuv` convertit sans déborder : il calcule
-/// `y + 4096` sur un i16. Une valeur au-delà ne vient que d'un flux hostile ou
-/// corrompu (un pixel valide reste loin en dessous) ; elle est saturée, comme
-/// le serait le pixel. Trouvé par cargo-fuzz le 27 novembre 2026 (Avash, cible
-/// egfx_progressif) : panique en debug, couleurs fausses en release.
-const LUMINANCE_MAX: i16 = i16::MAX - 4096;
+/// Borne des trois composantes Y, Cb et Cr confiées à `yuv`.
+///
+/// `yuv` calcule `y + 4096` sur un i16, puis `(y + 4096) × 65 536` et des
+/// produits par les coefficients (jusqu'à 115 993 pour le bleu) sur un i32,
+/// sans contrôle. Trouvé par cargo-fuzz (Avash, cible egfx_progressif) en deux
+/// temps : le 27 novembre 2026, une luminance au-delà de 28 671 débordait
+/// l'i16 ; le 28 novembre, la publication de la 0.17.0 a montré que borner la
+/// seule luminance ne suffisait pas, des chrominances extrêmes débordant l'i32.
+/// Panique en debug, couleurs fausses en release.
+///
+/// Un pixel valide vaut `(composante − 128) × 32`, soit [-4096, 4095] : ±8192
+/// en laisse le double, de quoi couvrir les écarts de quantification, et garde
+/// chaque calcul de `yuv` sous 1,8 × 10⁹, loin de la limite de l'i32. Une valeur
+/// au-delà ne vient que d'un flux hostile ou corrompu, et elle est saturée.
+const BORNE_COMPOSANTE: i16 = 8191;
 
-/// La luminance telle quelle, ou une copie saturée si une valeur dépasse
-/// `LUMINANCE_MAX` : la copie ne se paie que sur un flux hostile.
-fn luminance_bornee(y: &[i16]) -> std::borrow::Cow<'_, [i16]> {
-    if y.iter().all(|&v| v <= LUMINANCE_MAX) {
-        std::borrow::Cow::Borrowed(y)
+/// La composante telle quelle, ou une copie saturée dans
+/// [-`BORNE_COMPOSANTE` - 1, `BORNE_COMPOSANTE`] : la copie ne se paie que sur
+/// un flux hostile.
+fn composante_bornee(c: &[i16]) -> std::borrow::Cow<'_, [i16]> {
+    let dans_la_borne = |v: i16| (-BORNE_COMPOSANTE - 1..=BORNE_COMPOSANTE).contains(&v);
+    if c.iter().all(|&v| dans_la_borne(v)) {
+        std::borrow::Cow::Borrowed(c)
     } else {
-        std::borrow::Cow::Owned(y.iter().map(|&v| v.min(LUMINANCE_MAX)).collect())
+        std::borrow::Cow::Owned(
+            c.iter()
+                .map(|&v| v.clamp(-BORNE_COMPOSANTE - 1, BORNE_COMPOSANTE))
+                .collect(),
+        )
     }
 }
 
 // FIXME: used for the test suite, we may want to drop it
 pub fn ycbcr_to_argb(input: YCbCrBuffer<'_>, output: &mut [u8]) -> io::Result<()> {
-    let y = luminance_bornee(input.y);
+    let y = composante_bornee(input.y);
+    let cb = composante_bornee(input.cb);
+    let cr = composante_bornee(input.cr);
     let len = u32::try_from(output.len()).map_err(io::Error::other)?;
     let width = len / 4;
     let planar = YuvPlanarImage {
         y_plane: &y,
         y_stride: width,
-        u_plane: input.cb,
+        u_plane: &cb,
         u_stride: width,
-        v_plane: input.cr,
+        v_plane: &cr,
         v_stride: width,
         width,
         height: 1,
@@ -43,15 +60,17 @@ pub fn ycbcr_to_argb(input: YCbCrBuffer<'_>, output: &mut [u8]) -> io::Result<()
 }
 
 pub fn ycbcr_to_rgba(input: YCbCrBuffer<'_>, output: &mut [u8]) -> io::Result<()> {
-    let y = luminance_bornee(input.y);
+    let y = composante_bornee(input.y);
+    let cb = composante_bornee(input.cb);
+    let cr = composante_bornee(input.cr);
     let len = u32::try_from(output.len()).map_err(io::Error::other)?;
     let width = len / 4;
     let planar = YuvPlanarImage {
         y_plane: &y,
         y_stride: width,
-        u_plane: input.cb,
+        u_plane: &cb,
         u_stride: width,
-        v_plane: input.cr,
+        v_plane: &cr,
         v_stride: width,
         width,
         height: 1,
@@ -189,11 +208,36 @@ mod tests_luminance_hostile {
         ycbcr_to_argb(YCbCrBuffer { y: &y, cb: &c, cr: &c }, &mut argb).expect("conversion");
     }
 
+    /// Trouvé par cargo-fuzz le 28 novembre 2026, sur la publication de la
+    /// 0.17.0 (même cible) : borner la seule luminance ne suffisait pas. `yuv`
+    /// calcule ensuite `(y + 4096) × 65536 − 46 819 × cr − 22 526 × cb` sur un
+    /// i32 ; une luminance juste sous l'ancienne borne et des chrominances
+    /// extrêmes le font déborder (ligne du vert, panique en debug).
+    #[test]
+    fn des_chrominances_hostiles_ne_font_pas_paniquer_la_conversion() {
+        for (y, c) in [
+            (28_671, i16::MIN),
+            (28_671, i16::MAX),
+            (i16::MIN, i16::MAX),
+            (i16::MAX, i16::MIN),
+            (i16::MAX, i16::MAX),
+            (i16::MIN, i16::MIN),
+        ] {
+            let y = [y; 4];
+            let c = [c; 4];
+            let mut sortie = [0u8; 16];
+            ycbcr_to_rgba(YCbCrBuffer { y: &y, cb: &c, cr: &c }, &mut sortie).expect("conversion");
+            let mut argb = [0u8; 16];
+            ycbcr_to_argb(YCbCrBuffer { y: &y, cb: &c, cr: &c }, &mut argb).expect("conversion");
+        }
+    }
+
     #[test]
     fn une_luminance_valide_n_est_pas_touchee() {
         let y: Vec<i16> = (0..64).map(|i| i * 40 - 1200).collect();
         let c: Vec<i16> = (0..64).map(|i| i * 3 - 90).collect();
-        assert!(matches!(luminance_bornee(&y), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(composante_bornee(&y), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(composante_bornee(&c), std::borrow::Cow::Borrowed(_)));
         let mut sortie = vec![0u8; 256];
         ycbcr_to_rgba(YCbCrBuffer { y: &y, cb: &c, cr: &c }, &mut sortie).expect("conversion");
         let planar = YuvPlanarImage {

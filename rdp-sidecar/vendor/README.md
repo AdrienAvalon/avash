@@ -593,7 +593,7 @@ complet raisonnable qui passe, et la valeur du plafond.
 Défaut d'IronRDP, pas propre à avash : dès qu'une version publiée borne le
 réassemblage, supprimer ce répertoire et sa ligne `[patch.crates-io]`.
 
-## `ironrdp-graphics` : une luminance hostile faisait déborder la conversion de couleurs
+## `ironrdp-graphics` : une composante hostile faisait déborder la conversion de couleurs
 
 Trouvé le 27 novembre 2026 par la cible cargo-fuzz `egfx_progressif` (audit,
 QT-11), en 150 exécutions. `ycbcr_to_rgba` et `ycbcr_to_argb` passent la
@@ -604,13 +604,27 @@ chemin RemoteFX) ; en release, l'addition bouclait et donnait des couleurs
 fausses. Aucun pixel valide n'approche cette valeur : elle ne vient que d'un
 flux hostile ou corrompu.
 
-`color_conversion.rs` sature désormais la luminance à `i16::MAX - 4096` avant
-l'appel, sur une copie qui ne se fait que lorsqu'une valeur dépasse (un flux
-valide n'est pas recopié). Tests : `une_luminance_hostile_ne_fait_pas_paniquer_la_conversion`,
-`une_luminance_valide_n_est_pas_touchee` (mêmes pixels que l'appel direct).
+Ce premier correctif saturait la seule luminance, à `i16::MAX - 4096`. Le
+28 novembre 2026, le fuzzing qui précède la publication de la 0.17.0 l'a
+mis en défaut en 821 exécutions : `yuv` calcule ensuite, sur un `i32` et
+sans contrôle, `(y + 4096) × 65 536` plus ou moins les chrominances
+multipliées par leurs coefficients (jusqu'à 115 993 pour le bleu). Une
+luminance juste sous la borne et des chrominances extrêmes débordaient
+encore (la publication s'est arrêtée là, la 0.17.0 n'est pas sortie).
+
+`color_conversion.rs` sature désormais les **trois** composantes dans
+[-8192, 8191] avant l'appel. Un pixel valide vaut `(composante − 128) × 32`,
+soit [-4096, 4095] : la borne en laisse le double, et chaque calcul de `yuv`
+reste sous 1,8 × 10⁹. La copie ne se fait que lorsqu'une valeur dépasse (un
+flux valide n'est pas recopié). Tests :
+`une_luminance_hostile_ne_fait_pas_paniquer_la_conversion`,
+`des_chrominances_hostiles_ne_font_pas_paniquer_la_conversion` (les coins de
+l'espace des i16) et `une_luminance_valide_n_est_pas_touchee` (mêmes pixels
+que l'appel direct). Quinze minutes de fuzzing local sur la cible, soit
+147 000 exécutions, sans plantage.
 
 ### À retirer quand l'amont corrigera
 
-Le défaut est dans `yuv` ; si une version de `yuv` ou d'IronRDP borne la
-luminance elle-même, retirer `luminance_bornee` et ses tests.
+Le défaut est dans `yuv` ; si une version de `yuv` ou d'IronRDP borne les
+composantes elle-même, retirer `composante_bornee` et ses tests.
 
