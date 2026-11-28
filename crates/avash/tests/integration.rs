@@ -366,7 +366,7 @@ async fn changed_host_key_is_refused() {
     // dans le vrai profil, la vérification ne le voyait pas, et la connexion
     // était acceptée comme un premier contact.
     let known_hosts = avash::ssh::chemin_known_hosts().expect("chemin known_hosts");
-    avash::testutil::memoriser_cle_hote("127.0.0.1", port, &decoy_pub, &known_hosts)
+    avash::testutil::remplacer_par_leurre("127.0.0.1", port, &decoy_pub, &known_hosts)
         .expect("ecriture known_hosts");
 
     // Le serveur presente sa vraie cle : elle differe de celle memorisee.
@@ -1417,7 +1417,18 @@ async fn un_rebond_a_cle_changee_garde_le_marqueur_sous_le_format_alterne() {
                              // Fausse clé mémorisée pour le REBOND : sa clé d'hôte « a changé ».
     let decoy = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap();
     let known_hosts = avash::ssh::chemin_known_hosts().unwrap();
-    avash::testutil::memoriser_cle_hote("127.0.0.1", jump_port, decoy.public_key(), &known_hosts)
+    // Le port a pu servir à un test précédent, qui y a appris la vraie clé des
+    // serveurs de test : on rejoue ce cas à chaque passage. Le leurre doit la
+    // remplacer, pas s'y ajouter (vu le 28 novembre 2026, voir
+    // `testutil::remplacer_par_leurre`).
+    avash::testutil::memoriser_cle_hote(
+        "127.0.0.1",
+        jump_port,
+        CLE_HOTE.public_key(),
+        &known_hosts,
+    )
+    .unwrap();
+    avash::testutil::remplacer_par_leurre("127.0.0.1", jump_port, decoy.public_key(), &known_hosts)
         .unwrap();
 
     let hop = avash::ssh::Hop {
