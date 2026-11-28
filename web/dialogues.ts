@@ -8,6 +8,26 @@ import { readText as lirePressePapiers, writeText as ecrirePressePapiers } from 
 import { $ } from "./etat";
 import { t } from "./i18n";
 
+// Focus différé de 30 ms, le temps que la modale s'affiche, et annulé si elle
+// se referme avant : sinon le focus partait vers un champ déjà caché, et sous
+// la charge de la suite complète le minuteur survivait au test qui l'avait
+// posé (« document is not defined », pre-commit du 28 novembre 2026).
+const focusEnAttente = new Map<string, ReturnType<typeof setTimeout>>();
+function focaliserApres(modale: string, focaliser: () => void) {
+  annulerFocus(modale);
+  focusEnAttente.set(
+    modale,
+    setTimeout(() => {
+      focusEnAttente.delete(modale);
+      focaliser();
+    }, 30),
+  );
+}
+function annulerFocus(modale: string) {
+  clearTimeout(focusEnAttente.get(modale));
+  focusEnAttente.delete(modale);
+}
+
 // ---------- Saisie d'un texte (nom de fichier, de dossier) ----------
 
 let askResolve: ((v: string | null) => void) | null = null;
@@ -19,12 +39,12 @@ export function askText(title: string, label: string, initial: string): Promise<
   input.value = initial;
   $("ask-error").hidden = true;
   $("ask-modal").classList.add("open");
-  setTimeout(() => {
+  focaliserApres("ask", () => {
     input.focus();
     // Renommer : on selectionne le nom sans l'extension.
     const dot = initial.lastIndexOf(".");
     input.setSelectionRange(0, dot > 0 ? dot : initial.length);
-  }, 30);
+  });
   // Une demande déjà en attente doit être close, sinon son résolveur est
   // écrasé et sa promesse n'est jamais tenue : l'appelant reste bloqué à
   // jamais — un onglet figé sur « Connexion en cours… », une closure qui ne se
@@ -33,6 +53,7 @@ export function askText(title: string, label: string, initial: string): Promise<
   return new Promise((resolve) => { askResolve = resolve; });
 }
 function askClose(v: string | null) {
+  annulerFocus("ask");
   $("ask-modal").classList.remove("open");
   const r = askResolve;
   askResolve = null;
@@ -169,11 +190,12 @@ export function askConfirm(text: string, opts: { ok?: string; danger?: boolean; 
   // Une confirmation destructive ne pré-focalise pas son bouton rouge : Entrée
   // par réflexe, ou restée enfoncée depuis l'action précédente, supprimait un
   // hôte de ~/.ssh/config avant qu'on ait lu la phrase d'avertissement.
-  setTimeout(() => (dangereux ? ($("confirm-cancel") as HTMLButtonElement) : okBtn).focus(), 30);
+  focaliserApres("confirm", () => (dangereux ? ($("confirm-cancel") as HTMLButtonElement) : okBtn).focus());
   confirmResolve?.(false); // cf. askText : ne jamais abandonner une promesse
   return new Promise((resolve) => { confirmResolve = resolve; });
 }
 function confirmClose(v: boolean) {
+  annulerFocus("confirm");
   $("confirm-modal").classList.remove("open");
   const r = confirmResolve;
   confirmResolve = null;
@@ -348,7 +370,7 @@ function ouvrirPass(target: string, erreur?: string): Promise<{ password: string
     err.hidden = true;
   }
   passModal().classList.add("open");
-  setTimeout(() => ($("pass-input") as HTMLInputElement).focus(), 30);
+  focaliserApres("pass", () => ($("pass-input") as HTMLInputElement).focus());
   return new Promise((resolve) => {
     passResolve?.(null); // cf. askText : ne jamais abandonner une promesse
     passResolve = resolve;
@@ -356,6 +378,7 @@ function ouvrirPass(target: string, erreur?: string): Promise<{ password: string
 }
 
 function passClose(value: { password: string; remember: boolean } | null) {
+  annulerFocus("pass");
   passModal().classList.remove("open");
   const r = passResolve;
   passResolve = null;

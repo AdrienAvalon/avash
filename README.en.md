@@ -19,7 +19,7 @@ application, which reads your `~/.ssh/config` as it is.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Security](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF%20Scorecard-report-informational.svg)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-2200%20passing-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-2204%20passing-brightgreen.svg)](docs/qualite.md)
 [![Coverage](https://img.shields.io/badge/coverage-84%25%20of%20lines-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20caught-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -250,7 +250,7 @@ vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Quality
 
-**2200 tests** on every commit, on GitHub Actions (Linux, Windows and macOS,
+**2204 tests** on every commit, on GitHub Actions (Linux, Windows and macOS,
 including conformance against real xrdp servers):
 
 | Level | Tests | In a word |
@@ -260,7 +260,7 @@ including conformance against real xrdp servers):
 | RDP process | 253 | negotiation, graphics pipeline, VNC session, clipboard files, replay of real recordings, mutation fuzzing |
 | Test servers | 33 | server-side RDPDR (hand-written decoders, scenario state machine, full dialogue with the client channel) and the VNC server |
 | Vendored IronRDP and vnc-rs crates | 647 | our fixes, a hostile VNC server, and the upstream tests that ran nowhere |
-| Front (Vitest) | 550 | pure logic, VNC keysyms, translations |
+| Front (Vitest) | 554 | pure logic, VNC keysyms, translations |
 | End to end (WebdriverIO) | 93 | the real application, actual SSH, RDP and VNC connections, `axe-core` audit |
 
 Plus strict `clippy` in debug and release, ESLint, stylelint, knip, `cargo
