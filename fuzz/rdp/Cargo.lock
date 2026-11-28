@@ -185,9 +185,10 @@ dependencies = [
 
 [[package]]
 name = "avash-rdp"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "dirs",
  "futures-util",
  "image",
@@ -200,6 +201,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "socket2",
  "static_vcruntime",
  "tokio",
  "tokio-native-tls",

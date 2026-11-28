@@ -15,15 +15,22 @@
 # couvrent que les scénarios bout en bout et les parts de couverture. Ce
 # contrôle prend le code des deux crates pour vérité et rougit tant que la
 # cellule ne le cite pas exactement.
+#
+# Troisième sous-compte, ajouté en préparant la 0.17.0 (28 novembre 2026) : le
+# banc a apporté un test dans test-rdp-server/src/main.rs (la mire suspendue
+# par Suppress Output), hors des deux fichiers relus jusque-là. La ligne
+# annonçait 33 quand la garde n'en trouvait que 32 : elle compte désormais
+# aussi ce fichier, cité « suspension de la mire RDP (N) ».
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 qualite="docs/qualite.md"
 source_vnc="test-vnc-server/src/main.rs"
 source_rdpdr="test-rdp-server/src/rdpdr/tests.rs"
+source_mire="test-rdp-server/src/main.rs"
 echecs=0
 
-for fichier in "$qualite" "$source_vnc" "$source_rdpdr"; do
+for fichier in "$qualite" "$source_vnc" "$source_rdpdr" "$source_mire"; do
   if [[ ! -f "$fichier" ]]; then
     echo "  ✗ $fichier introuvable : la garde ne peut plus prendre le code pour vérité" >&2
     exit 1
@@ -34,7 +41,8 @@ done
 # fichiers que la cellule nomme.
 reel_vnc="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$source_vnc")"
 reel_rdpdr="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$source_rdpdr")"
-reel_total=$((reel_vnc + reel_rdpdr))
+reel_mire="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$source_mire")"
+reel_total=$((reel_vnc + reel_rdpdr + reel_mire))
 
 ligne="$(grep -E '^\| Serveurs de test ' "$qualite" || true)"
 if [[ -z "$ligne" ]]; then
@@ -48,10 +56,11 @@ dit_total="$(awk -F'|' '{gsub(/[^0-9]/, "", $3); print $3}' <<< "$ligne")"
 dit_vnc="$(grep -oE 'serveur VNC \([0-9]+\)' <<< "$ligne" | grep -oE '[0-9]+' | head -1 || true)"
 # Sous-compte RDPDR : « `test-rdp-server/src/rdpdr/`, N) ».
 dit_rdpdr="$(grep -oE 'test-rdp-server/src/rdpdr/`, [0-9]+\)' <<< "$ligne" | grep -oE '[0-9]+' | head -1 || true)"
+dit_mire="$(grep -oE 'suspension de la mire RDP \([0-9]+\)' <<< "$ligne" | grep -oE '[0-9]+' | head -1 || true)"
 
-if [[ -z "$dit_vnc" || -z "$dit_rdpdr" ]]; then
-  echo "  ✗ $qualite : la ligne « Serveurs de test » ne cite plus ses deux sous-comptes sous la forme attendue" >&2
-  echo "    → attendu « serveur VNC (N) » et « \`test-rdp-server/src/rdpdr/\`, N) »" >&2
+if [[ -z "$dit_vnc" || -z "$dit_rdpdr" || -z "$dit_mire" ]]; then
+  echo "  ✗ $qualite : la ligne « Serveurs de test » ne cite plus ses trois sous-comptes sous la forme attendue" >&2
+  echo "    → attendu « serveur VNC (N) », « suspension de la mire RDP (N) » et « \`test-rdp-server/src/rdpdr/\`, N) »" >&2
   exit 1
 fi
 
@@ -63,20 +72,24 @@ if [[ "$dit_rdpdr" != "$reel_rdpdr" ]]; then
   echo "  ✗ $qualite annonce $dit_rdpdr tests côté serveur RDPDR, $source_rdpdr en compte $reel_rdpdr" >&2
   echecs=1
 fi
+if [[ "$dit_mire" != "$reel_mire" ]]; then
+  echo "  ✗ $qualite annonce $dit_mire tests pour la suspension de la mire, $source_mire en compte $reel_mire" >&2
+  echecs=1
+fi
 if [[ "$dit_total" != "$reel_total" ]]; then
-  echo "  ✗ $qualite annonce $dit_total tests de serveurs de test, les deux fichiers en comptent $reel_total" >&2
+  echo "  ✗ $qualite annonce $dit_total tests de serveurs de test, les trois fichiers en comptent $reel_total" >&2
   echecs=1
 fi
 # L'incohérence interne visée par l'audit : l'addition annoncée au lecteur ne
 # retombait pas sur le total affiché dans la même cellule.
-if [[ $((dit_vnc + dit_rdpdr)) != "$dit_total" ]]; then
-  echo "  ✗ $qualite : $dit_vnc + $dit_rdpdr = $((dit_vnc + dit_rdpdr)), mais la même ligne affiche $dit_total" >&2
+if [[ $((dit_vnc + dit_rdpdr + dit_mire)) != "$dit_total" ]]; then
+  echo "  ✗ $qualite : $dit_vnc + $dit_rdpdr + $dit_mire = $((dit_vnc + dit_rdpdr + dit_mire)), mais la même ligne affiche $dit_total" >&2
   echecs=1
 fi
 
 if [[ "$echecs" -ne 0 ]]; then
-  echo "  → accorder la ligne « Serveurs de test » de $qualite au code : $reel_total au total, serveur VNC ($reel_vnc), RDPDR ($reel_rdpdr)" >&2
+  echo "  → accorder la ligne « Serveurs de test » de $qualite au code : $reel_total au total, serveur VNC ($reel_vnc), suspension de la mire RDP ($reel_mire), RDPDR ($reel_rdpdr)" >&2
   exit 1
 fi
 
-echo "  ✓ $qualite : ligne « Serveurs de test » exacte ($reel_total = VNC $reel_vnc + RDPDR $reel_rdpdr)"
+echo "  ✓ $qualite : ligne « Serveurs de test » exacte ($reel_total = VNC $reel_vnc + mire $reel_mire + RDPDR $reel_rdpdr)"

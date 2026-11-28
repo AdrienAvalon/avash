@@ -11,7 +11,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 
 [Site](https://adrienavalon.github.io/avash/) · [Français](README.md) · [English](README.en.md)
 
-[![Version](https://img.shields.io/badge/version-0.16.1-0f7a52.svg)](https://github.com/AdrienAvalon/avash/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.17.0-0f7a52.svg)](https://github.com/AdrienAvalon/avash/releases/latest)
 [![winget](https://img.shields.io/badge/winget-AdrienCros.Avash-0078d4.svg)](https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/AdrienCros/Avash)
 [![Plateformes](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-plateformes-informational)](#installation)
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-e05d44.svg)](LICENSE)
@@ -19,7 +19,7 @@ seule application, qui lit votre `~/.ssh/config` tel quel.
 [![CI](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/ci.yml)
 [![Sécurité](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml/badge.svg?branch=main)](https://github.com/AdrienAvalon/avash/actions/workflows/securite.yml)
 [![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF%20Scorecard-rapport-informational.svg)](https://scorecard.dev/viewer/?uri=github.com/AdrienAvalon/avash)
-[![Tests](https://img.shields.io/badge/tests-2094%20verts-brightgreen.svg)](docs/qualite.md)
+[![Tests](https://img.shields.io/badge/tests-2200%20verts-brightgreen.svg)](docs/qualite.md)
 [![Couverture](https://img.shields.io/badge/couverture-84%25%20des%20lignes-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 [![Mutants](https://img.shields.io/badge/mutants-201%2F264%20attrap%C3%A9s-brightgreen.svg)](docs/qualite.md#couverture-et-mutations--le-workflow-hebdomadaire)
 
@@ -254,17 +254,17 @@ signaler une faille : [SECURITY.md](SECURITY.md).
 
 ## Qualité
 
-**2094 tests** à chaque commit, sur GitHub Actions (Linux, Windows et macOS,
+**2200 tests** à chaque commit, sur GitHub Actions (Linux, Windows et macOS,
 conformité contre de vrais serveurs xrdp comprise) :
 
 | Niveau | Tests | En un mot |
 |---|---:|---|
-| Cœur Rust et intégration contre un vrai sshd | 376 | parseurs, import, SFTP, tunnels, rebonds |
-| Interface Tauri | 207 | commandes, magasin de sessions, clavier |
-| Processus RDP | 237 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
-| Serveurs de test | 32 | côté serveur RDPDR (décodeurs écrits à la main, automate du scénario, dialogue complet avec le canal client) et serveur VNC |
-| Paquets IronRDP et vnc-rs portés | 641 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
-| Front (Vitest) | 508 | logique pure, keysyms VNC, traductions |
+| Cœur Rust et intégration contre un vrai sshd | 403 | parseurs, import, SFTP, tunnels, rebonds |
+| Interface Tauri | 221 | commandes, magasin de sessions, clavier |
+| Processus RDP | 253 | négociation, canal graphique, session VNC, fichiers par le presse-papiers, rejeu d'enregistrements réels, fuzzing par mutation |
+| Serveurs de test | 33 | côté serveur RDPDR (décodeurs écrits à la main, automate du scénario, dialogue complet avec le canal client) et serveur VNC |
+| Paquets IronRDP et vnc-rs portés | 647 | nos correctifs, un serveur VNC hostile, et les tests amont qui ne s'exécutaient nulle part |
+| Front (Vitest) | 550 | logique pure, keysyms VNC, traductions |
 | Bout en bout (WebdriverIO) | 93 | l'application réelle, connexions SSH, RDP et VNC effectives, audit `axe-core` |
 
 Plus `clippy` strict en debug et en release, ESLint, stylelint, knip, `cargo

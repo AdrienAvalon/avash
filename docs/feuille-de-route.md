@@ -41,13 +41,13 @@ défaut n'est pas livrée, même terminée.
 
 | Indicateur | Valeur au 11/09/2026 |
 |---|---|
-| Tests | 852 Rust (292 cœur, 84 intégration, 207 interface, 237 processus RDP, 32 serveurs de test) · 641 dans les paquets IronRDP et vnc-rs portés · 508 front · 93 scénarios bout en bout dans 40 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
+| Tests | 910 Rust (302 cœur, 101 intégration, 221 interface, 253 processus RDP, 33 serveurs de test) · 647 dans les paquets IronRDP et vnc-rs portés · 550 front · 93 scénarios bout en bout dans 40 fichiers, tous en intégration continue, sous Linux et sous Windows (serveurs locaux compris depuis le 05/09/2026), et hors serveurs locaux sous macOS |
 | Binaire Linux | 21 Mo (`codegen-units=1`, LTO fin) ; AppImage publiée 85 Mo |
 | Paquet front | 221 Ko de paquet principal ; xterm.js (331 Ko) et ses extensions (WebGL 113, recherche 32, sérialisation 15, liens 2, ajustement 1) chargés à part, à l'oisiveté après l'accueil |
 | Plateformes livrées | Linux (AppImage) et Windows (NSIS + portable), éprouvées sur machine réelle ; macOS (image disque) construite et testée en CI, pas encore éprouvée |
 | Couverture | 84 % des lignes de l'espace de travail (cœur 91 %, interface 70 %), 81 % du processus RDP, tests unitaires et suite bout en bout confondus sur des binaires instrumentés (`scripts/couverture.sh`, 06/09/2026) ; 201 mutants sur 264 attrapés sur les modules de sécurité |
 | Dette déclarée | aucun `TODO`/`FIXME` dans le code |
-| Version publiée | 0.16.1 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
+| Version publiée | 0.17.0 (Linux AppImage, deb et rpm, Windows, macOS ; signées, attestation Sigstore et SBOM) |
 | Licence | AGPL-3.0-or-later (+ licence commerciale possible) |
 
 Acquis récents : Windows validé en usage réel (RDP, clavier, mise à jour
